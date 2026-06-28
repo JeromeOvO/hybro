@@ -1,4 +1,4 @@
-from app_shell.repository_store import _strip_file_urls
+from dal.runtime_store.parts.parsing import _strip_file_urls
 
 
 class TestStripFileUrls:

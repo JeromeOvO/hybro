@@ -16,9 +16,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from common.utils.logger import get_logger
+from context_memory.protocols import ContextMemoryCompactionPort
 from jobs.constants import COMPACTION_SWEEP
 from models.context_config import compaction_config
 
@@ -38,7 +39,7 @@ class LeaderGate(Protocol):
 class CompactionSweepDeps:
     list_room_ids_with_memory: Callable[[], Awaitable[list[str]]]
     get_room_ids_with_non_terminal_runs: Callable[[], Awaitable[list[str]]]
-    compaction_service: Any
+    context_compaction: ContextMemoryCompactionPort
 
 
 class CompactionSweep:
@@ -142,7 +143,7 @@ class CompactionSweep:
                     queue.task_done()
                     return
                 try:
-                    result = await deps.compaction_service.compact_if_needed(rid)
+                    result = await deps.context_compaction.compact_if_needed(rid)
                     if result and result.compacted_count > 0:
                         stats["compacted"] += 1
                         logger.info(

@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
-from common.dto import RoomInfo
-from models.request import RoomCenterRoomSettingRequest
+from common.dto import MessageCommitted, RoomInfo
+from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
@@ -32,300 +32,28 @@ def room_center():
     rc.agent_service = MagicMock()
     rc.openai_service = MagicMock()
     rc.a2a_service = MagicMock()
-    rc.room_memory_service = MagicMock()
-    rc.sse_manager = MagicMock()
-    rc.task_service = MagicMock()
+    rc.delivery = MagicMock()
+    rc.remote_task_reader = MagicMock()
     return rc
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ROOM_SERVICES_PATH = _ROOT / "app_shell" / "room_runtime.py"
 
 
-def _room_services_function(function_name: str) -> ast.AsyncFunctionDef:
-    tree = ast.parse(
-        _ROOM_SERVICES_PATH.read_text(), filename=str(_ROOM_SERVICES_PATH)
-    )
-    matches = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == function_name
-    ]
-    assert matches, f"{function_name} not found"
-    return matches[0]
+class RecordingEventPublisher:
+    def __init__(self) -> None:
+        self.internal_events = []
+        self.wait_flags = []
 
-
-def _room_services_call_line(
-    function_name: str,
-    call_name: str,
-    *snippets: str,
-    occurrence: int = 1,
-) -> int:
-    matches: list[tuple[int, str]] = []
-    for node in ast.walk(_room_services_function(function_name)):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Attribute):
-            name = node.func.attr
-        elif isinstance(node.func, ast.Name):
-            name = node.func.id
-        else:
-            name = None
-        if name != call_name:
-            continue
-        expression = ast.unparse(node)
-        if all(snippet in expression for snippet in snippets):
-            matches.append((node.lineno, expression))
-    matches.sort()
-    assert len(matches) >= occurrence, (
-        f"{function_name}.{call_name} with {snippets!r} occurrence "
-        f"{occurrence} not found; matches={matches}"
-    )
-    return matches[occurrence - 1][0]
-
-
-def _matching_room_services_call(
-    function_name: str,
-    call_name: str,
-    *snippets: str,
-    occurrence: int = 1,
-) -> ast.Call:
-    matches: list[ast.Call] = []
-    for node in ast.walk(_room_services_function(function_name)):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Attribute):
-            name = node.func.attr
-        elif isinstance(node.func, ast.Name):
-            name = node.func.id
-        else:
-            name = None
-        if name != call_name:
-            continue
-        expression = ast.unparse(node)
-        if all(snippet in expression for snippet in snippets):
-            matches.append(node)
-    matches.sort(key=lambda node: node.lineno)
-    assert len(matches) >= occurrence, (
-        f"{function_name}.{call_name} with {snippets!r} occurrence "
-        f"{occurrence} not found; matches="
-        f"{[(node.lineno, ast.unparse(node)) for node in matches]}"
-    )
-    return matches[occurrence - 1]
-
-
-def _body_containing_statement(
-    function: ast.AsyncFunctionDef,
-    statement: ast.stmt,
-) -> list[ast.stmt]:
-    for node in ast.walk(function):
-        bodies: list[list[ast.stmt]] = []
-        for attr in ("body", "orelse", "finalbody"):
-            body = getattr(node, attr, None)
-            if isinstance(body, list) and all(isinstance(item, ast.stmt) for item in body):
-                bodies.append(body)
-        if isinstance(node, ast.Try):
-            bodies.extend(handler.body for handler in node.handlers)
-        if isinstance(node, ast.Match):
-            bodies.extend(case.body for case in node.cases)
-        for body in bodies:
-            if any(item is statement for item in body):
-                return body
-    raise AssertionError(f"body containing statement at line {statement.lineno} not found")
-
-
-def _statement_containing_call(
-    function: ast.AsyncFunctionDef,
-    call: ast.Call,
-) -> ast.stmt:
-    statements = [
-        node
-        for node in ast.walk(function)
-        if isinstance(node, ast.stmt)
-        and node.lineno <= call.lineno <= getattr(node, "end_lineno", node.lineno)
-    ]
-    assert statements, f"statement containing call at line {call.lineno} not found"
-    statements.sort(
-        key=lambda node: (
-            getattr(node, "end_lineno", node.lineno) - node.lineno,
-            -node.lineno,
-        )
-    )
-    return statements[0]
-
-
-def _statement_owning_body(
-    function: ast.AsyncFunctionDef,
-    body: list[ast.stmt],
-) -> ast.stmt | None:
-    if body is function.body:
-        return None
-    for node in ast.walk(function):
-        if not isinstance(node, ast.stmt):
-            continue
-        bodies: list[list[ast.stmt]] = []
-        for attr in ("body", "orelse", "finalbody"):
-            candidate = getattr(node, attr, None)
-            if isinstance(candidate, list) and all(
-                isinstance(item, ast.stmt) for item in candidate
-            ):
-                bodies.append(candidate)
-        if isinstance(node, ast.Try):
-            bodies.extend(handler.body for handler in node.handlers)
-        if isinstance(node, ast.Match):
-            bodies.extend(case.body for case in node.cases)
-        if any(candidate is body for candidate in bodies):
-            return node
-    raise AssertionError("owner for branch body not found")
-
-
-def _preceding_path_statements(
-    function: ast.AsyncFunctionDef,
-    emit_statement: ast.stmt,
-) -> list[ast.stmt]:
-    path_statements: list[ast.stmt] = []
-    current_statement: ast.stmt | None = emit_statement
-    while current_statement is not None:
-        body = _body_containing_statement(function, current_statement)
-        emit_index = next(
-            index
-            for index, statement in enumerate(body)
-            if statement is current_statement
-        )
-        path_statements.extend(body[:emit_index])
-        current_statement = _statement_owning_body(function, body)
-    return path_statements
-
-
-def _path_calls(statement: ast.stmt) -> list[ast.Call]:
-    if isinstance(statement, ast.If) and any(
-        isinstance(node, ast.Return) for node in ast.walk(statement)
-    ):
-        return [node for node in ast.walk(statement.test) if isinstance(node, ast.Call)]
-    return [node for node in ast.walk(statement) if isinstance(node, ast.Call)]
-
-
-def _assert_room_service_before(
-    function_name: str,
-    before_call: str,
-    before_snippets: tuple[str, ...],
-    emit_snippets: tuple[str, ...],
-    *,
-    before_occurrence: int = 1,
-    emit_occurrence: int = 1,
-) -> None:
-    function = _room_services_function(function_name)
-    emit_call = _matching_room_services_call(
-        function_name,
-        "_emit_processing_status_event",
-        *emit_snippets,
-        occurrence=emit_occurrence,
-    )
-    emit_statement = _statement_containing_call(function, emit_call)
-    path_statements = _preceding_path_statements(function, emit_statement)
-    candidates: list[tuple[int, str]] = []
-    for statement in path_statements:
-        for node in _path_calls(statement):
-            if isinstance(node.func, ast.Attribute):
-                name = node.func.attr
-            elif isinstance(node.func, ast.Name):
-                name = node.func.id
-            else:
-                name = None
-            expression = ast.unparse(node)
-            if name == before_call and all(
-                snippet in expression for snippet in before_snippets
-            ):
-                candidates.append((node.lineno, expression))
-    candidates.sort()
-    assert len(candidates) >= before_occurrence, (
-        f"{function_name}.{before_call} with {before_snippets!r} occurrence "
-        f"{before_occurrence} not found in same path before emit line "
-        f"{emit_call.lineno}; candidates={candidates}"
-    )
-    assert candidates[before_occurrence - 1][0] < emit_call.lineno
-
-
-def test_send_message_failure_call_01_side_effects_before_failed_processing_status():
-    _assert_room_service_before(
-        "send_message_to_room",
-        "_initialize_room_memory",
-        (),
-        ("Failed to initialize room memory",),
-    )
-
-
-def test_send_message_failure_call_02_side_effects_before_failed_processing_status():
-    _assert_room_service_before(
-        "send_message_to_room",
-        "_resolve_explicit_target_scope",
-        (),
-        ("Agent selection failed",),
-    )
-
-
-def test_send_message_canceled_side_effects_before_canceled_processing_status():
-    _assert_room_service_before(
-        "send_message_to_room",
-        "parse_user_message",
-        (),
-        ("SSEProcessingStatus.CANCELED",),
-    )
-
-
-def test_send_message_failure_call_03_side_effects_before_failed_processing_status():
-    _assert_room_service_before(
-        "send_message_to_room",
-        "parse_user_message",
-        (),
-        ("Failed to parse user message",),
-    )
-
-
-def test_no_agents_fallback_side_effects_before_completed_processing_status():
-    _assert_room_service_before(
-        "_handle_no_agents_fallback",
-        "add_room_agent_message",
-        (),
-        ("SSEProcessingStatus.COMPLETED",),
-    )
-
-
-@pytest.mark.asyncio
-async def test_room_services_processing_status_uses_bound_execution_emitter():
-    svc = object.__new__(RoomServices)
-    emitter = AsyncMock(return_value=None)
-
-    svc.bind_execution_event_deps(processing_status_emitter=emitter)
-
-    await svc._send_processing_status("room-1", "msg-1", "cr-1")
-
-    emitter.assert_awaited_once()
-    assert emitter.await_args.kwargs["room_id"] == "room-1"
-    assert emitter.await_args.kwargs["message_id"] == "msg-1"
-    assert emitter.await_args.kwargs["lifecycle_message_id"] == "msg-1"
-    assert emitter.await_args.kwargs["client_request_id"] == "cr-1"
-
-
-@pytest.mark.asyncio
-async def test_room_services_processing_status_shim_does_not_normalize_details():
-    svc = object.__new__(RoomServices)
-    emitter = AsyncMock(return_value=None)
-
-    svc.bind_execution_event_deps(processing_status_emitter=emitter)
-
-    await svc._emit_processing_status_event(
-        "room-1",
-        "failed",
-        "msg-1",
-        client_request_id="cr-1",
-        details="parse failed",
-    )
-
-    emitter.assert_awaited_once()
-    assert emitter.await_args.kwargs["status"] == "failed"
-    assert emitter.await_args.kwargs["details"] == "parse failed"
-    assert "error_message" not in emitter.await_args.kwargs
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
+    ) -> None:
+        self.internal_events.append(event)
+        self.wait_flags.append(wait_for_local_handlers)
 
 
 def test_room_services_bind_store_sets_runtime_store():
@@ -354,8 +82,6 @@ async def test_room_services_delegated_methods_fail_before_bind():
 async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
-    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
-    svc._active_run_reader = AsyncMock(return_value=[])
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -433,7 +159,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
 
 
 @pytest.mark.asyncio
-async def test_room_services_active_runs_use_bound_reader_and_room_facade():
+async def test_room_services_active_runs_response_is_room_metadata_only():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -442,20 +168,11 @@ async def test_room_services_active_runs_use_bound_reader_and_room_facade():
     svc._store.get_room_user_message_by_message_id = AsyncMock(
         side_effect=AssertionError("legacy message store should not be used")
     )
+    svc._store.get_active_runs_by_room_id = AsyncMock(
+        side_effect=AssertionError("legacy active-run store should not be used")
+    )
     svc._bound = False
     svc._facade = None
-    active_run_reader = AsyncMock(
-        return_value=[
-            {
-                "run_id": "run-1",
-                "state": "running",
-                "trigger_message_id": "other-message",
-                "agent_id": "agent-1",
-                "seq": 1,
-                "updated_at": None,
-            }
-        ]
-    )
     facade = AsyncMock()
     facade.get_room.return_value = RoomInfo(
         room_id="r1",
@@ -466,7 +183,6 @@ async def test_room_services_active_runs_use_bound_reader_and_room_facade():
     facade.get_turn_completion_kind.return_value = "synthesis"
 
     svc.bind_facade(facade)
-    svc.bind_active_run_reader(active_run_reader)
 
     response = await svc.inquiry_active_runs(
         RoomCenterRoomSettingRequest(
@@ -477,20 +193,22 @@ async def test_room_services_active_runs_use_bound_reader_and_room_facade():
 
     assert response.success is True
     assert response.room_id == "r1"
-    assert response.active_runs[0].run_id == "run-1"
+    assert response.active_runs == []
     assert response.turn_completion_kind == "synthesis"
     facade.get_room.assert_awaited_once_with("r1")
-    active_run_reader.assert_awaited_once_with("r1")
     facade.get_turn_completion_kind.assert_awaited_once_with("trigger-1")
     svc._store.get_room_by_room_id.assert_not_awaited()
     svc._store.get_room_user_message_by_message_id.assert_not_awaited()
+    svc._store.get_active_runs_by_room_id.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_room_services_active_runs_reader_is_required_after_facade_bind():
+async def test_room_services_room_setting_returns_room_metadata_only():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
-    svc._active_run_reader = None
+    svc._store.get_active_runs_by_room_id = AsyncMock(
+        side_effect=AssertionError("legacy active-run store should not be used")
+    )
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -502,11 +220,12 @@ async def test_room_services_active_runs_reader_is_required_after_facade_bind():
     )
     svc.bind_facade(facade)
 
-    with pytest.raises(
-        RuntimeError,
-        match=r"RoomServices\.bind_active_run_reader\(\) not called - startup incomplete",
-    ):
-        await svc.inquiry_active_runs(RoomCenterRoomSettingRequest(room_id="r1"))
+    response = await svc.inquiry_room_setting(RoomCenterRoomSettingRequest(room_id="r1"))
+
+    assert response.success is True
+    assert response.active_runs is None
+    facade.get_room.assert_awaited_once_with("r1")
+    svc._store.get_active_runs_by_room_id.assert_not_awaited()
 
 
 def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches():
@@ -521,7 +240,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
         "update_room_name": {"get_room_by_room_id", "update_room_by_room_id"},
         "update_room_extend_info": {"get_room_by_room_id", "update_room_by_room_id"},
     }
-    source = _ROOT / "app_shell" / "room_runtime.py"
+    source = _ROOT / "room" / "compat" / "runtime.py"
     tree = ast.parse(source.read_text())
     methods = {
         item.name: item
@@ -543,7 +262,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
 
 
 @pytest.mark.asyncio
-async def test_room_services_persist_user_message_delegates_to_room_facade():
+async def test_room_services_persist_user_message_emits_message_committed_event():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.add_room_user_message = AsyncMock(
@@ -551,18 +270,107 @@ async def test_room_services_persist_user_message_delegates_to_room_facade():
     )
     svc._bound = False
     svc._facade = None
+    publisher = RecordingEventPublisher()
     facade = AsyncMock()
     facade.persist_user_message.return_value = True
     svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
         message_content=MessageContent(message_text="hello"),
     )
 
-    assert await svc._persist_user_message(user_message) is True
+    assert await svc._persist_user_message(
+        user_message,
+        room_agent_set={"a1": "Agent One"},
+    ) is True
+
     facade.persist_user_message.assert_awaited_once_with(user_message)
     svc._store.add_room_user_message.assert_not_awaited()
+    assert len(publisher.internal_events) == 1
+    event = publisher.internal_events[0]
+    assert isinstance(event, MessageCommitted)
+    assert event.room_id == "r1"
+    assert event.message_id == "u1"
+    assert event.message_type == "user"
+    assert event.agent_id is None
+    assert event.room_agent_set == {"a1": "Agent One"}
+    assert publisher.wait_flags == [True]
+
+
+@pytest.mark.asyncio
+async def test_room_services_persist_user_message_does_not_emit_on_failure():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    publisher = RecordingEventPublisher()
+    facade = AsyncMock()
+    facade.persist_user_message.return_value = False
+    svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    assert await svc._persist_user_message(user_message, room_agent_set={}) is False
+
+    assert publisher.internal_events == []
+    assert publisher.wait_flags == []
+
+
+@pytest.mark.asyncio
+async def test_room_services_persist_message_to_room_passes_room_agent_set_to_user_commit_event():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="r1",
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={"a1": "Canonical Agent"},
+            extend_info={},
+        )
+    )
+    svc._bound = False
+    svc._facade = None
+    svc.delivery = MagicMock()
+    svc.delivery.create_token.return_value = object()
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._resolve_explicit_target_scope = AsyncMock()
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    publisher = RecordingEventPublisher()
+    facade = AsyncMock()
+    facade.persist_user_message.return_value = True
+    svc.bind_facade(facade)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="u1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Please ask <@a1|Stale Name> for help"
+        ),
+    )
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="r1",
+            user_id="user-1",
+            message=user_message,
+        ),
+        target_group="all_agents",
+    )
+
+    assert response.success is True
+    assert context is not None
+    event = publisher.internal_events[0]
+    assert isinstance(event, MessageCommitted)
+    assert event.room_agent_set == {"a1": "Canonical Agent"}
 
 
 @pytest.mark.asyncio
@@ -616,7 +424,7 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
             "get_room_agent_messages_by_related_message_id",
         },
     }
-    source = _ROOT / "app_shell" / "room_runtime.py"
+    source = _ROOT / "room" / "compat" / "runtime.py"
     tree = ast.parse(source.read_text())
     methods = {
         item.name: item

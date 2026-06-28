@@ -1,7 +1,7 @@
 # Modular Decoupling Design Document
 
-> **Status**: Proposal (v3) with implemented LLM Gateway migration notes
-> **Date**: 2026-06-05
+> **Status**: Final / Accepted after Goal 8.6 application-shell package removal
+> **Date**: 2026-06-26
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
 
@@ -9,9 +9,9 @@
 
 ## 1. Executive Summary
 
-The current codebase delivers a full-featured multi-agent orchestration platform with rooms, supervisor/debate workflows, HITL, hub relay, memory compaction, and a discovery/gateway API. However, it suffers from tight coupling via singleton imports, a service-locator anti-pattern, no interface abstractions, and monolithic initialization.
+The original codebase delivered a full-featured multi-agent orchestration platform with rooms, supervisor/debate workflows, HITL, hub relay, memory compaction, and a discovery/gateway API, but it suffered from tight coupling via singleton imports, a service-locator anti-pattern, missing interface seams, and monolithic initialization.
 
-This document proposes restructuring the codebase into **well-defined modules** connected through **Python Protocol interfaces**, managed by **module-scoped sub-containers**, while preserving every non-decommissioned feature and API endpoint (legacy workflow endpoints are explicitly removed via Phase 0d deprecation). The modular structure enables future technology stack replacement (DBOS, AG-UI, etc.) by creating clean seams — but this document does not introduce any new technology.
+This document records the accepted restructuring of the codebase into **well-defined modules** connected through **Python Protocol interfaces**, managed by **module-scoped sub-containers**, while preserving every non-decommissioned feature and API endpoint (legacy workflow endpoints are explicitly removed via Phase 0d deprecation). The modular structure enables future technology stack replacement (DBOS, AG-UI, etc.) by creating clean seams — but this document does not introduce any new technology.
 
 ### Design Principles
 
@@ -23,7 +23,7 @@ This document proposes restructuring the codebase into **well-defined modules** 
 
 ---
 
-## 2. Current Architecture Problems
+## 2. Original Architecture Problems
 
 ### 2.1 Coupling Analysis
 
@@ -39,14 +39,14 @@ This document proposes restructuring the codebase into **well-defined modules** 
 | Hub Coupling | RelayService directly writes agents_collection | Hub logic and agent lifecycle tangled |
 | Config Scatter | 30+ `os.getenv()` calls outside settings.py | Settings model incomplete; silent key mismatches |
 
-### 2.2 Current Dependency Graph (Implicit)
+### 2.2 Original Dependency Graph (Implicit)
 
 ```
-api/* ──→ app_shell/* ──→ domain facades ──→ database/*
+api/* ──→ former application-shell package ──→ domain facades ──→ database/*
   │           │              │              │
   └───────────┼──────────────┼──────────────┘
               │              │         (all import settings, sse_manager, mongodb,
-              └──────────────┘          openai_service, a2a_service directly)
+              └──────────────┘          legacy service singletons directly)
 ```
 
 Every layer reaches into any other layer via singleton imports. No enforced boundary.
@@ -60,7 +60,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                            Application Shell                                │
-│   main.py: container assembly, lifespan, sub-container wiring, job sched   │
+│   main.py / container.py: runtime assembly, lifespan, dependency wiring    │
 └─────┬──────────────────────────────────────────────────────────────────────┘
       │
       ▼
@@ -115,17 +115,17 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 | # | Module | Responsibility | Current Source |
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/` |
-| 2 | **DAL** | Unified data access clients (split by concern) | `dal/`, `database/` (legacy migrations only) |
-| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/`, with `app_shell/a2a_runtime.py` as compatibility shim |
-| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `app_shell/openai_service.py`, `app_shell/gemini_service.py`, `app_shell/bedrock_service.py` |
-| 5 | **Agent** | Agent lifecycle, health, matching, discovery | `app_shell/agent_*.py`, `api/agent.py`, `api/discovery.py` |
-| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `app_shell/room_runtime.py` as compatibility shim |
-| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, ~~chat contexts~~ (legacy; source removed in Phase 0d/8) | `context_memory/`, with app-shell memory/context shims for compatibility |
-| 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, `app_shell/hitl_service.py` |
-| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `app_shell/delivery_runtime.py`, `delivery/` |
+| 2 | **DAL** | Unified data access clients (split by concern) | `dal/` |
+| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `a2a_adapter/` |
+| 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `llm_gateway/`, `llm_gateway/providers/`, `llm_gateway/services/` |
+| 5 | **Agent** | Agent lifecycle, health, matching, discovery | `agent/`, `agent/repository/` |
+| 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `room/`, with `room/compat/runtime.py` as runtime compatibility owner and `room/route_adapter.py` as route adapter |
+| 7 | **Context & Memory** | Context assembly, compaction, search, user memory, chat-context route compatibility | `context_memory/`, `context_memory/compat/` |
+| 8 | **Execution** | Run lifecycle, supervisor, debate, HITL, dispatch (NOT workflow) | `execution/`, including `execution/hitl/service.py`, `execution/orchestration/debate_prompt_injector.py`, and `execution/orchestration/synthesis_coordinator.py` |
+| 9 | **Delivery** | SSE connections, event broker, dedup, domain→frontend event translation | `delivery/` |
 | 10 | **Platform** | Gateway API, rate limiting, file storage | `platform_module/`, `api/gateway.py`, `api/discovery.py`, `api/files.py` |
-| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `app_shell/relay_service.py` shim |
-| 12 | **Jobs** | Background tasks with leader election | `jobs/`, app-shell Redis runtime |
+| 11 | **HubRuntimeBridge** | Hub connection, relay, liveness, offline queue, agent sync | `hub_runtime_bridge/`, `api/relay.py`, `api/hub.py`, `hub_runtime_bridge/compat/relay_service.py` |
+| 12 | **Jobs** | Background tasks with leader election | `jobs/`, DAL Redis runtime |
 
 > **NOTE (Workflow decommission)**: The legacy `base_tasks` / `meta_tasks` / `task_sessions` data model
 > (from the first version of chat room) is **deleted** in this refactor, NOT wrapped. The endpoints
@@ -144,7 +144,8 @@ Rule 4:  Business modules depend on Common + DAL + Adapter Protocols
 Rule 5:  Business modules communicate ONLY through Protocols (no direct imports)
 Rule 6:  Delivery depends on Common + DAL ONLY (no business module dependency)
 Rule 7:  API Layer depends on module Protocols via sub-container (not implementations)
-Rule 8:  Application Shell is the ONLY place that knows concrete implementations
+Rule 8:  Application Shell composition in `main.py`/`container.py` is the ONLY
+         place that knows concrete implementations
 Rule 9:  No module imports `main.py` or `container.py`
 Rule 10: a2a-sdk types are confined to the A2A Protocol Adapter in the target architecture
 Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
@@ -153,33 +154,26 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 > **NOTE (A1 fix)**: Rule 6 means Delivery is a **pure transport**. Historically,
 > before the Phase 7a/Phase 6 separation, `sse_manager.send_processing_status()`
 > combined frontend delivery with run lifecycle recording, which violated this
-> rule. The current Phase 7b prerequisite is that SSE no longer calls
+> rule. The accepted architecture requires that SSE no longer calls
 > `run_command_handler`: Execution records through `RunLifecyclePort.record_processing_status()`
 > **before** calling `EventPublisher.emit("processing_status", ...)`, and
 > Delivery only translates and delivers. See §4.5 for the enforced call-site
 > contract.
 
-> **Phase 7b deviation:** The Phase 7b execution plan temporarily allowlists A2A
-> SDK imports in exact moved dispatch/orchestration files while preserving
-> behavior. That is not the target state; new Execution HITL/cancellation code
-> must use string/domain-state ports, and the allowlist should shrink as A2A
-> protocol adapters are introduced.
+> **Accepted A2A SDK confinement:** Execution dispatch/orchestration files use
+> explicit compatibility adapters for legacy A2A behavior. New Execution
+> HITL/cancellation code must use string/domain-state ports, and A2A protocol
+> adapter ownership remains in `a2a_adapter`.
 
-> **P3 app-shell thinning final state (2026-06-18):** `app_shell` focus files are
-> fail-fast compatibility shims over module-owned facades, adapters, and focused
-> runtime ports. A2A SDK calls and response coercion live in `a2a_adapter`;
-> room CRUD/message behavior lives in Room; orchestration scheduling lives in
-> Execution; context assembly, legacy turn selection, and context metrics live
-> in Context & Memory; relay queues/liveness and legacy push/offline failure
-> handling live in HubRuntimeBridge; hub publish authorization adapters live in
-> HubRuntimeBridge; A2A task-tracking placeholder creation, tracked-send push
-> configuration, failure persistence, terminal response persistence, and HITL
-> reply task persistence live in Execution; object-storage behavior lives in
-> Platform/DAL. Startup splits the legacy `AppShellRepositoryStore` composite
-> into focused runtime-store adapters before binding Room runtime, Execution
-> `RoomMessageCenter`, Relay, debate, and coordinator compatibility services.
-> The cleanup gates now ratchet both exact forbidden imports and the explicit
-> public app-shell shim method surface.
+> **Goal 8.6 acceptance state (2026-06-26):** The modular decoupling target is
+> achieved for the former application-shell package. Runtime behavior is owned by
+> `agent/`, `room/`, `execution/`, `context_memory/`, `delivery/`,
+> `hub_runtime_bridge/`, `llm_gateway/`, `platform_module/`, `dal/`, and
+> `a2a_adapter/`. `container.py` remains the composition root, but the former
+> application-shell package is no longer shipped, imported, or used as a compatibility
+> surface. Cleanup gates require an absent package directory, empty blockers,
+> owner-protocol route inventory, and no production or test imports of the
+> removed package.
 
 ### 3.4 Cross-Module Communication Rules
 
@@ -193,22 +187,22 @@ Rule 11: LLM provider SDK types NEVER appear outside LLM Gateway
 | Execution → HubRuntimeBridge | `HubDispatchPort` Protocol | Async call | |
 | Context & Memory → Room | `RoomHistoryReader` Protocol | Sync call | |
 | Context & Memory ← (domain events) | `MessageCommitted` | **In-process** on emitting worker + **Redis Pub/Sub** for other workers | See §4.5 |
-| Room services → Context & Memory | `MemoryManager.delete_room_memory()` Protocol | Temporary Phase 5 cleanup call | Migration-only room deletion cleanup; startup binds protocol only, never the concrete facade |
+| Room services → Context & Memory | `MemoryManager.delete_room_memory()` Protocol | Protocol-bound room deletion cleanup | Accepted room deletion cleanup; startup binds protocol only, never the concrete facade |
 | HubRuntimeBridge → Agent | `AgentRegistryWriter` Protocol | Sync call | |
 | HubRuntimeBridge → Execution | `HubAgentResponseInternal` via `EventPublisher.emit_internal` | Async internal event | Phase 8 owner-worker routing; Phase 7b only registers the response-handler seam |
 | HubRuntimeBridge → Room | `RoomOwnershipReader` Protocol | Sync call | |
 | Agent → HubRuntimeBridge | `HubLivenessReader` Protocol | Sync call | For agent hydration: `is_hub_online` |
 | Agent ↔ Room | NO direct dependency | — | |
 
-> **Phase 7b deviation:** The Phase 7b execution plan temporarily binds a small
-> set of Execution-owned compatibility callables into legacy `RoomServices`:
-> pending-HITL checking, embedded active-run reading for
-> `/roomCenter/inquiryRoomSetting`, and sendMessage lifecycle/status emission.
-> This is a bridge while sendMessage persistence and room-setting assembly still
-> live in RoomServices. It is not a target communication direction. Follow-up
-> owner: Execution/Room boundary cleanup must move those gates/emits behind
-> `ExecutionFacade` or a Room-owned protocol so the long-term dependency returns
-> to Execution -> Room only.
+> **Phase 7b reverse-binding cleanup resolved (2026-06-21):** The former
+> Execution-owned compatibility callables are no longer injected into legacy
+> `RoomServices`. Pending-HITL checks, active-run gating, active-run route
+> assembly, and sendMessage lifecycle/status emission now live behind
+> `ExecutionFacade` or API-layer Execution ports. Room services may still perform
+> room persistence and legacy route compatibility, but the dependency direction is
+> `API / application composition -> ExecutionFacade -> Room port/services`; RoomServices does
+> not call back into Execution-owned processing status, active-run reader, or
+> recovery scheduler callables.
 
 ---
 
@@ -667,7 +661,7 @@ class EventPublisher(Protocol):
     def register_internal_handler(self, event_type: str, handler: Callable) -> None: ...
         """Register handler for internal events. Called during container assembly."""
     async def start(self) -> None: ...
-        """Component hook. DeliveryFacade.start() owns app-shell startup."""
+        """Component hook. DeliveryFacade.start() owns delivery startup."""
     async def stop(self) -> None: ...
         """Drain/cancel pending internal handler tasks. Facade owns bus shutdown."""
 
@@ -816,8 +810,10 @@ DeliveryEvent = Annotated[
   and Redis fan-out envelopes use top-level `envelope["trace_id"]`.
 
 **Final Delivery/SSE seam:**
-- `app_shell/delivery_runtime.py` is now the C3 migration adapter. Startup binds
-  it to `DeliveryFacade`; before binding, public methods fail fast.
+- `DeliveryFacade` directly owns Delivery startup, SSE transport, event broker,
+  deduplication, and domain-to-wire translation. API/SSE wiring passes the facade
+  as `sse_transport=_delivery_facade` or resolves it through route dependency
+  injection; there is no removed-package Delivery runtime adapter lifecycle.
 - Backend modules emit typed `DeliveryEvent` DTOs. Delivery translates every frontend-visible
   event into the room SSE frame shape `{type, timestamp, room_id, data}`.
 - `delivery.translator` is the only DTO-to-wire translation point. Backend-internal
@@ -878,7 +874,7 @@ class HubAgentResponseInternal(InternalEventBase):
 InternalEvent = MessageCommitted | RunStateChanged | HubAgentResponseInternal
 ```
 
-For Phase 7b handler registration, `HubAgentResponseInternal.payload` must be
+For accepted handler registration, `HubAgentResponseInternal.payload` is
 normalized before Execution handles it. Required fields are `kind` and either
 `message_id` or `continuation_message_id`; optional fields mirror the
 `AgentEvent` normalized event fields (`text`, `state`, `parts`, `artifacts`,
@@ -1417,8 +1413,8 @@ execution/
 │
 ├── hitl/                          # Human-in-the-loop
 │   ├── __init__.py
-│   ├── hitl_service.py            # HITL request lifecycle
-│   └── hitl_detector.py           # Prompt type detection (pure function)
+│   ├── service.py                 # HITL request lifecycle
+│   └── detector.py                # Prompt type detection (pure function)
 │
 ├── dispatch/                      # Agent dispatch routing
 │   ├── __init__.py
@@ -1438,28 +1434,29 @@ execution/
     └── hitl_repo.py
 ```
 
-> **Phase 7b scope note (2026-05-17):** The structure above remains the target
-> architecture. The Phase 7b plan delivers the Execution module boundary,
-> compatibility shims, typed Delivery emits, and adapter-backed run/HITL
-> persistence. It intentionally defers the `execution/repository/` package and
-> the full lifecycle-command port (`create_run`, `start_run`, `complete_run`,
-> `fail_run`, `pause_run`, `cancel_run`, `emit_event`) to a follow-up phase.
-> Phase 7b also uses pragmatic adapter filenames such as
+> **Accepted Execution scope note (2026-06-23):** The structure above remains the
+> target architecture. The accepted implementation delivers the Execution module
+> boundary, compatibility shims, typed Delivery emits, and adapter-backed run/HITL
+> persistence. The repository package and full lifecycle-command port
+> (`create_run`, `start_run`, `complete_run`, `fail_run`, `pause_run`,
+> `cancel_run`, `emit_event`) remain target interfaces for future expansion while
+> current persistence is adapter-backed. The implementation also uses pragmatic
+> adapter filenames such as
 > `execution/run_lifecycle.py`, `execution/run_queries.py`,
 > `execution/hitl/service.py`, `execution/hitl/detector.py`, and
 > `execution/dispatch/transports/direct.py`; the tree above is the target layout,
-> not a claim that those target paths are fully delivered by the Phase 7b plan.
-> Phase 7b still includes the existing watchdog-specific
+> not a claim that those target paths are fully delivered by the accepted state.
+> The accepted implementation still includes the existing watchdog-specific
 > `append_run_timeout_failure(room_id, run_id, stale_minutes=...)` adapter so
 > stale-run recovery keeps its current timeout event semantics.
 > Until repositories land, `ExecutionEngine.get_run()` and `get_runs_for_room()`
 > are served by an adapter-backed run read port that preserves the current
 > active-run response fields such as `trigger_message_id`.
-> The initial Phase 7b `HITLCoordinator` seam starts with the currently used
+> The accepted `HITLCoordinator` seam starts with the currently used
 > `request_input()` method plus `cancel_request()` for supervisor clarification
 > cleanup; query helpers such as `is_hitl_pending()` and `get_active_hitl()`
-> remain target-design methods until needed by runtime call sites. The Phase 7b
-> plan also keeps adapter-oriented filenames
+> remain target-design methods until needed by runtime call sites. The accepted
+> implementation also keeps adapter-oriented filenames
 > (`execution/run_lifecycle.py`, `execution/hitl/service.py`,
 > `execution/hitl/detector.py`, `execution/dispatch/agent_dispatcher.py`, and
 > `execution/dispatch/transports/direct.py`) rather than fully matching this
@@ -1542,14 +1539,14 @@ plain string before calling lifecycle persistence or typed Delivery emitters.
 |-----------|----------------|
 | `run/reducer.py` | Pure function, no side effects |
 | `run/metrics.py` | Derived value computation |
-| `hitl/hitl_detector.py` | Pure heuristic (pattern matching) |
+| `execution/hitl/detector.py` | Pure heuristic (pattern matching) |
 | `state/task_state_manager.py` | In-memory bookkeeping, only used by orchestrator |
 
-Phase 7b exception: `dispatch/response_handler.py` is stateful and performs DB,
-SSE, HITL continuation, and notification side effects. The Phase 7b plan
-introduces an `AgentResponseHandlerPort` seam for facade Hub-response handling
-and app-shell shared handler construction; it is not treated as a direct
-no-protocol import.
+Accepted response-handler seam: `dispatch/response_handler.py` is stateful and
+performs DB, SSE, HITL continuation, and notification side effects. The
+implementation provides an `AgentResponseHandlerPort` seam for facade
+Hub-response handling and shared response-handler construction; it is not
+treated as a direct no-protocol import.
 
 ### 5.4 Processing Status Call Flow (A1 Resolution)
 
@@ -1578,6 +1575,12 @@ statuses (`queued`, `processing`, `awaiting_input`, `completed`, `failed`,
 `details: dict | None`; human-readable failure text belongs in lifecycle
 records or `error_message` inputs that are normalized before frontend delivery.
 
+Execution owns the boundary between runtime lifecycle status and persisted A2A
+task state. Frontend lifecycle events may use `awaiting_input`, but system task
+records must persist the A2A state `input-required`; this mapping belongs in
+`execution/state/`, not Delivery or Room. Delivery continues to translate and
+deliver typed events only.
+
 ### 5.5 In-Flight Task Tracking (fix 2.10)
 
 ```python
@@ -1601,9 +1604,8 @@ class ExecutionFacade:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        # Phase 7b implementation must add and test orchestrator CancelledError
-        # handlers so each cancelled run transitions to RunState.CANCELED before
-        # shutdown cancellation is considered complete.
+        # Orchestrator CancelledError handlers ensure each cancelled run
+        # transitions to RunState.CANCELED before shutdown cancellation completes.
         return count
 ```
 
@@ -1627,6 +1629,11 @@ created via `_spawn_orchestration`, never bare `asyncio.create_task`.
 ---
 
 ## 6. Application Shell & Lifespan
+
+Application Shell is a composition role implemented by `main.py` and
+`container.py`: it assembles owner-module protocol implementations, facades,
+runtime ports, jobs, and lifecycle hooks. It is not a Python package or a
+compatibility import layer.
 
 ### 6.1 Lifespan Sequence (A4, A5 fixes)
 
@@ -1681,11 +1688,10 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
 
     # === Phase 1.8: Delivery startup ===
-    # DeliveryFacade.start() is the only app-shell Delivery startup API. It starts
+    # DeliveryFacade.start() is the only Delivery startup API. It starts
     # cancellation watcher readiness first, then Redis Pub/Sub subscriptions/health,
     # then EventPublisher's handler lifecycle hook.
     await delivery_facade.start()
-    sse_manager.bind_facade(delivery_facade)  # temporary C3 adapter binding
     app.state.delivery_facade = delivery_facade
 
     # === Phase 3: HubRuntimeBridge background ===
@@ -1698,12 +1704,11 @@ async def lifespan(app: FastAPI):
     # Cancel tracked background orchestration tasks before Delivery/SSE drain so
     # cancellation lifecycle/status frames can still be emitted.
     await container.execution.execution_engine.cancel_inflight_tasks()
-    sse_manager.set_draining(True)
+    delivery_facade.set_draining(True)
     await asyncio.sleep(delivery_config.shutdown_drain_seconds)
     await scheduler.stop()
     await container.hub.hub_management.stop()
     await delivery_facade.stop()  # closes SSE connections, unsubscribes rooms, stops bus/watcher
-    sse_manager.unbind_facade()
     await container.dal.mongo.close()
     # Redis pools are Optional (None in single-worker no-redis mode)
     if container.dal.redis_kv:
@@ -1718,14 +1723,16 @@ Phase 6 implementation detail: the current repository does not yet have a single
 `DALContainer`; `container.py` exposes focused helpers instead:
 `create_mongo_dal()`, `create_vector_dal()`, `create_delivery_config()`,
 `create_delivery_redis_clients()`, `create_delivery_cancellation_collection()`,
-`create_delivery_facade()`, and `create_delivery_deps()`. `main.py` calls these helpers and
-does not import concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
+`create_delivery_facade()`, and `create_delivery_deps()`. `container._runtime_lifespan()`
+and `startup_runtime()` construct Delivery through these container helpers and do not import
+concrete `delivery.*`, `dal.*`, or legacy SSE `RedisBroker` implementations.
 
 Health and multi-worker safety now use explicit fields:
-`delivery_pubsub_connected`, `delivery_kv_connected`, `legacy_redis_service_connected`,
+`delivery_pubsub_connected`, `delivery_kv_connected`, `redis_runtime_connected`,
 `relay_streams_available`, `change_stream_connected`, and `redis_expected`. Deprecated
-aliases (`broker_connected`, `broker_expected`, `redis_service_connected`) remain in
-`/health` for backend compatibility.
+aliases (`broker_connected`, `broker_expected`, `redis_service_connected`,
+`legacy_redis_service_connected`) remain in `/health` for backend compatibility
+and derive from canonical runtime fields.
 
 ### 6.2 Sub-Container Design
 
@@ -2076,7 +2083,7 @@ Rules:
 > **Total estimated: 18-22 weeks** (vs original 9 weeks)
 > Strategy: "Facade wrap first, internal rewrite second" — each phase has a wrap sub-phase (fast, low risk) and a rewrite sub-phase (slower, needs golden tests).
 >
-> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 defines the target `RunRepository` + `RunEventRepository` + `HITLRepository`, but the current Phase 7b plan defers those implementations and uses adapter-backed persistence; Phase 8 includes `HubRepository`.
+> **Repository implementation:** Domain-scoped Repository Protocols (§4.9.2) are implemented as part of each business module phase. Phase 3 includes `AgentRepository` impl in `agent/repository/`; Phase 4 includes `RoomRepository` + `MessageRepository`; Phase 5 includes `MemoryRepository`; Phase 6+7 defines the target `RunRepository` + `RunEventRepository` + `HITLRepository`, while the accepted implementation uses adapter-backed persistence for those paths; Phase 8 includes `HubRepository`.
 
 #### Phase 0a: Common Foundation (1 week)
 
@@ -2134,17 +2141,20 @@ Rules:
 **Implemented DAL convergence note (2026-06-05):** Production startup constructs
 DAL adapters directly from the composition root. Agent, Room, Execution,
 ContextMemory, Platform, HubRuntimeBridge, and Jobs use module-owned repositories
-or protocols rather than `database.mongodb` or `app_shell.database_service`.
+or protocols rather than deleted database service singletons.
 The final legacy runtime deletion removed `database/mongodb.py`,
 `database/pinecone_db.py`, `database/repository.py`, and
-`app_shell/database_service.py`; production code must not reintroduce them.
+the former application-shell database service; production code must not
+reintroduce them.
 
-**Operational migration/script compatibility decision (2026-06-11):** One-off
+**Operational migration/script compatibility decision (2026-06-26):** One-off
 scripts and historical migrations that imported `database.mongodb` were removed
-with the final legacy runtime deletion. New migration scripts must be standalone
-Motor/DAL scripts and must not restore `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, or
-`app_shell/database_service.py` for compatibility.
+with the final legacy runtime deletion, and the retired `database/migration/`
+package has also been removed after its remaining migrations were applied. New
+migration scripts must be standalone Motor/DAL scripts or live under a current
+owner package; they must not restore `database/mongodb.py`,
+`database/pinecone_db.py`, `database/repository.py`, `database/migration/`, or
+the former application-shell database service for compatibility.
 
 #### Phase 2: Adapter Layer (2.5 weeks)
 
@@ -2162,9 +2172,7 @@ persistence through that adapter. Platform file/content/avatar services now use
 DAL-shaped object storage dependencies; SDK ownership stays in `dal/s3/`.
 Production startup passes `PlatformObjectStorage` directly into runtime
 consumers that still need the legacy upload/presign methods through
-object-storage-named injection points, while `app_shell/s3_service.py` is
-retained only as an SDK-free compatibility shim for tests and legacy import
-paths until the final S3 service removal phase.
+object-storage-named injection points.
 The startup wiring also configures `a2a_adapter.artifact_storage` once with the
 platform object-storage adapter, bucket name, and file-size limit. Execution
 transports must call the shared A2A helper without rebinding artifact storage so
@@ -2172,23 +2180,23 @@ those startup settings remain intact during inline artifact conversion.
 Tracked terminal A2A message/task responses also keep artifact conversion
 best-effort: object-storage conversion failures are logged, but
 `update_task_on_message()` still persists the terminal task state.
-Boundary gates scan static and dynamic production imports, including `main.py`
-and `app_shell/`, so new `app_shell.s3_service` dependencies fail outside the
-shim file itself. AWS SDK imports are confined to `dal/s3/`, with a single
-documented temporary exception for `llm_gateway/providers/bedrock_provider.py`
+Boundary gates scan static and dynamic production imports, including `main.py`,
+so new object-storage compatibility dependencies outside
+`platform_module.object_storage` fail. AWS SDK imports are confined to `dal/s3/`, with a single
+documented provider-specific exception for `llm_gateway/providers/bedrock_provider.py`
 importing `aioboto3` until Bedrock SDK access is moved behind a dedicated
 provider transport.
 
-**Implemented LLM migration note (2026-06-05):** `LLMGatewayImpl` now owns
-logical model routing, retry/timeout behavior, structured JSON-object mode, and
-streaming. Provider adapters own SDK translation only. Legacy
-`app_shell/openai_service.py`, `app_shell/gemini_service.py`, and
-`app_shell/bedrock_service.py` are gateway-backed compatibility adapters with no
-direct provider SDK or LLM env reads. Focused services under
-`llm_gateway/services/` cover supervisor, embeddings, discovery, summary, agent
-selection, message parsing, room memory, and debate workflows. `main.py`
-constructs a single gateway and binds these focused services into production
-consumers.
+**Implemented LLM migration note (2026-06-25):** `LLMGatewayImpl` owns logical
+model routing, retry/timeout behavior, structured JSON-object mode, and
+streaming. Provider adapters own SDK translation only. The legacy
+provider-named compatibility facades have been removed. Focused
+services under `llm_gateway/services/` cover supervisor, embeddings, discovery,
+summary, agent selection, message parsing, room memory, and debate workflows.
+`container.py` constructs a single gateway and binds currently
+production-consumed focused services into runtime consumers; debate remains a
+focused capability/tested service rather than a provider-named compatibility
+facade.
 
 **Gate:** All LLM and A2A calls route through adapters. Import linter passes for SDK confinement rules.
 
@@ -2247,7 +2255,8 @@ consumers.
 - Deduplication (TTLCache per terminal status)
 - `register_internal_handler()` + `emit_internal()` for internal events
 - **No business logic** — verify by asserting no business module imports in delivery/
-- `app_shell/delivery_runtime.py` is a fail-fast C3 adapter bound to `DeliveryFacade` during startup.
+- `DeliveryFacade` is the direct runtime owner for Delivery. API/SSE wiring passes
+  `sse_transport=_delivery_facade` or obtains the facade through route dependencies.
 - `main.py` constructs Delivery through `container.py` helpers and does not import concrete `delivery.*`, concrete `dal.*`, or legacy SSE `RedisBroker`.
 - Old `sse_manager.send_processing_status()` is transport-only: no `record_processing_status()`, no `run_event_sse_enabled()`, no DB fallback.
 - At this point, the historical record-inside-send path is gone: callers already
@@ -2289,7 +2298,7 @@ consumers.
 During transition, old singletons delegate to new facades:
 
 ```python
-# app_shell/agent_service.py (during Phase 3)
+# historical: legacy agent service adapter during Phase 3
 
 class AgentService:
     """Legacy wrapper — delegates to new AgentFacade.
@@ -2322,27 +2331,27 @@ class AgentService:
 | Feature | Current Location | Target Module | Target Component |
 |---------|-----------------|---------------|-----------------|
 | **Agent lifecycle** | | | |
-| Agent registration | `app_shell/agent_service.py` | Agent | `service/agent_crud.py` |
-| Agent health checking | `app_shell/agent_health_service.py` | Agent + Jobs | `service/agent_health.py` |
-| Agent matching (vector) | `app_shell/agent_selection_service.py` | Agent | `service/agent_matching.py` |
+| Agent registration | `agent/service.py`, `agent/route_adapter.py` | Agent | `service/agent_crud.py` |
+| Agent health checking | `agent/health.py` | Agent + Jobs | `service/agent_health.py` |
+| Agent matching (vector) | `agent/selection_service.py` | Agent | `service/agent_matching.py` |
 | Agent groups | `api/agent_group.py` | Agent | `repository/agent_group_repo.py` |
-| Agent card fetching | `a2a_adapter/` via `app_shell/a2a_runtime.py` shim | A2A Adapter | `card_resolver.py` / `client_facade.py` |
-| Agent inspection | `app_shell/inspection_runtime.py` | Agent | `service/agent_crud.py` |
+| Agent card fetching | `a2a_adapter.runtime_service`, `a2a_adapter/card_resolver.py` | A2A Adapter | `card_resolver.py` / `client_facade.py` |
+| Agent inspection | `agent/inspection.py`, `agent/route_adapter.py` | Agent | `service/agent_crud.py` |
 | Discovery API (no visibility filter) | `api/discovery.py` | Agent | `facade.match_agents(respect_visibility=False)` |
-| Listings (owner-scoped, masked) | `app_shell/agent_service.py` | Agent | `facade.match_agents(respect_visibility=True)` |
+| Listings (owner-scoped, masked) | `agent/service.py`, `agent/route_adapter.py` | Agent | `facade.match_agents(respect_visibility=True)` |
 | is_directly_callable (hub 502) | implicit in gateway_service | Agent | `facade.is_directly_callable()` |
 | Hub agent enrichment (is_hub_online) | Agent facade + `HubLivenessReader` | Agent + HubRuntimeBridge | Agent calls `HubLivenessReader` |
 | **Room & messages** | | | |
-| Room CRUD | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `room/repository/` |
-| Room membership (3 seed modes) | `app_shell/room_runtime.py` shim | Room | `room/facade.py` compatibility methods |
-| User message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
-| Agent message persistence | `app_shell/room_runtime.py` shim | Room | `room/facade.py` + `MessageMongoRepository` |
-| Message graph | `app_shell/room_runtime.py` shim | Room | `room/repository/` message queries |
+| Room CRUD | `room/compat/runtime.py` owner and `room/route_adapter.py` adapter | Room | `room/facade.py` + `room/repository/` |
+| Room membership (3 seed modes) | `room/compat/runtime.py` owner and `room/route_adapter.py` adapter | Room | `room/facade.py` compatibility methods |
+| User message persistence | `room/compat/runtime.py` owner and `room/route_adapter.py` adapter | Room | `room/facade.py` + `MessageMongoRepository` |
+| Agent message persistence | `room/compat/runtime.py` owner | Room | `room/facade.py` + `MessageMongoRepository` |
+| Message graph | `room/compat/runtime.py` owner | Room | `room/repository/` message queries |
 | **Context & Memory** | | | |
-| Context assembly and legacy selection/metrics | `app_shell/context_assembly_service.py` shim | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
-| Memory compaction | `app_shell/compaction_service.py` | Context & Memory | `service/compaction.py` |
-| Memory search | `app_shell/memory_search_service.py` | Context & Memory | `service/memory_search.py` |
-| User memories | `app_shell/memory_service.py` | Context & Memory | `service/user_memory.py` |
+| Context assembly and legacy selection/metrics | `context_memory/compat/context_assembly.py` | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
+| Memory compaction | `context_memory/compaction.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compaction.py`, `context_memory/protocols.py` |
+| Memory search | `context_memory/search.py` and `context_memory/search_adapter.py` | Context & Memory | `context_memory/search.py`, `context_memory/search_adapter.py` |
+| Room/chat memories | `context_memory/compat/runtime.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compat/runtime.py`, `context_memory/facade.py` |
 | **Execution** | | | |
 | Message dispatch | `execution/orchestration/room_message_center.py` | Execution | `orchestration/` + `dispatch/` |
 | Supervisor loop | `execution/orchestration/supervisor_executor.py` | Execution | `orchestration/supervisor_executor.py` |
@@ -2351,16 +2360,16 @@ class AgentService:
 | Run lifecycle | `execution/run_lifecycle_service.py` | Execution | `run_lifecycle.py` in Phase 7b; target `run/lifecycle.py` |
 | Run events | `execution/run_command_handler.py` | Execution | `run_lifecycle.py` adapter in Phase 7b; target `run/command_handler.py` |
 | record_processing_status | `execution/run_command_handler.py` | Execution | `events.py` + `run_lifecycle.py` adapter in Phase 7b |
-| HITL requests | `app_shell/hitl_service.py` | Execution | `hitl/service.py` in Phase 7b; target `hitl/hitl_service.py` |
+| HITL requests | `execution/hitl/service.py` | Execution | `execution/hitl/service.py` + `execution/hitl/factory.py` |
 | Room-level locking | `execution/orchestration/room_message_center.py` | Execution | `state/locking.py` |
 | heal_diverged_runs_on_startup | `main.py` | Execution | `run/lifecycle.py` (exposed via Protocol) |
-| A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | Phase 7b deferred; target `api/a2a_task_routes.py` |
+| A2A long-running tasks | `api/a2a_tasks.py` | Execution (API) | Accepted legacy API route location; future route split target `api/a2a_task_routes.py` |
 | Webhooks | `api/webhooks.py` | Execution (API) | `api/webhook_routes.py` |
 | **Legacy Workflow** (DECOMMISSIONED — see Phase 0d) | | | |
 | Task decomposition / assignment / execution / CRUD | old workflow/task API surface | DELETED | Endpoints removed; collections dropped in Phase 8 cleanup |
 | **Delivery** | | | |
-| SSE broadcasting | `app_shell/delivery_runtime.py` | Delivery | `sse/manager.py` |
-| SSE connections | `app_shell/delivery_runtime.py` | Delivery | `sse/connection.py` |
+| SSE broadcasting | `delivery/` | Delivery | `sse/manager.py` |
+| SSE connections | `delivery/` | Delivery | `sse/connection.py` |
 | Event dedup | `delivery/` | Delivery | `sse/deduplication.py` |
 | Cross-instance pub/sub | `delivery/` | Delivery | `event_bus/cross_instance.py` |
 | Cancellation watcher | `delivery/` | Delivery | `sse/cancellation_watcher.py` |
@@ -2373,34 +2382,34 @@ class AgentService:
 | Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
 | Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
 | **HubRuntimeBridge** | | | |
-| Hub relay | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
-| Hub liveness | `app_shell/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
+| Hub relay | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
+| Hub liveness | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
 | Hub connection | `api/hub.py` | HubRuntimeBridge | `service/hub_connection.py` |
-| Hub route lifecycle compatibility | `app_shell/relay_service.py` shim | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
+| Hub route lifecycle compatibility | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `adapters/legacy_lifecycle.py` |
 | Hub publish intake | `hub_runtime_bridge/service/hub_publish.py` | HubRuntimeBridge | `service/hub_publish.py` |
 | Offline queue | `hub_runtime_bridge/` | HubRuntimeBridge | `transport/offline_queue.py` |
-| Redis Streams relay | `app_shell/redis_runtime.py` | HubRuntimeBridge | `transport/relay_transport.py` |
-| Hub agent sync | `app_shell/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
+| Redis Streams relay | `hub_runtime_bridge/transport/relay_streams.py` plus DAL Redis clients | HubRuntimeBridge | `transport/relay_transport.py` |
+| Hub agent sync | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge -> Agent | via `AgentRegistryWriter` |
 | **LLM Gateway** | | | |
-| OpenAI SDK calls | `app_shell/openai_service.py` | LLM Gateway | `providers/openai_provider.py` |
-| Gemini SDK calls | `app_shell/gemini_service.py` | LLM Gateway | `providers/gemini_provider.py` |
-| Bedrock SDK calls | `app_shell/bedrock_service.py` | LLM Gateway | `providers/bedrock_provider.py` |
-| Embedding generation | `app_shell/openai_service.py`, memory/search adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
-| Supervisor, summary, parsing, memory prompts | legacy app-shell prompt owners | LLM Gateway services | `llm_gateway/services/` |
+| OpenAI SDK calls | deleted provider facade | LLM Gateway | `providers/openai_provider.py` |
+| Gemini SDK calls | deleted provider facade | LLM Gateway | `providers/gemini_provider.py` |
+| Bedrock SDK calls | deleted provider facade | LLM Gateway | `providers/bedrock_provider.py` |
+| Embedding generation | agent, memory, and viewset adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
+| Supervisor, summary, parsing, memory prompts | focused service consumers | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
-| A2A message send/stream | `app_shell/a2a_runtime.py` shim | A2A Adapter | `a2a_adapter/client_facade.py` |
-| A2A task tracking setup, tracked-send persistence, and HITL reply task persistence | `app_shell/a2a_runtime.py` shim | Execution | `execution/task_tracking.py` |
+| A2A message send/stream | `a2a_adapter.runtime_service` | A2A Adapter | `a2a_adapter/client_facade.py` |
+| A2A task tracking setup, tracked-send persistence, and HITL reply task persistence | `a2a_adapter.runtime_service` plus Execution ports | Execution | `execution/task_tracking.py` |
 | A2A card resolution | `common/client/card_resolver.py` | A2A Adapter | `card_resolver.py` |
 | A2A type mapping | scattered | A2A Adapter | `translators/` |
 | Push notification auth | `common/utils/push_notification_auth.py` | A2A Adapter | `push_notification.py` |
 | **DAL** | | | |
 | MongoDB client | `database/mongodb.py` | DAL | `mongo/client.py` |
-| Redis KV | `app_shell/redis_runtime.py` | DAL | `redis/kv.py` |
+| Redis KV | `dal/redis/kv.py` | DAL | `redis/kv.py` |
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
-| Redis Streams | `app_shell/redis_runtime.py` | DAL | `redis/streams.py` |
+| Redis Streams | `dal/redis/streams.py` | DAL | `redis/streams.py` |
 | Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
-| S3 SDK calls | `app_shell/s3_service.py` shim | DAL | `s3/client.py` |
-| Leader election | `app_shell/redis_runtime.py` | DAL | `redis/leader.py` |
+| S3 SDK calls | `PlatformObjectStorage` compatibility adapter | DAL | `s3/client.py` |
+| Leader election | `dal/redis/lock.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |
 | Compaction sweep | `jobs/compaction_sweep.py` | Jobs | `compaction_sweep_job.py` |
@@ -2421,8 +2430,8 @@ class AgentService:
 8. **Settings are read-only after container creation**
 9. **Background jobs run under LeaderElector** — exactly once per job
 10. **Cancellation watcher runs in EVERY worker** — not leader-elected (A6)
-11. **a2a-sdk types are target-state confined to `a2a_adapter/`** — Phase 7b
-    temporarily allowlists exact moved Execution dispatch/orchestration files;
+11. **a2a-sdk types are confined to `a2a_adapter/` ownership** — exact legacy
+    Execution dispatch/orchestration compatibility paths are documented and gated;
     new HITL/cancellation code must not use A2A SDK types.
 12. **LLM provider SDK types never appear outside `llm_gateway/`**
 13. **Room writes canonical messages; Context & Memory projects derived artifacts**
@@ -2726,9 +2735,9 @@ source_modules = ["agent", "room", "context_memory", "execution", "delivery", "p
 forbidden_modules = ["openai", "google.genai", "aioboto3"]
 ```
 
-The A2A contract above is the target-state contract. Phase 7b uses an exact AST
-allowlist for moved Execution files that still carry A2A protocol translation
-during extraction; new HITL/cancellation code must not use that allowlist.
+The A2A contract above is the target-state contract. Exact legacy Execution
+compatibility files that still carry A2A protocol translation are documented and
+gated; new HITL/cancellation code must not use those compatibility paths.
 
 **AST scan (CI) — replaces the no-op import-linter contract (fix 2.8):**
 ```python
@@ -2841,7 +2850,7 @@ async def test_send_message_response_contract(client, seeded_room):
 | 13 | Legacy Workflow deleted, not wrapped | Zero value wrapping dead code; saves ~1.5 weeks dev + ongoing maintenance | Wrap (cost with no benefit) |
 | 14 | Execution owns record_processing_status | Delivery must be pure transport | Delivery calls back (violates Rule 6) |
 | 15 | IndexRegistry centralized | Startup ordering constraint (heal needs indexes) | Per-module init (ordering unclear) |
-| 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Defer (risk accumulates) |
+| 16 | Config unification in Phase 0b | Silent breakage risk from env var mismatch | Split config sources (risk accumulates) |
 | 17 | Domain-scoped Repository Protocols | Prevent cross-module raw query coupling; explicit schema ownership | Single generic MongoDAL (god interface) |
 | 18 | HybroError hierarchy for cross-module errors | Consistent error propagation without catching/re-raising SDK exceptions | Untyped exceptions (no contract) |
 | 19 | Trace context seam per facade method | Cross-module tracing is hard to retrofit; Phase 7b keeps no-dependency hooks that OpenTelemetry can wrap later | Ad hoc tracing later (lost context) |
@@ -3114,8 +3123,8 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-05 | Repository impl noted per migration phase | Prevents ambiguity about when Repositories are built (fix 2.11) |
 | 2026-05-05 | §15 Key Design Decisions expanded to 21 entries | Was stale at 16; now includes all major decisions (fix 2.12) |
 | 2026-05-05 | Added §19 Potential Future Protocol Additions | Documents hardest-to-retrofit seams; validates module boundaries accommodate them |
-| 2026-05-17 | Phase 6 Delivery extracted behind C3 `sse_manager` adapter | Delivery owns SSE transport, Redis fan-out, cancellation, dedup, translation, and internal event dispatch; app shell binds facade during startup |
+| 2026-05-17 | Phase 6 Delivery extracted behind C3 `sse_manager` adapter | Delivery owns SSE transport, Redis fan-out, cancellation, dedup, translation, and internal event dispatch; application composition binds facade during startup |
 | 2026-05-17 | Phase 6 tracing uses contextvars/task names, not OpenTelemetry links | Implemented helper preserves explicit trace ids without synthesizing ids; OTel span links remain future work |
-| 2026-06-04 | Temporary raw-frame isolation removed from active Delivery architecture | Room SSE production emitters use typed `DeliveryEvent` DTOs translated by Delivery |
-| 2026-05-17 | Main app shell no longer owns concrete DAL or legacy SSE broker construction | `container.py` owns concrete DAL/Delivery wiring; health uses explicit Delivery KV/PubSub and legacy RedisService fields |
-| 2026-06-15 | API route owner protocols moved out of `app_shell.bound` | Route inventory now records common protocols for reusable contracts and module-owned `agent.protocols`, `room.protocols`, and `context_memory.protocols` compatibility contracts for legacy model-shaped routes; `app_shell.bound.py` was removed |
+| 2026-06-04 | Raw-frame isolation removed from active Delivery architecture | Room SSE production emitters use typed `DeliveryEvent` DTOs translated by Delivery |
+| 2026-05-17 | Main application shell no longer owns concrete DAL or legacy SSE broker construction | `container.py` owns concrete DAL/Delivery wiring; health uses explicit Delivery KV/PubSub and legacy RedisService fields |
+| 2026-06-15 | API route owner protocols moved out of the former application-shell package | Route inventory now records common protocols for reusable contracts and module-owned `agent.protocols`, `room.protocols`, and `context_memory.protocols` compatibility contracts for legacy model-shaped routes; the former bound module was removed |

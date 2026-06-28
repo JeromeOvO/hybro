@@ -1,11 +1,14 @@
 # api/sse.py
 import json
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path
-from fastapi.params import Depends as DependsParam
 from fastapi.responses import StreamingResponse
 
+from api_gateway.dependencies import (
+    get_execution_engine,
+    get_sse_store,
+    get_sse_transport,
+)
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
 from common.protocols import ExecutionEngine, SSERouteTransport, SSEStateReader
@@ -14,59 +17,13 @@ from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 router = APIRouter()
-execution_engine: ExecutionEngine | None = None
-sse_store: SSEStateReader | None = None
-sse_manager: SSERouteTransport | None = None
-
-
-def bind_sse_dependencies(
-    store: SSEStateReader,
-    manager: SSERouteTransport,
-) -> None:
-    global sse_store, sse_manager
-
-    sse_store = store
-    sse_manager = manager
-
-
-def bind_execution_deps(deps) -> None:
-    global execution_engine
-    execution_engine = deps.execution_engine
-
-
-def _require_execution_engine() -> ExecutionEngine:
-    if execution_engine is None:
-        raise RuntimeError("ExecutionDeps have not been bound")
-    return execution_engine
-
-
-def get_execution_engine() -> ExecutionEngine:
-    return _require_execution_engine()
-
-
-def get_sse_store() -> SSEStateReader:
-    if sse_store is None:
-        raise RuntimeError("SSE database dependency has not been bound")
-    return sse_store
-
-
-def get_sse_manager() -> SSERouteTransport:
-    if sse_manager is None:
-        raise RuntimeError("SSE manager dependency has not been bound")
-    return sse_manager
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 @router.get("/sse/room/{room_id}/stream")
 async def stream_room_messages(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSERouteTransport = Depends(get_sse_manager),
+    transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
 ):
     """
@@ -79,22 +36,20 @@ async def stream_room_messages(
     Returns:
         StreamingResponse: SSE stream response
     """
-    manager = _resolve_dependency(manager, get_sse_manager)
-    if not isinstance(db, DependsParam):
-        room = await db.get_room_by_room_id(room_id)
-        if not room:
-            raise HTTPException(status_code=404, detail="Room not found")
-        if room.room_owner_id != user.user_id:
-            raise HTTPException(
-                status_code=403,
-                detail="You do not have permission to stream this room",
-            )
+    room = await db.get_room_by_room_id(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.room_owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to stream this room",
+        )
 
     async def event_generator():
         connection = None
         try:
             # create SSE connection
-            connection = await manager.add_connection(room_id)
+            connection = await transport.add_connection(room_id)
             logger.info(f"SSE stream started for room {room_id}")
 
             # send connected message
@@ -123,7 +78,7 @@ async def stream_room_messages(
         finally:
             # clean up connection
             if connection:
-                await manager.remove_connection(room_id, connection.connection_id)
+                await transport.remove_connection(room_id, connection.connection_id)
                 logger.info(f"SSE stream closed for room {room_id}")
 
     return StreamingResponse(
@@ -142,7 +97,7 @@ async def stream_room_messages(
 async def get_room_sse_status(
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
-    manager: SSERouteTransport = Depends(get_sse_manager),
+    transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
 ):
     """
@@ -155,17 +110,15 @@ async def get_room_sse_status(
     Returns:
         dict: room connection status information
     """
-    manager = _resolve_dependency(manager, get_sse_manager)
-    if not isinstance(db, DependsParam):
-        room = await db.get_room_by_room_id(room_id)
-        if not room:
-            raise HTTPException(status_code=404, detail="Room not found")
-        if room.room_owner_id != user.user_id:
-            raise HTTPException(
-                status_code=403,
-                detail="You do not have permission to inspect this room",
-            )
-    return manager.get_room_status(room_id)
+    room = await db.get_room_by_room_id(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.room_owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to inspect this room",
+        )
+    return transport.get_room_status(room_id)
 
 
 @router.post("/sse/message/{message_id}/cancel")
@@ -189,7 +142,6 @@ async def cancel_message(
         dict: Success status and message
     """
     try:
-        db = _resolve_dependency(db, get_sse_store)
         # Verify the message exists and the user owns the room it belongs to
         message = await db.get_room_user_message_by_message_id(message_id)
         if not message:
@@ -205,7 +157,6 @@ async def cancel_message(
                 detail="You do not have permission to cancel this message",
             )
 
-        engine = _resolve_dependency(engine, get_execution_engine)
         success = await engine.cancel(
             room_id=message.room_id,
             message_id=message_id,

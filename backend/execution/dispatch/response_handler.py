@@ -15,7 +15,7 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 
 if TYPE_CHECKING:
-    from execution.ports import ExecutionDeliveryPort
+    from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort
 
 
 class ResponseMessageWriter(Protocol):
@@ -102,7 +102,8 @@ class AgentResponseHandler:
         room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
-        notification_service=None,
+        task_notifier=None,
+        task_notification_store: TaskNotificationStorePort | None = None,
         task_notification_impl=None,
     ) -> None:
         self._message_writer = message_writer
@@ -115,7 +116,10 @@ class AgentResponseHandler:
         self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
-        self._notification_service = notification_service
+        self._task_notifier = task_notifier
+        if task_notification_impl is not None and task_notification_store is None:
+            raise RuntimeError("Task notification store dependency has not been bound")
+        self._task_notification_store = task_notification_store
         self._task_notification_impl = task_notification_impl
         self._processing_status_emitter = None
 
@@ -345,7 +349,9 @@ class AgentResponseHandler:
             )
             if resolved_text:
                 display_text = resolved_text
-        await self._notify(e, coerce_task_state("completed"))
+        await self._notify_terminal_best_effort(
+            e, coerce_task_state("completed")
+        )
         await self._terminate_slot(
             e,
             "completed",
@@ -366,7 +372,9 @@ class AgentResponseHandler:
                 state,
                 message_text=error,
             )
-        await self._notify(e, coerce_task_state(state), error=error)
+        await self._notify_terminal_best_effort(
+            e, coerce_task_state(state), error=error
+        )
         has_partial = bool(e.text and e.text.strip())
         await self._terminate_slot(
             e,
@@ -384,7 +392,7 @@ class AgentResponseHandler:
                 "canceled",
                 message_text=e.text or "Task was canceled",
             )
-        await self._notify(e, coerce_task_state("canceled"))
+        await self._notify_terminal_best_effort(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
         await self._resume_orchestration(e.message_id, "", failed=True)
 
@@ -645,35 +653,14 @@ class AgentResponseHandler:
         Preferred over the standalone ``notify_task_update`` function
         because it uses injected services instead of global singletons.
         """
-        if self._notification_service is None or self._task_notification_impl is None:
-            raise RuntimeError("Task notification dependencies have not been bound")
-
-        from types import SimpleNamespace
-
-        # The shared implementation (_notify_task_update_impl) expects a TaskNotificationStore
-        # with a mix of reader/writer methods. Rather than bloating a single writer port,
-        # we assemble them from the handler's specialized dependencies here.
-        notification_store = SimpleNamespace(
-            update_last_notified_state=getattr(
-                self._task_writer, "update_last_notified_state", None
-            ) or getattr(
-                self._message_writer, "update_last_notified_state", None
-            ),
-            get_room_agent_message_by_message_id=self._client_request_resolver.get_room_agent_message_by_message_id,
-            update_room_agent_message_by_message_id=getattr(
-                self._task_writer, "update_room_agent_message_by_message_id", None
-            ) or getattr(
-                self._message_writer, "update_room_agent_message_by_message_id", None
-            ),
-            get_room_by_room_id=self._room_reader.get_room_by_room_id,
-            resolve_client_request_id_for_agent_message=getattr(
-                self._client_request_resolver, "resolve_client_request_id_for_agent_message", None
-            ),
-        )
+        if self._task_notifier is None or self._task_notification_impl is None:
+            raise RuntimeError("Task notification runtime dependencies have not been bound")
+        if self._task_notification_store is None:
+            raise RuntimeError("Task notification store dependency has not been bound")
 
         return await self._task_notification_impl(
-            notification_store,
-            self._notification_service,
+            self._task_notification_store,
+            self._task_notifier,
             self._delivery,
             message_id=message_id,
             state=state,
@@ -701,6 +688,22 @@ class AgentResponseHandler:
             parts=e.parts,
             emit_processing_status=emit_processing_status,
         )
+
+    async def _notify_terminal_best_effort(
+        self,
+        e: AgentEvent,
+        state: Any,
+        *,
+        error: str | None = None,
+    ) -> None:
+        try:
+            await self._notify(e, state, error=error)
+        except Exception:
+            logger.warning(
+                "AgentResponseHandler: terminal task notification failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
 
     async def _resume_orchestration(
         self,

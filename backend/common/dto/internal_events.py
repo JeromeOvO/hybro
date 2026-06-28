@@ -29,6 +29,9 @@ class MessageCommitted(InternalDomainEvent):
     message_id: str
     message_type: Literal["user", "agent"]
     agent_id: str | None = None
+    room_agent_set: dict[str, str] | None = None
+    agent_name: str | None = None
+    was_successful: bool | None = None
 
 
 class RunStateChanged(InternalDomainEvent):

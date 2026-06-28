@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.room_runtime import RoomServices
 from models.file_upload import (
     MAX_ATTACHMENT_REFS_PER_REQUEST,
     MAX_ATTACHMENTS_PER_MESSAGE,
@@ -10,14 +9,14 @@ from models.file_upload import (
 from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import MessageContent, RoomUserMessage
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
 def room_svc():
     svc = RoomServices()
     svc.database_service = MagicMock()
-    svc.sse_manager = MagicMock()
-    svc.room_memory_service = MagicMock()
+    svc.delivery = MagicMock()
     reader = MagicMock()
     reader.get_for_room_file = AsyncMock(
         side_effect=lambda room_id, file_id: _file_meta(file_id, room_id) if room_id == "room1" else None

@@ -1,592 +1,320 @@
-"""Unit tests for AppShellRedisService.
+"""Unit tests for DAL Redis key-value and stream primitives."""
 
-Tests the shared Redis client for key-value and stream operations.
-Uses mocks to avoid requiring a real Redis instance.
-"""
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.redis_runtime import (
-    AppShellLeaderElection,
-    AppShellRedisService,
-    AppShellRelayStreamService,
-    create_app_shell_redis_runtime,
-)
 
-# =============================================================================
-# Test Helpers
-# =============================================================================
-
-
-def _make_service() -> AppShellRedisService:
-    """Create AppShellRedisService with mocked client for testing."""
-    svc = AppShellRedisService(url="redis://localhost:6379/0")
-    svc._client = MagicMock()
-    return svc
+def _make_client() -> MagicMock:
+    client = MagicMock()
+    client.get = AsyncMock(return_value="test_value")
+    client.set = AsyncMock(return_value=True)
+    client.delete = AsyncMock(return_value=1)
+    client.incrby = AsyncMock(return_value=3)
+    client.exists = AsyncMock(return_value=1)
+    client.ping = AsyncMock(return_value=True)
+    client.aclose = AsyncMock()
+    return client
 
 
-# =============================================================================
-# Factory Tests
-# =============================================================================
+@pytest.mark.asyncio
+class TestRedisKVImpl:
+    async def test_setnx_uses_dal_method_name_and_ttl(self):
+        from dal.redis.kv import RedisKVImpl
 
+        client = _make_client()
+        kv = RedisKVImpl(client=client)
 
-class TestAppShellRedisServiceFactory:
-    """Tests for the create_app_shell_redis_runtime factory function."""
+        assert await kv.setnx("test_key", "test_value", ttl=60) is True
 
-    def test_returns_none_when_redis_url_empty(self):
-        """Factory returns an empty runtime when redis_url is empty."""
-        with patch("app_shell.redis_runtime.settings") as mock_settings:
-            mock_settings.redis_url = ""
-            result = create_app_shell_redis_runtime(instance_id="inst-1")
-            assert result.command_client is None
-            assert result.streams_client is None
-            assert result.leader is None
-            assert result.relay_streams is None
-
-    def test_returns_runtime_when_redis_url_set(self):
-        """Factory returns app-shell Redis runtime objects when redis_url is configured."""
-        with patch("app_shell.redis_runtime.settings") as mock_settings:
-            mock_settings.redis_url = "redis://localhost:6379/0"
-            mock_settings.relay_stream_maxlen = 10
-            mock_settings.relay_hub_heartbeat_ttl = 60
-            result = create_app_shell_redis_runtime(instance_id="inst-1")
-            assert isinstance(result.command_client, AppShellRedisService)
-            assert isinstance(result.streams_client, AppShellRedisService)
-            assert isinstance(result.leader, AppShellLeaderElection)
-            assert isinstance(result.relay_streams, AppShellRelayStreamService)
-
-
-# =============================================================================
-# Set NX Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceSetNx:
-    """Tests for set_nx (SET if not exists) operation."""
-
-    @pytest.mark.asyncio
-    async def test_set_nx_returns_true_on_first_call(self):
-        """set_nx returns True when key is successfully set."""
-        svc = _make_service()
-        svc._client.set = AsyncMock(return_value=True)
-
-        result = await svc.set_nx("test_key", "test_value", ex=60)
-
-        assert result is True
-        svc._client.set.assert_called_once_with(
+        client.set.assert_awaited_once_with(
             "test_key", "test_value", nx=True, ex=60
         )
 
-    @pytest.mark.asyncio
-    async def test_set_nx_returns_false_on_duplicate(self):
-        """set_nx returns False when key already exists."""
-        svc = _make_service()
-        svc._client.set = AsyncMock(return_value=None)
-
-        result = await svc.set_nx("existing_key", "value")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_set_nx_returns_false_when_not_connected(self):
-        """set_nx returns False when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.set_nx("test_key", "test_value")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_set_nx_returns_false_on_error(self):
-        """set_nx returns False when Redis operation fails."""
-        svc = _make_service()
-        svc._client.set = AsyncMock(side_effect=Exception("Connection error"))
-
-        result = await svc.set_nx("test_key", "test_value")
-
-        assert result is False
-
-
-# =============================================================================
-# Exists Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceExists:
-    """Tests for exists operation."""
-
-    @pytest.mark.asyncio
-    async def test_exists_returns_true_when_key_set(self):
-        """exists returns True when key exists in Redis."""
-        svc = _make_service()
-        svc._client.exists = AsyncMock(return_value=1)
-
-        result = await svc.exists("test_key")
-
-        assert result is True
-        svc._client.exists.assert_called_once_with("test_key")
-
-    @pytest.mark.asyncio
-    async def test_exists_returns_false_when_missing(self):
-        """exists returns False when key doesn't exist."""
-        svc = _make_service()
-        svc._client.exists = AsyncMock(return_value=0)
-
-        result = await svc.exists("missing_key")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_exists_returns_false_when_not_connected(self):
-        """exists returns False when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.exists("test_key")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_exists_returns_false_on_error(self):
-        """exists returns False when Redis operation fails."""
-        svc = _make_service()
-        svc._client.exists = AsyncMock(side_effect=Exception("Connection error"))
-
-        result = await svc.exists("test_key")
-
-        assert result is False
-
-
-# =============================================================================
-# Get Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceGet:
-    """Tests for get operation."""
-
-    @pytest.mark.asyncio
-    async def test_get_returns_value(self):
-        """get returns value when key exists."""
-        svc = _make_service()
-        svc._client.get = AsyncMock(return_value="test_value")
-
-        result = await svc.get("test_key")
-
-        assert result == "test_value"
-        svc._client.get.assert_called_once_with("test_key")
-
-    @pytest.mark.asyncio
-    async def test_get_returns_none_when_missing(self):
-        """get returns None when key doesn't exist."""
-        svc = _make_service()
-        svc._client.get = AsyncMock(return_value=None)
-
-        result = await svc.get("missing_key")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_returns_none_when_not_connected(self):
-        """get returns None when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.get("test_key")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_returns_none_on_error(self):
-        """get returns None when Redis operation fails."""
-        svc = _make_service()
-        svc._client.get = AsyncMock(side_effect=Exception("Connection error"))
-
-        result = await svc.get("test_key")
-
-        assert result is None
-
-
-# =============================================================================
-# Delete Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceDelete:
-    """Tests for delete operation."""
-
-    @pytest.mark.asyncio
-    async def test_delete_returns_true_when_key_deleted(self):
-        """delete returns True when key is successfully deleted."""
-        svc = _make_service()
-        svc._client.delete = AsyncMock(return_value=1)
-
-        result = await svc.delete("test_key")
-
-        assert result is True
-        svc._client.delete.assert_called_once_with("test_key")
-
-    @pytest.mark.asyncio
-    async def test_delete_returns_false_when_key_missing(self):
-        """delete returns False when key doesn't exist."""
-        svc = _make_service()
-        svc._client.delete = AsyncMock(return_value=0)
-
-        result = await svc.delete("missing_key")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_delete_returns_false_when_not_connected(self):
-        """delete returns False when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.delete("test_key")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_delete_returns_false_on_error(self):
-        """delete returns False when Redis operation fails."""
-        svc = _make_service()
-        svc._client.delete = AsyncMock(side_effect=Exception("Connection error"))
-
-        result = await svc.delete("test_key")
-
-        assert result is False
-
-
-# =============================================================================
-# Set With TTL Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceSetWithTtl:
-    """Tests for set_with_ttl operation."""
-
-    @pytest.mark.asyncio
-    async def test_set_with_ttl_success(self):
-        """set_with_ttl returns True on successful set."""
-        svc = _make_service()
-        svc._client.set = AsyncMock()
-
-        result = await svc.set_with_ttl("test_key", "test_value", ex=120)
-
-        assert result is True
-        svc._client.set.assert_called_once_with("test_key", "test_value", ex=120)
-
-    @pytest.mark.asyncio
-    async def test_set_with_ttl_without_expiry(self):
-        """set_with_ttl works without expiry time."""
-        svc = _make_service()
-        svc._client.set = AsyncMock()
-
-        result = await svc.set_with_ttl("test_key", "test_value")
-
-        assert result is True
-        svc._client.set.assert_called_once_with("test_key", "test_value", ex=None)
-
-    @pytest.mark.asyncio
-    async def test_set_with_ttl_returns_false_when_not_connected(self):
-        """set_with_ttl returns False when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.set_with_ttl("test_key", "test_value")
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_set_with_ttl_returns_false_on_error(self):
-        """set_with_ttl returns False when Redis operation fails."""
-        svc = _make_service()
-        svc._client.set = AsyncMock(side_effect=Exception("Connection error"))
-
-        result = await svc.set_with_ttl("test_key", "test_value")
-
-        assert result is False
-
-
-# =============================================================================
-# Lua Script Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceEvalScript:
-    """Tests for eval_script (Lua script execution)."""
-
-    @pytest.mark.asyncio
-    async def test_eval_script_success(self):
-        """eval_script executes Lua script and returns result."""
-        svc = _make_service()
-        script = "return redis.call('GET', KEYS[1])"
-        svc._client.eval = AsyncMock(return_value="result_value")
-
-        result = await svc.eval_script(script, 1, "test_key")
-
-        assert result == "result_value"
-        svc._client.eval.assert_called_once_with(script, 1, "test_key")
-
-    @pytest.mark.asyncio
-    async def test_eval_script_returns_none_when_not_connected(self):
-        """eval_script returns None when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.eval_script("return 1", 0)
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_eval_script_returns_none_on_error(self):
-        """eval_script returns None when script execution fails."""
-        svc = _make_service()
-        svc._client.eval = AsyncMock(side_effect=Exception("Script error"))
-
-        result = await svc.eval_script("return 1", 0)
-
-        assert result is None
-
-
-# =============================================================================
-# Streams Tests
-# =============================================================================
-
-
-class TestAppShellRedisServiceStreams:
-    """Tests for Redis Streams operations."""
-
-    @pytest.mark.asyncio
-    async def test_xadd_calls_client(self):
-        """xadd adds entry to stream with correct parameters."""
-        svc = _make_service()
-        svc._client.xadd = AsyncMock(return_value="1234567890-0")
-
-        fields = {"field1": "value1", "field2": "value2"}
-        result = await svc.xadd("test_stream", fields, maxlen=1000)
-
-        assert result == "1234567890-0"
-        svc._client.xadd.assert_called_once_with(
-            "test_stream", fields, maxlen=1000, approximate=True
+    async def test_basic_key_value_operations_use_direct_client(self):
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        kv = RedisKVImpl(client=client)
+
+        assert await kv.get("test_key") == "test_value"
+        await kv.set("test_key", "test_value", ttl=120)
+        assert await kv.exists("test_key") is True
+        assert await kv.delete("test_key") is True
+        assert await kv.increment("counter", amount=2) == 3
+
+        client.get.assert_awaited_once_with("test_key")
+        client.set.assert_awaited_once_with("test_key", "test_value", ex=120)
+        client.exists.assert_awaited_once_with("test_key")
+        client.delete.assert_awaited_once_with("test_key")
+        client.incrby.assert_awaited_once_with("counter", 2)
+
+    async def test_health_tracks_successful_ping_and_close(self):
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        kv = RedisKVImpl(client=client)
+
+        assert kv.is_connected is True
+        assert await kv.ping() is True
+        assert kv.is_connected is True
+
+        await kv.close()
+
+        client.aclose.assert_awaited_once()
+        assert kv.is_connected is False
+
+    async def test_failed_ping_clears_client_and_health(self):
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        client.ping = AsyncMock(side_effect=ConnectionError("down"))
+        kv = RedisKVImpl(client=client)
+
+        assert await kv.ping() is False
+
+        assert kv.is_connected is False
+        assert kv._client is None
+
+    async def test_degrades_without_url(self, monkeypatch):
+        from dal.redis import kv as kv_module
+
+        monkeypatch.setattr(kv_module.settings, "redis_url", "")
+
+        kv = kv_module.RedisKVImpl()
+
+        assert kv.is_connected is False
+        assert await kv.get("test_key") is None
+        await kv.set("test_key", "test_value")
+        assert await kv.setnx("test_key", "test_value", ttl=60) is False
+        assert await kv.exists("test_key") is False
+        assert await kv.delete("test_key") is False
+        assert await kv.increment("counter") == 0
+        assert await kv.ping() is False
+
+
+@pytest.mark.asyncio
+class TestRedisStreamsImpl:
+    async def test_xadd_and_xread_use_dal_shape(self):
+        from dal.redis.streams import RedisStreamsImpl
+
+        client = MagicMock()
+        client.xadd = AsyncMock(return_value="1234567890-0")
+        client.xread = AsyncMock(
+            return_value=[
+                (
+                    "test_stream",
+                    [
+                        ("1234567890-0", {"field1": "value1"}),
+                        ("1234567890-1", {"field2": "value2"}),
+                    ],
+                )
+            ]
         )
 
-    @pytest.mark.asyncio
-    async def test_xadd_without_maxlen(self):
-        """xadd works without maxlen parameter."""
-        svc = _make_service()
-        svc._client.xadd = AsyncMock(return_value="1234567890-0")
+        streams = RedisStreamsImpl(client=client)
 
-        fields = {"field": "value"}
-        result = await svc.xadd("test_stream", fields)
-
-        assert result == "1234567890-0"
-        svc._client.xadd.assert_called_once_with("test_stream", fields)
-
-    @pytest.mark.asyncio
-    async def test_xadd_returns_none_when_not_connected(self):
-        """xadd returns None when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.xadd("test_stream", {"field": "value"})
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_xadd_returns_none_on_error(self):
-        """xadd returns None when operation fails."""
-        svc = _make_service()
-        svc._client.xadd = AsyncMock(side_effect=Exception("Stream error"))
-
-        result = await svc.xadd("test_stream", {"field": "value"})
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_xread_returns_data(self):
-        """xread reads entries from streams and returns parsed data."""
-        svc = _make_service()
-        mock_data = [
-            (
-                "stream1",
-                [
-                    ("1234567890-0", {"field1": "value1"}),
-                    ("1234567890-1", {"field2": "value2"}),
-                ],
-            )
+        assert (
+            await streams.xadd("test_stream", {"field1": "value1"}, maxlen=1000)
+            == "1234567890-0"
+        )
+        assert await streams.xread({"test_stream": "0"}, count=10, block=5000) == [
+            {
+                "stream": "test_stream",
+                "id": "1234567890-0",
+                "fields": {"field1": "value1"},
+            },
+            {
+                "stream": "test_stream",
+                "id": "1234567890-1",
+                "fields": {"field2": "value2"},
+            },
         ]
-        svc._client.xread = AsyncMock(return_value=mock_data)
 
-        result = await svc.xread({"stream1": "0"}, count=10, block=5000)
-
-        assert result == mock_data
-        svc._client.xread.assert_called_once_with(
-            {"stream1": "0"}, count=10, block=5000
+        client.xadd.assert_awaited_once_with(
+            "test_stream", {"field1": "value1"}, maxlen=1000
+        )
+        client.xread.assert_awaited_once_with(
+            {"test_stream": "0"}, block=5000, count=10
         )
 
-    @pytest.mark.asyncio
-    async def test_xread_returns_empty_list_when_no_data(self):
-        """xread returns empty list when no entries available."""
-        svc = _make_service()
-        svc._client.xread = AsyncMock(return_value=None)
+    async def test_health_tracks_successful_ping_and_close(self):
+        from dal.redis.streams import RedisStreamsImpl
 
-        result = await svc.xread({"stream1": "$"})
+        client = MagicMock()
+        client.ping = AsyncMock(return_value=True)
+        client.aclose = AsyncMock()
+        streams = RedisStreamsImpl(client=client)
 
-        assert result == []
+        assert streams.is_connected is True
+        assert await streams.ping() is True
+        assert streams.is_connected is True
 
-    @pytest.mark.asyncio
-    async def test_xread_returns_none_when_not_connected(self):
-        """xread returns None when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
+        await streams.close()
 
-        result = await svc.xread({"stream1": "0"})
+        client.aclose.assert_awaited_once()
+        assert streams.is_connected is False
 
-        assert result is None
+    async def test_failed_ping_clears_client_and_health(self):
+        from dal.redis.streams import RedisStreamsImpl
 
-    @pytest.mark.asyncio
-    async def test_xread_returns_none_on_error(self):
-        """xread returns None when operation fails."""
-        svc = _make_service()
-        svc._client.xread = AsyncMock(side_effect=Exception("Stream error"))
+        client = MagicMock()
+        client.ping = AsyncMock(side_effect=ConnectionError("down"))
+        streams = RedisStreamsImpl(client=client)
 
-        result = await svc.xread({"stream1": "0"})
+        assert await streams.ping() is False
 
-        assert result is None
+        assert streams.is_connected is False
+        assert streams._client is None
 
-    @pytest.mark.asyncio
-    async def test_xlen_returns_count(self):
-        """xlen returns number of entries in stream."""
-        svc = _make_service()
-        svc._client.xlen = AsyncMock(return_value=42)
+    async def test_degrades_without_url(self, monkeypatch):
+        from dal.redis import streams as streams_module
 
-        result = await svc.xlen("test_stream")
+        monkeypatch.setattr(streams_module.settings, "redis_url", "")
 
-        assert result == 42
-        svc._client.xlen.assert_called_once_with("test_stream")
+        streams = streams_module.RedisStreamsImpl()
 
-    @pytest.mark.asyncio
-    async def test_xlen_returns_zero_when_not_connected(self):
-        """xlen returns 0 when client is not connected."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        # _client is None (not connected)
-
-        result = await svc.xlen("test_stream")
-
-        assert result == 0
-
-    @pytest.mark.asyncio
-    async def test_xlen_returns_zero_on_error(self):
-        """xlen returns 0 when operation fails."""
-        svc = _make_service()
-        svc._client.xlen = AsyncMock(side_effect=Exception("Stream error"))
-
-        result = await svc.xlen("test_stream")
-
-        assert result == 0
+        assert streams.is_connected is False
+        assert await streams.xadd("test_stream", {"field": "value"}) == ""
+        assert await streams.xread({"test_stream": "0"}) == []
+        assert await streams.ping() is False
 
 
-# =============================================================================
-# Lifecycle Tests
-# =============================================================================
+@pytest.mark.asyncio
+async def test_create_redis_runtime_deps_wires_command_client_to_relay_heartbeat(
+    monkeypatch,
+):
+    import container
+    from dal.redis import kv as kv_module
+    from dal.redis import lock as lock_module
+    from dal.redis import streams as streams_module
+
+    command_client = MagicMock()
+    command_client.is_connected = True
+    command_client.set = AsyncMock(return_value=True)
+    command_client.exists = AsyncMock(return_value=True)
+    raw_command_client = object()
+    command_client._ensure_client = MagicMock(return_value=raw_command_client)
+
+    streams_client = MagicMock()
+    streams_client.is_connected = True
+
+    redis_kv_ctor = MagicMock(return_value=command_client)
+    redis_streams_ctor = MagicMock(return_value=streams_client)
+    leader_ctor = MagicMock(return_value=MagicMock())
+    room_lock_ctor = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(kv_module, "RedisKVImpl", redis_kv_ctor)
+    monkeypatch.setattr(streams_module, "RedisStreamsImpl", redis_streams_ctor)
+    monkeypatch.setattr(lock_module, "LeaderElectorImpl", leader_ctor)
+    monkeypatch.setattr(lock_module, "RoomRedisDistributedLock", room_lock_ctor)
+
+    redis_runtime = container.create_redis_runtime_deps(
+        redis_url="redis://unit-test",
+        instance_id="worker-1",
+        relay_stream_maxlen=123,
+        relay_hub_heartbeat_ttl=17,
+    )
+
+    assert redis_runtime.command_client is command_client
+    assert redis_runtime.streams_client is streams_client
+    redis_kv_ctor.assert_called_once_with(url="redis://unit-test")
+    redis_streams_ctor.assert_called_once_with(url="redis://unit-test")
+    command_client._ensure_client.assert_called_once_with()
+    leader_ctor.assert_called_once_with(
+        client=raw_command_client,
+        instance_id="worker-1",
+    )
+    room_lock_ctor.assert_called_once_with(client=raw_command_client)
+
+    await redis_runtime.relay_streams.record_heartbeat("hub-1")
+    assert await redis_runtime.relay_streams.is_hub_alive("hub-1") is True
+
+    command_client.set.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ttl=17,
+    )
+    command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
 
 
-class TestAppShellRedisServiceLifecycle:
-    """Tests for start/stop lifecycle methods."""
+@pytest.mark.asyncio
+async def test_close_redis_runtime_deps_dedupes_shared_underlying_clients():
+    import container
 
-    @pytest.mark.asyncio
-    async def test_start_connects_and_pings(self):
-        """start creates client and pings Redis."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
+    shared_client = object()
+    streams_client = object()
+    command_client = MagicMock()
+    command_client._client = shared_client
+    command_client.close = AsyncMock()
+    leader = MagicMock()
+    leader._client = shared_client
+    leader.close = AsyncMock()
+    room_lock = MagicMock()
+    room_lock._client = shared_client
+    room_lock.close = AsyncMock()
+    streams = MagicMock()
+    streams._client = streams_client
+    streams.close = AsyncMock()
 
-        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
-            mock_client = MagicMock()
-            mock_client.ping = AsyncMock()
-            mock_redis.from_url.return_value = mock_client
+    redis_runtime = container.RedisRuntimeDeps(
+        command_client=command_client,
+        streams_client=streams,
+        leader=leader,
+        room_lock=room_lock,
+        relay_streams=None,
+    )
 
-            await svc.start()
+    await container.close_redis_runtime_deps(redis_runtime)
 
-            mock_redis.from_url.assert_called_once_with(
-                "redis://localhost:6379/0",
-                decode_responses=True,
-                socket_connect_timeout=5,
-                max_connections=50,
-            )
-            mock_client.ping.assert_called_once()
-            assert svc.is_connected is True
+    streams.close.assert_awaited_once_with()
+    command_client.close.assert_awaited_once_with()
+    leader.close.assert_not_awaited()
+    room_lock.close.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_start_is_idempotent(self):
-        """start can be called multiple times without effect."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
 
-        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
-            mock_client = MagicMock()
-            mock_client.ping = AsyncMock()
-            mock_redis.from_url.return_value = mock_client
+@pytest.mark.asyncio
+async def test_relay_stream_service_uses_command_client_for_heartbeat():
+    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
-            await svc.start()
-            await svc.start()  # second call should be no-op
+    streams_client = MagicMock()
+    streams_client.is_connected = True
+    command_client = MagicMock()
+    command_client.is_connected = True
+    command_client.set = AsyncMock(return_value=True)
+    command_client.exists = AsyncMock(return_value=True)
 
-            # from_url should only be called once
-            assert mock_redis.from_url.call_count == 1
+    relay_streams = RelayStreamService(
+        streams_client,
+        kv=command_client,
+        heartbeat_ttl=17,
+    )
 
-    @pytest.mark.asyncio
-    async def test_start_sets_client_to_none_on_error(self):
-        """start sets _client to None when connection fails."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
+    await relay_streams.record_heartbeat("hub-1")
+    assert await relay_streams.is_hub_alive("hub-1") is True
 
-        with patch("app_shell.redis_runtime.aioredis") as mock_redis:
-            mock_redis.from_url.side_effect = Exception("Connection failed")
+    command_client.set.assert_awaited_once_with(
+        "hub:heartbeat:hub-1",
+        "1",
+        ttl=17,
+    )
+    command_client.exists.assert_awaited_once_with("hub:heartbeat:hub-1")
 
-            await svc.start()
 
-            assert svc._client is None
-            assert svc.is_connected is False
+@pytest.mark.asyncio
+async def test_relay_stream_service_requires_kv_for_heartbeat():
+    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
-    @pytest.mark.asyncio
-    async def test_stop_closes_client(self):
-        """stop closes the Redis client."""
-        svc = _make_service()
-        mock_aclose = AsyncMock()
-        svc._client.aclose = mock_aclose
+    redis_client = MagicMock()
+    redis_client.is_connected = True
+    redis_client.xadd = AsyncMock(return_value="1-0")
+    redis_client.xread = AsyncMock(return_value=[])
+    redis_client.set = AsyncMock(return_value=True)
+    redis_client.exists = AsyncMock(return_value=True)
 
-        await svc.stop()
+    relay_streams = RelayStreamService(redis_client, heartbeat_ttl=19)
 
-        mock_aclose.assert_called_once()
-        assert svc._client is None
+    await relay_streams.record_heartbeat("hub-1")
+    assert await relay_streams.is_hub_alive("hub-1") is False
 
-    @pytest.mark.asyncio
-    async def test_stop_is_idempotent(self):
-        """stop can be called multiple times safely."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-
-        await svc.stop()  # first call when _client is None
-        await svc.stop()  # second call should be safe
-
-        # Should not raise any errors
-        assert svc._client is None
-
-    @pytest.mark.asyncio
-    async def test_stop_handles_close_errors(self):
-        """stop handles errors during client close gracefully."""
-        svc = _make_service()
-        svc._client.aclose = AsyncMock(side_effect=Exception("Close error"))
-
-        await svc.stop()  # should not raise
-
-        assert svc._client is None
-
-    def test_is_connected_returns_false_when_client_none(self):
-        """is_connected returns False when _client is None."""
-        svc = AppShellRedisService(url="redis://localhost:6379/0")
-        assert svc.is_connected is False
-
-    def test_is_connected_returns_true_when_client_set(self):
-        """is_connected returns True when _client is set."""
-        svc = _make_service()
-        assert svc.is_connected is True
+    redis_client.set.assert_not_awaited()
+    redis_client.exists.assert_not_awaited()

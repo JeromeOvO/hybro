@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_room_runtime_has_no_a2a_sdk_imports():
-    tree = ast.parse(Path("app_shell/room_runtime.py").read_text())
+    tree = ast.parse(Path("room/compat/runtime.py").read_text())
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.ImportFrom)

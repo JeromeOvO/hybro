@@ -18,7 +18,7 @@ Tests cover:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.types import (
@@ -42,7 +42,6 @@ from models.response import (
     RoomCenterUserMessageResponse,
 )
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
-from tests.conftest import PATCH
 
 # =============================================================================
 # Fixtures
@@ -104,7 +103,9 @@ class TestRoomLifecycleFlow:
         mock_rc = MagicMock()
         mock_rc.create_new_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
-                success=True, room_id=room_id, room=mock_room,
+                success=True,
+                room_id=room_id,
+                room=mock_room,
             )
         )
         mock_rc.inquiry_room_setting = AsyncMock(
@@ -112,12 +113,14 @@ class TestRoomLifecycleFlow:
         )
         mock_rc.send_message_to_room = AsyncMock(
             return_value=RoomCenterUserMessageResponse(
-                success=True, message_id=message_id,
+                success=True,
+                message_id=message_id,
             )
         )
         mock_rc.inquiry_room_messages_by_room_id = AsyncMock(
             return_value=RoomCenterRoomMessageResponse(
-                success=True, message_list=[user_msg],
+                success=True,
+                message_list=[user_msg],
             )
         )
 
@@ -128,54 +131,69 @@ class TestRoomLifecycleFlow:
             return_value=ExecutionAck(success=True, message_id=message_id)
         )
         mock_execution_engine.start_orchestration = AsyncMock()
+        mock_execution_engine.get_runs_for_room = AsyncMock(return_value=[])
 
-        with patch(PATCH["room_center.room_store"], mock_db):
-            with patch(PATCH["room_center.room_center"], mock_rc):
-                with patch("api.room_center.execution_engine", mock_execution_engine):
-                    # Step 1: Create room (real endpoint parses request JSON,
-                    # builds RoomCenterRoomSettingRequest, calls room_center)
-                    req1 = MagicMock()
-                    req1.json = AsyncMock(return_value={
-                        "room_name": "Flow Test Room",
-                        "room_owner_name": "Flow User",
-                        "room_agent_set": {"agent-1": "TestAgent"},
-                    })
-                    create_resp = await create_new_room(req1, flow_user)
-                    assert create_resp.success is True
-                    assert create_resp.room_id == room_id
+        # Step 1: Create room (real endpoint parses request JSON,
+        # builds RoomCenterRoomSettingRequest, calls room_center)
+        req1 = MagicMock()
+        req1.json = AsyncMock(
+            return_value={
+                "room_name": "Flow Test Room",
+                "room_owner_name": "Flow User",
+                "room_agent_set": {"agent-1": "TestAgent"},
+            }
+        )
+        create_resp = await create_new_room(req1, flow_user, center=mock_rc)
+        assert create_resp.success is True
+        assert create_resp.room_id == room_id
 
-                    # Verify endpoint set room_owner_id from auth user
-                    create_call = mock_rc.create_new_room.call_args[0][0]
-                    assert create_call.room_owner_id == flow_user.user_id
+        # Verify endpoint set room_owner_id from auth user
+        create_call = mock_rc.create_new_room.call_args[0][0]
+        assert create_call.room_owner_id == flow_user.user_id
 
-                    # Step 2: Query room setting (real endpoint verifies ownership)
-                    req2 = MagicMock()
-                    req2.json = AsyncMock(return_value={"room_id": room_id})
-                    setting_resp = await inquiry_room_setting(req2, flow_user)
-                    assert setting_resp.success is True
-                    assert setting_resp.room.room_id == room_id
+        # Step 2: Query room setting (real endpoint verifies ownership)
+        req2 = MagicMock()
+        req2.json = AsyncMock(return_value={"room_id": room_id})
+        setting_resp = await inquiry_room_setting(
+            req2,
+            flow_user,
+            store=mock_db,
+            engine=mock_execution_engine,
+            center=mock_rc,
+        )
+        assert setting_resp.success is True
+        assert setting_resp.room.room_id == room_id
 
-                    # Step 3: Send message (real endpoint builds request,
-                    # calls execution engine, queues background task)
-                    req3 = MagicMock()
-                    req3.json = AsyncMock(return_value={
-                        "room_id": room_id,
-                        "message": user_msg.model_dump(),
-                        "message_target_mode": "room_default",
-                        "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
-                    })
-                    bg = MagicMock()
-                    send_resp = await send_message(req3, bg, flow_user)
-                    assert send_resp.success is True
-                    assert send_resp.message_id == message_id
-                    bg.add_task.assert_called_once()
+        # Step 3: Send message (real endpoint builds request,
+        # calls execution engine, queues background task)
+        req3 = MagicMock()
+        req3.json = AsyncMock(
+            return_value={
+                "room_id": room_id,
+                "message": user_msg.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
+            }
+        )
+        bg = MagicMock()
+        send_resp = await send_message(
+            req3, bg, flow_user, store=mock_db, engine=mock_execution_engine
+        )
+        assert send_resp.success is True
+        assert send_resp.message_id == message_id
+        bg.add_task.assert_called_once()
 
-                    # Step 4: Query messages
-                    req4 = MagicMock()
-                    req4.json = AsyncMock(return_value={"room_id": room_id})
-                    msgs_resp = await inquiry_room_messages(req4, flow_user)
-                    assert msgs_resp.success is True
-                    assert len(msgs_resp.message_list) == 1
+        # Step 4: Query messages
+        req4 = MagicMock()
+        req4.json = AsyncMock(return_value={"room_id": room_id})
+        msgs_resp = await inquiry_room_messages(
+            req4,
+            flow_user,
+            store=mock_db,
+            center=mock_rc,
+        )
+        assert msgs_resp.success is True
+        assert len(msgs_resp.message_list) == 1
 
     @pytest.mark.asyncio
     async def test_room_ownership_enforcement(self, flow_user):
@@ -206,29 +224,35 @@ class TestRoomLifecycleFlow:
         mock_db = MagicMock()
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
-        with patch(PATCH["room_center.room_store"], mock_db):
-            for endpoint_fn in [
-                inquiry_room_setting,
-                inquiry_active_runs,
-                inquiry_room_messages,
-            ]:
-                req = MagicMock()
-                req.json = AsyncMock(return_value={"room_id": "guarded-room"})
-                with pytest.raises(HTTPException) as exc:
-                    await endpoint_fn(req, other_user)
-                assert exc.value.status_code == 403
-
-            # send_message has a different signature (request, background_tasks, user)
+        for endpoint_fn in [
+            inquiry_room_setting,
+            inquiry_active_runs,
+            inquiry_room_messages,
+        ]:
             req = MagicMock()
-            req.json = AsyncMock(return_value={
+            req.json = AsyncMock(return_value={"room_id": "guarded-room"})
+            kwargs = {"store": mock_db, "center": MagicMock()}
+            if endpoint_fn is not inquiry_room_messages:
+                kwargs["engine"] = MagicMock()
+            with pytest.raises(HTTPException) as exc:
+                await endpoint_fn(req, other_user, **kwargs)
+            assert exc.value.status_code == 403
+
+        # send_message has a different signature (request, background_tasks, user)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={
                 "room_id": "guarded-room",
                 "message": {"message_text": "x"},
                 "message_target_mode": "room_default",
                 "client_request_id": "c7c9a000-0000-4000-8000-000000000004",
-            })
-            with pytest.raises(HTTPException) as exc:
-                await send_message(req, MagicMock(), other_user)
-            assert exc.value.status_code == 403
+            }
+        )
+        with pytest.raises(HTTPException) as exc:
+            await send_message(
+                req, MagicMock(), other_user, store=mock_db, engine=MagicMock()
+            )
+        assert exc.value.status_code == 403
 
 
 # =============================================================================
@@ -251,9 +275,14 @@ class TestAgentLifecycleFlow:
             description="Agent for flow testing",
             url="https://flow-agent.example.com/.well-known/agent.json",
             version="1.0.0",
-            skills=[AgentSkill(
-                id="s1", name="Skill", description="Test", tags=["test"],
-            )],
+            skills=[
+                AgentSkill(
+                    id="s1",
+                    name="Skill",
+                    description="Test",
+                    tags=["test"],
+                )
+            ],
             capabilities=AgentCapabilities(streaming=True),
             defaultInputModes=["text"],
             defaultOutputModes=["text"],
@@ -270,7 +299,9 @@ class TestAgentLifecycleFlow:
         mock_ac = MagicMock()
         mock_ac.register_agent_from_route = AsyncMock(
             return_value=AgentCenterResponse(
-                success=True, agent_id=agent_id, agent=mock_agent,
+                success=True,
+                agent_id=agent_id,
+                agent=mock_agent,
             )
         )
         mock_ac.get_visible_agent_for_route = AsyncMock(
@@ -281,51 +312,49 @@ class TestAgentLifecycleFlow:
         )
         mock_ac.finalize_agent_response_for_route = MagicMock(side_effect=lambda r: r)
 
-        mock_as = MagicMock()
-        mock_as.get_agent_by_agent_id = AsyncMock(return_value=mock_agent)
+        # Step 1: Register (real endpoint extracts agent_url,
+        # sets provider_id from auth user, calls agent_center)
+        req1 = MagicMock()
+        req1.json = AsyncMock(
+            return_value={
+                "agent_url": "https://flow-agent.example.com/.well-known/agent.json",
+            }
+        )
+        reg_resp = await register_agent(req1, flow_user, center=mock_ac)
+        assert reg_resp.success is True
+        assert reg_resp.agent_id == agent_id
 
-        with patch(PATCH["agent.agent_center"], mock_ac):
-            with patch(PATCH["agent.agent_service"], mock_as):
-                with patch(
-                    "api.agent.agent_liveness_checker",
-                    new=AsyncMock(return_value=mock_agent),
-                ):
-                    # Step 1: Register (real endpoint extracts agent_url,
-                    # sets provider_id from auth user, calls agent_center)
-                    req1 = MagicMock()
-                    req1.json = AsyncMock(return_value={
-                        "agent_url": "https://flow-agent.example.com/.well-known/agent.json",
-                    })
-                    reg_resp = await register_agent(req1, flow_user)
-                    assert reg_resp.success is True
-                    assert reg_resp.agent_id == agent_id
+        assert (
+            mock_ac.register_agent_from_route.call_args.kwargs["provider_id"]
+            == flow_user.user_id
+        )
 
-                    assert (
-                        mock_ac.register_agent_from_route.call_args.kwargs["provider_id"]
-                        == flow_user.user_id
-                    )
+        # Step 2: Query (real endpoint delegates visibility to adapter)
+        query_resp = await get_agent(
+            agent_id,
+            user=flow_user,
+            center=mock_ac,
+            liveness_checker=AsyncMock(return_value=mock_agent),
+        )
+        assert query_resp.success is True
+        assert query_resp.agent.agent_id == agent_id
 
-                    # Step 2: Query (real endpoint delegates visibility to adapter)
-                    query_resp = await get_agent(agent_id, user=flow_user)
-                    assert query_resp.success is True
-                    assert query_resp.agent.agent_id == agent_id
+        assert (
+            mock_ac.get_visible_agent_for_route.call_args.kwargs["user_id"]
+            == flow_user.user_id
+        )
 
-                    assert (
-                        mock_ac.get_visible_agent_for_route.call_args.kwargs["user_id"]
-                        == flow_user.user_id
-                    )
-
-                    # Step 3: Delete (real endpoint verifies ownership,
-                    # then calls agent_center.delete_agent_from_route)
-                    req3 = MagicMock()
-                    req3.json = AsyncMock(return_value={"agent_id": agent_id})
-                    del_resp = await delete_agent(req3, flow_user)
-                    assert del_resp.success is True
+        # Step 3: Delete (real endpoint verifies ownership,
+        # then calls agent_center.delete_agent_from_route)
+        req3 = MagicMock()
+        req3.json = AsyncMock(return_value={"agent_id": agent_id})
+        del_resp = await delete_agent(req3, flow_user, center=mock_ac)
+        assert del_resp.success is True
 
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from app_shell.agent_service import AgentService
+        from agent.service import AgentService
         from models.request import AgentCenterRequest
 
         agent_id = "private-flow-001"
@@ -347,7 +376,6 @@ class TestAgentLifecycleFlow:
             is_public=False,
         )
 
-        svc = AgentService()
         facade = MagicMock()
         facade.get_agent = AsyncMock(
             return_value=AgentInfo(
@@ -360,7 +388,7 @@ class TestAgentLifecycleFlow:
                 is_public=False,
             )
         )
-        svc.bind_facade(facade)
+        svc = AgentService(facade=facade)
 
         owner_resp = await svc.query_agent_by_agent_id(
             AgentCenterRequest(agent_id=agent_id, user_id=flow_user.user_id)
@@ -385,7 +413,7 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_complete_hitl_flow(self):
         """request_input -> get_pending_requests -> cancel_request."""
-        from app_shell.hitl_service import create_hitl_service
+        from execution.hitl.factory import create_hitl_service
 
         room_id = "hitl-flow-room"
         msg_id = "hitl-flow-msg"
@@ -447,7 +475,8 @@ class TestHITLFlow:
     @pytest.mark.asyncio
     async def test_hitl_max_rounds_enforcement(self):
         """Should return None when max rounds exceeded."""
-        from app_shell.hitl_service import MAX_HITL_ROUNDS, create_hitl_service
+        from execution.hitl.factory import create_hitl_service
+        from execution.hitl.service import MAX_HITL_ROUNDS
 
         mock_db = MagicMock()
         mock_db.count_hitl_requests_for_message = AsyncMock(
@@ -456,8 +485,11 @@ class TestHITLFlow:
         svc = create_hitl_service(persistence=mock_db)
 
         result = await svc.request_input(
-            room_id="r", user_message_id="m", source="supervisor",
-            prompt="x", continuation_message_id="c",
+            room_id="r",
+            user_message_id="m",
+            source="supervisor",
+            prompt="x",
+            continuation_message_id="c",
         )
         assert result is None
 
@@ -487,7 +519,8 @@ class TestA2ATaskFlow:
             agent_id="agent-t",
             user_id=flow_user.user_id,
             message_content=MessageContent(
-                message_text="Working...", message_task=mock_task,
+                message_text="Working...",
+                message_task=mock_task,
             ),
             has_task_tracking=True,
             task_created_at=datetime.now(),
@@ -498,8 +531,7 @@ class TestA2ATaskFlow:
             return_value=mock_msg,
         )
 
-        with patch(PATCH["a2a_tasks.task_store"], mock_db):
-            result = await get_task_status(msg_id, flow_user)
+        result = await get_task_status(msg_id, flow_user, db=mock_db)
 
         assert result["message_id"] == msg_id
         assert result["status"] == "working"
@@ -512,28 +544,31 @@ class TestA2ATaskFlow:
         msgs = []
         for i in range(3):
             t = Task(
-                id=f"t-{i}", contextId=f"c-{i}",
+                id=f"t-{i}",
+                contextId=f"c-{i}",
                 status=TaskStatus(state=TaskState.working),
             )
-            msgs.append(RoomAgentMessage(
-                room_id=f"r-{i}",
-                message_id=f"m-{i}",
-                agent_id=f"a-{i}",
-                user_id=flow_user.user_id,
-                message_content=MessageContent(
-                    message_text="...", message_task=t,
-                ),
-                has_task_tracking=True,
-                task_created_at=datetime.now(),
-            ))
+            msgs.append(
+                RoomAgentMessage(
+                    room_id=f"r-{i}",
+                    message_id=f"m-{i}",
+                    agent_id=f"a-{i}",
+                    user_id=flow_user.user_id,
+                    message_content=MessageContent(
+                        message_text="...",
+                        message_task=t,
+                    ),
+                    has_task_tracking=True,
+                    task_created_at=datetime.now(),
+                )
+            )
 
         mock_db = MagicMock()
         mock_db.get_pending_task_messages_for_user = AsyncMock(
             return_value=msgs,
         )
 
-        with patch(PATCH["a2a_tasks.task_store"], mock_db):
-            result = await list_user_pending_tasks(flow_user)
+        result = await list_user_pending_tasks(flow_user, db=mock_db)
 
         assert len(result["tasks"]) == 3
 
@@ -570,7 +605,9 @@ class TestMessageCancellationFlow:
         mock_db = MagicMock()
         mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=mock_msg)
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
-        mock_db.get_room_agent_messages_by_related_message_id = AsyncMock(return_value=[])
+        mock_db.get_room_agent_messages_by_related_message_id = AsyncMock(
+            return_value=[]
+        )
         mock_db.update_task_state_on_message = AsyncMock(return_value=(True, None))
 
         mock_mongodb = MagicMock()
@@ -585,9 +622,12 @@ class TestMessageCancellationFlow:
         mock_execution_engine = MagicMock()
         mock_execution_engine.cancel = AsyncMock(return_value=True)
 
-        with patch(PATCH["sse.sse_store"], mock_db):
-            with patch("api.sse.execution_engine", mock_execution_engine):
-                result = await cancel_message(msg_id, flow_user)
+        result = await cancel_message(
+            msg_id,
+            flow_user,
+            db=mock_db,
+            engine=mock_execution_engine,
+        )
 
         assert result["success"] is True
         assert result["message_id"] == msg_id
@@ -608,15 +648,14 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from app_shell.agent_service import AgentService
+        from agent.service import AgentService
         from models.request import AgentCenterRequest
 
-        svc = AgentService()
         facade = MagicMock()
         facade.list_visible_agents = AsyncMock(
             side_effect=Exception("Database connection failed"),
         )
-        svc.bind_facade(facade)
+        svc = AgentService(facade=facade)
 
         result = await svc.get_all_active_agents(AgentCenterRequest())
         assert result.success is False
@@ -630,10 +669,13 @@ class TestErrorHandlingFlow:
         from api.room_center import verify_room_ownership
 
         other_user = ClerkUser(
-            user_id="unauthorized", session_id="s", claims={},
+            user_id="unauthorized",
+            session_id="s",
+            claims={},
         )
         mock_room = Room(
-            room_id="r", room_name="R",
+            room_id="r",
+            room_name="R",
             room_owner_id="real_owner",
             room_owner_name="Owner",
             room_agent_set={},
@@ -641,7 +683,6 @@ class TestErrorHandlingFlow:
         mock_db = MagicMock()
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
-        with patch(PATCH["room_center.room_store"], mock_db):
-            with pytest.raises(HTTPException) as exc:
-                await verify_room_ownership("r", other_user)
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            await verify_room_ownership("r", other_user, mock_db)
+        assert exc.value.status_code == 403

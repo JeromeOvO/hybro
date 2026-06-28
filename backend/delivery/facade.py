@@ -1,8 +1,21 @@
+from enum import Enum
 from typing import Any
 
-from common.dto import DeliveryEvent
+from common.dto import (
+    AgentMessageFinal,
+    ArtifactUpdateEvent,
+    DeliveryEvent,
+    ErrorEvent,
+    ProcessingStatusEvent,
+    TaskSubmittedEvent,
+    TaskUpdateEvent,
+)
 from common.protocols import EventPublisher, RedisKV, SSETransport
 from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+
+
+def _enum_value(value: Any) -> Any:
+    return value.value if isinstance(value, Enum) else value
 
 
 class DeliveryCompatibility:
@@ -146,6 +159,9 @@ class DeliveryFacade:
     async def open_connection(self, room_id: str) -> Any:
         return await self._sse_transport.open_connection(room_id)
 
+    async def add_connection(self, room_id: str) -> Any:
+        return await self.open_connection(room_id)
+
     async def remove_connection(self, room_id: str, connection_id: str) -> None:
         await self._sse_transport.remove_connection(room_id, connection_id)
 
@@ -230,6 +246,192 @@ class DeliveryFacade:
         await self._sse_transport.stop_cancellation_watcher()
         await self._close_kv_once()
         self._started = False
+
+    async def send_agent_response(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        content: str,
+        related_message_id: str | None = None,
+        parts: list[dict] | None = None,
+        client_request_id: str | None = None,
+    ) -> None:
+        content_payload: dict[str, Any] = {
+            "content": content,
+            "related_message_id": related_message_id,
+        }
+        if client_request_id:
+            content_payload["client_request_id"] = client_request_id
+        if parts:
+            content_payload["parts"] = parts
+        await self.emit(
+            AgentMessageFinal(
+                room_id=room_id,
+                message_id=message_id,
+                agent_id=agent_id,
+                content=content_payload,
+            )
+        )
+
+    async def send_error(
+        self,
+        room_id: str,
+        error: str,
+        message_id: str | None = None,
+    ) -> None:
+        await self.emit(ErrorEvent(room_id=room_id, error=error, message_id=message_id))
+
+    async def send_rate_limit_error(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        reason: str,
+        retry_after_seconds: int | None = None,
+        user_requests_used: int = 0,
+        user_requests_limit: int | None = None,
+        system_requests_used: int = 0,
+        system_requests_limit: int | None = None,
+    ) -> None:
+        await self.emit(
+            ErrorEvent(
+                room_id=room_id,
+                error=reason,
+                error_type="rate_limit_exceeded",
+                message_id=message_id,
+                agent_id=agent_id,
+                retry_after_seconds=retry_after_seconds,
+                user_requests_used=user_requests_used,
+                user_requests_limit=user_requests_limit,
+                system_requests_used=system_requests_used,
+                system_requests_limit=system_requests_limit,
+            )
+        )
+
+    async def send_artifact_update(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        artifact: Any,
+        append: bool = False,
+        last_chunk: bool = False,
+        client_request_id: str | None = None,
+    ) -> None:
+        await self.emit(
+            ArtifactUpdateEvent(
+                room_id=room_id,
+                message_id=message_id,
+                agent_id=agent_id,
+                artifact=artifact,
+                append=append,
+                last_chunk=last_chunk,
+                client_request_id=client_request_id,
+            )
+        )
+
+    async def send_processing_status(
+        self,
+        room_id: str,
+        status: Any,
+        message_id: str | None = None,
+        details: Any = None,
+        related_message_id: str | None = None,
+        client_request_id: str | None = None,
+        agents: list[dict] | None = None,
+    ) -> None:
+        await self.emit(
+            ProcessingStatusEvent(
+                room_id=room_id,
+                message_id=message_id,
+                status=_enum_value(status),
+                details=(
+                    details
+                    if isinstance(details, dict)
+                    else {"message": details}
+                    if isinstance(details, str)
+                    else None
+                ),
+                related_message_id=related_message_id,
+                client_request_id=client_request_id,
+                agents=agents,
+            )
+        )
+
+    async def send_task_submitted(
+        self,
+        room_id: str,
+        message_id: str,
+        task_id: str,
+        agent_name: str,
+        agent_id: str | None = None,
+        status: Any = "working",
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        client_request_id: str | None = None,
+    ) -> None:
+        await self.emit(
+            TaskSubmittedEvent(
+                room_id=room_id,
+                message_id=message_id,
+                task_id=task_id,
+                agent_name=agent_name,
+                agent_id=agent_id,
+                status=_enum_value(status),
+                related_message_id=related_message_id,
+                created_at=created_at,
+                step_number=step_number,
+                total_steps=total_steps,
+                task_content=task_content,
+                client_request_id=client_request_id,
+            )
+        )
+
+    async def send_task_update(
+        self,
+        room_id: str,
+        message_id: str,
+        status: Any,
+        content: str | None = None,
+        error: str | None = None,
+        requires_input: bool = False,
+        requires_auth: bool = False,
+        status_message: str | None = None,
+        agent_name: str | None = None,
+        agent_id: str | None = None,
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+        parts: list[dict[str, Any]] | None = None,
+        client_request_id: str | None = None,
+    ) -> None:
+        await self.emit(
+            TaskUpdateEvent(
+                room_id=room_id,
+                message_id=message_id,
+                status=_enum_value(status),
+                content=content,
+                error=error,
+                requires_input=requires_input,
+                requires_auth=requires_auth,
+                status_message=status_message,
+                agent_name=agent_name,
+                agent_id=agent_id,
+                related_message_id=related_message_id,
+                created_at=created_at,
+                step_number=step_number,
+                total_steps=total_steps,
+                task_content=task_content,
+                parts=parts,
+                client_request_id=client_request_id,
+            )
+        )
 
     def set_draining(self, draining: bool) -> None:
         self._sse_transport.set_draining(draining)

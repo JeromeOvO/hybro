@@ -882,5 +882,5 @@ class StaleTaskChecker:
                 )
 
 
-# Singleton instance. App-shell startup binds runtime dependencies and settings.
+# Singleton instance. Application startup binds runtime dependencies and settings.
 stale_task_checker = StaleTaskChecker()

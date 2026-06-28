@@ -2,7 +2,7 @@
 API Key Authentication for Discovery API
 
 Validates X-API-Key header for external API access.
-Validation is delegated to an app-shell-bound authenticator.
+Validation is delegated to the bound API key authenticator.
 """
 
 import hashlib
@@ -21,7 +21,9 @@ def bind_api_key_authenticator(authenticator: APIKeyAuthenticator) -> None:
     api_key_authenticator = authenticator
 
 
-def _require_api_key_authenticator() -> APIKeyAuthenticator | None:
+def _require_api_key_authenticator() -> APIKeyAuthenticator:
+    if api_key_authenticator is None:
+        raise RuntimeError("API key authenticator dependency has not been bound")
     return api_key_authenticator
 
 
@@ -42,7 +44,7 @@ async def validate_api_key(
     api_key: str, *, track_usage: bool = True
 ) -> APIKeyPrincipal:
     """
-    Validate an API key through the bound app-shell authenticator.
+    Validate an API key through the bound authenticator.
 
     Args:
         api_key: The plaintext API key from the request
@@ -57,14 +59,6 @@ async def validate_api_key(
         HTTPException: If the key is invalid, inactive, or not found
     """
     authenticator = _require_api_key_authenticator()
-    if authenticator is None:
-        class DummyPrincipal:
-            key_id = "local_dev_key"
-            user_id = "user_local_developer"
-            name = "Local Dev Key"
-            is_active = True
-        return DummyPrincipal() # type: ignore
-        
     return await authenticator.validate_api_key(api_key, track_usage=track_usage)
 
 
@@ -93,14 +87,6 @@ async def get_api_key(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    if _require_api_key_authenticator() is None:
-        class DummyPrincipal:
-            key_id = "local_dev_key"
-            user_id = "user_local_developer"
-            name = "Local Dev Key"
-            is_active = True
-        return DummyPrincipal() # type: ignore
-
     # Extract API key from header
     api_key = request.headers.get("X-API-Key")
 
@@ -137,14 +123,6 @@ async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    if _require_api_key_authenticator() is None:
-        class DummyPrincipal:
-            key_id = "local_dev_key"
-            user_id = "user_local_developer"
-            name = "Local Dev Key"
-            is_active = True
-        return DummyPrincipal() # type: ignore
-
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:

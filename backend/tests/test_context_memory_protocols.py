@@ -14,6 +14,8 @@ from common.protocols import (
     MemoryRepository,
 )
 
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
+
 
 class FakeMongo:
     def collection(self, name: str):
@@ -45,7 +47,9 @@ class FakeMemoryRepository:
     async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
         return True
 
-    async def update_room_memory_by_memory_id(self, memory_id: str, updates: dict) -> bool:
+    async def update_room_memory_by_memory_id(
+        self, memory_id: str, updates: dict
+    ) -> bool:
         return True
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
@@ -74,7 +78,9 @@ class FakeMemoryRepository:
     ) -> tuple[bool, bool, bool]:
         return True, True, False
 
-    async def update_turn_notes(self, room_id: str, turn_id: str, turn_notes: dict) -> bool:
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
         return True
 
     async def get_room_summary_projection(self, room_id: str) -> dict | None:
@@ -90,7 +96,9 @@ class FakeMemoryRepository:
     ) -> bool:
         return True
 
-    async def compact_turns_bulk(self, room_id: str, compacted_turns: list[dict]) -> bool:
+    async def compact_turns_bulk(
+        self, room_id: str, compacted_turns: list[dict]
+    ) -> bool:
         return True
 
     async def list_room_ids_with_memory(self, limit: int | None = None) -> list[str]:
@@ -116,7 +124,9 @@ class FakeContentRepository:
     async def get_content_stats_for_room(self, room_id: str) -> dict:
         return {"room_id": room_id}
 
-    async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]:
+    async def text_search(
+        self, room_id: str, query: str, limit: int = 50
+    ) -> list[dict]:
         return []
 
     async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
@@ -334,7 +344,7 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     source = inspect.getsource(RoomServices.delete_room_by_room_id)
 
@@ -343,12 +353,45 @@ def test_room_delete_has_no_stale_direct_context_memory_cleanup():
 
 
 def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
-    from app_shell.room_runtime import RoomServices
+    from room.compat.runtime import RoomServices
 
     source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
 
     assert "Context & Memory cleanup skipped" in source
     assert "_context_memory_manager is None" in source
+
+
+def test_message_write_flows_do_not_call_context_memory_write_shims():
+    forbidden = {
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+    }
+    checked_paths = [
+        Path("room/compat/runtime.py"),
+        Path("execution/orchestration/queue_executor.py"),
+        Path("execution/orchestration/supervisor_executor.py"),
+        Path("execution/orchestration/room_message_center.py"),
+    ]
+    violations: list[str] = []
+    for path in checked_paths:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in forbidden:
+                    violations.append(f"{path}:{node.lineno}:{node.func.attr}")
+
+    assert violations == []
+
+
+def test_execution_startup_adapter_does_not_inject_agent_memory_write_shim():
+    source = Path("container.py").read_text()
+
+    for shim in {
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+    }:
+        assert f"room_memory_service.{shim}" not in source
+        assert f"{shim}=(" not in source
 
 
 def test_context_memory_import_boundary():
@@ -376,6 +419,16 @@ def test_context_memory_import_boundary():
         "models.request",
         "models.response",
     }
+    path_legacy_compat_imports = {
+        Path("context_memory/protocols.py"): protocol_legacy_model_imports,
+        Path("context_memory/compat/runtime.py"): {
+            "llm_gateway.errors",
+            "models.error",
+            "models.memory",
+            "models.request",
+            "models.response",
+        },
+    }
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -383,10 +436,7 @@ def test_context_memory_import_boundary():
             root = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if (
-                        path == Path("context_memory/protocols.py")
-                        and alias.name in protocol_legacy_model_imports
-                    ):
+                    if alias.name in path_legacy_compat_imports.get(path, set()):
                         continue
                     root = alias.name.split(".", 1)[0]
                     assert root in allowed_roots and root not in forbidden, (
@@ -394,10 +444,7 @@ def test_context_memory_import_boundary():
                         alias.name,
                     )
             elif isinstance(node, ast.ImportFrom) and node.module:
-                if (
-                    path == Path("context_memory/protocols.py")
-                    and node.module in protocol_legacy_model_imports
-                ):
+                if node.module in path_legacy_compat_imports.get(path, set()):
                     continue
                 root = node.module.split(".", 1)[0]
                 assert root in allowed_roots and root not in forbidden, (
@@ -408,11 +455,11 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "app_shell/context_assembly_service.py": {
+        "context_memory/compat/context_assembly.py": {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },
-        "app_shell/memory_service.py": {
+        "context_memory/compat/runtime.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
             "legacy_get_room_memory_by_memory_id",
@@ -425,12 +472,30 @@ def test_non_protocol_helper_call_boundary():
             "add_synthesis_to_history",
             "update_room_summary",
         },
-        "app_shell/memory_search_service.py": {
+        "context_memory/search_adapter.py": {
             "legacy_search",
             "index_turn_for_search",
             "delete_room_index",
         },
-        "app_shell/compaction_service.py": {
+        f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
+            "legacy_create_room_memory",
+            "legacy_get_room_memory_by_room_id",
+            "legacy_get_room_memory_by_memory_id",
+            "legacy_update_room_memory_by_room_id",
+            "legacy_update_room_memory_by_memory_id",
+            "legacy_delete_room_memory_by_room_id",
+            "legacy_delete_room_memory_by_memory_id",
+            "initialize_or_update_room_memory",
+            "add_agent_response_to_memory",
+            "add_synthesis_to_history",
+            "update_room_summary",
+        },
+        f"{REMOVED_RUNTIME_PACKAGE}/memory_search_service.py": {
+            "legacy_search",
+            "index_turn_for_search",
+            "delete_room_index",
+        },
+        f"{REMOVED_RUNTIME_PACKAGE}/compaction_service.py": {
             "should_compact",
             "compact_if_needed",
             "compact_room_memory",
@@ -449,11 +514,12 @@ def test_non_protocol_helper_call_boundary():
     violations = []
     for path in Path(".").rglob("*.py"):
         if (
-            path.parts[0] in {"context_memory", "tests"}
-                or path in {Path("container.py"), Path("main.py")}
-                or ".venv" in path.parts
-                or ".worktrees" in path.parts
-            ):
+            path.parts[0] == "tests"
+            or (path.parts[0] == "context_memory" and path not in path_allowed_helpers)
+            or path in {Path("container.py"), Path("main.py")}
+            or ".venv" in path.parts
+            or ".worktrees" in path.parts
+        ):
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

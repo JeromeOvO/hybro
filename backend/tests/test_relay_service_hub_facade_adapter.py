@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from app_shell.relay_service import RelayService
+from hub_runtime_bridge.compat.relay_service import RelayService
 
 
 class _DatabaseService:
-    pass
-
-
-class _SSEManager:
     pass
 
 
@@ -77,7 +73,6 @@ def service(monkeypatch):
     relay = RelayService(
         mongo=None,
         legacy_store=_DatabaseService(),
-        sse_manager=_SSEManager(),
         offline_failure_port=_OfflineFailurePort(),
     )
     spy = _FacadeSpy()

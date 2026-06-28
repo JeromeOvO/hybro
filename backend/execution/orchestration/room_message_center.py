@@ -16,6 +16,7 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
+from context_memory.protocols import ContextMemoryCompactionPort
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
@@ -40,6 +41,7 @@ from execution.ports import (
     RoomRuntimePort,
     RoomTaskStateStore,
     RoomWriter,
+    TaskNotificationStorePort,
 )
 from execution.state.task_state_manager import TaskStateManager
 from llm_gateway.errors import LLMServiceNotBoundError
@@ -73,9 +75,9 @@ class _UnboundRoomMessageCenterStore:
 a2a_transport = None
 agent_resolver_service = None
 default_store = _UnboundRoomMessageCenterStore()
-debate_service = None
+debate_prompt_injector = None
 room_memory = None
-notification_service = None
+task_notifier = None
 rate_limit_service = None
 coordinator = None
 summary_service = None
@@ -84,7 +86,7 @@ room_supervisor_service = None
 delivery = None
 remote_task_reader = None
 context_memory_runtime = None
-compaction_service = None
+context_compaction = None
 build_turn_content = None
 SupervisorPlanningError = RuntimeError
 
@@ -142,12 +144,13 @@ class RoomMessageCenter:
         hitl_reader: HITLReaderPort,
         delivery: ExecutionDeliveryPort,
         coordinator: CoordinatorSynthesisPort,
-        notification_service: NotificationServicePort,
+        task_notifier: NotificationServicePort,
+        task_notification_store: TaskNotificationStorePort,
         agent_resolver_service,
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
         room_memory: RoomMemoryPort,
-        debate_service,
+        debate_prompt_injector,
         rate_limit_service: RateLimitPort,
         room_supervisor_service,
         hitl_coordinator: HITLCoordinator,
@@ -159,7 +162,7 @@ class RoomMessageCenter:
         s3_service=None,
         capability_issue_service=None,
         context_memory_runtime: ContextMemoryRuntime | None = None,
-        compaction_service=None,
+        context_compaction: ContextMemoryCompactionPort | None = None,
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
@@ -183,10 +186,11 @@ class RoomMessageCenter:
         self.coordinator = coordinator
         self.summary_service = summary_service
         self.task_notifications = task_notifications
+        self.task_notification_store = task_notification_store
         self.room_memory = room_memory
         self.hitl_coordinator = hitl_coordinator
         self.context_memory_runtime = context_memory_runtime
-        self.compaction_service = compaction_service
+        self.context_compaction = context_compaction
         self.build_turn_content = build_turn_content_func
         self.supervisor_planning_error_cls = supervisor_planning_error_cls
         self.orphan_threshold_minutes = (
@@ -195,7 +199,7 @@ class RoomMessageCenter:
             else orphan_threshold_minutes
         )
         self.debate_rounds = debate_rounds
-        self.tsm = TaskStateManager(self.room_runtime, notification_service)
+        self.tsm = TaskStateManager(self.room_runtime, task_notifier)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             message_writer=self.message_writer,
@@ -226,7 +230,8 @@ class RoomMessageCenter:
             delivery=self.delivery,
             room_message_center=self,
             hitl_coordinator=hitl_coordinator,
-            notification_service=notification_service,
+            task_notifier=task_notifier,
+            task_notification_store=self.task_notification_store,
             task_notification_impl=task_notification_impl,
         )
 
@@ -269,7 +274,7 @@ class RoomMessageCenter:
             agent_lookup=self.agent_lookup,
             room_reader=self.room_reader,
             memory_reader=self.memory_reader,
-            debate_service=debate_service,
+            debate_prompt_injector=debate_prompt_injector,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -1191,7 +1196,7 @@ class RoomMessageCenter:
 
         Deserializes ``agent_registry``, ``room_config``, and
         ``conversation_context`` from the user message's ``extend_info``
-        (set by ``_prepare_for_supervisor`` in ``RoomServices``), then
+        (prepared by the room runtime), then
         delegates to ``SupervisorExecutor.run()``.
 
         Also handles clarify-resume: when the user message was prepared by
@@ -2317,8 +2322,8 @@ class RoomMessageCenter:
     async def _trigger_compaction_safe(self, room_id: str) -> None:
         """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
         try:
-            if self.compaction_service is not None:
-                await self.compaction_service.compact_if_needed(room_id)
+            if self.context_compaction is not None:
+                await self.context_compaction.compact_if_needed(room_id)
         except Exception as e:
             logger.warning(
                 "RoomMessageCenter: Background compaction failed for %s: %s",

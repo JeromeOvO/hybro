@@ -230,6 +230,61 @@ async def test_emit_internal_schedules_handlers_and_publishes_without_sse():
 
 
 @pytest.mark.asyncio
+async def test_emit_internal_can_wait_for_local_handlers_before_returning():
+    runner = RecordingTaskRunner()
+    publisher = make_publisher(task_runner=runner)
+    order: list[str] = []
+
+    async def handler(event):
+        order.append("handler-start")
+        await asyncio.sleep(0)
+        order.append("handler-done")
+
+    event = MessageCommitted(
+        room_id="room-1",
+        message_id="msg-1",
+        message_type="user",
+        timestamp=NOW,
+    )
+    publisher.register_internal_handler("message_committed", handler)
+
+    await publisher.emit_internal(event, wait_for_local_handlers=True)
+
+    assert order == ["handler-start", "handler-done"]
+    assert all(task.done() for task in runner.tasks)
+
+
+@pytest.mark.asyncio
+async def test_emit_internal_can_skip_redis_fanout_for_local_only_events():
+    transport = FakeTransport()
+    bus = FakeBus()
+    runner = RecordingTaskRunner()
+    publisher = make_publisher(transport=transport, bus=bus, task_runner=runner)
+    received = []
+
+    async def handler(event):
+        received.append(event)
+
+    event = MessageCommitted(
+        room_id="room-1",
+        message_id="msg-1",
+        message_type="user",
+        timestamp=NOW,
+    )
+    publisher.register_internal_handler("message_committed", handler)
+
+    await publisher.emit_internal(
+        event,
+        wait_for_local_handlers=True,
+        broadcast=False,
+    )
+
+    assert received == [event]
+    assert bus.internal == []
+    assert transport.frames == []
+
+
+@pytest.mark.asyncio
 async def test_emit_does_not_dispatch_internal_handlers():
     runner = RecordingTaskRunner()
     publisher = make_publisher(task_runner=runner)

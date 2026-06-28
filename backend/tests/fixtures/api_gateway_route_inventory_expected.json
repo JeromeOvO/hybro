@@ -428,7 +428,7 @@
       "POST"
     ],
     "name": "create_endpoint",
-    "endpoint_module": "api_gateway.viewsets.base",
+    "endpoint_module": "api_gateway.viewsets.agent",
     "declared_owner": "api_gateway.routes.agent_routes",
     "tags": [
       "agent",
@@ -436,8 +436,11 @@
     ],
     "status_code": 201,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -458,8 +461,10 @@
     ],
     "status_code": 204,
     "dependencies": [
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -502,8 +507,11 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -524,11 +532,211 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_agent_viewset_embedding_provider",
+      "get_agent_viewset_vector_index",
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_api_keys",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_api_key",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": 201,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/api-keys/{key_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "deactivate_api_key",
+    "endpoint_module": "api_gateway.routes.discovery_api_key_routes",
+    "declared_owner": "api_gateway.routes.discovery_api_key_routes",
+    "tags": [
+      "api_keys"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key_store",
+      "get_current_user"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/discovery/agents",
+    "methods": [
+      "POST"
+    ],
+    "name": "discover_agents",
+    "endpoint_module": "api_gateway.routes.discovery_routes",
+    "declared_owner": "api_gateway.routes.discovery_routes",
+    "tags": [
+      "discovery"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_discovery_default_limit",
+      "get_discovery_rate_limiter",
+      "get_discovery_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/files/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_file",
+    "endpoint_module": "api_gateway.routes.files_routes",
+    "declared_owner": "api_gateway.routes.files_routes",
+    "tags": [
+      "files",
+      "files"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_file_storage",
+      "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/discover",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_discover",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/card",
+    "methods": [
+      "GET"
+    ],
+    "name": "gateway_get_card",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/message/send",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_send",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/gateway/agents/{agent_id}/message/stream",
+    "methods": [
+      "POST"
+    ],
+    "name": "gateway_stream",
+    "endpoint_module": "api_gateway.routes.platform_gateway_routes",
+    "declared_owner": "api_gateway.routes.platform_gateway_routes",
+    "tags": [
+      "gateway"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_api_key",
+      "get_gateway_rate_limiter",
+      "get_gateway_service"
+    ],
+    "auth_dependencies": [
+      "get_api_key"
     ],
     "include_in_schema": true
   },
@@ -840,7 +1048,9 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -861,7 +1071,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -882,7 +1093,9 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -923,7 +1136,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -965,7 +1180,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -986,7 +1202,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1007,7 +1224,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_room_center"
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1049,7 +1267,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1070,7 +1290,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1091,7 +1313,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1134,8 +1358,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_manager",
-      "get_sse_store"
+      "get_sse_store",
+      "get_sse_transport"
     ],
     "auth_dependencies": [
       "get_current_user_with_query_token"
@@ -1156,8 +1380,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user_with_query_token",
-      "get_sse_manager",
-      "get_sse_store"
+      "get_sse_store",
+      "get_sse_transport"
     ],
     "auth_dependencies": [
       "get_current_user_with_query_token"

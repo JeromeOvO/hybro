@@ -4,7 +4,7 @@ Integration tests for Agent Matching & Dispatch Pipeline
 End-to-end tests verifying data flow across:
 - AgentMatcher → AgentSelectionService
 - RoomServices → AgentSelectionService → AgentMatcher
-- SequentialDebateDispatcher (shared by debate_service + SupervisorExecutor)
+- SequentialDebateDispatcher (shared by DebatePromptInjector + SupervisorExecutor)
 - DispatchStrategy resolution
 - required_input_modes threading
 
@@ -16,19 +16,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
 
-from app_shell.agent_matcher import (
+from agent.matcher import (
     MatchedAgent,
     MatchResult,
     compute_capability_score,
     select_top_agents,
 )
-from app_shell.agent_selection_service import AgentSelectionService, RoutingStrategy
-from app_shell.debate_service import debate_service
-from app_shell.room_runtime import RoomServices
+from agent.selection_service import AgentSelectionService, RoutingStrategy
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.orchestration.debate_prompt_injector import DebatePromptInjector
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
+from room.compat.runtime import RoomServices
 
 # ---- Test Helpers ----
 
@@ -74,7 +74,7 @@ async def test_all_agents_uses_agent_matcher():
     )
 
     # Patch AgentMatcher.match at the correct module level
-    with patch("app_shell.agent_matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
         mock_match.return_value = mock_match_result
 
         # Create service and call select_agents_for_message
@@ -123,7 +123,7 @@ async def test_room_team_bypasses_matcher():
     )
 
     # Mock agent_selection_service to track if it's called
-    with patch("app_shell.agent_selection_service.agent_selection_service.select_agents_for_message") as mock_select:
+    with patch("agent.selection_service.AgentSelectionService.select_agents_for_message") as mock_select:
         mock_select.return_value = None  # Should not be called
 
         # Create RoomServices and call _resolve_explicit_target_scope
@@ -245,7 +245,7 @@ async def test_derive_required_input_modes_flows_to_matcher():
     assert required_modes == ["application/pdf", "image/jpeg"]
 
     # Mock AgentMatcher.match to verify it receives required_input_modes
-    with patch("app_shell.agent_matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
         mock_match.return_value = MatchResult(agents=[], total_candidates=0, filtered_count=0)
 
         service = AgentSelectionService()
@@ -265,7 +265,7 @@ async def test_derive_required_input_modes_flows_to_matcher():
 async def test_no_matching_agents_graceful_fallback():
     """Verify empty MatchResult produces meaningful fallback response."""
     # Mock AgentMatcher.match to return empty result
-    with patch("app_shell.agent_matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
         mock_match.return_value = MatchResult(agents=[], total_candidates=0, filtered_count=0)
 
         service = AgentSelectionService()
@@ -284,7 +284,7 @@ async def test_no_matching_agents_graceful_fallback():
 @pytest.mark.asyncio
 async def test_matcher_error_propagates_to_caller():
     """Verify matcher exceptions propagate so callers can return proper 500s."""
-    with patch("app_shell.agent_matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
         mock_match.side_effect = RuntimeError("Database connection failed")
 
         service = AgentSelectionService()
@@ -391,7 +391,7 @@ def test_sequential_debate_first_agent_gets_raw_task():
 
 @pytest.mark.asyncio
 async def test_debate_service_uses_shared_dispatcher():
-    """Verify debate_service delegates to SequentialDebateDispatcher."""
+    """Verify DebatePromptInjector delegates to SequentialDebateDispatcher."""
     from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
     from models.room import RoomAgentMessage
@@ -437,16 +437,18 @@ async def test_debate_service_uses_shared_dispatcher():
         ),
     )
 
+    injector = DebatePromptInjector()
+
     # Mock database calls
-    with patch.object(debate_service._store, "get_room_agent_message_by_message_id", new_callable=AsyncMock) as mock_get_msg, \
-         patch.object(debate_service._store, "get_agent_name_by_agent_id", new_callable=AsyncMock) as mock_get_name, \
-         patch.object(debate_service._store, "update_room_agent_message_with_new_message_content_by_message_id", new_callable=AsyncMock) as mock_update:
+    with patch.object(injector._message_store, "get_room_agent_message_by_message_id", new_callable=AsyncMock) as mock_get_msg, \
+         patch.object(injector._message_store, "get_agent_name_by_agent_id", new_callable=AsyncMock) as mock_get_name, \
+         patch.object(injector._message_store, "update_room_agent_message_with_new_message_content_by_message_id", new_callable=AsyncMock) as mock_update:
 
         mock_get_msg.side_effect = [prior_message, current_message]
         mock_get_name.return_value = "PriorAgent"
         mock_update.return_value = True
 
-        await debate_service.inject_short_debate_for_agent_message(current_message)
+        await injector.inject_short_debate_for_agent_message(current_message)
         assert mock_update.called
 
 

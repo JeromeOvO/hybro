@@ -1,130 +1,290 @@
-"""Gateway dependency binding surface.
-
-The first consolidation pass keeps existing route modules as dependency holders
-while API Gateway owns HTTP route registration.
-"""
+"""Gateway-owned FastAPI dependency context."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
+from fastapi import Depends, Request
 
-@dataclass(frozen=True)
+from agent.protocols import (
+    AgentCapabilityIssueStore,
+    AgentCenterCompatibility,
+    AgentGroupStoreCompatibility,
+    AgentInspection,
+    AgentLivenessChecker,
+    AgentSuggestionService,
+)
+from common.protocols import (
+    A2ATaskStatusReader,
+    AgentAvatarManager,
+    AgentRegistry,
+    AgentVectorIndexWriter,
+    APIKeyRateLimiter,
+    APIKeyStore,
+    EmbeddingServiceProtocol,
+    ExecutionEngine,
+    FileStorage,
+    GatewayDiscoveryProvider,
+    GatewayService,
+    HITLManager,
+    HubRelayManagement,
+    HubStatusReader,
+    RoomOwnershipReader,
+    RoomRouteReader,
+    SSERouteTransport,
+    SSEStateReader,
+    ViewSetRepositoryProvider,
+    WebhookReceiver,
+)
+from context_memory.protocols import LegacyChatContextAPI
+from room.protocols import RoomCenterCompatibility
+
+
+@dataclass(frozen=True, slots=True)
 class APIGatewayDeps:
-    file_storage: Any
-    relay_service: Any
-    execution_deps: Any
-    platform_facade: Any
+    task_store: A2ATaskStatusReader
+    agent_center: AgentCenterCompatibility
+    agent_service: AgentRegistry
+    capability_issue_service: AgentCapabilityIssueStore
+    agent_avatar_manager: AgentAvatarManager
+    agent_liveness_checker: AgentLivenessChecker
+    agent_group_store: AgentGroupStoreCompatibility
+    api_key_store: APIKeyStore
+    discovery_service: GatewayDiscoveryProvider
+    discovery_rate_limiter: APIKeyRateLimiter
+    discovery_default_limit: int
+    file_storage: FileStorage
+    room_ownership_reader: RoomOwnershipReader
+    hitl_manager: HITLManager
+    hub_relay_service: HubStatusReader
+    inspection_center: AgentInspection
+    memory_center: LegacyChatContextAPI
+    gateway_service: GatewayService
+    gateway_rate_limiter: APIKeyRateLimiter
+    relay_service: HubRelayManagement
+    room_center: RoomCenterCompatibility
+    room_store: RoomRouteReader
+    agent_selection_service: AgentSuggestionService
+    execution_engine: ExecutionEngine
+    sse_store: SSEStateReader
+    sse_transport: SSERouteTransport
+    webhook_receiver: WebhookReceiver
+    repository_provider: ViewSetRepositoryProvider
+    embedding_provider: EmbeddingServiceProtocol
+    vector_index: AgentVectorIndexWriter
 
 
-_deps: APIGatewayDeps | None = None
-
-
-def missing_gateway_route_bindings() -> list[str]:
-    from api_gateway.routes import (
-        a2a_task_routes,
-        agent_group_routes,
-        agent_routes,
-
-        hitl_routes,
-        hub_routes,
-        inspection_routes,
-        memory_routes,
-        relay_routes,
-        room_routes,
-        sse_routes,
-        webhook_routes,
-    )
-    from api_gateway.viewsets import agent as agent_viewset
-    from api_gateway.viewsets import base as viewset
-
-    bindings = {
-        "api_gateway.routes.a2a_task_routes": (a2a_task_routes, ("task_store",)),
-        "api_gateway.routes.agent_group_routes": (agent_group_routes, ("agent_group_store",)),
-        "api_gateway.routes.agent_routes": (
-            agent_routes,
-            (
-                "agent_center",
-                "agent_service",
-                "capability_issue_service",
-                "agent_avatar_manager",
-                "agent_liveness_checker",
-            ),
-        ),
-
-        "api_gateway.routes.hitl_routes": (
-            hitl_routes,
-            ("hitl_manager", "room_ownership_reader"),
-        ),
-        "api_gateway.routes.hub_routes": (hub_routes, ("hub_relay_service",)),
-        "api_gateway.routes.inspection_routes": (
-            inspection_routes,
-            ("inspection_center",),
-        ),
-        "api_gateway.routes.memory_routes": (memory_routes, ("memory_center",)),
-        "api_gateway.routes.relay_routes": (relay_routes, ("relay_service",)),
-        "api_gateway.routes.room_routes": (
-            room_routes,
-            ("room_center", "room_store", "agent_selection_service", "execution_engine"),
-        ),
-        "api_gateway.routes.sse_routes": (
-            sse_routes,
-            ("execution_engine", "sse_store", "sse_manager"),
-        ),
-        "api_gateway.routes.webhook_routes": (
-            webhook_routes,
-            ("webhook_receiver",),
-        ),
-        "api_gateway.viewsets.agent": (
-            agent_viewset,
-            ("embedding_provider", "vector_index"),
-        ),
-        "api_gateway.viewsets.base": (viewset, ("repository_provider",)),
-    }
-
-    missing = []
-    for module_name, (module, names) in bindings.items():
-        for name in names:
-            if getattr(module, name) is None:
-                missing.append(f"{module_name}.{name}")
-    return missing
-
-
-def missing_required_deps(deps: APIGatewayDeps | None = None) -> list[str]:
-    include_route_bindings = deps is None
+def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
     if deps is None:
-        deps = _deps
-    if deps is None:
-        return ["api_gateway.dependencies"]
-
-    missing = []
-    for field_name in APIGatewayDeps.__dataclass_fields__:
-        if field_name in {"file_storage", "platform_facade"}:
-            continue
-        if getattr(deps, field_name) is None:
-            missing.append(field_name)
-    if include_route_bindings:
-        missing.extend(missing_gateway_route_bindings())
-    return missing
+        return ["app.state.api_gateway_deps"]
+    return [
+        field.name
+        for field in fields(APIGatewayDeps)
+        if getattr(deps, field.name) is None
+    ]
 
 
-def bind_api_gateway_deps(deps: APIGatewayDeps) -> None:
+def bind_api_gateway_deps(app: Any, deps: APIGatewayDeps) -> None:
     missing = missing_required_deps(deps)
     if missing:
         raise RuntimeError(
             "APIGatewayDeps incomplete - missing: " + ", ".join(missing)
         )
 
-    global _deps
-    _deps = deps
+    app.state.api_gateway_deps = deps
 
 
-def get_api_gateway_deps() -> APIGatewayDeps:
-    if _deps is None:
+def get_api_gateway_deps(request: Request) -> APIGatewayDeps:
+    deps = getattr(request.app.state, "api_gateway_deps", None)
+    if deps is None:
         raise RuntimeError("APIGatewayDeps not bound - startup incomplete")
-    return _deps
+    return deps
 
 
-def is_bound() -> bool:
-    return _deps is not None and not missing_required_deps()
+_API_GATEWAY_DEPS_DEPENDENCY = Depends(get_api_gateway_deps)
+
+
+def is_bound(app: Any) -> bool:
+    deps = getattr(app.state, "api_gateway_deps", None)
+    return deps is not None and not missing_required_deps(deps)
+
+
+def get_task_store(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> A2ATaskStatusReader:
+    return deps.task_store
+
+
+def get_agent_center(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentCenterCompatibility:
+    return deps.agent_center
+
+
+def get_agent_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentRegistry:
+    return deps.agent_service
+
+
+def get_capability_issue_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentCapabilityIssueStore:
+    return deps.capability_issue_service
+
+
+def get_agent_avatar_manager(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentAvatarManager:
+    return deps.agent_avatar_manager
+
+
+def get_agent_liveness_checker(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentLivenessChecker:
+    return deps.agent_liveness_checker
+
+
+def get_agent_group_store(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentGroupStoreCompatibility:
+    return deps.agent_group_store
+
+
+def get_api_key_store(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> APIKeyStore:
+    return deps.api_key_store
+
+
+def get_discovery_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> GatewayDiscoveryProvider:
+    return deps.discovery_service
+
+
+def get_discovery_rate_limiter(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> APIKeyRateLimiter:
+    return deps.discovery_rate_limiter
+
+
+def get_discovery_default_limit(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> int:
+    return deps.discovery_default_limit
+
+
+def get_file_storage(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> FileStorage:
+    return deps.file_storage
+
+
+def get_room_ownership_reader(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> RoomOwnershipReader:
+    return deps.room_ownership_reader
+
+
+def get_hitl_manager(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> HITLManager:
+    return deps.hitl_manager
+
+
+def get_hub_relay_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> HubStatusReader:
+    return deps.hub_relay_service
+
+
+def get_inspection_center(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentInspection:
+    return deps.inspection_center
+
+
+def get_memory_center(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> LegacyChatContextAPI:
+    return deps.memory_center
+
+
+def get_gateway_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> GatewayService:
+    return deps.gateway_service
+
+
+def get_gateway_rate_limiter(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> APIKeyRateLimiter:
+    return deps.gateway_rate_limiter
+
+
+def get_relay_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> HubRelayManagement:
+    return deps.relay_service
+
+
+def get_room_center(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> RoomCenterCompatibility:
+    return deps.room_center
+
+
+def get_room_store(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> RoomRouteReader:
+    return deps.room_store
+
+
+def get_agent_selection_service(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentSuggestionService:
+    return deps.agent_selection_service
+
+
+def get_execution_engine(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> ExecutionEngine:
+    return deps.execution_engine
+
+
+def get_sse_store(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> SSEStateReader:
+    return deps.sse_store
+
+
+def get_sse_transport(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> SSERouteTransport:
+    return deps.sse_transport
+
+
+def get_webhook_receiver(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> WebhookReceiver:
+    return deps.webhook_receiver
+
+
+def get_viewset_repository_provider(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> ViewSetRepositoryProvider:
+    return deps.repository_provider
+
+
+def get_agent_viewset_embedding_provider(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> EmbeddingServiceProtocol:
+    return deps.embedding_provider
+
+
+def get_agent_viewset_vector_index(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentVectorIndexWriter:
+    return deps.vector_index

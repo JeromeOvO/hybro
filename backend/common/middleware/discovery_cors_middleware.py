@@ -5,15 +5,23 @@ Applies permissive CORS settings specifically for the Discovery API endpoints
 to allow external access from any origin.
 """
 
+from collections.abc import Iterable
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from api_gateway.registry import open_cors_path_prefixes
-
 
 def _path_matches_prefix(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _default_open_cors_path_prefixes(api_prefix: str) -> tuple[str, ...]:
+    return (
+        f"{api_prefix}/discovery",
+        f"{api_prefix}/gateway",
+        f"{api_prefix}/relay",
+    )
 
 
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
@@ -25,9 +33,18 @@ class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     Allows all origins, methods, and headers for external API access.
     """
 
-    def __init__(self, app, *, api_prefix: str = "/api/v1") -> None:
+    def __init__(
+        self,
+        app,
+        *,
+        api_prefix: str = "/api/v1",
+        open_cors_path_prefixes: Iterable[str] | None = None,
+    ) -> None:
         super().__init__(app)
-        self._open_cors_path_prefixes = open_cors_path_prefixes(api_prefix)
+        if open_cors_path_prefixes is None:
+            self._open_cors_path_prefixes = _default_open_cors_path_prefixes(api_prefix)
+        else:
+            self._open_cors_path_prefixes = tuple(open_cors_path_prefixes)
 
     async def dispatch(self, request: Request, call_next):
         is_external_api = any(

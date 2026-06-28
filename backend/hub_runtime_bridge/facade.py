@@ -43,7 +43,7 @@ from hub_runtime_bridge.task_ownership import (
 )
 from hub_runtime_bridge.transport.offline_queue import OfflineQueue
 
-legacy_relay_logger = logging.getLogger("app_shell.relay_service")
+legacy_relay_logger = logging.getLogger("hub_runtime_bridge.compat.relay_service")
 
 
 @dataclass(frozen=True)

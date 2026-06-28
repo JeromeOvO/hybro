@@ -1,20 +1,23 @@
 """Tests for hub heartbeat fixes: SSE refresh, self-heal, connection guard, ownership check."""
 
+import ast
 import asyncio
 import logging
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.agent_liveness_service import (
+from agent.liveness import (
     bind_agent_liveness_deps,
     check_and_sync_liveness,
     reset_agent_liveness_deps,
 )
-from app_shell.relay_service import (
+from hub_runtime_bridge.compat.relay_service import (
     RelayHubLivenessReader,
     RelayService,
 )
+from models.agent import AgentStatus
 from models.api_key import APIKey
 from models.hub import HubAgentSync, RelayToHubEvent
 from tests.conftest import FROZEN_TIME
@@ -100,16 +103,9 @@ def _make_service(mongo=None, streams=None):
     db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
     db_service.pinecone.upsert = MagicMock()
 
-    sse_manager = MagicMock()
-    sse_manager.send_agent_response = AsyncMock()
-    sse_manager.send_task_submitted = AsyncMock()
-    sse_manager.send_processing_status = AsyncMock()
-    sse_manager.send_error = AsyncMock()
-
     svc = RelayService(
         mongo=mongo,
         legacy_store=db_service,
-        sse_manager=sse_manager,
         offline_failure_port=MagicMock(mark_hub_message_failed=AsyncMock()),
     )
     if streams is not None:
@@ -191,8 +187,6 @@ class TestIsHubAlive:
     async def test_agent_liveness_uses_async_liveness_reader(self):
         from types import SimpleNamespace
 
-        from models.agent import AgentStatus
-
         reader = FakeHubLivenessReader(True)
         writer = _make_writer()
         bind_agent_liveness_deps(
@@ -214,6 +208,56 @@ class TestIsHubAlive:
         assert result.agent_status == AgentStatus.active
         assert reader.checked == ["hub-1"]
         writer.mark_hub_agents_offline.assert_not_awaited()
+
+    async def test_agent_liveness_reset_clears_cloud_health_service(self):
+        health = MagicMock()
+        health.check_agent_health = AsyncMock(return_value=(True, None))
+        health.update_agent_status = AsyncMock()
+        bind_agent_liveness_deps(health_service=health)
+        reset_agent_liveness_deps()
+
+        agent = MagicMock()
+        agent.agent_id = "cloud-agent"
+        agent.hub_id = None
+        agent.source = "cloud"
+        agent.agent_status = AgentStatus.active
+
+        result = await check_and_sync_liveness(agent)
+
+        assert result is agent
+        health.check_agent_health.assert_not_awaited()
+
+
+
+def test_container_binds_health_service_to_agent_liveness():
+    tree = ast.parse(Path("container.py").read_text())
+
+    constructors = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name | ast.Attribute)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "AgentLivenessService"
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "AgentLivenessService"
+            )
+        )
+    ]
+
+    assert any(
+        any(
+            keyword.arg == "health_service"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "agent_health_service"
+            for keyword in constructor.keywords
+        )
+        for constructor in constructors
+    )
 
 
 @pytest.mark.asyncio
@@ -460,7 +504,9 @@ async def test_streams_push_logs_redis_dead_rejection(caplog):
         local_agent_id="local-1",
     )
 
-    with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
+    with caplog.at_level(
+        logging.WARNING, logger="hub_runtime_bridge.compat.relay_service"
+    ):
         delivered = await svc.push_to_hub("hub-dead", event)
 
     assert delivered is False
@@ -740,7 +786,9 @@ class TestHeartbeatOwnershipCheck:
         svc = _make_service(mongo=mongo, streams=streams)
         api_key = _make_api_key(user_id="user-attacker")
 
-        with caplog.at_level(logging.WARNING, logger="app_shell.relay_service"):
+        with caplog.at_level(
+            logging.WARNING, logger="hub_runtime_bridge.compat.relay_service"
+        ):
             with pytest.raises(PermissionError, match="not owned"):
                 await svc.record_hub_heartbeat("hub-1", api_key)
 

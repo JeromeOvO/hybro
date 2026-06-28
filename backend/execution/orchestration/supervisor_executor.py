@@ -26,6 +26,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.hitl import InterruptKind
 from models.processing import ProcessingStatus
 from models.room import CoordinatorAgentId
@@ -1846,10 +1847,8 @@ class SupervisorExecutor:
                     and db_msg.message_content
                     and db_msg.message_content.message_task
                 ):
-                    from common.types import TaskState
-
-                    db_msg.message_content.message_task.status.state = TaskState(
-                        task_status
+                    db_msg.message_content.message_task.status.state = (
+                        system_task_state_from_runtime_status(task_status)
                     )
                     await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content

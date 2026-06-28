@@ -1,56 +1,192 @@
-import importlib
+import inspect
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import Request
+from fastapi.params import Depends as DependsParam
+
+
+def _deps(**overrides):
+    from api_gateway.dependencies import APIGatewayDeps
+
+    values = {
+        "task_store": MagicMock(),
+        "agent_center": MagicMock(),
+        "agent_service": MagicMock(),
+        "capability_issue_service": MagicMock(),
+        "agent_avatar_manager": MagicMock(),
+        "agent_liveness_checker": AsyncMock(),
+        "agent_group_store": MagicMock(),
+        "api_key_store": MagicMock(),
+        "discovery_service": MagicMock(),
+        "discovery_rate_limiter": MagicMock(),
+        "discovery_default_limit": 10,
+        "file_storage": MagicMock(),
+        "room_ownership_reader": MagicMock(),
+        "hitl_manager": MagicMock(),
+        "hub_relay_service": MagicMock(),
+        "inspection_center": MagicMock(),
+        "memory_center": MagicMock(),
+        "gateway_service": MagicMock(),
+        "gateway_rate_limiter": MagicMock(),
+        "relay_service": MagicMock(),
+        "room_center": MagicMock(),
+        "room_store": MagicMock(),
+        "agent_selection_service": MagicMock(),
+        "execution_engine": MagicMock(),
+        "sse_store": MagicMock(),
+        "sse_transport": MagicMock(),
+        "webhook_receiver": MagicMock(),
+        "repository_provider": MagicMock(),
+        "embedding_provider": MagicMock(),
+        "vector_index": MagicMock(),
+    }
+    values.update(overrides)
+    return APIGatewayDeps(**values)
+
+
+def _request_with_state(**state_values):
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [],
+        "app": SimpleNamespace(state=SimpleNamespace(**state_values)),
+    }
+    return Request(scope)
+
+
+PROVIDER_FIELD_NAMES = [
+    ("get_task_store", "task_store"),
+    ("get_agent_center", "agent_center"),
+    ("get_agent_service", "agent_service"),
+    ("get_capability_issue_service", "capability_issue_service"),
+    ("get_agent_avatar_manager", "agent_avatar_manager"),
+    ("get_agent_liveness_checker", "agent_liveness_checker"),
+    ("get_agent_group_store", "agent_group_store"),
+    ("get_api_key_store", "api_key_store"),
+    ("get_discovery_service", "discovery_service"),
+    ("get_discovery_rate_limiter", "discovery_rate_limiter"),
+    ("get_discovery_default_limit", "discovery_default_limit"),
+    ("get_file_storage", "file_storage"),
+    ("get_room_ownership_reader", "room_ownership_reader"),
+    ("get_hitl_manager", "hitl_manager"),
+    ("get_hub_relay_service", "hub_relay_service"),
+    ("get_inspection_center", "inspection_center"),
+    ("get_memory_center", "memory_center"),
+    ("get_gateway_service", "gateway_service"),
+    ("get_gateway_rate_limiter", "gateway_rate_limiter"),
+    ("get_relay_service", "relay_service"),
+    ("get_room_center", "room_center"),
+    ("get_room_store", "room_store"),
+    ("get_agent_selection_service", "agent_selection_service"),
+    ("get_execution_engine", "execution_engine"),
+    ("get_sse_store", "sse_store"),
+    ("get_sse_transport", "sse_transport"),
+    ("get_webhook_receiver", "webhook_receiver"),
+    ("get_viewset_repository_provider", "repository_provider"),
+    ("get_agent_viewset_embedding_provider", "embedding_provider"),
+    ("get_agent_viewset_vector_index", "vector_index"),
+]
 
 
 def test_api_gateway_deps_report_missing_required_fields():
-    from api_gateway.dependencies import APIGatewayDeps, missing_required_deps
+    from api_gateway.dependencies import missing_required_deps
 
-    deps = APIGatewayDeps(
-        file_storage=None,
-        relay_service=object(),
-        execution_deps=None,
-        platform_facade=object(),
-    )
+    deps = _deps(file_storage=None, execution_engine=None)
 
-    assert missing_required_deps(deps) == ["execution_deps"]
+    assert missing_required_deps(deps) == ["file_storage", "execution_engine"]
+
+
+def test_api_gateway_deps_report_missing_app_state_binding():
+    from api_gateway.dependencies import missing_required_deps
+
+    assert missing_required_deps(None) == ["app.state.api_gateway_deps"]
 
 
 def test_bind_api_gateway_deps_rejects_incomplete_bindings():
-    from api_gateway.dependencies import APIGatewayDeps, bind_api_gateway_deps
+    from api_gateway.dependencies import bind_api_gateway_deps
 
-    deps = APIGatewayDeps(
-        file_storage=object(),
-        relay_service=None,
-        execution_deps=object(),
-        platform_facade=object(),
-    )
+    app = SimpleNamespace(state=SimpleNamespace())
+    deps = _deps(relay_service=None)
 
     with pytest.raises(RuntimeError, match="relay_service"):
-        bind_api_gateway_deps(deps)
+        bind_api_gateway_deps(app, deps)
+    assert not hasattr(app.state, "api_gateway_deps")
 
 
-@pytest.mark.parametrize(
-    ("module_name", "binding_name"),
-    [
-        ("api_gateway.routes.agent_routes", "agent_center"),
-        ("api_gateway.routes.agent_routes", "agent_liveness_checker"),
-        ("api_gateway.routes.room_routes", "room_center"),
-        ("api_gateway.routes.room_routes", "room_store"),
-        ("api_gateway.routes.sse_routes", "sse_manager"),
-        ("api_gateway.routes.webhook_routes", "webhook_receiver"),
-        ("api_gateway.routes.inspection_routes", "inspection_center"),
-        ("api_gateway.routes.memory_routes", "memory_center"),
-    ],
-)
-def test_gateway_dependency_validation_checks_route_module_bindings(
-    monkeypatch,
-    module_name,
-    binding_name,
-):
-    from api_gateway.dependencies import missing_gateway_route_bindings
+def test_bind_api_gateway_deps_stores_deps_on_app_state():
+    from api_gateway.dependencies import bind_api_gateway_deps
 
-    module = importlib.import_module(module_name)
-    monkeypatch.setattr(module, binding_name, None)
+    app = SimpleNamespace(state=SimpleNamespace())
+    deps = _deps()
 
-    assert f"{module_name}.{binding_name}" in missing_gateway_route_bindings()
+    bind_api_gateway_deps(app, deps)
+
+    assert app.state.api_gateway_deps is deps
+
+
+def test_api_gateway_memory_center_accepts_context_memory_route_center():
+    from context_memory.compat.runtime import ContextMemoryRouteCenter
+
+    route_center = object.__new__(ContextMemoryRouteCenter)
+    deps = _deps(memory_center=route_center)
+
+    assert deps.memory_center is route_center
+
+
+def test_get_api_gateway_deps_reads_request_app_state():
+    from api_gateway.dependencies import get_api_gateway_deps
+
+    deps = _deps()
+    request = _request_with_state(api_gateway_deps=deps)
+
+    assert get_api_gateway_deps(request) is deps
+
+
+def test_api_gateway_dependencies_are_app_state_injected_not_route_global():
+    from api_gateway.dependencies import bind_api_gateway_deps, get_api_gateway_deps
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    deps = _deps()
+
+    bind_api_gateway_deps(app, deps)
+    request = _request_with_state(api_gateway_deps=app.state.api_gateway_deps)
+
+    assert get_api_gateway_deps(request) is deps
+
+    source = Path("api_gateway/dependencies.py").read_text()
+    assert "app.state.api_gateway_deps = deps" in source
+    assert 'getattr(request.app.state, "api_gateway_deps", None)' in source
+
+
+def test_get_api_gateway_deps_fails_when_startup_did_not_bind():
+    from api_gateway.dependencies import get_api_gateway_deps
+
+    request = _request_with_state()
+
+    with pytest.raises(RuntimeError, match="APIGatewayDeps not bound"):
+        get_api_gateway_deps(request)
+
+
+@pytest.mark.parametrize(("provider_name", "field_name"), PROVIDER_FIELD_NAMES)
+def test_named_providers_read_expected_fields(provider_name, field_name):
+    from api_gateway import dependencies as gateway_deps
+
+    deps = _deps()
+    provider = getattr(gateway_deps, provider_name)
+
+    assert provider(deps) is getattr(deps, field_name)
+
+
+@pytest.mark.parametrize(("provider_name", "_field_name"), PROVIDER_FIELD_NAMES)
+def test_named_providers_are_fastapi_dependency_providers(provider_name, _field_name):
+    from api_gateway import dependencies as gateway_deps
+
+    provider = getattr(gateway_deps, provider_name)
+    parameter = inspect.signature(provider).parameters["deps"]
+
+    assert isinstance(parameter.default, DependsParam)
+    assert parameter.default.dependency is gateway_deps.get_api_gateway_deps

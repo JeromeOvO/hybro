@@ -2,7 +2,7 @@
 
 This document describes the current architecture and core workflows of the
 `multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-14 and focuses on the code that is currently present, not on older
+2026-06-26 and focuses on the code that is currently present, not on older
 design documents that may have existed previously.
 
 ## High-Level Shape
@@ -26,7 +26,8 @@ At runtime the system follows this broad layering:
 flowchart TD
     Client[Frontend / API client] --> FastAPI[main.py FastAPI app]
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> AppShell[app_shell bindings]
+    APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
+    APIGateway --> OwnerPorts[owner protocols / facades]
     APIGateway --> Execution[execution facade]
     APIGateway --> Platform[platform facade]
 
@@ -72,12 +73,12 @@ Startup has three practical phases:
 1. Infrastructure setup:
    - Load settings and auth configuration.
    - `container.py` builds `MongoDAL`, `VectorDAL`, Redis, object-storage
-     adapters, facades, repositories, route dependencies, and app-shell
-     compatibility adapters.
+     adapters, facades, repositories, route dependencies, and owner-module
+     runtime adapters.
 
 2. Runtime guard and background services:
    - Start Delivery/SSE runtime.
-   - Start app-shell Redis runtime services when `REDIS_URL` is configured.
+   - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
 
@@ -102,41 +103,44 @@ groups around protocol interfaces from `common.protocols`:
 - `ExecutionDeps`
 - `HubDeps`
 
-The codebase is built around facade/protocol boundaries. Some current entry
-points still pass through app-shell adapters, but the preferred direction is:
+The codebase is built around facade/protocol boundaries.
+
+Runtime composition now follows:
 
 ```text
 route -> protocol/facade -> repository/DAL -> external service
 ```
 
-The current compatibility shape is:
-
-```text
-route -> app-shell route owner -> facade -> repository/DAL
-```
-
 Examples:
 
-- `app_shell.room_runtime.AppShellRoomCenter` delegates to `app_shell.room_runtime`, which is bound to
-  `room.RoomFacade` and an explicit repository-backed app-shell store.
-- `app_shell.agent_runtime.AppShellAgentCenter` delegates to `app_shell.agent_service`, which is bound to
-  `agent.AgentFacade`.
-- `app_shell.relay_service` exposes relay route behavior while delegating
-  runtime behavior into `hub_runtime_bridge.HubFacade`.
-- `app_shell.a2a_runtime.A2AService` keeps legacy method names while delegating
-  task-tracking placeholder creation, tracked-send push configuration, failure
-  persistence, terminal response persistence, and HITL reply token/task
-  persistence to `execution.task_tracking`; A2A SDK transport/coercion work
-  stays in `a2a_adapter`.
+- Room CRUD, membership, message persistence helpers, and route-shaped room
+  behavior live in `room.compat.runtime`, `room.route_adapter`, and
+  `room.membership_source`.
+- Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
+  and `agent.service.AgentService`, both constructed directly by `container.py`
+  over `agent.AgentFacade`.
+- Relay route behavior lives in `hub_runtime_bridge.compat.relay_service`;
+  relay behavior is owned by `hub_runtime_bridge.HubFacade` and HubRuntimeBridge
+  adapters.
+- A2A compatibility-shaped runtime behavior lives in
+  `a2a_adapter.runtime_service`. A2A SDK transport/coercion work stays in
+  `a2a_adapter`, while task-tracking persistence lives in Execution ports.
 
-Execution is intentionally independent from
-app-shell compatibility objects.
-`container.py` may wrap `app_shell.a2a_runtime`, `app_shell.room_runtime`,
-Delivery/SSE, room memory, notification, and repository-store objects into
-focused execution ports, but files under `execution/` do not import app-shell
-modules and do not accept broad app-shell composite stores. Queue, supervisor,
-dispatch, HITL, cancellation, and webhook resume paths receive only the methods
-they call through execution-owned protocols in `execution/ports.py`.
+Execution is intentionally independent from removed-package compatibility
+objects.
+`container.py` wires owner modules such as `a2a_adapter.runtime_service`,
+`room.compat.runtime`, Delivery/SSE, room memory, Delivery task notifier, and
+`dal.runtime_store` objects into focused execution ports. Files under
+`execution/` do not accept broad compatibility-store aggregates. Queue,
+supervisor, dispatch, HITL, cancellation, and webhook resume paths receive only
+the methods they call through execution-owned protocols in `execution/ports.py`.
+
+Agent dependency assembly is also container-owned. `container.py` constructs
+`AgentService`, `AgentRouteAdapter`, `AgentMatcher`, `AgentSelectionService`,
+`AgentResolverService`, `AgentHealthService`, `AgentLivenessService`, and
+`AgentInspectionService` from `agent/`; `APIGatewayDeps` receives these
+Agent-owned protocol implementations directly. Agent runtime behavior is owned
+by `agent/`.
 
 ## Major Code Areas
 
@@ -179,6 +183,15 @@ use API-key auth from `common.api_key_auth`.
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
 
+- `common.protocols.runtime_store_protocols` is now a leaf-package contract
+  surface. It exposes common-owned runtime DTOs from
+  `common.dto.runtime_store`; runtime-store adapters convert those DTOs to
+  legacy `models.*` instances before calling focused persistence stores, so
+  legacy models no longer cross the `common.protocols` boundary.
+- Runtime-store aggregate ports are assembled in `container.py` and remain
+  legacy-model shaped where production consumers still require those models.
+  New common protocols should stay DTO-shaped.
+
 #### Runtime Configuration
 
 Runtime application code reads environment-backed configuration through
@@ -187,11 +200,11 @@ Runtime application code reads environment-backed configuration through
 config unification gate in `tests/test_config_unification_gate.py` scans tracked
 production Python files and fails on new raw env reads outside that file.
 
-The gate intentionally excludes `tests/`, `scripts/`, `docs/`, and
-`database/migration/`: tests may set env vars to verify settings loading, while
-scripts and migration utilities run outside the app runtime. `SERVER_SOFTWARE`
-is exposed as the live `Settings.is_gunicorn` property because it is
-server-injected runtime metadata, not user application configuration.
+The gate intentionally excludes `tests/`, `scripts/`, and `docs/`: tests may
+set env vars to verify settings loading, while scripts run outside the app
+runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
+property because it is server-injected runtime metadata, not user application
+configuration.
 
 ### `llm_gateway`
 
@@ -215,14 +228,13 @@ without importing domain models:
 - `DiscoveryLLMService`: discovery query expansion.
 - `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
 - `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
-  and `DebateLLMService`: DTO-backed compatibility workflows for legacy app-shell
-  callers while migration continues.
+  and `DebateLLMService`: DTO-backed workflows used directly by runtime modules
+  or tested as focused LLM capabilities.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
-these focused services into production consumers. Legacy `app_shell.openai_service`,
-`app_shell.gemini_service`, and `app_shell.bedrock_service` remain as
-side-effect-free compatibility adapters, but they no longer construct provider
-SDK clients or read LLM environment variables directly.
+focused services into production consumers. Runtime modules now depend on
+focused LLM services or gateway capability protocols instead of provider-named
+compatibility facades.
 
 ### `agent`
 
@@ -236,8 +248,10 @@ SDK clients or read LLM environment variables directly.
 - Merge hub liveness into agent status when hub agents are involved.
 
 Mongo persistence is implemented by `agent.repository.mongo.AgentMongoRepository`.
-Route-facing app-shell owners access this through `app_shell.agent_service` and
-`app_shell.agent_runtime.AppShellAgentCenter`.
+Route-facing compatibility, legacy request/response translation, resolver
+selection, health/liveness, capability-issue exclusion, and inspection workflows
+now live under `agent/`. API gateway dependencies receive Agent-owned protocol
+implementations directly from `container.py`.
 
 ### `room`
 
@@ -269,14 +283,12 @@ Key components:
   idempotent claims, per-room locks, cancellation tokens, routing between
   queue and supervisor modes, and terminal processing status.
 - `execution.orchestration.dispatch_strategy`: owns dispatch strategy selection
-  after room agent selection. App-shell keeps a compatibility re-export only
-  for legacy imports.
+  after room agent selection.
 - `execution.ports`: owns the narrow type contracts used inside Execution for
   room runtime, delivery/SSE, rate limit, memory, resolver, health, and
-  notification collaborators. Execution modules must not import `app_shell`
-  types, including type-only imports. Where execution invokes a collaborator
-  method, the port must use named parameters and execution-owned result
-  protocols instead of `*args`/`**kwargs` catch-all signatures.
+  notification collaborators. Where execution invokes a collaborator method,
+  the port must use named parameters and execution-owned result protocols
+  instead of `*args`/`**kwargs` catch-all signatures.
 - `QueueExecutor`: sequentially processes pre-created agent messages for
   non-supervisor flows and explicit non-supervisor mention flows.
 - `SupervisorExecutor`: adaptive supervisor loop for rooms with
@@ -290,6 +302,9 @@ Key components:
   tasks.
 - `AgentResponseHandler`: single place that normalizes agent events, persists
   task/artifact state, handles HITL states, and emits SSE/task updates.
+  Handler-owned task notifications use the explicit
+  `TaskNotificationStorePort` for idempotency and message/room reads, keeping
+  task-state persistence writers write-only.
 - `TaskStateManager`: owns task state transitions and persistence for agent
   messages.
 
@@ -318,18 +333,44 @@ The facade uses:
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-`container.py` creates the facade before execution orchestration and exposes it
-through `ContextMemoryDeps.context_memory_runtime` for supervisor and agent
-context assembly. `app_shell.context_assembly_service` and
-`app_shell.memory_search_service` remain compatibility shims for tests and
-legacy callers; production `RoomServices` and `RoomMessageCenter` use the
-injected context-memory protocol instead of importing those app-shell singletons.
+`container.py` creates the facade before execution orchestration, registers
+`ContextMemoryEventHandler` with Delivery's internal `message_committed` event,
+and exposes the facade through `ContextMemoryDeps.context_memory_runtime` for
+supervisor and agent context assembly. Frontdoor user-message persistence and
+execution response paths publish local-only `MessageCommitted` events only after
+the message write succeeds; user-message commits wait for local handler
+completion before preflight continues. Delivery records handler failures in a
+bounded in-memory dead-letter buffer and sends a best-effort Redis dead-letter
+notification rather than propagating failures to the message writer, so this
+wait establishes local ordering but does not guarantee projection success. User
+commit events carry `room_agent_set` so event projection can clean raw
+`<@id|name>` mentions with canonical room agent names before appending
+attachment descriptions. Agent commit events carry `agent_name` and
+`was_successful` metadata so event projection preserves the old direct-memory
+turn shape. ContextMemory reloads the persisted message by `message_id`,
+projects it idempotently, and runs compaction only after a successful new
+projection.
+### ContextMemory Runtime Ownership
+
+`context_memory/` owns room memory projection, legacy chat-context route
+compatibility, memory search, turn indexing, compaction, content expansion,
+context assembly, and route/runtime adapters that expose memory-facing behavior.
+`ContextMemoryFacade` is the canonical runtime object for Room, Execution,
+background compaction, and event-driven projection. API Gateway memory routes use
+`context_memory.compat.runtime.ContextMemoryRouteCenter`, which adapts legacy
+chat-context request/response models without importing removed-package modules.
+
+The former application-shell ContextMemory service files have been removed.
+Startup wiring in `container.py` constructs ContextMemory repositories, facade,
+and compatibility adapters directly. The preserved event path remains:
+`MessageCommitted -> ContextMemoryEventHandler -> ContextMemoryFacade.project_message_for_event`,
+with compaction triggered through ContextMemory-owned facade methods.
 Legacy turn-selection and context metric logging helpers live in
-`context_memory.legacy_assembly`, leaving the app-shell context assembly shim to
-convert result shapes and expose the legacy truncation counter.
-`app_shell.compaction_service` and `app_shell.memory_service` are still bound to
-the facade by the container runtime while their compatibility surfaces remain in
-use.
+`context_memory.legacy_assembly`. Route compatibility uses
+`ContextMemoryRouteCenter` with a store-backed `ContextMemoryChatAdapter`, while
+execution room-memory compatibility uses the facade-backed
+`ContextMemoryRoomMemoryAdapter` instead of removed-package memory service
+objects.
 
 ### `delivery`
 
@@ -352,16 +393,19 @@ It is composed from:
 
 - `SSETransportImpl`: local room connection management.
 - `EventPublisherImpl`: emits frames/events and handles deduplication.
+- `TaskUpdateNotifier`: execution-facing task update publisher that resolves
+  final agent display fields and delegates to `DeliveryFacade.send_task_update`.
 - `CrossInstanceEventBus`: Redis Pub/Sub based fan-out when Redis is enabled.
 - `CancellationWatcher`: tracks cancellation state through Mongo change streams
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
-`app_shell.delivery_runtime.sse_manager` is the route-facing delivery manager
-bound to the Delivery facade during startup. Routes call the manager, while the
-runtime implementation lives in `delivery`. Delivery never calls back into
-Execution or app-shell business services; lifecycle recording happens before
-typed delivery events are emitted.
+Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
+through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
+provider. Routes call the delivery transport, while the runtime implementation
+lives in `delivery`. Delivery never calls back into Execution or removed-package
+business services; lifecycle recording happens before typed delivery events are
+emitted.
 
 ### `platform_module`
 
@@ -392,17 +436,17 @@ This module is used by:
 
 `hub_runtime_bridge.HubFacade` owns hub connection management, relay dispatch,
 agent sync, liveness, offline queue behavior, task ownership, and internal hub
-response routing. `app_shell.relay_service.RelayService` remains as a
-compatibility adapter for legacy route imports and APIKey/request adaptation; it
+response routing. `hub_runtime_bridge.compat.relay_service.RelayService`
+provides the legacy relay method surface for APIKey/request adaptation and
 delegates Hub behavior through facade public methods. Its runtime binding uses
-`AppShellRelayHubStore`, `HubMongoRepository`, `AgentRepository`, and an
-injected relay offline-failure port instead of the broad legacy Mongo/database
-singletons. The relay shim keeps the historical `sse_manager` constructor
-parameter for startup compatibility only; relay behavior no longer imports or
-stores the concrete app-shell Delivery runtime, and stream/leader bindings are
-protocol-style pass-throughs rather than app-shell Redis runtime concrete
-dependencies. Relay transport binding is stored once and exposed through the
-legacy `relay_transport` compatibility accessor rather than duplicated private
+`RelayHubStore` under HubRuntimeBridge ownership, `HubMongoRepository`,
+`AgentRepository`, and the `RelayOfflineFailureAdapter` instead of the broad
+legacy Mongo/database singletons. Route-facing Delivery transport state is no
+longer part of `RelayService` construction; offline failures enter Delivery
+through `RelayOfflineFailureAdapter`, and stream/leader bindings are
+owner-protocol pass-throughs rather than Redis runtime concrete dependencies.
+Relay transport binding is stored once and exposed through the legacy
+`relay_transport` compatibility accessor rather than duplicated private
 transport state.
 
 Hub relay responsibilities:
@@ -416,16 +460,20 @@ Hub relay responsibilities:
 - Journal internal responses and replay them if needed.
 - Maintain task ownership leases for multi-worker safety.
 - Own legacy hub publish authorization and cancellation-reader adapters used by
-  relay publish processing; `app_shell.relay_service` wires these adapters into
-  `HubFacade` instead of querying room/agent message state directly.
+  relay publish processing; HubRuntimeBridge compat wiring injects these
+  adapters into `HubFacade` instead of querying room/agent message state
+  directly.
 - Own legacy relay lifecycle adapter behavior for hub registration,
   owner/room authorization, heartbeat validation, hub status aggregation, and
-  disconnect bookkeeping. The app-shell relay service keeps compatibility
-  method names and delegates these operations to HubRuntimeBridge adapters.
+  disconnect bookkeeping. HubRuntimeBridge keeps relay compatibility method
+  names and delegates these operations to its adapters.
 
 When Redis Streams are available, relay events use streams for durable-ish hub
-event delivery. Without streams, the facade falls back to in-memory/offline
-queues for single-process/degraded operation.
+event delivery through `hub_runtime_bridge.transport.RelayStreamService`, which
+consumes DAL `RedisStreams` rows and optional DAL `RedisKV` heartbeat state.
+Redis stream and heartbeat failures are logged and degrade to empty reads,
+missing entry ids, or dead liveness checks so the facade can fall back to
+in-memory/offline queues for single-process/degraded operation.
 
 ### `a2a_adapter`
 
@@ -434,17 +482,24 @@ queues for single-process/degraded operation.
 - Resolve and validate AgentCards.
 - Own all production imports of the upstream A2A SDK.
 - Build outbound A2A send, stream, cancellation, HITL, and task-fetch requests.
+- Remote task reads are exposed to Execution through
+  `a2a_adapter.remote_task_reader.RemoteTaskReader`, which delegates SDK calls
+  to `a2a_adapter.remote_task`.
 - Translate internal common models to SDK payloads and normalize SDK responses
   back to SDK-free dictionaries or `common.types` models.
 - Own A2A output-mode negotiation and response/task coercion helpers used by
-  app-shell compatibility services.
+  owner-module runtime services.
 - Normalize task status and artifacts.
+- Inbound A2A streaming `artifact-update` control flags treat explicit `null`
+  for `append` and `lastChunk` the same as omitted values at the shared
+  `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
+  strictly validated.
 - Parse webhook stream response payloads.
-- Probe inspection and dry-send flows without leaking SDK clients into app-shell
+- Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
 - Convert inline binary artifacts to S3-backed references through bound storage.
 
-App-shell services, jobs, execution transports, and room runtime code use
+Owner services, jobs, execution transports, and room runtime code use
 `common.types`, plain DTO dictionaries, and adapter facades instead of importing
 `a2a.*` directly. `tests/test_phase9_cleanup_gate.py` enforces that boundary by
 failing on direct A2A SDK imports and SDK-shaped adapter helper usage outside
@@ -458,7 +513,8 @@ Business modules use module-scoped repositories built from `MongoDAL`,
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.pinecone`: vector adapter.
-- `dal.redis`: Redis KV, Pub/Sub, and related support.
+- `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
+  distributed locking support.
 - `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
   SDK calls.
 - `dal.index_registry`: startup index registration across modules.
@@ -469,14 +525,11 @@ Platform-facing file/content services depend on `ObjectStorageDAL` or the
 avatar bytes and persists the resulting public URL through the agent repository.
 Production startup passes `PlatformObjectStorage` directly into runtime
 consumers through object-storage-named injection points where they still
-require the legacy upload/presign surface. The
-`app_shell.s3_service` module remains an SDK-free compatibility shim for tests
-and legacy import paths only; it is not imported by `main.py` and must not
-become a new dependency target for domain or platform modules.
-The object-storage convergence gate scans static and dynamic imports across
-production code, including `main.py` and `app_shell/`, and exempts only
-`app_shell/s3_service.py` itself. AWS SDK imports are confined to `dal/s3/`;
-the only temporary exception is `llm_gateway/providers/bedrock_provider.py`
+require the legacy upload/presign surface.
+`PlatformObjectStorage` in `platform_module.object_storage` is the only
+SDK-free object-storage compatibility adapter used by runtime code and tests.
+AWS SDK imports are confined to `dal/s3/`;
+the only provider-specific exception is `llm_gateway/providers/bedrock_provider.py`
 importing `aioboto3` for Bedrock until that provider's SDK access moves behind
 a dedicated transport.
 Startup also configures A2A artifact storage once with the platform object
@@ -490,11 +543,10 @@ still written so remote agent completion is not lost due to object-storage
 transient failures.
 
 The legacy runtime database files `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, and
-`app_shell/database_service.py` have been removed. Production startup wiring in
-`container.py` uses `MongoDAL`, `VectorDAL`, DAL-backed repositories, and narrow
-app-shell adapters directly. The remaining `database/` package is limited to
-retired migration scripts and is not part of production runtime wiring.
+`database/pinecone_db.py`, `database/repository.py`, the retired
+`database/migration/` scripts, and the former application-shell database service
+have been removed. Production startup wiring in `container.py` uses `MongoDAL`,
+`VectorDAL`, DAL-backed repositories, and narrow owner adapters directly.
 
 Important Mongo collections include:
 
@@ -523,40 +575,17 @@ Important Mongo collections include:
 Pinecone is used for agent matching and context memory search. S3 is used for
 file uploads and converted binary artifacts.
 
-### `app_shell`
+### Application Shell
 
-`app_shell` contains route-facing runtime adapters, process-level compatibility
-bindings, and fail-fast shims. Business ownership for the P3 focus areas lives
-in module facades, services, repositories, adapters, and narrow runtime-store
-ports; app-shell modules preserve legacy import and route method names.
+The application shell is now a composition concept, not a Python package.
+Startup, lifespan, dependency assembly, validation, health binding, and
+shutdown are owned by `main.py` and `container.py`. Runtime behavior is created
+from owner modules and injected through protocols, facades, repositories, or
+ports.
 
-Examples:
-
-- `app_shell.room_runtime`: legacy room-center and room-runtime method surface
-  over Room, Execution, ContextMemory, Platform, and Delivery ports.
-- `app_shell.a2a_runtime`: route/execution compatibility over `a2a_adapter`.
-  Runtime settings are injected through `A2ARuntimeConfig`; task tracking and
-  call counting are bound as explicit ports rather than read from global
-  settings or broad stores during calls.
-- `app_shell.agent_service`: route-facing adapter over `AgentFacade`.
-- `app_shell.repository_store`: compatibility composite over focused runtime
-  store parts in `app_shell.repository_parts`. Startup splits the composite into
-  focused agent/room, message, task lifecycle, HITL, and memory ports before
-  binding production consumers; production runtime consumers no longer receive
-  the composite directly. Room runtime, relay, debate, and room-coordinator
-  compatibility services receive focused startup adapters that expose only the
-  cancellation, message, memory, and agent/room lookup methods they call. Execution
-  `RoomMessageCenter` receives a focused startup adapter composed from those
-  runtime-store parts rather than the app-shell composite.
-- `app_shell.relay_service`: relay route surface over
-  `hub_runtime_bridge`. Hub-owned liveness, stream binding, agent sync,
-  legacy push delivery, offline queues, offline failure persistence, heartbeat
-  monitoring, command dispatch, ownership, and internal response router setup
-  are handled by `HubFacade`; relay runtime settings are injected as
-  `HubRuntimeBridgeConfig`, and persistence reaches Mongo through
-  repository-backed app-shell adapters.
-- `execution.dispatch.task_notifications`: terminal task update notifications.
-- `app_shell.hitl_service`: HITL lifecycle and response handling.
+The former application-shell package directory has been deleted. New code must
+not introduce that package, import path, singleton registry, or compatibility
+shim.
 
 A2A-facing API routes bind narrow readers from `common.protocols`:
 `A2ATaskStatusReader` for task inspection, `RoomRouteReader` for room ownership
@@ -564,7 +593,7 @@ checks, and `SSEStateReader` for SSE status and cancellation lookup. These
 replace the older combined room compatibility reader in route modules while
 leaving legacy room protocol shims available for non-route migration work.
 
-### `jobs` and App-Shell Infrastructure
+### `jobs` and Runtime Infrastructure
 
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
@@ -573,11 +602,15 @@ pass:
   and run watchdog events.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
-- `app_shell.agent_health_service`: periodic health/liveness support for agents.
+- `agent.health.AgentHealthService`: periodic health/liveness support for
+  agents.
 
-App-shell Redis runtime modules contain Redis services, leader election, room
-locks, relay streams, and event broker support. Leader election prevents
-duplicate job execution in multi-worker deployments.
+Redis runtime primitives live under `dal.redis`: KV and Streams expose
+`is_connected` health and use bounded Redis connection timeouts, leader election
+accepts explicit TTL overrides, and room distributed locking preserves the
+`True`/`False`/`None` acquire result used by Execution to distinguish acquisition,
+contention, and Redis degradation.
+Leader election prevents duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message
 
@@ -601,16 +634,23 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - schedules `ExecutionFacade.start_orchestration` as a FastAPI background
      task if orchestration should start.
 
-4. `ExecutionFacade.execute` delegates to `AppShellRoomCenter.send_message_to_room`,
-   which reaches `app_shell.room_runtime.RoomServices.send_message_to_room`.
+4. `ExecutionFacade.execute` owns execution preflight:
+   - checks pending HITL requests before persistence,
+   - checks active runs before persistence,
+   - delegates room persistence to the room route/runtime port,
+   - emits preflight `processing` status immediately after the user message is
+     persisted so the frontend has a cancellable `message_id`,
+   - asks the room route/runtime port to run message preflight before Execution
+     starts orchestration,
+   - emits terminal preflight status when a persisted room response completes
+     before orchestration starts.
 
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
-   - blocks new messages if HITL input is pending,
    - resolves and validates attachments,
    - loads the room and target scope,
    - persists the user message,
-   - delegates initial `processing` status to Execution-owned processing-status
+   - returns preflight outcome metadata for Execution-owned processing-status
      emission,
    - creates a cancellation token,
    - initializes context memory if needed,
@@ -655,7 +695,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - persists artifact updates,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
-    - emits SSE updates through `sse_manager`/Delivery,
+    - emits SSE updates through Delivery,
     - delegates terminal task notifications through
       `execution.dispatch.task_notifications`.
 
@@ -703,13 +743,18 @@ transport, relay, or webhook.
 Task lifecycle data access for A2A task submission, webhook token validation,
 cancellation persistence, HITL lifecycle, task notification persistence, webhook
 response handling, and stale-task cleanup is routed through focused runtime-store
-ports assembled in `main.py`. `AppShellRepositoryStore` still backs those ports
-with module repositories and `MongoDAL` collections, but production bindings use
-its scoped `repository_parts` surfaces or focused startup adapters wherever a
-narrower port is sufficient. Relay route registration, hub status, and liveness
-use explicit repository-backed app-shell adapters. Remaining aggregate-store use
-is limited to documented compatibility shims rather than new production
-business owners.
+ports assembled in `container.py`. The runtime-store repository aggregate backs those
+ports with module repositories and `MongoDAL` collections, but production
+bindings use scoped `dal.runtime_store.parts` surfaces or focused startup
+adapters wherever a narrower port is sufficient. Relay route registration, hub
+status, and liveness use explicit repository-backed owner adapters. Remaining
+runtime-store aggregate use is limited to documented compatibility shims rather
+than new production business owners.
+
+Task notification persistence is a distinct execution port. `ResponseTaskWriter`
+remains limited to task-state writes, while `TaskNotificationStorePort` supplies
+the idempotency update plus message, room, and client-request-id reads needed by
+`execution.dispatch.task_notifications`.
 
 **Agent display text:** Terminal `message_text` and artifact text parts are persisted as received from agents. List/section markdown repair runs only in the frontend remark plugin pipeline (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown render time. Hybro-controlled LLM paths (supervisor synthesis, `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses `###` section headers; third-party agent text is still stored as-is. Backend terminal helpers in `common/utils/a2a_helpers.py` (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`, `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts and align artifact payloads without transforming markdown. Terminal resolution is owned by `update_task_state_on_message`; streaming text parts collapse to a single canonical text part while file/data parts are preserved. SSE terminal `content` is authoritative for display text; `parts` carries only non-text payloads.
 
@@ -798,7 +843,9 @@ provide it directly.
 
 HITL is used when an agent or supervisor needs user input before continuing.
 
-Main responsibilities live in `app_shell.hitl_service` and execution adapters:
+Main responsibilities live in `execution.hitl.service`, constructed by
+`execution.hitl.factory.create_hitl_service` and passed through Execution
+facade/port wiring:
 
 - Create HITL requests.
 - Broadcast input-required state.
@@ -810,7 +857,7 @@ Main responsibilities live in `app_shell.hitl_service` and execution adapters:
   correlation when available.
 
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
-routes do not need to know app-shell runtime internals.
+routes do not need to know runtime implementation internals.
 
 HITL storage is exposed through a focused startup adapter over the HITL, message,
 and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
@@ -823,24 +870,37 @@ persistence, and stale processing iteration.
 Room memory is updated and used across turns.
 
 1. User and agent messages are persisted in MongoDB.
-2. Context memory projection creates or updates room memory documents.
-3. Before agent execution, context assembly builds a token-budgeted context
-   for the supervisor or the target agent.
-4. Memory search can retrieve relevant historical turns with vector and keyword
+2. Frontdoor user-message persistence and execution response paths publish
+   `MessageCommitted(room_id, message_id, message_type, agent_id?,
+   room_agent_set?, agent_name?, was_successful?)` through Delivery's internal
+   event publisher with Redis fan-out disabled.
+   User commits request `wait_for_local_handlers=True`; agent commits keep the
+   default asynchronous local-handler behavior. Waiting means the local handler
+   task has completed; handler failures are captured in Delivery's bounded
+   in-memory dead-letter buffer with best-effort Redis notification.
+3. `ContextMemoryEventHandler` consumes `message_committed`, reloads the
+   persisted message through `RoomHistoryReader`, and calls
+   `project_message_for_event`.
+4. Projection is idempotent by `turn_id == "message:{message_id}"`; duplicate
+   hits do not add another turn.
+5. ContextMemory runs `run_compaction(room_id)` after a new projection, while
+   duplicate/missing/empty/mismatched messages skip compaction.
+6. Before agent execution, context assembly builds a token-budgeted context for
+   the supervisor or the target agent.
+7. Memory search can retrieve relevant historical turns with vector and keyword
    scoring.
-5. Compaction sweep or direct compaction turns old full-history content into
-   compact references while preserving retrievable full content.
+8. The compaction sweep still handles periodic compaction for eligible rooms.
 
 The design keeps current task context, recent conversation context, room summary,
 memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
 Memory search is provided by `ContextMemoryFacade` through the injected
-context-memory runtime protocol. The app-shell memory-search service is a
-compatibility adapter over the same facade, not a production orchestration
-dependency. Vector retrieval goes through `VectorDAL`, and keyword
-search/hydration goes through the context-memory content repository rather than
-private legacy database runtime backends.
+context-memory runtime protocol. Legacy search response consumers use
+`context_memory.search_adapter.ContextMemorySearchAdapter` over the same facade,
+not an application-shell service. Vector retrieval goes through `VectorDAL`, and
+keyword search/hydration goes through the context-memory content repository
+rather than private legacy database runtime backends.
 
 ## Background Jobs
 
@@ -869,7 +929,7 @@ Multi-worker production:
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
-  streams, app-shell Redis runtime, or cancellation change streams are missing.
+  streams, DAL Redis runtime, or cancellation change streams are missing.
 
 This guard exists because without Redis:
 
@@ -901,50 +961,35 @@ The normal terminal states seen by clients are:
 - `rate_limited`
 - `error`
 
-## Current Architectural Tensions
+## Accepted Architecture State
 
-The current codebase has a mixed architecture:
-
-- Newer modules use explicit facades, protocol interfaces, DTOs, and container
-  construction.
-- Some app-shell modules still expose singleton-style process runtime objects as
-  compatibility shims, but focus-area behavior is bound through fail-fast
-  facades, adapters, and narrow ports.
-- Legacy database files still exist for the final deletion phase, but
-  production startup no longer imports or binds them.
-- Room orchestration still has a compatibility store surface, but it is backed
-  by module repositories and DAL collections rather than the legacy database
-  singleton.
-- Some route modules bind dependencies via module-level globals during startup.
-- Compatibility layers are intentionally kept so the repo can migrate in phases
-  without breaking existing route behavior.
-
-When making new changes, prefer the newer shape:
-
-```text
-route -> protocol/facade -> repository/DAL -> external service
-```
-
-Avoid adding new direct dependencies on broad app-shell runtime singletons
-unless the surrounding module already requires that path.
+- API gateway dependencies are injected through `app.state.api_gateway_deps`.
+- ContextMemory projection is event-driven through `MessageCommitted`.
+- `common` remains a leaf package and exposes only DTOs, protocols, auth,
+  config, errors, observability, and utilities.
+- Domain modules depend on owner protocols, facades, repositories, or ports for
+  business behavior.
+- Removed-package compatibility surfaces must not be reintroduced.
 
 ## API Route Protocol Ownership
 
 API route handlers remain thin adapters: they parse HTTP input, resolve injected
 dependencies, call route-facing protocols, and format compatible responses.
-Route owner contracts are no longer declared in `app_shell.bound`. Shared,
-common-safe contracts live under `common.protocols`, including viewset,
-Delivery/SSE, webhook, and JSON-shaped route aliases. Compatibility endpoints
-that still expose legacy `models.*` request or response types use module-owned
-protocols such as `agent.protocols.AgentCenterCompatibility`,
-`agent.protocols.AgentInspection`, `room.protocols.RoomCenterCompatibility`, and
-`context_memory.protocols.LegacyChatContextAPI`.
+Route owner contracts are declared in `common.protocols`, `agent.protocols`,
+`room.protocols`, and `context_memory.protocols`. API Gateway route modules do
+not import runtime implementation packages; they receive owner protocols through
+`APIGatewayDeps`.
 
-The application shell remains responsible for compatibility adapters, but
-concrete startup assembly is container-owned. `main.py` should not import or bind
-app-shell, execution, delivery, platform, or LLM concrete implementations
-directly. API Gateway route modules should not import app-shell protocol surfaces
-or concrete module facades/services directly.
+API Gateway route modules are thin HTTP adapters. Business dependencies for
+routes and API viewsets are assembled once during application startup into
+`APIGatewayDeps` and stored on `app.state.api_gateway_deps`; provider functions
+in `api_gateway.dependencies` expose those objects through FastAPI `Depends`;
+route-owned SSE streaming uses the `sse_transport` provider rather than an
+application-level manager dependency.
+Route modules must not own mutable dependency globals or `bind_*` startup
+functions, and route-level scalar configuration such as discovery defaults is
+passed through the same runtime dependency context rather than imported from
+global settings.
 
 ## Testing and Verification
 
@@ -968,7 +1013,7 @@ Focused tests are organized by module and workflow:
 - `tests/test_execution_*` and related orchestration tests: execution flows.
 - `tests/test_hub_runtime_bridge_*`: hub relay behavior.
 - `tests/test_platform_*`: gateway, files, rate limits, platform protocols.
-- `tests/test_service_*`: app-shell runtime compatibility and behavior.
+- `tests/test_service_*`: service-level runtime compatibility and behavior.
 
 For architecture-sensitive changes, run the closest focused tests first, then
 the full suite before merging.

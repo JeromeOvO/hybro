@@ -4,7 +4,7 @@ Unit tests for Phase 5: Supervisor Integration.
 Tests cover:
 1. build_supervisor_context() wiring into _prepare_for_supervisor()
 2. build_agent_execution_context() wiring into process_agent_message()
-3. add_synthesis_to_history() in RoomMemoryService
+3. add_synthesis_to_history() through the ContextMemory runtime adapter
 4. update_room_summary() with LLM extraction
 5. Compaction trigger in _handle_supervisor_run_result() for terminal statuses
 6. Prompt cache optimization (conversation_context in system prompt)
@@ -14,12 +14,14 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from common.utils.time import utcnow
 from context_memory import assembly as context_memory_assembly
+from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
 from context_memory.config import TokenBudgetConfig
 from models.memory import (
     ConversationTurn,
@@ -46,6 +48,20 @@ from models.supervisor import (
 
 async def _noop_processing_status_emitter(**_kwargs):
     return None
+
+
+class RecordingEventPublisher:
+    def __init__(self):
+        self.internal_events = []
+
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
+    ):
+        self.internal_events.append((event, wait_for_local_handlers, broadcast))
 
 
 class BoundRoomMemoryFacade:
@@ -118,7 +134,7 @@ class BoundRoomMemoryFacade:
     ) -> bool:
         prompt = f"Synthesis:\n{synthesis_text}"
         try:
-            extracted = await self.service.openai_service.call_supervisor_llm_json(
+            extracted = await self.service.supervisor_llm_service.call_json(
                 system_prompt="You extract structured information from text. Respond with valid JSON only.",
                 user_prompt=prompt,
                 model="gpt-4o-mini",
@@ -188,9 +204,13 @@ class BoundRoomMemoryFacade:
         )
 
 
-def bind_room_memory_facade(service):
-    service.bind_facade(BoundRoomMemoryFacade(service))
-    return service
+def room_memory_adapter(mock_db_service, mock_supervisor_llm_service):
+    holder = SimpleNamespace(
+        _store=mock_db_service,
+        supervisor_llm_service=mock_supervisor_llm_service,
+        _enrich_turn_notes_background=AsyncMock(),
+    )
+    return ContextMemoryRoomMemoryAdapter(facade=BoundRoomMemoryFacade(holder)), holder
 
 
 class BoundAssemblyFacade:
@@ -262,8 +282,8 @@ def mock_db_service():
 
 
 @pytest.fixture
-def mock_openai_service():
-    """Mock OpenAIService."""
+def mock_supervisor_llm_service():
+    """Mock supervisor LLM capability."""
     svc = AsyncMock()
     return svc
 
@@ -274,20 +294,16 @@ def mock_openai_service():
 
 
 class TestAddSynthesisToHistory:
-    """Tests for RoomMemoryService.add_synthesis_to_history()."""
+    """Tests for synthesis history through the runtime adapter."""
 
     @pytest.mark.asyncio
     async def test_adds_supervisor_turn_and_persists(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -303,16 +319,12 @@ class TestAddSynthesisToHistory:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_push_fails(
-        self, mock_db_service, mock_openai_service
+        self, mock_db_service, mock_supervisor_llm_service
     ):
         """Should return None when room document doesn't exist."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         result = await service.add_synthesis_to_history(
             room_id="nonexistent",
@@ -323,16 +335,12 @@ class TestAddSynthesisToHistory:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_db_update_fails(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """Should return None when DB persistence fails."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -347,21 +355,17 @@ class TestSynthesisLLMEnrichment:
 
     @pytest.mark.asyncio
     async def test_enrichment_scheduled_for_long_synthesis(
-        self, mock_db_service, mock_openai_service
+        self, mock_db_service, mock_supervisor_llm_service
     ):
         """Long synthesis text should trigger background _enrich_turn_notes_background."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         long_text = "This is a very detailed synthesis. " * 50
 
         with patch.object(
-            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+            holder, "_enrich_turn_notes_background", new_callable=AsyncMock
         ) as mock_enrich:
             result = await service.add_synthesis_to_history(
                 room_id="test_room",
@@ -377,19 +381,15 @@ class TestSynthesisLLMEnrichment:
 
     @pytest.mark.asyncio
     async def test_enrichment_skipped_for_short_synthesis(
-        self, mock_db_service, mock_openai_service
+        self, mock_db_service, mock_supervisor_llm_service
     ):
         """Short synthesis text should NOT trigger background enrichment."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         with patch.object(
-            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+            holder, "_enrich_turn_notes_background", new_callable=AsyncMock
         ) as mock_enrich:
             result = await service.add_synthesis_to_history(
                 room_id="test_room",
@@ -407,11 +407,11 @@ class TestSynthesisLLMEnrichment:
 
 
 class TestUpdateRoomSummary:
-    """Tests for RoomMemoryService.update_room_summary()."""
+    """Tests for summary updates through the runtime adapter."""
 
     @pytest.mark.asyncio
     async def test_extracts_and_persists_summary(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """Happy path: LLM extracts structured fields, summary is saved atomically."""
         mock_db_service.get_room_summary_projection.return_value = {
@@ -419,7 +419,7 @@ class TestUpdateRoomSummary:
             "room_facts": [],
         }
         mock_db_service.update_room_summary_atomic.return_value = True
-        mock_openai_service.call_supervisor_llm_json.return_value = {
+        mock_supervisor_llm_service.call_json.return_value = {
             "current_goal": "Complete test coverage",
             "key_decisions": ["Use pytest", "Mock external services"],
             "open_questions": ["How to test async?"],
@@ -427,11 +427,7 @@ class TestUpdateRoomSummary:
             "important_constraints": ["Must finish by Friday"],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -446,18 +442,14 @@ class TestUpdateRoomSummary:
 
     @pytest.mark.asyncio
     async def test_preserves_existing_on_llm_failure(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """On LLM failure, existing summary should be preserved (graceful degradation)."""
-        mock_openai_service.call_supervisor_llm_json.side_effect = Exception(
+        mock_supervisor_llm_service.call_json.side_effect = Exception(
             "LLM timeout"
         )
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -469,11 +461,11 @@ class TestUpdateRoomSummary:
 
     @pytest.mark.asyncio
     async def test_returns_false_when_room_not_found(
-        self, mock_db_service, mock_openai_service
+        self, mock_db_service, mock_supervisor_llm_service
     ):
         """Should return False when room memory doesn't exist."""
         mock_db_service.get_room_summary_projection.return_value = None
-        mock_openai_service.call_supervisor_llm_json.return_value = {
+        mock_supervisor_llm_service.call_json.return_value = {
             "current_goal": "Test",
             "key_decisions": [],
             "open_questions": [],
@@ -481,11 +473,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         success = await service.update_room_summary(
             room_id="nonexistent",
@@ -496,7 +484,7 @@ class TestUpdateRoomSummary:
 
     @pytest.mark.asyncio
     async def test_keeps_existing_fields_when_extraction_returns_empty(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """If LLM returns empty/null fields, existing values should be kept."""
         mock_db_service.get_room_summary_projection.return_value = {
@@ -507,7 +495,7 @@ class TestUpdateRoomSummary:
             "room_facts": [],
         }
         mock_db_service.update_room_summary_atomic.return_value = True
-        mock_openai_service.call_supervisor_llm_json.return_value = {
+        mock_supervisor_llm_service.call_json.return_value = {
             "current_goal": None,
             "key_decisions": [],
             "open_questions": ["New question"],
@@ -515,11 +503,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -534,7 +518,7 @@ class TestUpdateRoomSummary:
 
     @pytest.mark.asyncio
     async def test_populates_updated_after_turn_id(
-        self, room_memory, mock_db_service, mock_openai_service
+        self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """synthesis_turn_id should be stored in RoomSummary.updated_after_turn_id (§4.2)."""
         mock_db_service.get_room_summary_projection.return_value = {
@@ -542,7 +526,7 @@ class TestUpdateRoomSummary:
             "room_facts": [],
         }
         mock_db_service.update_room_summary_atomic.return_value = True
-        mock_openai_service.call_supervisor_llm_json.return_value = {
+        mock_supervisor_llm_service.call_json.return_value = {
             "current_goal": "Test goal",
             "key_decisions": [],
             "open_questions": [],
@@ -550,11 +534,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        from app_shell.memory_service import RoomMemoryService
-
-        service = bind_room_memory_facade(RoomMemoryService())
-        service._store = mock_db_service
-        service.openai_service = mock_openai_service
+        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -615,8 +595,7 @@ class TestPromptCacheOptimization:
         )
         from models.supervisor import AgentProfile, RoomConfig, SupervisorTrajectory
 
-        mock_openai = AsyncMock()
-        service = RoomSupervisorService(openai_service=mock_openai)
+        service = RoomSupervisorService()
 
         agents = [
             AgentProfile(
@@ -665,8 +644,7 @@ class TestPromptCacheOptimization:
             SupervisorTrajectory,
         )
 
-        mock_openai = AsyncMock()
-        service = RoomSupervisorService(openai_service=mock_openai)
+        service = RoomSupervisorService()
 
         agents = [
             AgentProfile(
@@ -781,7 +759,7 @@ class TestMaxContextCharsEnforcement:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService with mock settings."""
-        with patch("models.context_config.settings") as mock_settings:
+        with patch("common.config.settings") as mock_settings:
             mock_settings.context_model_window = 128000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 1000
@@ -789,7 +767,7 @@ class TestMaxContextCharsEnforcement:
             mock_settings.context_room_pct = 0.2
             mock_settings.context_history_pct = 0.6
             mock_settings.context_task_pct = 0.2
-            from app_shell.context_assembly_service import ContextAssemblyService
+            from context_memory.compat.context_assembly import ContextAssemblyService
 
             yield bind_assembly_facade(ContextAssemblyService())
 
@@ -862,8 +840,7 @@ class TestParseV2ActionCaseInsensitive:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
-        mock_openai = MagicMock()
-        return RoomSupervisorService(openai_service=mock_openai)
+        return RoomSupervisorService()
 
     @pytest.mark.parametrize("action_str,expected_action", [
         ("delegate", "delegate"),
@@ -973,8 +950,7 @@ class TestParseV2ActionClarifySanitization:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
-        mock_openai = MagicMock()
-        return RoomSupervisorService(openai_service=mock_openai)
+        return RoomSupervisorService()
 
     def _clarify_json(self, **overrides):
         base = {
@@ -1123,14 +1099,14 @@ class TestHandleV2RunResultUnifiedSummary:
             patch("execution.orchestration.room_message_center.delivery") as mock_delivery,
             patch("execution.orchestration.room_message_center.coordinator"),
             patch("execution.orchestration.room_message_center.room_runtime"),
-            patch("execution.orchestration.room_message_center.notification_service"),
+            patch("execution.orchestration.room_message_center.task_notifier"),
             patch("execution.orchestration.room_message_center.a2a_transport"),
             patch("execution.orchestration.room_message_center.remote_task_reader"),
             patch("execution.orchestration.room_message_center.agent_resolver_service"),
             patch("execution.orchestration.room_message_center.room_memory"),
             patch("execution.orchestration.room_message_center.room_supervisor_service"),
             patch("execution.orchestration.room_message_center.rate_limit_service"),
-            patch("execution.orchestration.room_message_center.debate_service"),
+            patch("execution.orchestration.room_message_center.debate_prompt_injector"),
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
@@ -1139,7 +1115,10 @@ class TestHandleV2RunResultUnifiedSummary:
 
             from execution.orchestration.factory import create_room_message_center
 
-            rmc = create_room_message_center(debate_rounds=2)
+            rmc = create_room_message_center(
+                debate_rounds=2,
+                event_publisher=RecordingEventPublisher(),
+            )
             rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "Final synthesis."))
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
@@ -1308,10 +1287,7 @@ class TestParseV2ActionMultiQuestion:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
-        return RoomSupervisorService(
-            openai_service=MagicMock(),
-            store=MagicMock(),
-        )
+        return RoomSupervisorService()
 
     def test_parses_valid_questions_array(self, service):
         action = service._parse_supervisor_action({

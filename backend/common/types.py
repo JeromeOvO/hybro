@@ -17,6 +17,7 @@ from pydantic import (
     RootModel,
     TypeAdapter,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -182,6 +183,11 @@ class TaskArtifactUpdateEvent(BaseModel):
     metadata: dict[str, Any] | None = None
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    @field_validator("append", "last_chunk", mode="before")
+    @classmethod
+    def _default_nullable_flags(cls, value):
+        return False if value is None else value
 
     @property
     def task_id(self) -> str:

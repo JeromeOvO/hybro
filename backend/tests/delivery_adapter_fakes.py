@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from app_shell.delivery_runtime import SSEConnection, SSEManager
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
+from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+from delivery.facade import DeliveryFacade
+from delivery.sse.connection import SSEConnection
 from delivery.translator import to_sse_frame
 
 TERMINAL_STATUSES = {
@@ -35,7 +36,12 @@ class FakeDeliveryCompat:
     async def open_connection(self, room_id: str) -> SSEConnection:
         if self.draining:
             raise ConnectionRefusedError("Server is draining - rejecting new SSE connections")
-        connection = SSEConnection(room_id=room_id)
+        connection = SSEConnection(
+            room_id=room_id,
+            connection_id=f"conn-{len(self.room_connections.get(room_id, {})) + 1}",
+            heartbeat_interval=0.01,
+            now=utcnow,
+        )
         self.room_connections.setdefault(room_id, {})[connection.connection_id] = connection
         return connection
 
@@ -98,29 +104,39 @@ class FakeDeliveryCompat:
     def remove_token(self, message_id: str) -> None:
         self.tokens.pop(message_id, None)
 
+    async def start(self) -> None:
+        self.lifecycle_calls.append(("start", None))
+
+    async def stop(self) -> None:
+        self.lifecycle_calls.append(("stop", None))
+
     async def start_change_stream_watcher(self) -> None:
         self.lifecycle_calls.append(("start_change_stream_watcher", None))
 
     async def stop_change_stream_watcher(self) -> None:
         self.lifecycle_calls.append(("stop_change_stream_watcher", None))
 
-    async def start_redis_service(self, redis_service: Any | None = None) -> None:
-        self.lifecycle_calls.append(("start_redis_service", redis_service))
-        self.redis_service = redis_service
-        self.delivery_kv_connected = redis_service is not None
+    async def start_cancellation_watcher(self) -> None:
+        self.lifecycle_calls.append(("start_cancellation_watcher", None))
 
-    async def stop_redis_service(self) -> None:
-        self.lifecycle_calls.append(("stop_redis_service", None))
-        self.redis_service = None
-        self.delivery_kv_connected = False
+    async def stop_cancellation_watcher(self) -> None:
+        self.lifecycle_calls.append(("stop_cancellation_watcher", None))
 
-    async def start_event_broker(self, broker: Any | None = None) -> None:
-        self.lifecycle_calls.append(("start_event_broker", broker))
-        self.delivery_pubsub_connected = broker is not None
+    async def close_all_connections(self) -> None:
+        self.lifecycle_calls.append(("close_all_connections", None))
+        for connections in self.room_connections.values():
+            for connection in connections.values():
+                connection.close()
+        self.room_connections.clear()
 
-    async def stop_event_broker(self) -> None:
-        self.lifecycle_calls.append(("stop_event_broker", None))
-        self.delivery_pubsub_connected = False
+    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> None:
+        self.frames.append((frame["type"], frame["data"]))
+
+    async def publish_dead_letter(self, envelope: dict[str, Any]) -> None:
+        self.lifecycle_calls.append(("publish_dead_letter", envelope))
+
+    async def publish_internal(self, event: Any) -> None:
+        self.lifecycle_calls.append(("publish_internal", event))
 
     async def refresh_health(self) -> None:
         self.lifecycle_calls.append(("refresh_health", None))
@@ -134,6 +150,10 @@ class FakeDeliveryCompat:
 
     @property
     def broker_connected(self) -> bool:
+        return self.delivery_pubsub_connected
+
+    @property
+    def is_connected(self) -> bool:
         return self.delivery_pubsub_connected
 
     def _set_cancelled_local(self, message_id: str) -> None:
@@ -169,6 +189,7 @@ class FakeEventPublisher:
     def __init__(self, compat: FakeDeliveryCompat | None = None) -> None:
         self.compat = compat
         self.events = []
+        self.lifecycle_calls: list[tuple[str, Any | None]] = []
 
     async def emit(self, event) -> None:
         self.events.append(event)
@@ -181,42 +202,51 @@ class FakeEventPublisher:
         self.compat.frames.append((frame["type"], frame["data"]))
         connections = list(self.compat.room_connections.get(room_id, {}).values())
         for connection in connections:
-            await connection.queue.put(json.dumps(frame))
+            await connection.queue.put(frame)
 
+    async def start(self) -> None:
+        self.lifecycle_calls.append(("start", None))
 
-class FakeDeliveryFacade:
-    def __init__(
+    async def stop(self) -> None:
+        self.lifecycle_calls.append(("stop", None))
+
+    async def emit_internal(
         self,
+        event,
         *,
-        compat: FakeDeliveryCompat | None = None,
-        instance_id: str = "test-worker",
-        event_publisher: FakeEventPublisher | None = None,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
     ) -> None:
-        self.compat = compat or FakeDeliveryCompat()
-        self.instance_id = instance_id
-        self.event_publisher = event_publisher or FakeEventPublisher(self.compat)
-        if getattr(self.event_publisher, "compat", None) is None:
-            self.event_publisher.compat = self.compat
+        self.lifecycle_calls.append(("emit_internal", event))
 
-    async def emit(self, event) -> None:
-        await self.event_publisher.emit(event)
+    def register_internal_handler(self, event_type: str, handler) -> None:
+        self.lifecycle_calls.append(("register_internal_handler", event_type))
 
 
-def make_bound_manager(
+def make_delivery_facade(
     *,
     compat: FakeDeliveryCompat | None = None,
     redis_service: Any | None = None,
     instance_id: str = "test-worker",
     event_publisher: FakeEventPublisher | None = None,
-) -> SSEManager:
+) -> DeliveryFacade:
     if compat is None:
         compat = FakeDeliveryCompat(redis_service=redis_service)
-    manager = SSEManager()
-    manager.bind_facade(
-        FakeDeliveryFacade(
-            compat=compat,
-            instance_id=instance_id,
-            event_publisher=event_publisher,
-        )
+    publisher = event_publisher or FakeEventPublisher(compat)
+    if getattr(publisher, "compat", None) is None:
+        publisher.compat = compat
+    facade = DeliveryFacade(
+        event_publisher=publisher,
+        sse_transport=compat,
+        event_bus=compat,
+        cancellation_watcher=compat,
+        redis_kv=None,
+        config=DeliveryConfig(),
+        startup_policy=DeliveryStartupPolicy(
+            redis_expected=False,
+            multi_worker=False,
+            allow_degraded_change_stream=True,
+        ),
+        instance_id=instance_id,
     )
-    return manager
+    return facade

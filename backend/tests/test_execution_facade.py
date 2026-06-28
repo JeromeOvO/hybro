@@ -1,11 +1,17 @@
 import asyncio
 from types import SimpleNamespace
 from typing import get_type_hints
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from common.dto import ExecutionAck, ExecutionRequest, HubAgentResponseInternal
+from common.dto import (
+    ExecutionAck,
+    ExecutionRequest,
+    HubAgentResponseInternal,
+    ProcessingStatusEvent,
+    RunInfo,
+)
 from common.utils.time import utcnow
 from execution.facade import (
     ExecutionFacade,
@@ -26,8 +32,20 @@ class RecordingTaskFactory:
 
 def _make_facade(**overrides):
     room_center = SimpleNamespace(send_message_to_room=AsyncMock())
+
+    async def persist_message_to_room(*args, **kwargs):
+        response = await room_center.send_message_to_room(*args, **kwargs)
+        return response, response if response.message_id else None
+
+    async def run_message_preflight_to_room(context):
+        return context
+
+    room_center.persist_message_to_room = AsyncMock(side_effect=persist_message_to_room)
+    room_center.run_message_preflight_to_room = AsyncMock(
+        side_effect=run_message_preflight_to_room
+    )
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
-    hitl_service = SimpleNamespace(
+    hitl_manager = SimpleNamespace(
         request_input=AsyncMock(),
         handle_response=AsyncMock(),
         get_pending_requests=AsyncMock(return_value=[]),
@@ -60,7 +78,7 @@ def _make_facade(**overrides):
     deps = {
         "room_center": room_center,
         "room_message_center": room_message_center,
-        "hitl_service": hitl_service,
+        "hitl_manager": hitl_manager,
         "run_lifecycle": run_lifecycle,
         "run_reader": run_reader,
         "cancellation_state": cancellation_state,
@@ -78,12 +96,48 @@ def _make_facade(**overrides):
     return facade, deps
 
 
+def _assert_processing_status_event(
+    event,
+    *,
+    room_id: str,
+    message_id: str,
+    status: str,
+    related_message_id: str,
+    client_request_id: str,
+    details: dict | None,
+):
+    assert isinstance(event, ProcessingStatusEvent)
+    assert event.event_type == "processing_status"
+    assert event.room_id == room_id
+    assert event.message_id == message_id
+    assert event.related_message_id == related_message_id
+    assert event.status == status
+    assert event.client_request_id == client_request_id
+    assert event.details == details
+    assert event.timestamp is None
+    assert event.trace_id is None
+    assert event.agent_id is None
+    assert event.agents is None
+
+
+def _room_response_with_preflight(**kwargs) -> RoomCenterUserMessageResponse:
+    assert "preflight_outcome" in RoomCenterUserMessageResponse.model_fields
+    assert "preflight_details" in RoomCenterUserMessageResponse.model_fields
+    response = RoomCenterUserMessageResponse(**kwargs)
+    assert response.preflight_outcome == kwargs.get("preflight_outcome")
+    assert response.preflight_details == kwargs.get("preflight_details")
+    dumped = response.model_dump(mode="json")
+    assert dumped["preflight_outcome"] == kwargs.get("preflight_outcome")
+    assert dumped["preflight_details"] == kwargs.get("preflight_details")
+    return response
+
+
 def test_constructor_core_dependencies_are_typed_ports():
     hints = get_type_hints(ExecutionFacade.__init__)
 
     assert hints["room_center"].__name__ == "RoomCenterPort"
     assert hints["room_message_center"].__name__ == "RoomMessageCenterPort"
-    assert hints["hitl_service"].__name__ == "HITLServicePort"
+    assert hints["hitl_manager"].__name__ == "HITLServicePort"
 
 
 @pytest.mark.asyncio
@@ -122,6 +176,485 @@ async def test_execute_persists_ack_without_starting_orchestration():
         ["agent-1"],
     )
     deps["room_message_center"].process_room_user_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_pending_hitl_before_room_persist():
+    facade, deps = _make_facade()
+    deps["hitl_manager"].get_pending_requests.return_value = [SimpleNamespace()]
+    deps["room_center"].send_message_to_room.side_effect = AssertionError(
+        "room persist should not be called"
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is False
+    assert ack.room_id == "room-1"
+    assert ack.status_code == 409
+    assert ack.should_start_orchestration is False
+    assert "waiting for your input" in ack.error
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["room_center"].send_message_to_room.assert_not_awaited()
+    deps["run_reader"].get_run.assert_not_awaited()
+    deps["run_reader"].get_runs_for_room.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["event_publisher"].emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_active_run_before_room_persist():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.side_effect = AssertionError(
+        "room persist should not be called"
+    )
+    deps["run_reader"].get_runs_for_room.return_value = [
+        RunInfo(
+            run_id="run-1",
+            room_id="room-1",
+            state="processing",
+            trigger_message_id="msg-active",
+        )
+    ]
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is False
+    assert ack.room_id == "room-1"
+    assert ack.status_code == 409
+    assert ack.should_start_orchestration is False
+    assert "already processing" in ack.error
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
+    deps["room_center"].send_message_to_room.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["event_publisher"].emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_continues_when_hitl_pending_lookup_fails():
+    facade, deps = _make_facade()
+    order: list[str] = []
+
+    async def get_pending_requests(_room_id):
+        order.append("hitl")
+        raise RuntimeError("hitl down")
+
+    async def get_runs_for_room(_room_id):
+        order.append("active_runs")
+        return []
+
+    async def send_message_to_room(*_args, **_kwargs):
+        order.append("persist")
+        return _room_response_with_preflight(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+            preflight_outcome="ready",
+        )
+
+    deps["hitl_manager"].get_pending_requests.side_effect = get_pending_requests
+    deps["run_reader"].get_runs_for_room.side_effect = get_runs_for_room
+    deps["room_center"].send_message_to_room.side_effect = send_message_to_room
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.message_id == "msg-1"
+    assert ack.should_start_orchestration is True
+    assert order == ["hitl", "active_runs", "persist"]
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["room_center"].send_message_to_room.assert_awaited_once()
+    deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
+
+
+@pytest.mark.asyncio
+async def test_execute_continues_when_active_run_lookup_fails():
+    facade, deps = _make_facade()
+    order: list[str] = []
+
+    async def get_pending_requests(_room_id):
+        order.append("hitl")
+        return []
+
+    async def get_runs_for_room(_room_id):
+        order.append("active_runs")
+        raise RuntimeError("runs down")
+
+    async def send_message_to_room(*_args, **_kwargs):
+        order.append("persist")
+        return _room_response_with_preflight(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+            preflight_outcome="ready",
+        )
+
+    deps["hitl_manager"].get_pending_requests.side_effect = get_pending_requests
+    deps["run_reader"].get_runs_for_room.side_effect = get_runs_for_room
+    deps["room_center"].send_message_to_room.side_effect = send_message_to_room
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.message_id == "msg-1"
+    assert ack.should_start_orchestration is True
+    assert order == ["hitl", "active_runs", "persist"]
+    deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
+    deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
+    deps["room_center"].send_message_to_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_processing_for_ready_room_preflight():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="frontend-msg-1",
+        dispatch_root_message_id="root-msg-1",
+        success=True,
+        preflight_outcome="ready",
+    )
+    order: list[tuple[str, str]] = []
+
+    async def record_status(_room_id, status, _message_id, **_kwargs):
+        order.append(("record", status))
+
+    async def emit_event(event):
+        order.append(("emit", event.status))
+
+    deps["run_lifecycle"].record_processing_status.side_effect = record_status
+    deps["event_publisher"].emit.side_effect = emit_event
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.should_start_orchestration is True
+    assert order == [("record", "processing"), ("emit", "processing")]
+    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
+        "room-1",
+        "processing",
+        "root-msg-1",
+        client_request_id="cr-1",
+        details=None,
+        error_message=None,
+    )
+    deps["event_publisher"].emit.assert_awaited_once()
+    event = deps["event_publisher"].emit.await_args.args[0]
+    _assert_processing_status_event(
+        event,
+        room_id="room-1",
+        message_id="frontend-msg-1",
+        status="processing",
+        related_message_id="root-msg-1",
+        client_request_id="cr-1",
+        details=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_processing_before_room_preflight_continuation():
+    preflight_context = object()
+    room_center = SimpleNamespace(
+        send_message_to_room=AsyncMock(
+            side_effect=AssertionError("legacy single-step room path should not be used")
+        ),
+        persist_message_to_room=AsyncMock(
+            return_value=(
+                RoomCenterUserMessageResponse(
+                    room_id="room-1",
+                    message_id="msg-1",
+                    dispatch_root_message_id="msg-1",
+                    success=True,
+                ),
+                preflight_context,
+            )
+        ),
+        run_message_preflight_to_room=AsyncMock(),
+    )
+    facade, deps = _make_facade(room_center=room_center)
+    order: list[str] = []
+
+    async def record_status(_room_id, status, _message_id, **_kwargs):
+        order.append(f"record:{status}")
+
+    async def emit_event(event):
+        order.append(f"emit:{event.status}")
+
+    async def continue_preflight(context):
+        assert context is preflight_context
+        order.append("room_preflight")
+        return _room_response_with_preflight(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+            preflight_outcome="ready",
+        )
+
+    deps["run_lifecycle"].record_processing_status.side_effect = record_status
+    deps["event_publisher"].emit.side_effect = emit_event
+    room_center.run_message_preflight_to_room.side_effect = continue_preflight
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is True
+    assert order == ["record:processing", "emit:processing", "room_preflight"]
+    room_center.persist_message_to_room.assert_awaited_once()
+    room_center.run_message_preflight_to_room.assert_awaited_once_with(preflight_context)
+    room_center.send_message_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_does_not_emit_completed_for_success_without_preflight_outcome():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = RoomCenterUserMessageResponse(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        status_code=200,
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is False
+    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
+        "room-1",
+        "processing",
+        "msg-1",
+        client_request_id="cr-1",
+        details=None,
+        error_message=None,
+    )
+    event = deps["event_publisher"].emit.await_args.args[0]
+    assert event.status == "processing"
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_completed_for_completed_room_preflight():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        status_code=200,
+        preflight_outcome="completed",
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is False
+    assert [
+        await_call.args[1]
+        for await_call in deps["run_lifecycle"].record_processing_status.await_args_list
+    ] == [
+        "processing",
+        "completed",
+    ]
+    assert [
+        await_call.args[0].status
+        for await_call in deps["event_publisher"].emit.await_args_list
+    ] == [
+        "processing",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_ack_when_post_persist_status_emit_fails():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        dispatch_root_message_id="msg-1",
+        success=True,
+        preflight_outcome="ready",
+    )
+    deps["run_lifecycle"].record_processing_status.side_effect = RuntimeError("sse down")
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.message_id == "msg-1"
+    assert ack.success is True
+    assert ack.should_start_orchestration is True
+    deps["room_center"].send_message_to_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_processing_then_failed_for_persisted_preflight_failure():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        success=False,
+        error="Failed to parse user message",
+        status_code=500,
+        preflight_outcome="failed",
+        preflight_details="Failed to parse user message",
+    )
+    order: list[tuple[str, str]] = []
+
+    async def record_status(_room_id, status, _message_id, **_kwargs):
+        order.append(("record", status))
+
+    async def emit_event(event):
+        order.append(("emit", event.status))
+
+    deps["run_lifecycle"].record_processing_status.side_effect = record_status
+    deps["event_publisher"].emit.side_effect = emit_event
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is False
+    assert ack.should_start_orchestration is False
+    assert ack.error == "Failed to parse user message"
+    assert ack.status_code == 500
+    assert order == [
+        ("record", "processing"),
+        ("emit", "processing"),
+        ("record", "failed"),
+        ("emit", "failed"),
+    ]
+    assert deps["run_lifecycle"].record_processing_status.await_args_list == [
+        call(
+            "room-1",
+            "processing",
+            "msg-1",
+            client_request_id="cr-1",
+            details=None,
+            error_message=None,
+        ),
+        call(
+            "room-1",
+            "failed",
+            "msg-1",
+            client_request_id="cr-1",
+            details={"message": "Failed to parse user message"},
+            error_message="Failed to parse user message",
+        ),
+    ]
+    events = [
+        await_call.args[0]
+        for await_call in deps["event_publisher"].emit.await_args_list
+    ]
+    assert len(events) == 2
+    _assert_processing_status_event(
+        events[0],
+        room_id="room-1",
+        message_id="msg-1",
+        status="processing",
+        related_message_id="msg-1",
+        client_request_id="cr-1",
+        details=None,
+    )
+    _assert_processing_status_event(
+        events[1],
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        related_message_id="msg-1",
+        client_request_id="cr-1",
+        details={"message": "Failed to parse user message"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_canceled_for_canceled_room_preflight():
+    facade, deps = _make_facade()
+    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        status_code=200,
+        preflight_outcome="canceled",
+    )
+    order: list[tuple[str, str]] = []
+
+    async def record_status(_room_id, status, _message_id, **_kwargs):
+        order.append(("record", status))
+
+    async def emit_event(event):
+        order.append(("emit", event.status))
+
+    deps["run_lifecycle"].record_processing_status.side_effect = record_status
+    deps["event_publisher"].emit.side_effect = emit_event
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is True
+    assert ack.should_start_orchestration is False
+    assert order == [
+        ("record", "processing"),
+        ("emit", "processing"),
+        ("record", "canceled"),
+        ("emit", "canceled"),
+    ]
+    assert deps["run_lifecycle"].record_processing_status.await_args_list == [
+        call(
+            "room-1",
+            "processing",
+            "msg-1",
+            client_request_id="cr-1",
+            details=None,
+            error_message=None,
+        ),
+        call(
+            "room-1",
+            "canceled",
+            "msg-1",
+            client_request_id="cr-1",
+            details=None,
+            error_message=None,
+        ),
+    ]
+    events = [
+        await_call.args[0]
+        for await_call in deps["event_publisher"].emit.await_args_list
+    ]
+    assert len(events) == 2
+    _assert_processing_status_event(
+        events[0],
+        room_id="room-1",
+        message_id="msg-1",
+        status="processing",
+        related_message_id="msg-1",
+        client_request_id="cr-1",
+        details=None,
+    )
+    _assert_processing_status_event(
+        events[1],
+        room_id="room-1",
+        message_id="msg-1",
+        status="canceled",
+        related_message_id="msg-1",
+        client_request_id="cr-1",
+        details=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -300,12 +833,12 @@ async def test_hitl_methods_delegate_and_translate():
         status="pending",
         display_message_id="display-msg-1",
     )
-    deps["hitl_service"].request_input.return_value = model_request
-    deps["hitl_service"].handle_response.return_value = {
+    deps["hitl_manager"].request_input.return_value = model_request
+    deps["hitl_manager"].handle_response.return_value = {
         "status": "ok",
         "request_id": "req-1",
     }
-    deps["hitl_service"].get_pending_requests.return_value = [model_request]
+    deps["hitl_manager"].get_pending_requests.return_value = [model_request]
 
     created = await facade.create_hitl_request(
         "room-1",
@@ -322,7 +855,7 @@ async def test_hitl_methods_delegate_and_translate():
     assert resolved.status == "ok"
     assert pending[0].message_id == "display-msg-1"
     assert canceled is True
-    deps["hitl_service"].cancel_request.assert_awaited_once_with(
+    deps["hitl_manager"].cancel_request.assert_awaited_once_with(
         "req-1",
         room_id="room-1",
     )

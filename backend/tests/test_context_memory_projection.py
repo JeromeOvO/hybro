@@ -6,9 +6,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
 from context_memory import projection
 from context_memory.config import ContextMemoryLLMConfig
 from context_memory.translators import normalize_room_memory
+from room.translators import message_info_from_doc
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -206,6 +208,148 @@ async def test_project_message_from_history_duplicate():
     )
 
     assert result == {"projected": False, "reason": "duplicate"}
+
+
+@pytest.mark.asyncio
+async def test_project_message_from_history_user_cleans_mentions_before_attachments():
+    repo = StateMemoryRepository()
+    reader = FakeHistoryReader(
+        [
+            message_info_from_doc(
+                {
+                    "message_id": "user-msg-1",
+                    "room_id": "r1",
+                    "message_type": "user",
+                    "user_id": "user-1",
+                    "message_content": {
+                        "message_text": "Please ask <@a1|Stale Name> for help",
+                        "attachments": [
+                            {
+                                "file_name": "spec.pdf",
+                                "mime_type": "application/pdf",
+                                "size_bytes": 2048,
+                            }
+                        ],
+                    },
+                    "message_created_at": NOW,
+                }
+            )
+        ]
+    )
+
+    result = await projection.project_message_from_history(
+        room_id="r1",
+        message_id="user-msg-1",
+        repository=repo,
+        room_history_reader=reader,
+        id_factory=id_factory(),
+        now=now,
+        room_agent_set={"a1": "Canonical Agent"},
+    )
+
+    assert result == {"projected": True, "reason": "projected"}
+    turn = repo.pushed[0]
+    assert turn["turn_id"] == "message:user-msg-1"
+    assert (
+        turn["content"]
+        == "Please ask @Canonical Agent for help\n"
+        "[Attachments: spec.pdf (application/pdf, 2KB)]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_message_from_history_agent_uses_event_metadata_and_enriches_notes():
+    repo = StateMemoryRepository(
+        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+    )
+    background_tasks = []
+    response_text = "agent response " * (LLM_TURN_NOTES_THRESHOLD * 4)
+    reader = FakeHistoryReader(
+        [
+            message_info_from_doc(
+                {
+                    "message_id": "agent-msg-1",
+                    "room_id": "r1",
+                    "message_type": "agent",
+                    "agent_id": "agent-1",
+                    "message_content": {"message_text": response_text},
+                    "message_created_at": NOW,
+                }
+            )
+        ]
+    )
+
+    result = await projection.project_message_from_history(
+        room_id="r1",
+        message_id="agent-msg-1",
+        repository=repo,
+        room_history_reader=reader,
+        id_factory=id_factory(),
+        now=now,
+        agent_name="Agent One",
+        was_successful=True,
+        llm_provider=FakeLLM(),
+        llm_config=ContextMemoryLLMConfig(),
+        background_task_runner=background_tasks.append,
+    )
+
+    assert result == {"projected": True, "reason": "projected"}
+    turn = repo.pushed[0]
+    assert turn["turn_id"] == "message:agent-msg-1"
+    assert turn["agent_id"] == "agent-1"
+    assert turn["agent_name"] == "Agent One"
+    assert turn["was_successful"] is True
+    assert len(background_tasks) == 1
+    await background_tasks[0]
+    assert repo.updated_notes == [
+        (
+            "r1",
+            "message:agent-msg-1",
+            {
+                "keywords": ["alpha"],
+                "entities": ["Hybro"],
+                "tags": ["memory"],
+                "one_liner": "Enriched turn notes",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_project_message_from_history_agent_falls_back_to_translated_metadata():
+    repo = StateMemoryRepository(
+        projection.new_room_memory_doc(room_id="r1", memory_id="m1", now=NOW)
+    )
+    reader = FakeHistoryReader(
+        [
+            message_info_from_doc(
+                {
+                    "message_id": "agent-msg-1",
+                    "room_id": "r1",
+                    "message_type": "agent",
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "was_successful": True,
+                    "message_content": {"message_text": "agent response"},
+                    "message_created_at": NOW,
+                }
+            )
+        ]
+    )
+
+    result = await projection.project_message_from_history(
+        room_id="r1",
+        message_id="agent-msg-1",
+        repository=repo,
+        room_history_reader=reader,
+        id_factory=id_factory(),
+        now=now,
+    )
+
+    assert result == {"projected": True, "reason": "projected"}
+    turn = repo.pushed[0]
+    assert turn["agent_name"] == "Agent One"
+    assert turn["was_successful"] is True
 
 
 @pytest.mark.asyncio

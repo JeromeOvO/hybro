@@ -2,6 +2,9 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
 from common.dto import (
     FileInfo,
     GatewayDiscoveryResponse,
@@ -46,6 +49,11 @@ class APIKeyStore(Protocol):
 class APIKeyValidationStore(Protocol):
     async def get_api_key_by_hash(self, key_hash: str) -> APIKeyRecord | None: ...
     async def update_api_key_usage(self, key_hash: str) -> bool: ...
+
+
+@runtime_checkable
+class HealthCheck(Protocol):
+    async def check(self, request: Request) -> JSONResponse: ...
 
 
 @runtime_checkable
@@ -118,6 +126,7 @@ __all__ = [
     "APIKeyValidationStore",
     "FileStorage",
     "GatewayDiscoveryProvider",
+    "HealthCheck",
     "AttachmentCleanupPort",
     "AttachmentMetadataReader",
     "GatewayService",

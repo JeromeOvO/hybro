@@ -129,8 +129,8 @@ def _validate_response(result: Any) -> dict[str, Any]:
 def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
     """Validate an SDK-free adapter response payload.
 
-    Returns ``(errors, is_transport_error)`` so legacy app-shell callers can
-    preserve their existing response model/status behavior.
+    Returns ``(errors, is_transport_error)`` so former compatibility callers
+    can preserve their existing response model/status behavior.
     """
     if result.get("kind") == "error":
         return [str(result.get("error"))], True
