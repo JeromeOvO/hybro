@@ -490,6 +490,10 @@ in-memory/offline queues for single-process/degraded operation.
 - Own A2A output-mode negotiation and response/task coercion helpers used by
   owner-module runtime services.
 - Normalize task status and artifacts.
+- Inbound A2A streaming `artifact-update` control flags treat explicit `null`
+  for `append` and `lastChunk` the same as omitted values at the shared
+  `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
+  strictly validated.
 - Parse webhook stream response payloads.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
