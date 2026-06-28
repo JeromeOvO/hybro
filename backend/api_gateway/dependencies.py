@@ -50,18 +50,18 @@ class APIGatewayDeps:
     agent_avatar_manager: AgentAvatarManager
     agent_liveness_checker: AgentLivenessChecker
     agent_group_store: AgentGroupStoreCompatibility
-    api_key_store: APIKeyStore
-    discovery_service: GatewayDiscoveryProvider
-    discovery_rate_limiter: APIKeyRateLimiter
+    api_key_store: APIKeyStore | None
+    discovery_service: GatewayDiscoveryProvider | None
+    discovery_rate_limiter: APIKeyRateLimiter | None
     discovery_default_limit: int
-    file_storage: FileStorage
+    file_storage: FileStorage | None
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
     hub_relay_service: HubStatusReader
     inspection_center: AgentInspection
     memory_center: LegacyChatContextAPI
-    gateway_service: GatewayService
-    gateway_rate_limiter: APIKeyRateLimiter
+    gateway_service: GatewayService | None
+    gateway_rate_limiter: APIKeyRateLimiter | None
     relay_service: HubRelayManagement
     room_center: RoomCenterCompatibility
     room_store: RoomRouteReader
@@ -78,10 +78,20 @@ class APIGatewayDeps:
 def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
     if deps is None:
         return ["app.state.api_gateway_deps"]
+    
+    optional_fields = {
+        "api_key_store",
+        "discovery_service",
+        "discovery_rate_limiter",
+        "file_storage",
+        "gateway_service",
+        "gateway_rate_limiter"
+    }
+    
     return [
         field.name
         for field in fields(APIGatewayDeps)
-        if getattr(deps, field.name) is None
+        if getattr(deps, field.name) is None and field.name not in optional_fields
     ]
 
 
