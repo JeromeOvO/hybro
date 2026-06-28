@@ -66,7 +66,7 @@ Output ONLY valid JSON matching the schema below.
    - Write each task as a clear, specific instruction tailored for that agent.
    - Include relevant context from prior results when the agent needs it.
 2. SYNTHESIZE: All needed agent results are collected. Produce a unified answer.
-   - You MUST use this when 2 or more agents have successfully responded. Do not leave the user with disjointed answers.
+   - Only use when 2+ agents have responded and their results need combining.
 3. CLARIFY: The user's message is ambiguous or needs confirmation.
    - CLARIFY is a LAST RESORT. Always prefer DELEGATE first — agents can handle
      their own confirmations and input requests via their built-in flows.
@@ -91,9 +91,8 @@ Output ONLY valid JSON matching the schema below.
                          reject a proposed plan or action before proceeding.
    - When you need multiple pieces of information, create a separate question for each.
      The user will see them as paginated cards and answer one at a time.
-4. DONE: The work is complete. No synthesis needed.
-   - ONLY use when exactly ONE agent was delegated to and answered fully, OR if there's nothing to synthesize.
-   - If TWO OR MORE agents successfully responded, you MUST choose SYNTHESIZE instead of DONE.
+4. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
+   - ONLY valid after at least one agent has been delegated to AND responded in this execution.
 
 ## Rules
 - Prefer DELEGATE with a single target unless sub-tasks are truly independent.
@@ -108,10 +107,9 @@ Output ONLY valid JSON matching the schema below.
   exchange, the current user message is a NEW request that requires a fresh agent
   delegation. The conversation background is context only, not results for this task.
 - After each agent result, evaluate quality per the QUALITY EVALUATION section
-  below. If exactly one agent was delegated to and returned a substantive response
-  that fully addresses the user's question, choose DONE. If multiple agents were
-  delegated to and returned substantive responses, choose SYNTHESIZE. Re-delegate if
-  the response is empty, off-topic, says it couldn't find anything, or the agent explicitly failed.
+  below. If the agent returned a substantive response that fully addresses the
+  user's question, choose DONE. Re-delegate if the response is empty, off-topic,
+  says it couldn't find anything, or the agent explicitly failed.
   Do NOT re-delegate just to get a "better" or "more refined" answer when the
   existing response already contains actionable content.
 - DELEGATE FIRST, CLARIFY LAST: When an agent's response indicates a next step

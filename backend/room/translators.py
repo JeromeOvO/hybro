@@ -80,6 +80,9 @@ def message_info_from_doc(doc: dict[str, Any]) -> RoomMessageInfo:
         "has_task_tracking",
         "turn_id",
         "run_id",
+        "agent_name",
+        "was_successful",
+        "success",
     )
     metadata = {key: doc[key] for key in metadata_keys if key in doc}
     return RoomMessageInfo(

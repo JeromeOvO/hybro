@@ -11,7 +11,8 @@ from uuid import uuid4
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.dto import RoomMessageSummary
-from common.protocols import ContextMemoryRuntime, RoomDistributedLock
+from common.message_commit_events import publish_message_committed
+from common.protocols import ContextMemoryRuntime, EventPublisher, RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
@@ -84,6 +85,7 @@ summary_service = None
 room_runtime = None
 room_supervisor_service = None
 delivery = None
+event_publisher = None
 remote_task_reader = None
 context_memory_runtime = None
 context_compaction = None
@@ -125,7 +127,8 @@ ROOM_LOCK_HOLD_TTL_SECONDS = 600
 
 class RoomMessageCenter:
     """Room user message processing: agent communication,
-    streaming/sync responses, queue management, and memory updates."""
+    streaming/sync responses, queue management, commit-event publishing,
+    and synthesis/summary memory updates."""
 
     def __init__(
         self,
@@ -169,7 +172,10 @@ class RoomMessageCenter:
         debate_rounds: int = 2,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
+        event_publisher: EventPublisher | None = None,
     ):
+        if event_publisher is None:
+            raise RuntimeError("RoomMessageCenter event_publisher dependency is required")
         self.room_runtime = room_runtime
         self.message_reader = message_reader
         self.message_writer = message_writer
@@ -183,6 +189,7 @@ class RoomMessageCenter:
         self.memory_writer = memory_writer
         self.hitl_reader = hitl_reader
         self.delivery = delivery
+        self.event_publisher = event_publisher
         self.coordinator = coordinator
         self.summary_service = summary_service
         self.task_notifications = task_notifications
@@ -266,7 +273,7 @@ class RoomMessageCenter:
             tsm=self.tsm,
             delivery=self.delivery,
             room_runtime=self.room_runtime,
-            room_memory=room_memory,
+            event_publisher=event_publisher,
             message_reader=self.message_reader,
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
@@ -290,7 +297,7 @@ class RoomMessageCenter:
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
             continuation_store=self.continuation_store,
-            room_memory=room_memory,
+            event_publisher=event_publisher,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -328,6 +335,29 @@ class RoomMessageCenter:
             binder = getattr(component, "bind_execution_event_deps", None)
             if binder is not None:
                 binder(processing_status_emitter)
+
+    async def _publish_agent_message_committed(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        agent_id: str | None,
+        agent_name: str,
+        was_successful: bool,
+    ) -> None:
+        if not message_id:
+            return
+        if self.event_publisher is None:
+            raise RuntimeError("RoomMessageCenter event_publisher not bound")
+        await publish_message_committed(
+            self.event_publisher,
+            room_id=room_id,
+            message_id=message_id,
+            message_type="agent",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            was_successful=was_successful,
+        )
 
     async def _emit_processing_status(
         self,
@@ -651,7 +681,7 @@ class RoomMessageCenter:
         1. Gets room memory context
         2. Queries all agent messages related to the user message
         3. Processes each agent message in order using streaming
-        4. Updates room memory after all agents have responded
+        4. Publishes agent commit events so ContextMemory can project responses
         5. Sends SSE events to the room for real-time updates
 
         Args:
@@ -1599,13 +1629,12 @@ class RoomMessageCenter:
                 task_result_text=task_result_text,
             )
 
-            # Add completed agent response to room memory
+            # Publish completion so ContextMemory can project the agent response.
             if task_result_text and paused_agent_id:
-                await self.room_memory.add_agent_response_to_memory(
+                await self._publish_agent_message_committed(
                     room_id=room_id,
                     agent_id=paused_agent_id,
                     agent_name=paused_agent_name or "Agent",
-                    response_text=task_result_text,
                     was_successful=True,
                     message_id=paused_message_id,
                 )
@@ -1935,7 +1964,7 @@ class RoomMessageCenter:
             "supervisor_resume_no_matching_paused_result: could not find a "
             "PAUSED StepResult with agent_message_id=%s. "
             "The push notification result will be visible to the supervisor "
-            "only via room memory.",
+            "only via the committed message projection.",
             paused_message_id,
         )
 

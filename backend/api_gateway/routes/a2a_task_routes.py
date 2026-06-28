@@ -8,8 +8,8 @@ Tasks are now stored on room_agent_messages (consolidated from separate a2a_task
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_task_store
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.a2a_constants import (
     NON_TERMINAL_STATES,
@@ -22,24 +22,6 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
-task_store: A2ATaskStatusReader | None = None
-
-def bind_a2a_task_dependencies(store: A2ATaskStatusReader) -> None:
-    global task_store
-
-    task_store = store
-
-
-def get_task_store() -> A2ATaskStatusReader:
-    if task_store is None:
-        raise RuntimeError("A2A task database dependency has not been bound")
-    return task_store
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 @router.get("/a2a-tasks/{message_id}")
@@ -58,7 +40,6 @@ async def get_task_status(
     Returns:
         Task status with optional retry_after_seconds hint
     """
-    db = _resolve_dependency(db, get_task_store)
     msg = await db.get_room_agent_message_by_message_id(message_id)
     if not msg or not msg.has_task_tracking:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -106,7 +87,6 @@ async def list_room_tasks(
         List of tasks for the room
     """
     # Get task messages for room
-    db = _resolve_dependency(db, get_task_store)
     messages = await db.get_task_messages_for_room(room_id, limit=limit)
 
     # Filter to only tasks owned by this user (or room members in future)
@@ -158,7 +138,6 @@ async def list_user_pending_tasks(
         List of pending tasks for the user
     """
     non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
-    db = _resolve_dependency(db, get_task_store)
     messages = await db.get_pending_task_messages_for_user(
         current_user.user_id, non_terminal_state_values
     )

@@ -157,7 +157,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "facade=context_memory_facade,",
         "usage_store=memory_store,",
         "summary_service=summary_llm_service,",
-        "discovery_query_expander=discovery_llm_service,",
         "embedding_provider=embedding_llm_service,",
     ]
     forbidden_snippets = [

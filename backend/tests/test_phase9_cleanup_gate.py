@@ -743,16 +743,6 @@ def test_container_does_not_define_platform_adapter_classes_inline():
 
     assert inline_adapters == set()
 
-    from platform_module.adapters import (
-        MongoFileMetadataRepository,
-        RateLimitCollectionAdapter,
-    )
-
-    assert RateLimitCollectionAdapter.__module__.startswith("platform_module.adapters.")
-    assert MongoFileMetadataRepository.__module__.startswith(
-        "platform_module.adapters."
-    )
-
 
 def test_a2a_sdk_blockers_are_exact_current_files():
     blocked = _blocked_cleanup_paths(contract="sdk_confinement")

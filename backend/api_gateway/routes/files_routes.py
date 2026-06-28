@@ -1,8 +1,7 @@
-from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
-from fastapi.params import Depends as DependsParam
 
+from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.errors import FileStoragePlatformError
@@ -10,37 +9,6 @@ from common.protocols import FileStorage, RoomOwnershipReader
 from models.file_upload import FileUploadResponse
 
 router = APIRouter(prefix="/files", tags=["files"])
-
-file_storage: FileStorage | None = None
-room_ownership_reader: RoomOwnershipReader | None = None
-
-
-def bind_file_dependencies(
-    storage: FileStorage,
-    room_ownership: RoomOwnershipReader,
-) -> None:
-    global file_storage, room_ownership_reader
-
-    file_storage = storage
-    room_ownership_reader = room_ownership
-
-
-def get_file_storage() -> FileStorage:
-    if file_storage is None:
-        raise RuntimeError("File storage dependency has not been bound")
-    return file_storage
-
-
-def get_room_ownership_reader() -> RoomOwnershipReader:
-    if room_ownership_reader is None:
-        raise RuntimeError("Room ownership dependency has not been bound")
-    return room_ownership_reader
-
-
-def _resolve_dependency(value: Any, provider) -> Any:
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 @router.post("/upload")
@@ -59,8 +27,6 @@ async def upload_file(
 
     Returns FileUploadResponse with file_id and presigned URL.
     """
-    storage = _resolve_dependency(storage, get_file_storage)
-    room_ownership = _resolve_dependency(room_ownership, get_room_ownership_reader)
 
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")

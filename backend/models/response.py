@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -219,6 +219,8 @@ class RoomCenterUserMessageResponse(BaseModel):
     message: RoomUserMessage | None = None
     message_list: list[RoomUserMessage] | None = None
     scope_resolution_error: ScopeResolutionError | None = None
+    preflight_outcome: Literal["ready", "completed", "failed", "canceled"] | None = None
+    preflight_details: dict[str, Any] | str | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
