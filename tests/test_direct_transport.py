@@ -220,6 +220,27 @@ class TestParseSyncFallbackResponse:
         assert artifact_event.append is True
         assert artifact_event.last_chunk is True
 
+    def test_coerce_stream_result_defaults_nullable_artifact_flags(self):
+        artifact_event = DirectTransport._coerce_stream_result(
+            {
+                "kind": "artifact-update",
+                "result": {
+                    "kind": "artifact-update",
+                    "taskId": "task-1",
+                    "artifact": {
+                        "artifactId": "art-1",
+                        "parts": [{"kind": "text", "text": "hello"}],
+                    },
+                    "append": None,
+                    "lastChunk": None,
+                },
+            }
+        )
+
+        assert isinstance(artifact_event, TaskArtifactUpdateEvent)
+        assert artifact_event.append is False
+        assert artifact_event.last_chunk is False
+
 
 # =============================================================================
 # Instance-method tests — bypass __init__ via object.__new__, inject mocks
