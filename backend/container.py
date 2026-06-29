@@ -209,8 +209,6 @@ def validate_runtime_bindings(
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
 
-    if getattr(app.state, "platform_facade", None) is None:
-        errors.append("app.state.platform_facade")
     api_gateway_deps = getattr(app.state, "api_gateway_deps", None)
     for missing in missing_required_deps(api_gateway_deps):
         errors.append(f"api_gateway.{missing}")
