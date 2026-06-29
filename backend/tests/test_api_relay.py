@@ -16,11 +16,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app_shell.relay_service import (
-    RelayService,
-    _LegacyPublishSink,
-    init_relay_service,
-)
 from common.dto import HubDispatchCommand
 from common.dto.agent import SyncedHubAgent
 from execution.dispatch.agent_event import AgentEvent
@@ -28,6 +23,11 @@ from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.relay import RelayTransport
 from hub_runtime_bridge.adapters.legacy_publish import (
     LegacyHubPublishAuthorizationReader,
+)
+from hub_runtime_bridge.compat.relay_service import (
+    RelayService,
+    _LegacyPublishSink,
+    init_relay_service,
 )
 from hub_runtime_bridge.config import HubRuntimeBridgeConfig
 from models.api_key import APIKey
@@ -72,7 +72,7 @@ def _make_relay_service(
     *,
     mongo=None,
     db_service=None,
-    sse_manager=None,
+    delivery=None,
     offline_failure_port=None,
     config=None,
 ) -> RelayService:
@@ -100,12 +100,12 @@ def _make_relay_service(
         db_service.is_message_cancelled = AsyncMock(return_value=False)
         db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
         db_service.pinecone.upsert = MagicMock()
-    if sse_manager is None:
-        sse_manager = MagicMock()
-        sse_manager.send_agent_response = AsyncMock()
-        sse_manager.send_task_submitted = AsyncMock()
-        sse_manager.send_processing_status = AsyncMock()
-        sse_manager.send_error = AsyncMock()
+    if delivery is None:
+        delivery = MagicMock()
+        delivery.send_agent_response = AsyncMock()
+        delivery.send_task_submitted = AsyncMock()
+        delivery.send_processing_status = AsyncMock()
+        delivery.send_error = AsyncMock()
     if offline_failure_port is None:
         offline_failure_port = MagicMock()
         offline_failure_port.mark_hub_message_failed = AsyncMock()
@@ -113,7 +113,6 @@ def _make_relay_service(
     svc = RelayService(
         mongo=mongo,
         db=db_service,
-        sse_manager=sse_manager,
         offline_failure_port=offline_failure_port,
         config=config,
     )
@@ -126,7 +125,7 @@ def _make_relay_service(
         relay_service=svc,
         task_tracker=db_service,
         call_counter=db_service,
-        delivery=sse_manager,
+        delivery=delivery,
     )
     svc.set_relay_transport(relay_transport)
 
@@ -160,14 +159,12 @@ async def test_hub_facade_uses_injected_offline_failure_port_for_legacy_rejectio
 def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
     mongo = MagicMock()
     db_service = MagicMock()
-    sse_manager = MagicMock()
     room_message_center = MagicMock()
     hitl_coordinator = MagicMock()
 
     svc = init_relay_service(
         mongo=mongo,
         db=db_service,
-        sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
         offline_failure_port=MagicMock(),
@@ -179,7 +176,6 @@ def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
 def test_init_relay_service_requires_injected_response_handler():
     mongo = MagicMock()
     db_service = MagicMock()
-    sse_manager = MagicMock()
     room_message_center = SimpleNamespace()
     hitl_coordinator = MagicMock()
 
@@ -187,7 +183,6 @@ def test_init_relay_service_requires_injected_response_handler():
         init_relay_service(
             mongo=mongo,
             db=db_service,
-            sse_manager=sse_manager,
             room_message_center=room_message_center,
             hitl_coordinator=hitl_coordinator,
             offline_failure_port=MagicMock(),
@@ -199,7 +194,6 @@ def test_init_relay_service_requires_offline_failure_port():
         init_relay_service(
             mongo=MagicMock(),
             db=MagicMock(),
-            sse_manager=MagicMock(),
             room_message_center=MagicMock(agent_response_handler=MagicMock()),
         )
 
@@ -207,7 +201,6 @@ def test_init_relay_service_requires_offline_failure_port():
 def test_init_relay_service_binds_processor_relay_path():
     mongo = MagicMock()
     db_service = MagicMock()
-    sse_manager = MagicMock()
     hitl_coordinator = MagicMock()
 
     processor = MagicMock()
@@ -221,7 +214,6 @@ def test_init_relay_service_binds_processor_relay_path():
     svc = init_relay_service(
         mongo=mongo,
         db=db_service,
-        sse_manager=sse_manager,
         room_message_center=room_message_center,
         hitl_coordinator=hitl_coordinator,
         offline_failure_port=MagicMock(),
@@ -244,7 +236,6 @@ def test_init_relay_service_wires_hub_worker_and_event_publisher():
     svc = init_relay_service(
         mongo=MagicMock(),
         db=MagicMock(),
-        sse_manager=MagicMock(),
         room_message_center=MagicMock(agent_response_handler=MagicMock()),
         event_publisher=publisher,
         worker_id="worker-123",
@@ -903,7 +894,7 @@ class TestRelayServicePublish:
         sse.send_task_submitted = AsyncMock()
         sse.send_processing_status = AsyncMock()
 
-        svc = _make_relay_service(mongo=mongo, db_service=db_service, sse_manager=sse)
+        svc = _make_relay_service(mongo=mongo, db_service=db_service, delivery=sse)
 
         events = [
             HubPublishEvent(

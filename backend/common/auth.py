@@ -45,10 +45,6 @@ def _get_clerk_client() -> Clerk:
 def _cached_clerk_user_name(user_id: str) -> str | None:
     """Fetch and cache user display name from Clerk."""
     try:
-        secret_key = _require_clerk_secret_key()
-        if not secret_key:
-            return "Local Developer"
-            
         client = _get_clerk_client()
         user = client.users.get(user_id=user_id)
         if not user:
@@ -93,15 +89,12 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
-        secret_key = _require_clerk_secret_key()
-        if not secret_key:
-            return ClerkUser(user_id="user_local_developer", session_id="local_session", claims={"email": "dev@local", "username": "local_dev"})
 
         # Use Clerk SDK to authenticate the request
         # The SDK handles JWKS fetching, caching, and JWT verification automatically
         # Create authentication options with secret key and authorized parties
         options = AuthenticateRequestOptions(
-            secret_key=secret_key,
+            secret_key=_require_clerk_secret_key(),
             authorized_parties=clerk_authorized_parties,
         )
         request_state = authenticate_request(request, options)

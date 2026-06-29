@@ -6,7 +6,7 @@ these tests use AsyncClient to verify that auth, request parsing, response
 serialization, and error handling all work through the HTTP transport layer.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -17,7 +17,6 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
-from tests.conftest import PATCH
 
 
 @pytest.fixture
@@ -66,16 +65,9 @@ class TestAuthGuardIntegration:
     async def test_register_agent_requires_auth(self):
         """POST /agent/registerAgent should 401 without auth."""
         from main import app
-        from api_gateway.routes.agent_routes import get_agent_center
-        from common.auth import get_current_user
-        from fastapi import HTTPException
-
-        def _mock_auth():
-            raise HTTPException(status_code=401)
 
         original_overrides = dict(app.dependency_overrides)
-        app.dependency_overrides[get_agent_center] = lambda: None
-        app.dependency_overrides[get_current_user] = _mock_auth
+        app.dependency_overrides.clear()
 
         try:
             async with AsyncClient(
@@ -88,7 +80,6 @@ class TestAuthGuardIntegration:
 
             assert resp.status_code == 401
         finally:
-            app.dependency_overrides.clear()
             app.dependency_overrides.update(original_overrides)
 
 
@@ -102,7 +93,10 @@ class TestRoomCenterHTTPIntegration:
 
     @pytest.mark.asyncio
     async def test_create_room_returns_json(
-        self, http_client, integration_user,
+        self,
+        http_client,
+        integration_app,
+        integration_user,
     ):
         """POST /roomCenter/createNewRoom should return well-formed JSON."""
         mock_rc = MagicMock()
@@ -112,7 +106,10 @@ class TestRoomCenterHTTPIntegration:
             )
         )
 
-        with patch(PATCH["room_center.room_center"], mock_rc):
+        from api import room_center as room_api
+
+        integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
+        try:
             resp = await http_client.post(
                 "/api/v1/roomCenter/createNewRoom",
                 json={
@@ -121,6 +118,8 @@ class TestRoomCenterHTTPIntegration:
                     "room_agent_set": {},
                 },
             )
+        finally:
+            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -129,7 +128,10 @@ class TestRoomCenterHTTPIntegration:
 
     @pytest.mark.asyncio
     async def test_inquiry_room_messages_returns_json(
-        self, http_client, integration_user,
+        self,
+        http_client,
+        integration_app,
+        integration_user,
     ):
         """POST /roomCenter/inquiryRoomMessagesByRoomId via HTTP."""
         from models.room import Room
@@ -147,17 +149,21 @@ class TestRoomCenterHTTPIntegration:
 
         mock_rc = MagicMock()
         mock_rc.inquiry_room_messages_by_room_id = AsyncMock(
-            return_value=RoomCenterRoomMessageResponse(
-                success=True, message_list=[]
-            )
+            return_value=RoomCenterRoomMessageResponse(success=True, message_list=[])
         )
 
-        with patch(PATCH["room_center.room_store"], mock_db):
-            with patch(PATCH["room_center.room_center"], mock_rc):
-                resp = await http_client.post(
-                    "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
-                    json={"room_id": "room-http-002"},
-                )
+        from api import room_center as room_api
+
+        integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
+        integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
+        try:
+            resp = await http_client.post(
+                "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+                json={"room_id": "room-http-002"},
+            )
+        finally:
+            integration_app.dependency_overrides.pop(room_api.get_room_store, None)
+            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -173,15 +179,22 @@ class TestAgentHTTPIntegration:
     """Verify agent endpoints through the HTTP stack."""
 
     @pytest.mark.asyncio
-    async def test_get_active_agents_returns_json(self, http_client):
+    async def test_get_active_agents_returns_json(self, http_client, integration_app):
         """GET /agent/getAllActiveAgents should serialize correctly."""
         mock_ac = MagicMock()
         mock_ac.list_visible_agents_for_route = AsyncMock(
             return_value=AgentCenterResponse(success=True, agents=[])
         )
 
-        with patch(PATCH["agent.agent_center"], mock_ac):
+        from api import agent as agent_api
+
+        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+            mock_ac
+        )
+        try:
             resp = await http_client.get("/api/v1/agent/getAllActiveAgents")
+        finally:
+            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -194,8 +207,8 @@ class TestAgentHTTPIntegration:
         """POST /agent/registerAgent should 400 when agent_url missing."""
         from api import agent as agent_api
 
-        integration_app.dependency_overrides[agent_api.get_agent_center] = (
-            lambda: MagicMock()
+        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+            MagicMock()
         )
         try:
             resp = await http_client.post(
@@ -214,8 +227,8 @@ class TestAgentHTTPIntegration:
         """GET /agent/getAgent/ with whitespace ID returns error response."""
         from api import agent as agent_api
 
-        integration_app.dependency_overrides[agent_api.get_agent_center] = (
-            lambda: MagicMock()
+        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+            MagicMock()
         )
         integration_app.dependency_overrides[agent_api.get_agent_liveness_checker] = (
             lambda: AsyncMock()
@@ -244,7 +257,9 @@ class TestHITLHTTPIntegration:
     """Verify HITL endpoints through the HTTP stack."""
 
     @pytest.mark.asyncio
-    async def test_get_pending_through_http(self, http_client, integration_user):
+    async def test_get_pending_through_http(
+        self, http_client, integration_app, integration_user
+    ):
         """GET /rooms/{room_id}/hitl/pending should return JSON array."""
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(
@@ -254,11 +269,21 @@ class TestHITLHTTPIntegration:
         mock_hitl = MagicMock()
         mock_hitl.get_pending_hitl = AsyncMock(return_value=[])
 
-        with patch("api.hitl.room_ownership_reader", room_ownership_reader):
-            with patch("api.hitl.hitl_manager", mock_hitl):
-                resp = await http_client.get(
-                    "/api/v1/rooms/room-hitl-http/hitl/pending"
-                )
+        from api import hitl as hitl_api
+
+        integration_app.dependency_overrides[hitl_api.get_room_ownership_reader] = (
+            lambda: room_ownership_reader
+        )
+        integration_app.dependency_overrides[hitl_api.get_hitl_manager] = lambda: (
+            mock_hitl
+        )
+        try:
+            resp = await http_client.get("/api/v1/rooms/room-hitl-http/hitl/pending")
+        finally:
+            integration_app.dependency_overrides.pop(
+                hitl_api.get_room_ownership_reader, None
+            )
+            integration_app.dependency_overrides.pop(hitl_api.get_hitl_manager, None)
 
         assert resp.status_code == 200
         body = resp.json()

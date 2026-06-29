@@ -72,10 +72,10 @@ class TaskStateManager:
     def __init__(
         self,
         room_runtime: RoomRuntimePort,
-        notification_service: NotificationServicePort,
+        task_notifier: NotificationServicePort,
     ) -> None:
         self.room_runtime = room_runtime
-        self.notification_service = notification_service
+        self.task_notifier = task_notifier
 
     # ------------------------------------------------------------------
     # Core primitives
@@ -98,7 +98,7 @@ class TaskStateManager:
 
     async def notify_task(self, ctx: ProcessingContext, status: str, **kwargs) -> None:
         """Send a task update notification using common fields from *ctx*."""
-        await self.notification_service.send_task_update(
+        await self.task_notifier.send_task_update(
             room_id=ctx.room_id,
             message_id=ctx.tracked_message_id,
             status=status,

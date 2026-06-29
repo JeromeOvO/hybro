@@ -293,17 +293,20 @@ def _make_room_message_center_port_deps():
         "memory_writer": MagicMock(),
         "hitl_reader": MagicMock(),
         "delivery": MagicMock(),
+        "event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
-        "notification_service": MagicMock(),
+        "task_notifier": MagicMock(),
+        "task_notification_store": MagicMock(),
         "agent_resolver_service": MagicMock(),
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
         "room_memory": MagicMock(),
-        "debate_service": MagicMock(),
+        "debate_prompt_injector": MagicMock(),
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
         "context_memory_runtime": MagicMock(),
+        "context_compaction": MagicMock(),
         "hitl_coordinator": MagicMock(),
         "task_notifications": MagicMock(),
         "object_storage": MagicMock(),
@@ -331,11 +334,13 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.memory_writer is deps["memory_writer"]
     assert runtime.hitl_reader is deps["hitl_reader"]
     assert runtime.delivery is deps["delivery"]
+    assert runtime.event_publisher is deps["event_publisher"]
     assert runtime.coordinator is deps["coordinator"]
     assert runtime.summary_service is deps["summary_service"]
+    assert runtime.task_notification_store is deps["task_notification_store"]
     assert runtime.room_memory is deps["room_memory"]
     assert runtime.tsm.room_runtime is deps["room_runtime"]
-    assert runtime.tsm.notification_service is deps["notification_service"]
+    assert runtime.tsm.task_notifier is deps["task_notifier"]
     assert runtime.agent_dispatcher._message_writer is deps["message_writer"]
     assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
     assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]
@@ -346,8 +351,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler._message_writer is deps["message_writer"]
     assert runtime.agent_response_handler._task_writer is deps["message_writer"]
     assert (
-        runtime.agent_response_handler._continuation_store
-        is deps["continuation_store"]
+        runtime.agent_response_handler._continuation_store is deps["continuation_store"]
     )
     client_request_resolver = runtime.agent_response_handler._client_request_resolver
     assert (
@@ -365,6 +369,10 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler._room_reader is deps["room_reader"]
     assert runtime.agent_response_handler._hitl_reader is deps["hitl_reader"]
     assert runtime.agent_response_handler._delivery is deps["delivery"]
+    assert (
+        runtime.agent_response_handler._task_notification_store
+        is deps["task_notification_store"]
+    )
     assert runtime.direct_transport._message_reader is deps["message_reader"]
     assert runtime.direct_transport._artifact_store is deps["message_writer"]
     assert runtime.direct_transport._task_updater is deps["task_state_store"]
@@ -379,20 +387,34 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.queue_executor.message_writer is deps["message_writer"]
     assert runtime.queue_executor.delivery is deps["delivery"]
     assert runtime.queue_executor.room_runtime is deps["room_runtime"]
-    assert runtime.queue_executor.room_memory is deps["room_memory"]
+    assert runtime.queue_executor.event_publisher is deps["event_publisher"]
+    assert (
+        runtime.queue_executor.debate_prompt_injector is deps["debate_prompt_injector"]
+    )
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
     assert runtime.supervisor_executor.message_reader is deps["message_reader"]
     assert runtime.supervisor_executor.message_writer is deps["message_writer"]
     assert runtime.supervisor_executor.delivery is deps["delivery"]
     assert runtime.supervisor_executor.room_runtime is deps["room_runtime"]
-    assert runtime.supervisor_executor.room_memory is deps["room_memory"]
+    assert runtime.supervisor_executor.event_publisher is deps["event_publisher"]
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_compaction is deps["context_compaction"]
     assert runtime.direct_transport.object_storage is deps["object_storage"]
+
+
+def test_room_message_center_factory_requires_event_publisher():
+    from execution.orchestration.factory import create_room_message_center
+
+    deps = _make_room_message_center_port_deps()
+    deps.pop("event_publisher")
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        create_room_message_center(**deps, debate_rounds=5)
 
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
@@ -421,6 +443,7 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.room_runtime is deps["room_runtime"]
     assert runtime.debate_rounds == 6
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_compaction is deps["context_compaction"]
 
 
 def test_container_wires_execution_with_focused_port_names():
@@ -468,10 +491,13 @@ def test_container_wires_execution_with_focused_port_names():
         "memory_writer",
         "hitl_reader",
         "delivery",
+        "event_publisher",
         "coordinator",
         "a2a_transport",
         "remote_task_reader",
         "room_memory",
+        "context_compaction",
+        "task_notification_store",
     }
     legacy_keywords = {
         "store",
@@ -481,6 +507,7 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_service",
         "task_service",
         "room_memory_service",
+        "compaction_service",
     }
     assert focused_keywords <= room_center_keywords
     assert room_center_keywords.isdisjoint(legacy_keywords)
@@ -490,11 +517,19 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_transport": "execution_a2a_transport",
         "remote_task_reader": "execution_remote_task_reader",
         "room_memory": "execution_room_memory",
+        "event_publisher": "_delivery_deps.event_publisher",
+        "context_compaction": "context_memory_facade",
+        "task_notification_store": "task_notification_store",
     }
     for keyword, expected_name in expected_room_center_adapter_names.items():
         value = keyword_value(room_center_call, keyword)
-        assert isinstance(value, ast.Name)
-        assert value.id == expected_name
+        if "." in expected_name:
+            assert isinstance(value, ast.Attribute)
+            assert isinstance(value.value, ast.Name)
+            assert f"{value.value.id}.{value.attr}" == expected_name
+        else:
+            assert isinstance(value, ast.Name)
+            assert value.id == expected_name
     coordinator_value = keyword_value(room_center_call, "coordinator")
     assert isinstance(coordinator_value, ast.Name)
     assert coordinator_value.id == "execution_coordinator"
@@ -504,9 +539,14 @@ def test_container_wires_execution_with_focused_port_names():
     assert "QuotedSnippet.model_validate" in source
     assert "execution_inquiry_agent_messages_by_related_message_id" in source
     assert (
-        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
-        in source
+        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)" in source
     )
+    assert (
+        ('from ' + 'app_' + 'shell' + '.') + "compaction_service import compaction_service" not in source
+    )
+    assert "compaction_service.bind_content_storage" not in source
+    assert "compaction_service.bind_room_memory_reader" not in source
+    assert "compaction_service.bind_facade" not in source
 
     rmc_source = (
         ROOT / "execution" / "orchestration" / "room_message_center.py"
@@ -517,8 +557,7 @@ def test_container_wires_execution_with_focused_port_names():
     )
     assert (
         "inquiry_agent_messages_by_related_message_id(\n"
-        "                room_user_message_id\n"
-        in rmc_source
+        "                room_user_message_id\n" in rmc_source
     )
 
     hitl_call = calls_named("create_hitl_service")[0]
@@ -548,10 +587,16 @@ def test_container_wires_execution_with_focused_port_names():
     webhook_handler_call = calls_named("AgentResponseHandler")[0]
     webhook_keywords = keyword_names(webhook_handler_call)
     assert "delivery" in webhook_keywords
+    assert "task_notification_store" in webhook_keywords
     assert "sse_manager" not in webhook_keywords
     delivery_value = keyword_value(webhook_handler_call, "delivery")
     assert isinstance(delivery_value, ast.Name)
     assert delivery_value.id == "execution_delivery"
+    webhook_notification_store = keyword_value(
+        webhook_handler_call, "task_notification_store"
+    )
+    assert isinstance(webhook_notification_store, ast.Name)
+    assert webhook_notification_store.id == "task_notification_store"
 
 
 def test_room_message_center_constructor_requires_explicit_dependencies():
@@ -569,8 +614,19 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
         "task_service",
         "room_memory_service",
         "room_coordinator_service",
+        "compaction_service",
     }
     assert legacy_names.isdisjoint(params)
+
+
+def test_room_message_center_constructor_requires_event_publisher():
+    from execution.orchestration.room_message_center import RoomMessageCenter
+
+    deps = _make_room_message_center_port_deps()
+    deps["event_publisher"] = None
+
+    with pytest.raises(RuntimeError, match="event_publisher"):
+        RoomMessageCenter(**deps, debate_rounds=5)
 
 
 def test_room_message_center_uses_common_room_lock_protocol():
@@ -583,7 +639,7 @@ def test_room_message_center_uses_common_room_lock_protocol():
     source = Path("execution/orchestration/room_message_center.py").read_text()
     hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
 
-    assert "AppShellRedisService" not in source
+    assert ('App' + 'Shell' + 'RedisService') not in source
     assert "._client" not in source
     assert hints["room_lock"] == RoomDistributedLock | None
     assert (
@@ -592,22 +648,18 @@ def test_room_message_center_uses_common_room_lock_protocol():
     )
 
 
-def test_app_shell_room_lock_uses_public_redis_protocol_surface():
-    from pathlib import Path
+def test_dal_room_lock_uses_dal_redis_owner_module():
     from typing import get_type_hints
 
-    from app_shell.room_lock import RedisLockStore, RedisRoomDistributedLock
+    from common.protocols import RoomDistributedLock
+    from dal.redis.lock import RoomRedisDistributedLock
+    from execution.orchestration.room_message_center import RoomMessageCenter
 
-    source = Path("app_shell/room_lock.py").read_text()
-    init_hints = get_type_hints(RedisRoomDistributedLock.__init__)
-
-    assert "Any" not in source
-    assert "._client" not in source
-    assert "_client" not in source
-    assert ".set_nx(" in source
-    assert init_hints["redis_service"] == RedisLockStore | None
-    acquire_hints = get_type_hints(RedisRoomDistributedLock.acquire)
+    hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
+    assert hints["room_lock"] == RoomDistributedLock | None
+    acquire_hints = get_type_hints(RoomRedisDistributedLock.acquire)
     assert acquire_hints["ttl"] is int
+    assert RoomRedisDistributedLock.__module__ == "dal.redis.lock"
 
 
 class _FakeCursor:

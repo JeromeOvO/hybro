@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Protocol
 
+from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     ExecutionAck,
     ExecutionRequest,
@@ -17,7 +18,7 @@ from common.observability import traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from execution.events import emit_processing_status
+from execution.events import emit_processing_status, emit_room_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
@@ -93,6 +94,15 @@ class RoomCenterPort(Protocol):
         target_group: Any = None,
         mentioned_agent_ids: Any = None,
     ) -> Any: ...
+
+    async def persist_message_to_room(
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: Any = None,
+        mentioned_agent_ids: Any = None,
+    ) -> tuple[Any, Any | None]: ...
+
+    async def run_message_preflight_to_room(self, context: Any) -> Any: ...
 
 
 class RoomMessageCenterPort(Protocol):
@@ -337,7 +347,7 @@ class ExecutionFacade:
         *,
         room_center: RoomCenterPort,
         room_message_center: RoomMessageCenterPort,
-        hitl_service: HITLServicePort,
+        hitl_manager: HITLServicePort,
         run_lifecycle: RunLifecyclePort,
         run_reader: RunReadPort,
         cancellation_state: CancellationStatePort,
@@ -352,7 +362,7 @@ class ExecutionFacade:
     ) -> None:
         self._room_center = room_center
         self._room_message_center = room_message_center
-        self._hitl_service = hitl_service
+        self._hitl_manager = hitl_manager
         self._run_lifecycle = run_lifecycle
         self._run_reader = run_reader
         self._cancellation_state = cancellation_state
@@ -367,7 +377,128 @@ class ExecutionFacade:
         self._inflight: set[asyncio.Task] = set()
         self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
 
+    async def _reject_if_hitl_pending(
+        self,
+        request: ExecutionRequest,
+    ) -> ExecutionAck | None:
+        try:
+            pending_requests = await self._hitl_manager.get_pending_requests(
+                request.room_id
+            )
+        except Exception:
+            logger.warning("pending HITL lookup failed before execute", exc_info=True)
+            return None
+        if not pending_requests:
+            return None
+        return ExecutionAck(
+            room_id=request.room_id,
+            success=False,
+            error="Room is waiting for your input before it can process another message.",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+    async def _reject_if_room_has_active_run(
+        self,
+        request: ExecutionRequest,
+    ) -> ExecutionAck | None:
+        try:
+            active_runs = await self._run_reader.get_runs_for_room(request.room_id)
+        except Exception:
+            logger.warning("active room run lookup failed before execute", exc_info=True)
+            return None
+        if not active_runs:
+            return None
+        return ExecutionAck(
+            room_id=request.room_id,
+            success=False,
+            error="Room is already processing another message.",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+    async def _emit_room_preflight_processing_status(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        if not ack.message_id:
+            return
+        lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
+        await emit_room_processing_status(
+            room_id=ack.room_id or request.room_id,
+            status=SSEProcessingStatus.PROCESSING,
+            message_id=ack.message_id,
+            lifecycle_message_id=lifecycle_message_id,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+            client_request_id=request.client_request_id,
+        )
+
+    def _terminal_preflight_status(
+        self,
+        ack: ExecutionAck,
+    ) -> SSEProcessingStatus | None:
+        if ack.should_start_orchestration:
+            return None
+        status_by_outcome = {
+            "completed": SSEProcessingStatus.COMPLETED,
+            "canceled": SSEProcessingStatus.CANCELED,
+            "failed": SSEProcessingStatus.FAILED,
+        }
+        if ack.preflight_outcome in status_by_outcome:
+            return status_by_outcome[ack.preflight_outcome]
+        if ack.message_id and not ack.success:
+            return SSEProcessingStatus.FAILED
+        return None
+
+    async def _emit_room_preflight_terminal_status(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        status = self._terminal_preflight_status(ack)
+        if status is None or not ack.message_id:
+            return
+        lifecycle_message_id = ack.dispatch_root_message_id or ack.message_id
+        await emit_room_processing_status(
+            room_id=ack.room_id or request.room_id,
+            status=status,
+            message_id=ack.message_id,
+            lifecycle_message_id=lifecycle_message_id,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+            client_request_id=request.client_request_id,
+            details=ack.preflight_details or ack.error,
+        )
+
+    async def _emit_room_preflight_statuses(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        try:
+            await self._emit_room_preflight_processing_status(request, ack)
+            await self._emit_room_preflight_terminal_status(request, ack)
+        except Exception:
+            logger.warning(
+                "room preflight status emission failed after persistence",
+                exc_info=True,
+            )
+
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
+        hitl_rejection = await self._reject_if_hitl_pending(request)
+        if hitl_rejection is not None:
+            return hitl_rejection
+
+        active_run_rejection = await self._reject_if_room_has_active_run(request)
+        if active_run_rejection is not None:
+            return active_run_rejection
+
         room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
@@ -377,12 +508,33 @@ class ExecutionFacade:
             inline_file_ids=request.inline_file_ids,
             client_request_id=request.client_request_id,
         )
-        response = await self._room_center.send_message_to_room(
+        persisted_response, preflight_context = await self._room_center.persist_message_to_room(
             room_request,
             request.target_group,
             request.mentioned_agent_ids,
         )
-        return room_response_to_execution_ack(response)
+        persisted_ack = room_response_to_execution_ack(persisted_response)
+        try:
+            await self._emit_room_preflight_processing_status(request, persisted_ack)
+        except Exception:
+            logger.warning(
+                "room preflight processing status emission failed after persistence",
+                exc_info=True,
+            )
+        if preflight_context is None:
+            return persisted_ack
+        response = await self._room_center.run_message_preflight_to_room(
+            preflight_context
+        )
+        ack = room_response_to_execution_ack(response)
+        try:
+            await self._emit_room_preflight_terminal_status(request, ack)
+        except Exception:
+            logger.warning(
+                "room preflight terminal status emission failed after preflight",
+                exc_info=True,
+            )
+        return ack
 
     async def start_orchestration(
         self,
@@ -546,7 +698,7 @@ class ExecutionFacade:
         source: str,
         **kwargs: Any,
     ) -> HITLRequest | None:
-        result = await self._hitl_service.request_input(
+        result = await self._hitl_manager.request_input(
             room_id=room_id,
             user_message_id=user_message_id,
             source=source,
@@ -562,7 +714,7 @@ class ExecutionFacade:
         response: str,
         responder_id: str,
     ) -> HITLResponse:
-        result = await self._hitl_service.handle_response(
+        result = await self._hitl_manager.handle_response(
             room_id=room_id,
             request_id=request_id,
             user_input=response,
@@ -571,11 +723,11 @@ class ExecutionFacade:
         return hitl_response_dict_to_common(result)
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
-        requests = await self._hitl_service.get_pending_requests(room_id)
+        requests = await self._hitl_manager.get_pending_requests(room_id)
         return [model_hitl_request_to_common(request) for request in requests]
 
     async def cancel_hitl(self, room_id: str, request_id: str) -> bool:
-        result = await self._hitl_service.cancel_request(request_id, room_id=room_id)
+        result = await self._hitl_manager.cancel_request(request_id, room_id=room_id)
         return hitl_cancel_none_to_success(result)
 
     async def handle_hub_agent_response(

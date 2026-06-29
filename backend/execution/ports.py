@@ -13,7 +13,7 @@ from models.agent_group import AgentGroup
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
-from models.response import RoomCenterAgentMessageResponse, RoomCenterMemoryResponse
+from models.response import RoomCenterAgentMessageResponse
 from models.room import (
     CoordinatorAgentId,
     MessageContent,
@@ -262,8 +262,12 @@ class AgentHealthPort(Protocol):
 class AgentResolverPort(Protocol):
     async def resolve(
         self,
-        user_input: str,
+        query_text: str,
+        *,
         allowed_agent_ids: list[str] | None = None,
+        count: int = 5,
+        use_llm_selection: bool = False,
+        user_id: str | None = None,
     ) -> Any: ...
 
 
@@ -351,6 +355,26 @@ class NotificationServicePort(Protocol):
     ) -> None: ...
 
 
+class TaskNotificationStorePort(Protocol):
+    async def update_last_notified_state(
+        self, message_id: str, state: str
+    ) -> bool: ...
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> RoomAgentMessage | None: ...
+
+    async def update_room_agent_message_by_message_id(
+        self, message_id: str, room_agent_message: Any
+    ) -> bool: ...
+
+    async def get_room_by_room_id(self, room_id: str) -> Room | None: ...
+
+    async def resolve_client_request_id_for_agent_message(
+        self, room_agent_message: Any
+    ) -> str | None: ...
+
+
 class AgentRateLimitResultPort(Protocol):
     allowed: bool
     reason: str | None
@@ -377,16 +401,6 @@ RoomCoordinatorPort = CoordinatorSynthesisPort
 
 
 class RoomMemoryPort(Protocol):
-    async def add_agent_response_to_memory(
-        self,
-        room_id: str,
-        agent_id: str,
-        agent_name: str,
-        response_text: str,
-        was_successful: bool = True,
-        message_id: str | None = None,
-    ) -> RoomCenterMemoryResponse: ...
-
     async def add_synthesis_to_history(
         self,
         room_id: str,

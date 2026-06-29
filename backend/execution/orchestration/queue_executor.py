@@ -21,15 +21,18 @@ from typing import TYPE_CHECKING
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import SSEProcessingStatus
+from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.state.task_state_manager import TaskStateManager
+from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
+    from common.protocols import EventPublisher
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.ports import (
         DebateServicePort,
@@ -37,7 +40,6 @@ if TYPE_CHECKING:
         HITLCoordinator,
         RateLimitPort,
         RoomContinuationStore,
-        RoomMemoryPort,
         RoomMemoryReader,
         RoomMessageReader,
         RoomMessageWriter,
@@ -99,7 +101,7 @@ class QueueExecutor:
         tsm: TaskStateManager,
         delivery: ExecutionDeliveryPort,
         room_runtime: RoomRuntimePort,
-        room_memory: RoomMemoryPort,
+        event_publisher: EventPublisher,
         message_reader: RoomMessageReader,
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
@@ -107,8 +109,8 @@ class QueueExecutor:
         agent_lookup: RoomReader,
         room_reader: RoomReader,
         memory_reader: RoomMemoryReader,
-        debate_service: DebateServicePort,
-        rate_limit_service: RateLimitPort,
+        debate_prompt_injector: DebateServicePort,
+        rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         response_handler: AgentResponseHandler,
@@ -116,10 +118,12 @@ class QueueExecutor:
         turn_event_appender=None,
         hitl_coordinator: HITLCoordinator | None = None,
     ) -> None:
+        if event_publisher is None:
+            raise RuntimeError("QueueExecutor event_publisher dependency is required")
         self.tsm = tsm
         self.delivery = delivery
         self.room_runtime = room_runtime
-        self.room_memory = room_memory
+        self.event_publisher = event_publisher
         self.message_reader = message_reader
         self.message_writer = message_writer
         self.task_state_store = task_state_store
@@ -127,7 +131,7 @@ class QueueExecutor:
         self.agent_lookup = agent_lookup
         self.room_reader = room_reader
         self.memory_reader = memory_reader
-        self.debate_service = debate_service
+        self.debate_prompt_injector = debate_prompt_injector
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self._agent_message_processor = agent_message_processor
@@ -139,6 +143,27 @@ class QueueExecutor:
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
+
+    async def _publish_agent_message_committed(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        agent_id: str | None,
+        agent_name: str,
+        was_successful: bool,
+    ) -> None:
+        if not message_id:
+            return
+        await publish_message_committed(
+            self.event_publisher,
+            room_id=room_id,
+            message_id=message_id,
+            message_type="agent",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            was_successful=was_successful,
+        )
 
     async def _emit_processing_status(
         self,
@@ -481,11 +506,10 @@ class QueueExecutor:
                     )
 
                 if result.response_text:
-                    await self.room_memory.add_agent_response_to_memory(
+                    await self._publish_agent_message_committed(
                         room_id=room_id,
                         agent_id=current_message.agent_id,
                         agent_name=agent.agent_card.name if agent else "Agent",
-                        response_text=result.response_text,
                         was_successful=result.status == ProcessingStatus.SUCCESS,
                         message_id=getattr(current_message, "message_id", None),
                     )
@@ -522,10 +546,8 @@ class QueueExecutor:
                     and db_msg.message_content
                     and db_msg.message_content.message_task
                 ):
-                    from common.types import TaskState
-
-                    db_msg.message_content.message_task.status.state = TaskState(
-                        task_status
+                    db_msg.message_content.message_task.status.state = (
+                        system_task_state_from_runtime_status(task_status)
                     )
                     await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
@@ -921,11 +943,10 @@ class QueueExecutor:
         if task_result_text:
             current_agent_id = continuation.get("current_agent_id")
             current_agent_name = continuation.get("current_agent_name", "Agent")
-            await self.room_memory.add_agent_response_to_memory(
+            await self._publish_agent_message_committed(
                 room_id=room_id,
                 agent_id=current_agent_id,
                 agent_name=current_agent_name,
-                response_text=task_result_text,
                 was_successful=True,
                 message_id=message_id,
             )
@@ -1019,7 +1040,7 @@ class QueueExecutor:
 
             if is_debate_mode:
                 new_agent_message = (
-                    await self.debate_service.inject_short_debate_for_agent_message(
+                    await self.debate_prompt_injector.inject_short_debate_for_agent_message(
                         next_message
                     )
                 )

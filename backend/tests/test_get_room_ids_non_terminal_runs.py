@@ -35,9 +35,9 @@ async def test_run_repository_get_room_ids_with_non_terminal_runs_filters_and_st
 
 @pytest.mark.asyncio
 async def test_repository_store_get_room_ids_with_non_terminal_runs_filters_and_strings():
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
-    store = object.__new__(AppShellRepositoryStore)
+    store = object.__new__(RuntimeRepositoryStore)
     store._runs = MagicMock()
     store._runs.distinct = AsyncMock(return_value=["r1", "r2", None, ""])
 
@@ -48,9 +48,9 @@ async def test_repository_store_get_room_ids_with_non_terminal_runs_filters_and_
 
 @pytest.mark.asyncio
 async def test_repository_store_get_room_ids_returns_empty_on_error():
-    from app_shell.repository_store import AppShellRepositoryStore
+    from dal.runtime_store import RuntimeRepositoryStore
 
-    store = object.__new__(AppShellRepositoryStore)
+    store = object.__new__(RuntimeRepositoryStore)
     store._runs = MagicMock()
     store._runs.distinct = AsyncMock(side_effect=RuntimeError("db down"))
 

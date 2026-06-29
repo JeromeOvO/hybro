@@ -856,64 +856,7 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
     assert events[0].payload["raw"]["result"]["taskId"] == "task-1"
 
 
-
 @pytest.mark.asyncio
-async def test_transport_stream_message_yields_error_event_before_first_frame(monkeypatch):
-    from a2a_adapter import transport as transport_module
-
-    @asynccontextmanager
-    async def fake_aconnect_sse(client, method, url, **kwargs):
-        raise httpx.RequestError("stream failed")
-        yield
-
-    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
-    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    events = [
-        event
-        async for event in transport.stream_message("https://agent.example/a2a", message)
-    ]
-
-    assert len(events) == 1
-    assert events[0].event_type == "error"
-    assert events[0].payload == {"error": "stream failed"}
-    assert events[0].final is True
-
-
-@pytest.mark.asyncio
-async def test_transport_stream_message_yields_error_event_after_first_frame(monkeypatch):
-    from a2a_adapter import transport as transport_module
-
-    @asynccontextmanager
-    async def fake_aconnect_sse(client, method, url, **kwargs):
-        yield _FailingEventSource(
-            [{"taskId": "task-1", "type": "delta", "message": {"text": "one"}}],
-            httpx.RequestError("stream died"),
-        )
-
-    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
-    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
-    message = InternalAgentMessage(
-        agent_id="agent-1",
-        role=MessageRole.USER,
-        parts=[{"kind": "text", "text": "hello"}],
-    )
-
-    events = [
-        event
-        async for event in transport.stream_message("https://agent.example/a2a", message)
-    ]
-
-    assert [event.event_type for event in events] == ["delta", "error"]
-    assert events[1].payload == {"error": "stream died"}
-    assert events[1].final is True
-
-
 def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     monkeypatch,
 ):

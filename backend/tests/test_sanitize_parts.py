@@ -6,13 +6,13 @@ validation so a single bad part doesn't poison the entire RoomAgentMessage.
 """
 
 
-from app_shell.repository_store import _safe_parse_agent_message
 from common.utils.a2a_helpers import (
     sanitize_artifact_parts as _sanitize_parts,
 )
 from common.utils.a2a_helpers import (
     sanitize_task_dict as _sanitize_task_dict,
 )
+from dal.runtime_store.parts.parsing import _safe_parse_agent_message
 
 
 # ---------------------------------------------------------------------------

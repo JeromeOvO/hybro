@@ -19,13 +19,21 @@ class RedisStreamsImpl:
     ) -> None:
         self._client = client
         self._url = settings.redis_url if url is None else url
+        self._last_ping_ok = client is not None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._client is not None and self._last_ping_ok
 
     def _ensure_client(self) -> Any | None:
         if self._client is not None:
             return self._client
         if not self._url:
             return None
-        kwargs: dict[str, Any] = {"decode_responses": True}
+        kwargs: dict[str, Any] = {
+            "decode_responses": True,
+            "socket_connect_timeout": 5,
+        }
         max_connections = getattr(settings, "redis_max_connections", None)
         if max_connections is not None:
             kwargs["max_connections"] = max_connections
@@ -71,11 +79,15 @@ class RedisStreamsImpl:
     async def ping(self) -> bool:
         client = self._ensure_client()
         if client is None:
+            self._last_ping_ok = False
             return False
         try:
             await client.ping()
+            self._last_ping_ok = True
             return True
         except Exception:
+            self._last_ping_ok = False
+            self._client = None
             return False
 
     async def close(self) -> None:
@@ -85,3 +97,4 @@ class RedisStreamsImpl:
             except Exception:
                 pass
         self._client = None
+        self._last_ping_ok = False

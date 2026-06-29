@@ -28,7 +28,7 @@ from a2a.types import (
     TextPart,
 )
 
-from app_shell.a2a_runtime import A2ARuntimeConfig
+from a2a_adapter.runtime_service import A2ARuntimeConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -176,7 +176,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_webhook_url_set_uses_push_notification(self):
         """When webhook_base_url is configured, push config is built and blocking=False."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_payload = {}
 
@@ -193,7 +193,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
+            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com")
@@ -217,7 +217,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_no_webhook_url_uses_blocking_true(self):
         """When webhook_base_url is empty, blocking=True and no push_config."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_payload = {}
 
@@ -234,7 +234,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
+            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "")
@@ -254,7 +254,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_trailing_slash_stripped_from_webhook_url(self):
         """Trailing slash is stripped from webhook_base_url to avoid double-slash URLs."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_payload = {}
 
@@ -271,7 +271,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
+            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com/")
@@ -295,7 +295,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_agent_without_push_capability_uses_blocking_true(self):
         """Agent without push-notification capability → blocking=True even if webhook URL is set."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_payload = {}
 
@@ -312,7 +312,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=False
             ),
-            patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
+            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com")
@@ -332,7 +332,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
     @pytest.mark.asyncio
     async def test_timeout_is_long_when_blocking(self):
         """With blocking=True, the a2a_client is created with DEFAULT_REQUEST_TIMEOUT."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_timeout = {}
 
@@ -349,7 +349,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("app_shell.a2a_runtime.adapter_send_message", fake_send_message),
+            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "")
@@ -393,7 +393,7 @@ class TestReplyToTaskWebhookFallback:
     @pytest.mark.asyncio
     async def test_hitl_webhook_url_and_capability_uses_push_notification(self):
         """HITL: webhook_base_url set + agent push-capable → push_config built, blocking=False."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_request = {}
 
@@ -421,7 +421,7 @@ class TestReplyToTaskWebhookFallback:
 
         with (
             patch(
-                "app_shell.a2a_runtime.adapter_send_hitl_reply",
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
             patch.dict("sys.modules", {}),
@@ -447,7 +447,7 @@ class TestReplyToTaskWebhookFallback:
     @pytest.mark.asyncio
     async def test_hitl_no_webhook_url_uses_blocking_true(self):
         """HITL: webhook_base_url empty → push_config=None, blocking=True."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_request = {}
 
@@ -475,7 +475,7 @@ class TestReplyToTaskWebhookFallback:
 
         with (
             patch(
-                "app_shell.a2a_runtime.adapter_send_hitl_reply",
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
@@ -493,7 +493,7 @@ class TestReplyToTaskWebhookFallback:
     @pytest.mark.asyncio
     async def test_hitl_agent_without_push_capability_uses_blocking_true(self):
         """HITL: agent lacks push-notification capability → blocking=True even if webhook URL is set."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_request = {}
 
@@ -521,7 +521,7 @@ class TestReplyToTaskWebhookFallback:
 
         with (
             patch(
-                "app_shell.a2a_runtime.adapter_send_hitl_reply",
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
@@ -539,7 +539,7 @@ class TestReplyToTaskWebhookFallback:
     @pytest.mark.asyncio
     async def test_hitl_agent_card_not_found_uses_blocking_true(self):
         """HITL: agent record not in DB → push_config=None, blocking=True."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         captured_request = {}
 
@@ -565,7 +565,7 @@ class TestReplyToTaskWebhookFallback:
 
         with (
             patch(
-                "app_shell.a2a_runtime.adapter_send_hitl_reply",
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
                 fake_send_hitl_reply,
             ),
         ):
@@ -607,7 +607,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_true_on_successful_db_write(self):
         """update_task_on_message returns True → response has persisted=True."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
@@ -620,7 +620,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 service, "has_push_notification_capability", return_value=False
             ),
             patch(
-                "app_shell.a2a_runtime.adapter_send_message",
+                "a2a_adapter.runtime_service.adapter_send_message",
                 AsyncMock(return_value=_message_facade_response()),
             ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
@@ -639,7 +639,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
     @pytest.mark.asyncio
     async def test_persisted_false_on_failed_db_write(self):
         """update_task_on_message returns False → response has persisted=False."""
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
@@ -652,7 +652,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 service, "has_push_notification_capability", return_value=False
             ),
             patch(
-                "app_shell.a2a_runtime.adapter_send_message",
+                "a2a_adapter.runtime_service.adapter_send_message",
                 AsyncMock(return_value=_message_facade_response()),
             ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
@@ -670,7 +670,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
 
     @pytest.mark.asyncio
     async def test_message_artifact_conversion_failure_still_persists_task(self):
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
@@ -684,7 +684,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 service, "has_push_notification_capability", return_value=False
             ),
             patch(
-                "app_shell.a2a_runtime.adapter_send_message",
+                "a2a_adapter.runtime_service.adapter_send_message",
                 AsyncMock(return_value=_message_with_file_facade_response()),
             ),
             patch(
@@ -709,7 +709,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
 
     @pytest.mark.asyncio
     async def test_terminal_task_artifact_conversion_failure_still_persists_task(self):
-        from app_shell.a2a_runtime import A2AService
+        from a2a_adapter.runtime_service import A2AService
 
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
@@ -723,7 +723,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 service, "has_push_notification_capability", return_value=False
             ),
             patch(
-                "app_shell.a2a_runtime.adapter_send_message",
+                "a2a_adapter.runtime_service.adapter_send_message",
                 AsyncMock(return_value=_terminal_task_with_file_facade_response()),
             ),
             patch(

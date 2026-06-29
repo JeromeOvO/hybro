@@ -21,6 +21,9 @@ from common.utils.context_utils import (
     add_turn_to_history,
     estimate_tokens,
 )
+from context_memory import search
+from context_memory.config import MemorySearchConfig
+from context_memory.models import SearchRankingRecord
 from models.compaction import CompactionResult
 from models.memory import (
     ContentType,
@@ -98,7 +101,7 @@ class TestCompactionSweep:
             CompactionSweepDeps(
                 list_room_ids_with_memory=AsyncMock(return_value=["room_1"]),
                 get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
-                compaction_service=mock_compaction_svc,
+                context_compaction=mock_compaction_svc,
             )
         )
 
@@ -131,7 +134,7 @@ class TestCompactionSweep:
                 get_room_ids_with_non_terminal_runs=AsyncMock(
                     return_value=["active_room"]
                 ),
-                compaction_service=mock_compaction_svc,
+                context_compaction=mock_compaction_svc,
             )
         )
 
@@ -221,24 +224,15 @@ class TestExtractTurnNotesLLM:
 
 
 class TestMemorySearchHydration:
-    """Tests for _hydrate_results_from_storage."""
+    """Tests for hydrating empty search results from storage."""
 
     @pytest.mark.asyncio
     async def test_hydrates_empty_content_from_turn_notes(self, mock_compaction_config):
-        from app_shell.memory_search_service import MemorySearchService
-        from models.search import MemorySearchResult, MemorySourceType
-
-        service = MemorySearchService()
-
         results = [
-            MemorySearchResult(
+            SearchRankingRecord(
                 turn_id="turn_1",
                 content="",
-                content_preview=None,
-                role=MessageRole.AGENT,
-                agent_name="TestAgent",
                 room_id="room_1",
-                source_type=MemorySourceType.TURN,
                 vector_score=0.95,
                 timestamp=datetime(2026, 2, 20),
             ),
@@ -256,41 +250,45 @@ class TestMemorySearchHydration:
                 }
             ]
         )
-        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        await service._hydrate_results_from_storage(results, "room_1")
+        await search.hydrate_empty_results(
+            results,
+            "room_1",
+            content_repository,
+            MemorySearchConfig(max_snippet_chars=500),
+        )
 
         content_repository.hydrate_turn_notes.assert_awaited_once_with(
             "room_1", ["turn_1"]
         )
         assert results[0].content == "Discussion about React deployment"
-        assert results[0].content_preview == "Discussion about React deployment"
+        assert (
+            results[0].metadata["content_preview"]
+            == "Discussion about React deployment"
+        )
 
     @pytest.mark.asyncio
     async def test_skips_results_that_already_have_content(self, mock_compaction_config):
-        from app_shell.memory_search_service import MemorySearchService
-        from models.search import MemorySearchResult, MemorySourceType
-
-        service = MemorySearchService()
-
         results = [
-            MemorySearchResult(
+            SearchRankingRecord(
                 turn_id="turn_1",
                 content="Already has content",
-                content_preview="Already has content",
-                role=MessageRole.AGENT,
                 room_id="room_1",
-                source_type=MemorySourceType.TURN,
                 vector_score=0.95,
                 timestamp=datetime(2026, 2, 20),
+                metadata={"content_preview": "Already has content"},
             ),
         ]
 
         content_repository = MagicMock()
         content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
-        service.bind_facade(MagicMock(content_repository=content_repository))
 
-        await service._hydrate_results_from_storage(results, "room_1")
+        await search.hydrate_empty_results(
+            results,
+            "room_1",
+            content_repository,
+            MemorySearchConfig(max_snippet_chars=500),
+        )
 
         content_repository.hydrate_turn_notes.assert_not_awaited()
 
@@ -387,7 +385,7 @@ class TestSearchToContextIntegration:
     """Verify memory search results flow through to supervisor context output."""
 
     def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
-        from app_shell.context_assembly_service import ContextAssemblyService
+        from context_memory.compat.context_assembly import ContextAssemblyService
         from models.search import MemorySearchResult, MemorySourceType
 
         mock_compaction_config.context_model_window = 32000

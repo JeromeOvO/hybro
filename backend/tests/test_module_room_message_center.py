@@ -18,12 +18,16 @@ import pytest
 from a2a.types import TaskState
 
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
+from common.dto import MessageCommitted
 from execution.orchestration.room_message_center import RoomMessageCenter
+from models.hitl import InterruptKind
 from models.supervisor import (
     ActionType,
+    RunStatus,
     StepResult,
     StepStatus,
     SupervisorAction,
+    SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
 )
@@ -31,6 +35,20 @@ from models.supervisor import (
 # =============================================================================
 # _validate_room_message_request Tests
 # =============================================================================
+
+
+class RecordingEventPublisher:
+    def __init__(self):
+        self.internal_events = []
+
+    async def emit_internal(
+        self,
+        event,
+        *,
+        wait_for_local_handlers: bool = False,
+        broadcast: bool = True,
+    ):
+        self.internal_events.append(event)
 
 
 class TestValidateRoomMessageRequest:
@@ -192,6 +210,86 @@ class TestFindPausedAgent:
         aid, aname = RoomMessageCenter._find_paused_agent(t, "msg-p1")
         assert aid is None
         assert aname is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interrupt_kind",
+    [InterruptKind.PUSH_NOTIFICATION, InterruptKind.HITL_AGENT],
+)
+async def test_resume_supervisor_agent_interrupt_publishes_agent_message_committed(
+    interrupt_kind,
+):
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.event_publisher = RecordingEventPublisher()
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=None)
+    )
+    rmc.memory_reader = SimpleNamespace(
+        get_room_memory_by_room_id=AsyncMock(return_value=None)
+    )
+    rmc.context_memory_runtime = None
+    rmc.room_reader = SimpleNamespace(
+        get_room_by_room_id=AsyncMock(
+            return_value=SimpleNamespace(
+                room_agent_set={"a1": "Alpha"},
+                extend_info={},
+            )
+        )
+    )
+    rmc.agent_lookup = SimpleNamespace(
+        get_agent_by_agent_id=AsyncMock(return_value=None)
+    )
+    token = SimpleNamespace(is_cancelled=False)
+    rmc.delivery = SimpleNamespace(
+        get_token=MagicMock(return_value=None),
+        create_token=MagicMock(return_value=token),
+    )
+
+    async def run_supervisor(**kwargs):
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=kwargs["resumed_trajectory"],
+        )
+
+    rmc.supervisor_executor = SimpleNamespace(run=AsyncMock(side_effect=run_supervisor))
+    rmc._handle_supervisor_run_result = AsyncMock()
+    rmc._log_room_memory_stats = AsyncMock()
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc._turn_event_appender = None
+
+    trajectory = _make_trajectory_with_paused("a1", "Alpha", "paused-msg")
+    continuation = {
+        "room_id": "room-1",
+        "user_message_id": "umsg-1",
+        "message_text": "original user task",
+        "interrupt_kind": interrupt_kind.value,
+        "trajectory": trajectory.model_dump(mode="json"),
+        "room_config": {},
+        "agent_registry": [],
+    }
+
+    status = await rmc._resume_supervisor(
+        continuation,
+        paused_message_id="paused-msg",
+        task_result_text="agent result",
+    )
+
+    assert status == RunStatus.COMPLETED
+    committed_events = [
+        event
+        for event in rmc.event_publisher.internal_events
+        if isinstance(event, MessageCommitted)
+    ]
+    assert len(committed_events) == 1
+    event = committed_events[0]
+    assert event.room_id == "room-1"
+    assert event.message_id == "paused-msg"
+    assert event.message_type == "agent"
+    assert event.agent_id == "a1"
+    assert event.agent_name == "Alpha"
+    assert event.was_successful is True
 
 
 # =============================================================================

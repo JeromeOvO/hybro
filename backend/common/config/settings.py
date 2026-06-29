@@ -84,6 +84,7 @@ class Settings(BaseSettings):
 
     # Clerk Authentication
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
+    auth_mode: str = "mock"  # "mock" or "clerk"
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check

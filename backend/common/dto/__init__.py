@@ -117,6 +117,18 @@ from common.dto.room import (
     SavedUserMessage,
     UserMessageInput,
 )
+from common.dto.runtime_store import (
+    RuntimeAgentGroup,
+    RuntimeAgentRecord,
+    RuntimeChatContext,
+    RuntimeMessageContent,
+    RuntimeRoomAgentMessage,
+    RuntimeRoomMemory,
+    RuntimeRoomMessage,
+    RuntimeRoomRecord,
+    RuntimeRoomUserMessage,
+    RuntimeUserAttachment,
+)
 
 __all__ = [
     "AgentCardSnapshot",
@@ -202,6 +214,16 @@ __all__ = [
     "RoomMessageSummary",
     "RoomMessageInfo",
     "RoomSummary",
+    "RuntimeAgentGroup",
+    "RuntimeAgentRecord",
+    "RuntimeChatContext",
+    "RuntimeMessageContent",
+    "RuntimeRoomAgentMessage",
+    "RuntimeRoomMemory",
+    "RuntimeRoomMessage",
+    "RuntimeRoomRecord",
+    "RuntimeRoomUserMessage",
+    "RuntimeUserAttachment",
     "RunEventNotification",
     "RunInfo",
     "RunState",

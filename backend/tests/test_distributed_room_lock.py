@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dal.redis.lock import RoomRedisDistributedLock
 from execution.orchestration.room_message_center import (
     ROOM_LOCK_HOLD_TTL_SECONDS,
     RoomMessageCenter,
@@ -29,43 +30,11 @@ def _make_rmc(redis=None):
 
 
 def _make_redis(*, set_nx_return=True, connected=True):
-    """Build a mock RedisService.
-
-    *set_nx_return*: when True, ``_client.set(nx=True)`` returns ``True``
-    (key created); when False it returns ``None`` (key already existed).
-    """
+    """Build a DAL Redis room lock with a mocked Redis client."""
     client = MagicMock()
     client.set = AsyncMock(return_value=True if set_nx_return else None)
-    redis = MagicMock()
-    redis.is_connected = connected
-    redis._client = client
-    redis.eval_script = AsyncMock(return_value=1)
-    redis.delete = AsyncMock(return_value=True)
-
-    async def acquire(room_id: str, owner: str, ttl: int):
-        if not redis.is_connected:
-            return None
-        try:
-            result = await redis._client.set(
-                f"room:lock:{room_id}", owner, nx=True, ex=ttl
-            )
-            return result is not None
-        except Exception:
-            return None
-
-    async def release(room_id: str, owner: str):
-        if not redis.is_connected:
-            return None
-        return await redis.eval_script(
-            RoomMessageCenter._RELEASE_LOCK_LUA,
-            1,
-            f"room:lock:{room_id}",
-            owner,
-        )
-
-    redis.acquire = AsyncMock(side_effect=acquire)
-    redis.release = AsyncMock(side_effect=release)
-    return redis
+    client.eval = AsyncMock(return_value=1)
+    return RoomRedisDistributedLock(client=client, enabled=connected)
 
 
 # =========================================================================
@@ -101,6 +70,16 @@ class TestDistributedLockPrimitives:
         redis._client.set.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_disabled_room_lock_acquire_returns_none_and_release_noops(self):
+        redis = _make_redis(connected=False)
+
+        assert await redis.acquire("room-1", "owner-abc", ttl=60) is None
+        await redis.release("room-1", "owner-abc")
+
+        redis._client.set.assert_not_awaited()
+        redis._client.eval.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_acquire_returns_none_when_no_redis(self):
         rmc = _make_rmc(redis=None)
         result = await rmc._acquire_distributed_lock("room-1", "owner-abc")
@@ -113,8 +92,8 @@ class TestDistributedLockPrimitives:
 
         await rmc._release_distributed_lock("room-1", "owner-abc")
 
-        redis.eval_script.assert_awaited_once()
-        args = redis.eval_script.call_args
+        redis._client.eval.assert_awaited_once()
+        args = redis._client.eval.call_args
         assert args[0][1] == 1  # num_keys
         assert args[0][2] == "room:lock:room-1"
         assert args[0][3] == "owner-abc"
@@ -165,7 +144,7 @@ class TestAcquireRoomLock:
         await rmc._release_room_lock("room-1", owner)
 
         assert not rmc._room_locks["room-1"].locked()
-        redis.eval_script.assert_awaited_once()
+        redis._client.eval.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_release_without_owner_skips_distributed(self):
@@ -200,7 +179,7 @@ class TestAcquireRoomLock:
         owner = await rmc._acquire_room_lock("room-1", timeout=0.3)
 
         assert owner is None
-        redis.eval_script.assert_awaited_once()  # distributed lock was released
+        redis._client.eval.assert_awaited_once()  # distributed lock was released
 
         local_lock.release()
 
@@ -306,7 +285,7 @@ class TestRedisDisconnectionMidAcquisition:
         assert owner is not None
         # Distributed lock was acquired (eval_script will be called on release)
         await rmc._release_room_lock("room-1", owner)
-        redis.eval_script.assert_awaited_once()
+        redis._client.eval.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_non_consecutive_errors_dont_trigger_fallback(self):
@@ -332,7 +311,7 @@ class TestRedisDisconnectionMidAcquisition:
         owner = await rmc._acquire_room_lock("room-1", timeout=5)
         assert owner is not None
         await rmc._release_room_lock("room-1", owner)
-        redis.eval_script.assert_awaited_once()
+        redis._client.eval.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_lock_reused_after_release(self):

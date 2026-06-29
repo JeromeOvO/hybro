@@ -184,7 +184,15 @@ class ContextMemoryFacade:
     async def project_message(self, room_id: str, message_id: str) -> None:
         await self.project_message_for_event(room_id, message_id)
 
-    async def project_message_for_event(self, room_id: str, message_id: str) -> dict:
+    async def project_message_for_event(
+        self,
+        room_id: str,
+        message_id: str,
+        *,
+        room_agent_set: dict[str, str] | None = None,
+        agent_name: str | None = None,
+        was_successful: bool | None = None,
+    ) -> dict:
         return await projection.project_message_from_history(
             room_id=room_id,
             message_id=message_id,
@@ -192,6 +200,12 @@ class ContextMemoryFacade:
             room_history_reader=self.room_history_reader,
             id_factory=self.id_factory,
             now=self.now,
+            room_agent_set=room_agent_set,
+            agent_name=agent_name,
+            was_successful=was_successful,
+            llm_provider=self.llm_provider,
+            llm_config=self.llm_config,
+            background_task_runner=self.background_task_runner,
         )
 
     async def run_compaction(self, room_id: str) -> CompactionResult:
@@ -407,8 +421,19 @@ class ContextMemoryFacade:
         )
 
     async def compact_room_memory(
-        self, room_id: str, room_memory_doc: dict | None = None
+        self,
+        room_id: str,
+        room_memory_doc: object | None = None,
+        *,
+        room_memory: object | None = None,
     ):
+        if room_memory is not None:
+            if room_memory_doc is not None:
+                raise ValueError(
+                    "compact_room_memory accepts either room_memory_doc or "
+                    "room_memory, not both"
+                )
+            room_memory_doc = room_memory
         return await compaction.compact_room_memory(
             repository=self.memory_repository,
             content_repository=self.content_repository,

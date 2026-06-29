@@ -60,6 +60,8 @@ class ExecutionAck(FrozenDTO):
     message: dict[str, JsonValue] | None = None
     message_list: list[dict[str, JsonValue]] | None = None
     scope_resolution_error: dict[str, JsonValue] | None = None
+    preflight_outcome: Literal["ready", "completed", "failed", "canceled"] | None = None
+    preflight_details: dict[str, JsonValue] | str | None = None
     success: bool = True
     error: str | None = None
     status_code: int = 200

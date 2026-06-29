@@ -78,6 +78,48 @@ class DistributedLockImpl(_RedisOwnerClient):
         return await self._owner_eval(_RENEW_SCRIPT, f"lock:{key}", owner, str(ttl))
 
 
+class RoomRedisDistributedLock(_RedisOwnerClient):
+    """Room-scoped Redis lock with tri-state acquire for graceful fallback."""
+
+    _ROOM_LOCK_PREFIX = "room:lock:"
+
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        url: str | None = None,
+        enabled: bool = True,
+    ) -> None:
+        super().__init__(client=client, url=url)
+        self._enabled = enabled
+
+    async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None:
+        if not self._enabled:
+            return None
+        client = self._ensure_client()
+        if client is None:
+            return None
+        try:
+            result = await client.set(
+                f"{self._ROOM_LOCK_PREFIX}{room_id}",
+                owner,
+                nx=True,
+                ex=ttl,
+            )
+            return bool(result)
+        except Exception:
+            return None
+
+    async def release(self, room_id: str, owner: str) -> None:
+        if not self._enabled:
+            return
+        await self._owner_eval(
+            _RELEASE_SCRIPT,
+            f"{self._ROOM_LOCK_PREFIX}{room_id}",
+            owner,
+        )
+
+
 class LeaderElectorImpl(_RedisOwnerClient):
     """Long-lived Redis leader election with owner-checked renewal."""
 
@@ -91,7 +133,10 @@ class LeaderElectorImpl(_RedisOwnerClient):
         super().__init__(client=client, url=url)
         self._instance_id = instance_id or f"{socket.gethostname()}:{os.getpid()}"
 
-    async def try_acquire(self, job_name: str, ttl: int = 60) -> bool:
+    async def try_acquire(
+        self, job_name: str, ttl: int = 60, *, ttl_seconds: int | None = None
+    ) -> bool:
+        resolved_ttl = ttl if ttl_seconds is None else ttl_seconds
         client = self._ensure_client()
         if client is None:
             return False
@@ -101,18 +146,21 @@ class LeaderElectorImpl(_RedisOwnerClient):
                     f"leader:{job_name}",
                     self._instance_id,
                     nx=True,
-                    ex=ttl,
+                    ex=resolved_ttl,
                 )
             )
         except Exception:
             return False
 
-    async def renew(self, job_name: str, ttl: int = 60) -> bool:
+    async def renew(
+        self, job_name: str, ttl: int = 60, *, ttl_seconds: int | None = None
+    ) -> bool:
+        resolved_ttl = ttl if ttl_seconds is None else ttl_seconds
         return await self._owner_eval(
             _RENEW_SCRIPT,
             f"leader:{job_name}",
             self._instance_id,
-            str(ttl),
+            str(resolved_ttl),
         )
 
     async def release(self, job_name: str) -> None:

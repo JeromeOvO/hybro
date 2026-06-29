@@ -29,7 +29,7 @@ def make_client_request_id_resolver():
 
 
 @pytest.mark.asyncio
-async def test_app_shell_client_request_id_resolver_uses_db_not_sse_private_method():
+async def test_execution_client_request_id_resolver_uses_db_not_sse_private_method():
     db = AsyncMock()
     db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
     resolver = SSEClientRequestIdResolver(resolver=db)
@@ -41,7 +41,7 @@ async def test_app_shell_client_request_id_resolver_uses_db_not_sse_private_meth
 
 
 @pytest.mark.asyncio
-async def test_app_shell_client_request_id_resolver_prefers_provided_id():
+async def test_execution_client_request_id_resolver_prefers_provided_id():
     db = AsyncMock()
     db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-db")
     resolver = SSEClientRequestIdResolver(resolver=db)
@@ -88,7 +88,7 @@ def test_webhook_response_handler_binds_hitl_and_processing_status_deps():
     )
     kwargs = {kw.arg: ast.unparse(kw.value) for kw in handler_call.keywords}
 
-    assert kwargs["hitl_coordinator"] == "hitl_service"
+    assert kwargs["hitl_coordinator"] == "hitl_manager"
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -159,6 +159,14 @@ def test_execution_event_manifest_covers_status_helpers_and_hub_ingress():
         (
             "execution/orchestration/supervisor_executor.py",
             "SupervisorExecutor._emit_processing_status",
+        ),
+        (
+            "execution/facade.py",
+            "ExecutionFacade._emit_room_preflight_processing_status",
+        ),
+        (
+            "execution/facade.py",
+            "ExecutionFacade._emit_room_preflight_terminal_status",
         ),
         ("execution/facade.py", "hub_agent_response_internal_to_agent_event"),
     }

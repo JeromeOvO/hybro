@@ -14,8 +14,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import TaskState, TaskStatus
 
+from common.types import TaskState as CommonTaskState
 from execution.state.task_state_manager import TaskStateManager, get_task, state_str
+from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.room import RoomAgentMessage
+from models.supervisor import RunStatus
 
 
 def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:
@@ -37,6 +40,28 @@ def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:
     msg.total_steps = 3
     msg.task_content = "Test task"
     return msg
+
+
+# =============================================================================
+# system task status mapping Tests
+# =============================================================================
+
+
+class TestSystemTaskStateFromRuntimeStatus:
+    @pytest.mark.parametrize(
+        ("runtime_status", "task_state"),
+        [
+            (RunStatus.AWAITING_INPUT, CommonTaskState.input_required),
+            ("awaiting_input", CommonTaskState.input_required),
+            ("input_required", CommonTaskState.input_required),
+            ("auth_required", CommonTaskState.auth_required),
+            ("completed", CommonTaskState.completed),
+        ],
+    )
+    def test_maps_runtime_status_to_a2a_task_state(
+        self, runtime_status, task_state
+    ):
+        assert system_task_state_from_runtime_status(runtime_status) == task_state
 
 
 # =============================================================================
@@ -93,7 +118,7 @@ class TestTransitionTask:
         notif_svc.send_task_update = AsyncMock()
         return TaskStateManager(
             room_runtime=room_svc,
-            notification_service=notif_svc,
+            task_notifier=notif_svc,
         )
 
     @pytest.mark.asyncio
@@ -138,7 +163,7 @@ class TestTransitionTask:
         """transition_task no longer sends notifications — that's notify_task_update's job."""
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working)
-        tsm.notification_service.send_task_update.assert_not_called()
+        tsm.task_notifier.send_task_update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_attaches_error_message(self, tsm):
@@ -172,7 +197,7 @@ class TestCancelRemainingQueue:
         notif_svc = MagicMock()
         return TaskStateManager(
             room_runtime=room_svc,
-            notification_service=notif_svc,
+            task_notifier=notif_svc,
         )
 
     @pytest.mark.asyncio

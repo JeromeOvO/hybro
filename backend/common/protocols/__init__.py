@@ -48,7 +48,6 @@ from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     HubAgentResponseSink,
-    RoomActiveRunReader,
     RoomDistributedLock,
     WebhookReceiver,
 )
@@ -89,6 +88,7 @@ from common.protocols.platform_protocols import (
     FileStorage,
     GatewayDiscoveryProvider,
     GatewayService,
+    HealthCheck,
     RateLimiter,
 )
 from common.protocols.repository_protocols import (
@@ -173,6 +173,7 @@ __all__ = [
     "FileStorage",
     "GatewayDiscoveryProvider",
     "GatewayService",
+    "HealthCheck",
     "HITLManager",
     "HITLRepository",
     "HubAgentResponseSink",
@@ -222,7 +223,6 @@ __all__ = [
     "RedisPubSub",
     "RedisStreams",
     "RequiredEmbeddingServiceProtocol",
-    "RoomActiveRunReader",
     "RoomHistoryReader",
     "RoomDistributedLock",
     "RoomAgentTaskTracker",

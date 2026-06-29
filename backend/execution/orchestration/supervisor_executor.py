@@ -22,10 +22,12 @@ from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
+from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.hitl import InterruptKind
 from models.processing import ProcessingStatus
 from models.room import CoordinatorAgentId
@@ -45,6 +47,7 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
+    from common.protocols import EventPublisher
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
@@ -53,7 +56,6 @@ if TYPE_CHECKING:
         HITLCoordinator,
         RateLimitPort,
         RoomContinuationStore,
-        RoomMemoryPort,
         RoomMessageReader,
         RoomMessageWriter,
         RoomRuntimePort,
@@ -87,14 +89,16 @@ class SupervisorExecutor:
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
-        room_memory: RoomMemoryPort,
-        rate_limit_service: RateLimitPort,
+        event_publisher: EventPublisher,
+        rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         slot_lifecycle=None,
         hitl_coordinator: HITLCoordinator | None = None,
         debate_rounds: int = 2,
     ) -> None:
+        if event_publisher is None:
+            raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
         self.supervisor_service = supervisor_service
         self.room_runtime = room_runtime
         self.tsm = tsm
@@ -103,7 +107,7 @@ class SupervisorExecutor:
         self.message_writer = message_writer
         self.task_state_store = task_state_store
         self.continuation_store = continuation_store
-        self.room_memory = room_memory
+        self.event_publisher = event_publisher
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
@@ -114,6 +118,27 @@ class SupervisorExecutor:
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
+
+    async def _publish_agent_message_committed(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        agent_id: str | None,
+        agent_name: str,
+        was_successful: bool,
+    ) -> None:
+        if not message_id:
+            return
+        await publish_message_committed(
+            self.event_publisher,
+            room_id=room_id,
+            message_id=message_id,
+            message_type="agent",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            was_successful=was_successful,
+        )
 
     async def _emit_processing_status(
         self,
@@ -787,41 +812,57 @@ class SupervisorExecutor:
                         quoted_text=quoted_text,
                     )
 
-                    # Write completed results to room memory regardless of
-                    # whether some targets are PAUSED — this ensures subsequent
-                    # agents (after resume) have cross-agent context.
+                    # Publish completed results regardless of whether some
+                    # targets are PAUSED so ContextMemory can project them for
+                    # subsequent agents after resume.
                     for result in results:
                         if (
                             result.status == StepStatus.SUCCESS
                             and result.success
                             and result.response_text
                         ):
-                            await self.room_memory.add_agent_response_to_memory(
+                            await self._publish_agent_message_committed(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
-                                agent_name=result.agent_name,
-                                response_text=result.response_text,
+                                agent_name=result.agent_name or "Agent",
                                 was_successful=result.success,
                                 message_id=getattr(result, "agent_message_id", None),
                             )
 
-                    # Attach results to entry now so reconciliation mutates them correctly
-                    entry.results = results
-
                     # Check for PAUSED (push notification agent)
-                    paused = [r for r in entry.results if r.status == StepStatus.PAUSED]
+                    paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
-                        # Reconcile against DB: a relay agent may have completed
-                        # before its continuation was saved (race between webhook
-                        # response and _save_interrupted_state during concurrent
-                        # dispatch). Check actual DB state and upgrade if terminal.
-                        await self._reconcile_paused_results(
-                            paused, trajectory, room_id
-                        )
-                        # Re-evaluate paused after reconciliation
-                        paused = [r for r in entry.results if r.status == StepStatus.PAUSED]
-                        
+                        # Racy Check: Before yielding, check if the webhook already completed
+                        # the task while we were blocked waiting for the HTTP response.
+                        still_paused = []
+                        for p in paused:
+                            if getattr(p, "agent_message_id", None):
+                                agent_msg = await self.message_reader.get_room_agent_message_by_message_id(p.agent_message_id)
+                                if agent_msg and agent_msg.last_notified_state in ("completed", "failed"):
+                                    logger.info("supervisor_executor: task %s already terminal before pausing", p.agent_message_id)
+                                    is_success = agent_msg.last_notified_state == "completed"
+                                    p.status = StepStatus.SUCCESS if is_success else StepStatus.FAILED
+                                    p.success = is_success
+                                    if agent_msg.message_content and agent_msg.message_content.message_text:
+                                        p.response_text = agent_msg.message_content.message_text
+                                        
+                                    if p.success and p.response_text:
+                                        await self._publish_agent_message_committed(
+                                            room_id=room_id,
+                                            agent_id=p.agent_id,
+                                            agent_name=p.agent_name or "Agent",
+                                            was_successful=p.success,
+                                            message_id=p.agent_message_id,
+                                        )
+                                else:
+                                    still_paused.append(p)
+                            else:
+                                still_paused.append(p)
+                                
+                        paused = still_paused
+
                     if paused:
+                        entry.results = results
                         trajectory.status = TrajectoryStatus.RUNNING
                         saved = await self._save_interrupted_state(
                             kind=InterruptKind.PUSH_NOTIFICATION,
@@ -855,7 +896,7 @@ class SupervisorExecutor:
 
                     # Check for AWAITING_INPUT (agent returned input_required)
                     awaiting = [
-                        r for r in entry.results if r.status == StepStatus.AWAITING_INPUT
+                        r for r in results if r.status == StepStatus.AWAITING_INPUT
                     ]
                     if awaiting:
                         # Mark non-first awaiting agents as FAILED so the
@@ -898,6 +939,7 @@ class SupervisorExecutor:
                                 "Max HITL rounds exceeded for message %s — failing trajectory",
                                 user_message_id,
                             )
+                            entry.results = results
                             trajectory.status = TrajectoryStatus.FAILED
                             return await self._log_and_return(
                                 room_id,
@@ -946,6 +988,7 @@ class SupervisorExecutor:
                             ),
                         )
 
+                    entry.results = results
                     entry.completed_at = utcnow()
 
                     # Post-dispatch checkpoint: persist completed results.
@@ -1473,7 +1516,7 @@ class SupervisorExecutor:
                     )
 
                 # Rate limit check
-                if request_user_id:
+                if request_user_id and self.rate_limit_service:
                     rate_result = await self.rate_limit_service.check_rate_limit(
                         agent_id=agent.agent_id,
                         user_id=request_user_id,
@@ -1580,7 +1623,7 @@ class SupervisorExecutor:
                         status_message=result.status_message,
                     )
 
-                if result.status == ProcessingStatus.SUCCESS and request_user_id:
+                if result.status == ProcessingStatus.SUCCESS and request_user_id and self.rate_limit_service:
                     await self.rate_limit_service.record_request(
                         agent_id=agent.agent_id,
                         user_id=request_user_id,
@@ -1846,10 +1889,8 @@ class SupervisorExecutor:
                     and db_msg.message_content
                     and db_msg.message_content.message_task
                 ):
-                    from common.types import TaskState
-
-                    db_msg.message_content.message_task.status.state = TaskState(
-                        task_status
+                    db_msg.message_content.message_task.status.state = (
+                        system_task_state_from_runtime_status(task_status)
                     )
                     await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
                         db_msg.message_id, db_msg.message_content
@@ -1974,11 +2015,10 @@ class SupervisorExecutor:
                 break
 
             if is_success and response_text:
-                await self.room_memory.add_agent_response_to_memory(
+                await self._publish_agent_message_committed(
                     room_id=room_id,
                     agent_id=pr.agent_id,
                     agent_name=pr.agent_name or "Agent",
-                    response_text=response_text,
                     was_successful=True,
                     message_id=msg_id,
                 )

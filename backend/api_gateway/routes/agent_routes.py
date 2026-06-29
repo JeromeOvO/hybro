@@ -1,12 +1,18 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
-from fastapi.params import Depends as DependsParam
 
 from agent.protocols import (
     AgentCapabilityIssueStore,
     AgentCenterCompatibility,
     AgentLivenessChecker,
+)
+from api_gateway.dependencies import (
+    get_agent_avatar_manager,
+    get_agent_center,
+    get_agent_liveness_checker,
+    get_agent_service,
+    get_capability_issue_service,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from api_gateway.viewsets.agent import AgentViewSet
@@ -23,88 +29,6 @@ from models.response import AgentCenterResponse
 router = APIRouter()
 agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
-agent_center: AgentCenterCompatibility | None = None
-agent_service: AgentRegistry | None = None
-capability_issue_service: AgentCapabilityIssueStore | None = None
-agent_avatar_manager: AgentAvatarManager | None = None
-agent_liveness_checker: AgentLivenessChecker | None = None
-
-
-def bind_agent_dependencies(
-    *,
-    center: AgentCenterCompatibility,
-    service: AgentRegistry,
-    issue_service: AgentCapabilityIssueStore,
-    avatar_manager: AgentAvatarManager,
-) -> None:
-    global agent_center, agent_service, capability_issue_service, agent_avatar_manager
-
-    agent_center = center
-    agent_service = service
-    capability_issue_service = issue_service
-    agent_avatar_manager = avatar_manager
-
-
-def bind_agent_liveness_checker(checker: AgentLivenessChecker) -> None:
-    global agent_liveness_checker
-
-    agent_liveness_checker = checker
-
-
-def _require_agent_center() -> AgentCenterCompatibility:
-    if agent_center is None:
-        raise RuntimeError("Agent center dependency has not been bound")
-    return agent_center
-
-
-def _require_agent_service() -> AgentRegistry:
-    if agent_service is None:
-        raise RuntimeError("Agent service dependency has not been bound")
-    return agent_service
-
-
-def _require_capability_issue_service() -> AgentCapabilityIssueStore:
-    if capability_issue_service is None:
-        raise RuntimeError("Capability issue dependency has not been bound")
-    return capability_issue_service
-
-
-def _require_agent_avatar_manager() -> AgentAvatarManager:
-    if agent_avatar_manager is None:
-        raise RuntimeError("Agent avatar dependency has not been bound")
-    return agent_avatar_manager
-
-
-def _require_agent_liveness_checker() -> AgentLivenessChecker:
-    if agent_liveness_checker is None:
-        raise RuntimeError("Agent liveness dependency has not been bound")
-    return agent_liveness_checker
-
-
-def get_agent_center() -> AgentCenterCompatibility:
-    return _require_agent_center()
-
-
-def get_agent_service() -> AgentRegistry:
-    return _require_agent_service()
-
-
-def get_capability_issue_service() -> AgentCapabilityIssueStore:
-    return _require_capability_issue_service()
-
-
-def get_agent_avatar_manager() -> AgentAvatarManager:
-    return _require_agent_avatar_manager()
-
-
-def get_agent_liveness_checker() -> AgentLivenessChecker:
-    return _require_agent_liveness_checker()
-
-
-def _resolve_dependency(value, provider):
-    if isinstance(value, DependsParam):
-        return provider()
-    return value
 
 
 # ============= PROTECTED ENDPOINTS (Auth Required) =============
@@ -124,8 +48,6 @@ async def register_agent(
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
-
-    center = _resolve_dependency(center, get_agent_center)
     agent_center_response = await center.register_agent_from_route(
         agent_url=agent_url,
         provider_id=provider_id,
@@ -147,7 +69,6 @@ async def get_agent_by_provider(
     center: AgentCenterCompatibility = Depends(get_agent_center),
 ):
     """Get agents by provider id - PROTECTED (requires authentication)"""
-    center = _resolve_dependency(center, get_agent_center)
     provider_id = user.user_id
     if not provider_id:
         raise HTTPException(status_code=400, detail="provider_id is required")
@@ -169,8 +90,6 @@ async def delete_agent(
 
     if not agent_id or not agent_id.strip():
         raise HTTPException(status_code=400, detail="agent_id is required")
-
-    center = _resolve_dependency(center, get_agent_center)
     agent_center_response = await center.delete_agent_from_route(
         agent_id=agent_id,
         provider_id=user.user_id,
@@ -204,8 +123,6 @@ async def update_agent(
     """
     if not agent_id or not agent_id.strip():
         raise HTTPException(status_code=400, detail="agent_id is required")
-
-    center = _resolve_dependency(center, get_agent_center)
     agent_center_response = await center.update_agent_settings_from_route(
         agent_id=agent_id,
         provider_id=user.user_id,
@@ -224,7 +141,9 @@ async def update_agent(
     return agent_center_response
 
 
-_AVATAR_ALLOWED_TYPES = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
+_AVATAR_ALLOWED_TYPES = frozenset(
+    {"image/jpeg", "image/png", "image/webp", "image/gif"}
+)
 _AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 _AVATAR_EXT_MAP = {
     "image/jpeg": "jpg",
@@ -250,8 +169,6 @@ async def upload_agent_avatar(
 
     Returns: { "iconUrl": "<permanent public URL>" }
     """
-    agent_lookup = _resolve_dependency(agent_lookup, get_agent_service)
-    avatar_manager = _resolve_dependency(avatar_manager, get_agent_avatar_manager)
     existing_agent = await agent_lookup.get_agent(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -297,8 +214,6 @@ async def get_capability_issues(
     issue_store: AgentCapabilityIssueStore = Depends(get_capability_issue_service),
 ):
     """Get capability issues for an agent - PROTECTED (requires ownership)"""
-    agent_lookup = _resolve_dependency(agent_lookup, get_agent_service)
-    issue_store = _resolve_dependency(issue_store, get_capability_issue_service)
     existing_agent = await agent_lookup.get_agent(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -331,8 +246,6 @@ async def resolve_all_capability_issues(
     issue_store: AgentCapabilityIssueStore = Depends(get_capability_issue_service),
 ):
     """Bulk resolve all open capability issues for an agent - PROTECTED"""
-    agent_lookup = _resolve_dependency(agent_lookup, get_agent_service)
-    issue_store = _resolve_dependency(issue_store, get_capability_issue_service)
     existing_agent = await agent_lookup.get_agent(agent_id)
     if not existing_agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -342,9 +255,7 @@ async def resolve_all_capability_issues(
             detail="You do not have permission to resolve issues for this agent",
         )
 
-    count = await issue_store.resolve_all_for_agent(
-        agent_id, user.user_id
-    )
+    count = await issue_store.resolve_all_for_agent(agent_id, user.user_id)
     return {"resolved_count": count}
 
 
@@ -356,8 +267,6 @@ async def resolve_capability_issue(
     issue_store: AgentCapabilityIssueStore = Depends(get_capability_issue_service),
 ):
     """Resolve a single capability issue - PROTECTED (requires ownership)"""
-    agent_lookup = _resolve_dependency(agent_lookup, get_agent_service)
-    issue_store = _resolve_dependency(issue_store, get_capability_issue_service)
     issue = await issue_store.get_issue_by_id(issue_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
@@ -394,8 +303,6 @@ async def get_agent_card_from_url(
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
-
-    center = _resolve_dependency(center, get_agent_center)
     return await center.get_agent_card_from_url_for_route(
         agent_url=agent_url,
     )
@@ -420,17 +327,15 @@ async def get_agent(
         )
 
     user_id = user.user_id if user else None
-    center = _resolve_dependency(center, get_agent_center)
     agent_center_response = await center.get_visible_agent_for_route(
         agent_id=agent_id,
         user_id=user_id,
     )
 
     if agent_center_response.success and agent_center_response.agent:
-        liveness_checker = _resolve_dependency(
-            liveness_checker, get_agent_liveness_checker
+        agent_center_response.agent = await liveness_checker(
+            agent_center_response.agent
         )
-        agent_center_response.agent = await liveness_checker(agent_center_response.agent)
 
     return center.finalize_agent_response_for_route(agent_center_response)
 
@@ -441,7 +346,6 @@ async def get_agent_list(
     center: AgentCenterCompatibility = Depends(get_agent_center),
 ):
     """Get all agents - PUBLIC (authentication optional)"""
-    center = _resolve_dependency(center, get_agent_center)
     user_id = user.user_id if user else None
     return await center.list_visible_agents_for_route(
         user_id=user_id,
@@ -459,7 +363,6 @@ async def get_all_active_agents(
     Returns only agents with active status, filtering out inactive and deleted agents.
     If authenticated, also includes the user's private agents.
     """
-    center = _resolve_dependency(center, get_agent_center)
     user_id = user.user_id if user else None
     return await center.list_visible_agents_for_route(
         user_id=user_id,
@@ -473,7 +376,6 @@ async def get_agent_list_with_conditions(
     center: AgentCenterCompatibility = Depends(get_agent_center),
 ):
     """Get agents with conditions - PUBLIC (authentication optional)"""
-    center = _resolve_dependency(center, get_agent_center)
     user_id = user.user_id if user else None
     return await center.list_agents_with_conditions_for_route(
         user_id=user_id,

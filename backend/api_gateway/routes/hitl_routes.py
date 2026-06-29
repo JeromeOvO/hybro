@@ -8,43 +8,24 @@ See docs/HITL_DESIGN.md §7.4 for design details.
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from api_gateway.dependencies import get_hitl_manager, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.protocols import HITLManager, RoomOwnershipReader
 from models.hitl import HITLResponseRequest
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
-hitl_manager: HITLManager | None = None
-room_ownership_reader: RoomOwnershipReader | None = None
 
 
-def bind_execution_deps(deps) -> None:
-    global hitl_manager
-    hitl_manager = deps.hitl_manager
-
-
-def bind_room_ownership_reader(reader: RoomOwnershipReader) -> None:
-    global room_ownership_reader
-    room_ownership_reader = reader
-
-
-def _require_hitl_manager() -> HITLManager:
-    if hitl_manager is None:
-        raise RuntimeError("ExecutionDeps have not been bound")
-    return hitl_manager
-
-
-def _require_room_ownership_reader() -> RoomOwnershipReader:
-    if room_ownership_reader is None:
-        raise RuntimeError("HITL room ownership dependency has not been bound")
-    return room_ownership_reader
-
-
-async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
+async def verify_room_ownership(
+    room_id: str,
+    user: ClerkUser,
+    room_ownership: RoomOwnershipReader,
+) -> None:
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
-    owner_id = await _require_room_ownership_reader().get_room_owner(room_id)
+    owner_id = await room_ownership.get_room_owner(room_id)
     if owner_id is None:
         raise HTTPException(status_code=404, detail="Room not found")
     if owner_id != user.user_id:
@@ -73,12 +54,14 @@ async def respond_to_hitl_request(
     room_id: str,
     body: HITLResponseRequest,
     user: ClerkUser = Depends(get_current_user),
+    manager: HITLManager = Depends(get_hitl_manager),
+    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """User responds to an HITL prompt."""
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, room_ownership)
 
     try:
-        response = await _require_hitl_manager().resolve_hitl(
+        response = await manager.resolve_hitl(
             room_id,
             body.request_id,
             body.user_input,
@@ -96,11 +79,13 @@ async def respond_to_hitl_request(
 async def get_pending_hitl_requests(
     room_id: str,
     user: ClerkUser = Depends(get_current_user),
+    manager: HITLManager = Depends(get_hitl_manager),
+    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Get pending HITL requests for a room (SSE reconnect catch-up)."""
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, room_ownership)
 
-    requests = await _require_hitl_manager().get_pending_hitl(room_id)
+    requests = await manager.get_pending_hitl(room_id)
     return {
         "requests": [
             {
@@ -117,12 +102,14 @@ async def cancel_hitl_request(
     room_id: str,
     request_id: str,
     user: ClerkUser = Depends(get_current_user),
+    manager: HITLManager = Depends(get_hitl_manager),
+    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
     """Cancel a pending HITL request."""
-    await verify_room_ownership(room_id, user)
+    await verify_room_ownership(room_id, user, room_ownership)
 
     try:
-        await _require_hitl_manager().cancel_hitl(room_id, request_id)
+        await manager.cancel_hitl(room_id, request_id)
     except Exception as exc:
         _raise_http_for_hitl_error(exc)
     return {"status": "canceled"}

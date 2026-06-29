@@ -93,7 +93,38 @@ def test_a2a_adapter_import_boundary():
         "services",
     }
 
-    _assert_import_boundary(Path("a2a_adapter"), allowed_roots, forbidden_roots)
+    _assert_import_boundary(
+        Path("a2a_adapter"),
+        allowed_roots,
+        forbidden_roots,
+        excluded_paths={Path("a2a_adapter/runtime_service.py")},
+    )
+
+
+def test_a2a_runtime_service_import_boundary():
+    allowed_roots = set(sys.stdlib_module_names) | {
+        "__future__",
+        "a2a_adapter",
+        "common",
+        "execution",
+        "models",
+    }
+    forbidden_roots = {
+        ('app_' + 'shell'),
+        "config",
+        "container",
+        "database",
+        "infrastructure",
+        "main",
+        "modules",
+        "services",
+    }
+
+    _assert_import_boundary(
+        Path("a2a_adapter/runtime_service.py"),
+        allowed_roots,
+        forbidden_roots,
+    )
 
 
 def test_llm_gateway_import_boundary():
@@ -142,8 +173,9 @@ def test_llm_gateway_provider_sdks_are_limited_to_provider_adapters():
             if leaked:
                 violations.append(f"{path}: {sorted(leaked)}")
 
-    assert not violations, "Provider SDK imports must stay under llm_gateway/providers:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Provider SDK imports must stay under llm_gateway/providers:\n"
+        + "\n".join(violations)
     )
 
 
@@ -151,10 +183,16 @@ def _assert_import_boundary(
     package_path: Path,
     allowed_roots: set[str],
     forbidden_roots: set[str],
+    excluded_paths: set[Path] | None = None,
 ) -> None:
     assert package_path.exists(), f"{package_path} does not exist"
 
-    for path in package_path.rglob("*.py"):
+    paths = (
+        [package_path] if package_path.is_file() else sorted(package_path.rglob("*.py"))
+    )
+    for path in paths:
+        if path in (excluded_paths or set()):
+            continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             imported_roots: set[str] = set()

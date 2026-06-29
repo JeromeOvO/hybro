@@ -77,6 +77,12 @@ async def project_message_from_history(
     room_history_reader: RoomHistoryReader,
     id_factory: Callable[[], str],
     now,
+    room_agent_set: dict[str, str] | None = None,
+    agent_name: str | None = None,
+    was_successful: bool | None = None,
+    llm_provider: LLMStructuredGateway | None = None,
+    llm_config: ContextMemoryLLMConfig | None = None,
+    background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
 ) -> dict:
     messages = await room_history_reader.get_messages_by_ids([message_id])
     message = next((m for m in messages if getattr(m, "message_id", None) == message_id), None)
@@ -86,11 +92,18 @@ async def project_message_from_history(
         return {"projected": False, "reason": "room_mismatch"}
 
     message_type = getattr(message, "message_type", "user")
-    content_text = extract_message_text(getattr(message, "content", None))
+    message_content = getattr(message, "content", None)
+    raw_message_text = extract_raw_message_text(message_content)
+    content_text = extract_message_text(message_content)
     if not content_text:
         return {"projected": False, "reason": "empty_content"}
 
     if message_type == "user":
+        clean_message = clean_mention_format(raw_message_text, room_agent_set or {})
+        content_text = build_turn_content(
+            clean_message,
+            extract_message_attachments(message_content),
+        )
         defaults = new_room_memory_doc(
             room_id=room_id,
             memory_id=id_factory(),
@@ -106,12 +119,13 @@ async def project_message_from_history(
     else:
         if not await repository.get_room_memory(room_id):
             return {"projected": False, "reason": "missing_room_memory"}
-        turn = agent_turn(
+        turn = agent_turn_from_projected_message(
+            message=message,
+            message_id=message_id,
             content=content_text,
-            agent_id=getattr(message, "agent_id", None) or getattr(message, "sender_id", None),
-            agent_name=getattr(message, "sender_name", None),
-            timestamp=getattr(message, "created_at", None) or now(),
-            turn_id=f"message:{message_id}",
+            now=now,
+            agent_name=agent_name,
+            was_successful=was_successful,
         )
 
     modified, matched, already_exists = await repository.push_and_trim_conversation_turn_if_absent(
@@ -126,7 +140,76 @@ async def project_message_from_history(
         return {"projected": False, "reason": "duplicate"}
     if not matched:
         return {"projected": False, "reason": "missing_room_memory"}
+    if _should_enrich_projected_agent_turn(
+        message_type=message_type,
+        modified=modified,
+        turn=turn,
+        llm_provider=llm_provider,
+        llm_config=llm_config,
+        background_task_runner=background_task_runner,
+    ):
+        background_task_runner(
+            enrich_turn_notes(
+                repository=repository,
+                llm_provider=llm_provider,
+                llm_config=llm_config,
+                room_id=room_id,
+                turn_id=turn["turn_id"],
+                heuristic_notes=turn.get("turn_notes"),
+                content=content_text,
+            )
+        )
     return {"projected": bool(modified), "reason": "projected"}
+
+
+def _should_enrich_projected_agent_turn(
+    *,
+    message_type: str,
+    modified: bool,
+    turn: dict,
+    llm_provider: LLMStructuredGateway | None,
+    llm_config: ContextMemoryLLMConfig | None,
+    background_task_runner: Callable[[Awaitable[Any]], None] | None,
+) -> bool:
+    return (
+        message_type == "agent"
+        and modified
+        and turn["estimated_tokens_full"] > LLM_TURN_NOTES_THRESHOLD
+        and llm_provider is not None
+        and llm_config is not None
+        and background_task_runner is not None
+    )
+
+
+def agent_turn_from_projected_message(
+    *,
+    message: Any,
+    message_id: str,
+    content: str,
+    now,
+    agent_name: str | None,
+    was_successful: bool | None,
+) -> dict:
+    resolved_agent_name = (
+        agent_name
+        or getattr(message, "sender_name", None)
+        or _message_metadata_value(message, "agent_name")
+    )
+    resolved_was_successful = was_successful
+    if resolved_was_successful is None:
+        resolved_was_successful = getattr(message, "was_successful", None)
+    if resolved_was_successful is None:
+        resolved_was_successful = _message_metadata_value(
+            message, "was_successful", "success"
+        )
+    return agent_turn(
+        content=content,
+        agent_id=getattr(message, "agent_id", None) or getattr(message, "sender_id", None),
+        agent_name=resolved_agent_name,
+        timestamp=getattr(message, "created_at", None) or now(),
+        turn_id=f"message:{message_id}",
+        was_successful=resolved_was_successful,
+    )
 
 
 def new_room_memory_doc(*, room_id: str, memory_id: str, now) -> dict:
@@ -466,3 +549,34 @@ def extract_message_text(content: Any) -> str:
                 return build_turn_content(value, attachments)
         return json.dumps(content, sort_keys=True, default=str)
     return json.dumps(content, sort_keys=True, default=str)
+
+
+def extract_raw_message_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        for key in ("message_text", "response_text", "response", "content", "message", "text"):
+            value = content.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
+    return json.dumps(content, sort_keys=True, default=str)
+
+
+def extract_message_attachments(content: Any) -> list[Any] | None:
+    if isinstance(content, dict):
+        attachments = content.get("attachments")
+        if isinstance(attachments, list):
+            return attachments
+    return None
+
+
+def _message_metadata_value(message: Any, *keys: str) -> Any:
+    metadata = getattr(message, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in keys:
+            if metadata.get(key) is not None:
+                return metadata[key]
+    return None

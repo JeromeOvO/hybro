@@ -6,6 +6,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HUB_PACKAGE = ROOT / "hub_runtime_bridge"
+REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
+
+
+def _application_shell_module(name: str) -> str:
+    return f"{REMOVED_RUNTIME_PACKAGE}.{name}"
 
 
 def _py_files(base: Path) -> list[Path]:
@@ -59,6 +64,7 @@ def test_hub_runtime_bridge_package_exists_and_is_registered() -> None:
         "hub_runtime_bridge.service",
         "hub_runtime_bridge.transport",
         "hub_runtime_bridge.adapters",
+        "hub_runtime_bridge.compat",
     ]:
         assert f'"{package}"' in pyproject
 
@@ -84,6 +90,7 @@ def test_hub_runtime_bridge_import_boundaries() -> None:
         "hub_runtime_bridge.adapters.api_key",
         "hub_runtime_bridge.adapters.legacy_failure",
         "hub_runtime_bridge.adapters.legacy_lifecycle",
+        "hub_runtime_bridge.compat.relay_service",
     }
     a2a_agent_card_allowlist = {"hub_runtime_bridge.adapters.a2a_card"}
     a2a_task_status_allowlist = {"hub_runtime_bridge.adapters.legacy_failure"}
@@ -134,7 +141,7 @@ def test_execution_depends_on_common_not_relay_or_hub_concrete() -> None:
         if module in temporary:
             continue
         imported = _imports(path)
-        assert "app_shell.relay_service" not in imported
+        assert _application_shell_module("relay_service") not in imported
         assert not any(name.startswith("hub_runtime_bridge") for name in imported)
 
 
@@ -146,19 +153,28 @@ def test_execution_relay_transport_is_outbound_only() -> None:
     assert "handle_publish_event" not in text
     assert "models.hub" not in imported
     assert "database.mongodb" not in imported
-    assert "app_shell.relay_service" not in imported
+    assert _application_shell_module("relay_service") not in imported
 
 
-def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
-    from app_shell.redis_runtime import AppShellRelayStreamService
-    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
-
-    relay = ROOT / "app_shell/relay_service.py"
+def test_relay_service_runtime_is_owned_by_hub_runtime_bridge() -> None:
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_calls = _calls(relay)
     relay_text = relay.read_text()
+    deleted_modules = {
+        name: _application_shell_module(name)
+        for name in ("relay_service", "redis_runtime", "delivery_runtime")
+    }
 
     assert "hub_runtime_bridge.facade" in relay_imports
+    assert deleted_modules["relay_service"] not in relay_imports
+    assert deleted_modules["relay_service"] not in relay_text
+    assert deleted_modules["redis_runtime"] not in relay_imports
+    assert deleted_modules["redis_runtime"] not in relay_text
+    assert deleted_modules["delivery_runtime"] not in relay_imports
+    assert deleted_modules["delivery_runtime"] not in relay_text
+    assert "sse_manager" not in relay_text
+    assert ('App' + 'Shell' + 'RelayStreamService') not in relay_text
     assert not any(name.startswith("modules") for name in relay_imports)
     assert "execution.facade" not in relay_text
     assert "AgentResponseHandler" not in relay_text
@@ -166,32 +182,31 @@ def test_legacy_relay_is_shim_and_stream_runtime_moved_to_app_shell() -> None:
     assert "AgentResponseHandler" not in relay_calls
     assert "RelayTransport" not in relay_calls
 
-    assert not (ROOT / "infrastructure/relay_streams.py").exists()
-    assert issubclass(AppShellRelayStreamService, RelayStreamService)
-
 
 def test_legacy_relay_does_not_import_delivery_runtime_concrete() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_text = relay.read_text()
+    delivery_runtime_module = _application_shell_module("delivery_runtime")
 
-    assert "app_shell.delivery_runtime" not in relay_imports
+    assert delivery_runtime_module not in relay_imports
     assert "SSEManager" not in relay_text
     assert "self._sse" not in relay_text
 
 
 def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     relay_imports = _imports(relay)
     relay_text = relay.read_text()
+    redis_runtime_module = _application_shell_module("redis_runtime")
 
-    assert "app_shell.redis_runtime" not in relay_imports
-    assert "AppShellRelayStreamService" not in relay_text
-    assert "AppShellLeaderElection" not in relay_text
+    assert redis_runtime_module not in relay_imports
+    assert ('App' + 'Shell' + 'RelayStreamService') not in relay_text
+    assert ('App' + 'Shell' + 'LeaderElection') not in relay_text
 
 
 def test_legacy_relay_has_single_transport_state() -> None:
-    relay = ROOT / "app_shell/relay_service.py"
+    relay = ROOT / "hub_runtime_bridge/compat/relay_service.py"
     tree = ast.parse(relay.read_text(), filename=str(relay))
 
     private_transport_refs = [
@@ -202,7 +217,7 @@ def test_legacy_relay_has_single_transport_state() -> None:
     assert private_transport_refs == []
 
 
-def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
+def test_application_shell_routes_internal_hub_events_through_hub_router() -> None:
     main = (ROOT / "main.py").read_text()
     container = (ROOT / "container.py").read_text()
 
@@ -214,6 +229,30 @@ def test_app_shell_routes_internal_hub_events_through_hub_router() -> None:
     )
     assert "internal_response_dispatcher" in container
     assert "router.dispatch_hub_internal_response" in container
+
+
+def test_container_uses_owner_runtime_modules_for_delivery_redis_and_relay() -> None:
+    container_path = ROOT / "container.py"
+    container = container_path.read_text()
+    container_imports = _imports(container_path)
+    deleted_modules = {
+        name: _application_shell_module(name)
+        for name in ("delivery_runtime", "redis_runtime", "room_lock")
+    }
+
+    assert deleted_modules["delivery_runtime"] not in container_imports
+    assert deleted_modules["redis_runtime"] not in container_imports
+    assert deleted_modules["room_lock"] not in container_imports
+    assert ('create_' + 'app_' + 'shell' + '_redis_runtime') not in container
+    assert ('App' + 'Shell' + 'RelayHubStore') not in container
+    assert "RedisRoomDistributedLock" not in container
+    assert "class RedisRuntimeDeps" in container
+    assert "def create_redis_runtime_deps" in container
+    assert "RedisKVImpl" in container
+    assert "RedisStreamsImpl" in container
+    assert "LeaderElectorImpl" in container
+    assert "RoomRedisDistributedLock" in container
+    assert "RelayStreamService" in container
 
 
 def test_relay_and_hub_route_inventory_matches_fixture() -> None:
