@@ -939,6 +939,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 update_room_summary=context_memory_room_memory.update_room_summary,
             )
+            from common.noop_rate_limiter import NoOpAgentRateLimiter
             room_message_center_impl = create_room_message_center(
                 room_runtime=execution_room_runtime,
                 message_reader=execution_message_reader,
@@ -963,7 +964,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 remote_task_reader=execution_remote_task_reader,
                 room_memory=execution_room_memory,
                 debate_prompt_injector=debate_prompt_injector,
-                rate_limit_service=None,
+                rate_limit_service=NoOpAgentRateLimiter(),
                 room_supervisor_service=room_supervisor_service,
                 hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
