@@ -154,7 +154,7 @@ class RoomMessageCenter:
         remote_task_reader: RemoteTaskReaderPort,
         room_memory: RoomMemoryPort,
         debate_prompt_injector,
-        rate_limit_service: RateLimitPort,
+        rate_limit_service: RateLimitPort | None = None,
         room_supervisor_service,
         hitl_coordinator: HITLCoordinator,
         task_notifications,

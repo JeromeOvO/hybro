@@ -1,5 +1,5 @@
-from typing import Any
-from execution.ports import RateLimitPort, AgentRateLimitResultPort
+from execution.ports import AgentRateLimitResultPort, RateLimitPort
+
 
 class NoOpRateLimitResult(AgentRateLimitResultPort):
     allowed: bool = True

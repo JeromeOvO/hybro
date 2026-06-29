@@ -6,13 +6,13 @@ Validation is delegated to the bound API key authenticator.
 """
 
 import hashlib
+from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
-from dataclasses import dataclass
 
-from common.config.settings import settings
 from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
+
 
 @dataclass
 class MockAPIKeyPrincipal:
@@ -96,9 +96,7 @@ async def get_api_key(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    if settings.auth_mode == "mock":
-        return MockAPIKeyPrincipal()
-        
+
     # Extract API key from header
     api_key = request.headers.get("X-API-Key")
 
@@ -135,9 +133,7 @@ async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     Raises:
         HTTPException: If the key is missing, invalid, or inactive
     """
-    if settings.auth_mode == "mock":
-        return MockAPIKeyPrincipal()
-        
+
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:

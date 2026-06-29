@@ -10,8 +10,6 @@ from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from common.config.settings import settings
-
 clerk_secret_key: str | None = None
 clerk_authorized_parties: tuple[str, ...] = (
     "https://hybro.ai",
@@ -91,13 +89,6 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
-        if settings.auth_mode == "mock":
-            return ClerkUser(
-                user_id="user_local_developer",
-                session_id="mock_session",
-                claims={"email": "local@developer.com", "username": "local_dev"},
-            )
-
 
         # Use Clerk SDK to authenticate the request
         # The SDK handles JWKS fetching, caching, and JWT verification automatically

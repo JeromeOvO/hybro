@@ -173,6 +173,35 @@ def create_app(
 
 app = create_app()
 
+if settings.auth_mode == "mock":
+    from common.api_key_auth import (
+        MockAPIKeyPrincipal,
+        get_api_key,
+        get_api_key_no_track,
+    )
+    from common.auth import (
+        ClerkUser,
+        get_current_user,
+        get_current_user_with_query_token,
+        get_optional_user,
+    )
+
+    def mock_get_current_user():
+        return ClerkUser(
+            user_id="user_local_developer",
+            session_id="mock_session",
+            claims={"email": "local@developer.com", "username": "local_dev"},
+        )
+
+    def mock_get_api_key():
+        return MockAPIKeyPrincipal()
+
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    app.dependency_overrides[get_current_user_with_query_token] = mock_get_current_user
+    app.dependency_overrides[get_optional_user] = mock_get_current_user
+    app.dependency_overrides[get_api_key] = mock_get_api_key
+    app.dependency_overrides[get_api_key_no_track] = mock_get_api_key
+
 def main() -> None:
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

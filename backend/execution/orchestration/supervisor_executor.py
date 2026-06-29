@@ -90,7 +90,7 @@ class SupervisorExecutor:
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
         event_publisher: EventPublisher,
-        rate_limit_service: RateLimitPort,
+        rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         slot_lifecycle=None,
@@ -832,6 +832,36 @@ class SupervisorExecutor:
                     # Check for PAUSED (push notification agent)
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
+                        # Racy Check: Before yielding, check if the webhook already completed
+                        # the task while we were blocked waiting for the HTTP response.
+                        still_paused = []
+                        for p in paused:
+                            if getattr(p, "agent_message_id", None):
+                                agent_msg = await self.message_reader.get_room_agent_message_by_message_id(p.agent_message_id)
+                                if agent_msg and agent_msg.last_notified_state in ("completed", "failed"):
+                                    logger.info("supervisor_executor: task %s already terminal before pausing", p.agent_message_id)
+                                    is_success = agent_msg.last_notified_state == "completed"
+                                    p.status = StepStatus.SUCCESS if is_success else StepStatus.FAILED
+                                    p.success = is_success
+                                    if agent_msg.message_content and agent_msg.message_content.message_text:
+                                        p.response_text = agent_msg.message_content.message_text
+                                        
+                                    if p.success and p.response_text:
+                                        await self._publish_agent_message_committed(
+                                            room_id=room_id,
+                                            agent_id=p.agent_id,
+                                            agent_name=p.agent_name or "Agent",
+                                            was_successful=p.success,
+                                            message_id=p.agent_message_id,
+                                        )
+                                else:
+                                    still_paused.append(p)
+                            else:
+                                still_paused.append(p)
+                                
+                        paused = still_paused
+
+                    if paused:
                         entry.results = results
                         trajectory.status = TrajectoryStatus.RUNNING
                         saved = await self._save_interrupted_state(
@@ -1486,7 +1516,7 @@ class SupervisorExecutor:
                     )
 
                 # Rate limit check
-                if request_user_id:
+                if request_user_id and self.rate_limit_service:
                     rate_result = await self.rate_limit_service.check_rate_limit(
                         agent_id=agent.agent_id,
                         user_id=request_user_id,
@@ -1593,7 +1623,7 @@ class SupervisorExecutor:
                         status_message=result.status_message,
                     )
 
-                if result.status == ProcessingStatus.SUCCESS and request_user_id:
+                if result.status == ProcessingStatus.SUCCESS and request_user_id and self.rate_limit_service:
                     await self.rate_limit_service.record_request(
                         agent_id=agent.agent_id,
                         user_id=request_user_id,

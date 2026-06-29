@@ -110,7 +110,7 @@ class QueueExecutor:
         room_reader: RoomReader,
         memory_reader: RoomMemoryReader,
         debate_prompt_injector: DebateServicePort,
-        rate_limit_service: RateLimitPort,
+        rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         response_handler: AgentResponseHandler,
