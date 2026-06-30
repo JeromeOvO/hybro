@@ -261,6 +261,54 @@ async def test_send_message_accepts_minimal_internal_agent_card(monkeypatch):
     assert captured["agent_card"].skills[0].tags == []
 
 
+@pytest.mark.asyncio
+async def test_send_message_falls_back_to_docker_host_for_loopback_card(
+    monkeypatch,
+    caplog,
+):
+    attempted_urls = []
+
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, agent_card, **kwargs):
+            self.agent_card = agent_card
+            attempted_urls.append(agent_card.url)
+
+        async def send_message(self, request):
+            if self.agent_card.url == "http://127.0.0.1:9060":
+                raise A2AClientHTTPError(
+                    503,
+                    "Network communication error: All connection attempts failed",
+                )
+            return SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+
+    card = _sdk_card_data()
+    card["url"] = "http://127.0.0.1:9060"
+    message = {
+        "kind": "message",
+        "role": "user",
+        "messageId": "msg-1",
+        "parts": [{"kind": "text", "text": "hello"}],
+    }
+
+    with caplog.at_level(logging.WARNING):
+        result = await client_facade.send_message(card, message, timeout=1)
+
+    assert result["kind"] == "task"
+    assert attempted_urls == [
+        "http://127.0.0.1:9060",
+        "http://host.docker.internal:9060",
+    ]
+    assert "fall_back from docker to local service" in caplog.text
+
+
 def test_normalize_response_returns_plain_error_dict():
     error = JSONRPCErrorResponse(
         id="req-1",

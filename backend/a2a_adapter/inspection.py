@@ -25,6 +25,10 @@ from a2a.types import (
 from common.types import AgentCard
 
 from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
+from .docker_host_fallback import (
+    stream_with_docker_host_fallback,
+    with_docker_host_fallback,
+)
 
 
 async def fetch_agent_card_for_inspection(
@@ -47,8 +51,7 @@ async def inspect_a2a_connection(
     """Fetch an agent card, dry-send a probe message, and return SDK-free data."""
     async with httpx.AsyncClient(timeout=timeout) as client:
         sdk_card = await _fetch_sdk_agent_card_with_fallback(client, agent_url)
-        a2a_client = A2AClient(client, agent_card=sdk_card)
-        response = await _dry_send_message(a2a_client, sdk_card, probe_text)
+        response = await _dry_send_message(client, sdk_card, probe_text)
 
     internal_card = _to_internal_card(sdk_card)
     return {
@@ -73,7 +76,7 @@ async def _fetch_sdk_agent_card_with_fallback(
 
 
 async def _dry_send_message(
-    a2a_client: A2AClient,
+    client: httpx.AsyncClient,
     card: SDKAgentCard,
     message_text: str,
 ) -> dict[str, Any]:
@@ -98,7 +101,13 @@ async def _dry_send_message(
                 params=payload,
             )
             last_result: dict[str, Any] | None = None
-            async for stream_result in a2a_client.send_message_streaming(request):
+            async for stream_result in stream_with_docker_host_fallback(
+                card,
+                lambda candidate: A2AClient(
+                    client,
+                    agent_card=candidate,
+                ).send_message_streaming(request),
+            ):
                 last_result = _validate_response(stream_result)
             return last_result or {
                 "result": ["Response from agent is missing required 'kind' field."],
@@ -111,7 +120,13 @@ async def _dry_send_message(
             jsonrpc="2.0",
             params=payload,
         )
-        return _validate_response(await a2a_client.send_message(request))
+        response = await with_docker_host_fallback(
+            card,
+            lambda candidate: A2AClient(client, agent_card=candidate).send_message(
+                request
+            ),
+        )
+        return _validate_response(response)
     except Exception as exc:
         return {"result": [f"Failed to send message: {exc}"], "status_code": 500}
 
