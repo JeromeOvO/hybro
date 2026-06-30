@@ -51,6 +51,8 @@ services:
       - MONGODB_URL=mongodb://mongo:27017/hybro
       - REDIS_URL=redis://redis:6379/0
       - API_PREFIX=/api/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mongo-setup:
         condition: service_completed_successfully
