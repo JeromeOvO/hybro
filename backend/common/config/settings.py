@@ -137,9 +137,6 @@ class Settings(BaseSettings):
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
     )
     webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-    allowed_agent_hosts: set[str] = (
-        set()
-    )  # Comma-separated allowlist of trusted agent hosts (optional)
     max_tasks_per_user: int = 100  # Max concurrent non-terminal tasks per user
     max_tasks_per_room: int = 50  # Max concurrent non-terminal tasks per room
     stale_check_minutes: int = 10  # Poll tasks not updated in this time
@@ -229,7 +226,6 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
-    s3_presigned_url_ttl: int = 3600  # presigned URL validity in seconds
     max_file_size_mb: int = 50
 
     # AWS Bedrock Settings (Supervisor LLM)
@@ -262,13 +258,6 @@ class Settings(BaseSettings):
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
 
-    @field_validator("allowed_agent_hosts", mode="before")
-    @classmethod
-    def parse_allowed_agent_hosts(cls, v):
-        if isinstance(v, str) and v.strip():
-            # Split comma-separated string into set
-            return {host.strip() for host in v.split(",") if host.strip()}
-        return set() if not v else v
 
     @field_validator("terminal_processing_statuses", mode="before")
     @classmethod
