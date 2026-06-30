@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import urlparse, urlunparse
 
-LOCAL_HOST_ALIASES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+from common.url_utils import LOCAL_HOST_ALIASES
+
 WELL_KNOWN_PATHS = ("/.well-known/agent-card.json", "/.well-known/agent.json")
 
 

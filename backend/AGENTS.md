@@ -16,7 +16,7 @@ This is a Python FastAPI backend for HybroAI's multi-agent system. The app entry
 
 ## Coding Style & Naming Conventions
 
-Use Python 3.11+ and prefer explicit, typed, async-aware code for I/O paths. Ruff targets Python 3.12, uses an 88-character line length, and enforces `E`, `F`, `B`, `I`, `UP`, and `C90` while ignoring `E501`. Name modules and functions with `snake_case`, classes with `PascalCase`, and tests with `test_*`. Keep route/viewset code thin; put business behavior in service, facade, repository, or translator modules.
+Use Python 3.12+ and prefer explicit, typed, async-aware code for I/O paths. Ruff targets Python 3.12, uses an 88-character line length, and enforces `E`, `F`, `B`, `I`, `UP`, and `C90` while ignoring `E501`. Name modules and functions with `snake_case`, classes with `PascalCase`, and tests with `test_*`. Keep route/viewset code thin; put business behavior in service, facade, repository, or translator modules.
 
 ## Testing Guidelines
 

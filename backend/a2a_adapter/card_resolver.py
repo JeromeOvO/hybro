@@ -10,6 +10,7 @@ from a2a.utils.constants import (
 
 from common.dto import AgentCardSnapshot
 
+from .docker_host_fallback import docker_host_fallback_url_for_error
 from .translators import a2a_card_to_snapshot
 
 logger = logging.getLogger(__name__)
@@ -38,24 +39,11 @@ class AgentCardResolverImpl:
         if cached and now - cached[0] < self._cache_ttl:
             return cached[1]
 
-        snapshot = None
-        last_error: Exception | None = None
-        for path in (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH):
-            try:
-                response = await self._client.get(f"{normalized_url}{path}")
-                response.raise_for_status()
-                payload = response.json()
-                card = AgentCard(**payload)
-                snapshot = a2a_card_to_snapshot(card, normalized_url)
-                break
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                if exc.response.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
-                    continue
-                break
-            except Exception as exc:
-                last_error = exc
-                break
+        snapshot, last_error = await self._resolve_card_from_url(normalized_url)
+        if snapshot is None and last_error is not None:
+            fallback_url = docker_host_fallback_url_for_error(normalized_url, last_error)
+            if fallback_url is not None:
+                snapshot, last_error = await self._resolve_card_from_url(fallback_url)
 
         if snapshot is None:
             logger.warning(
@@ -68,6 +56,29 @@ class AgentCardResolverImpl:
 
         self._cache[normalized_url] = (now, snapshot)
         return snapshot
+
+    async def _resolve_card_from_url(
+        self,
+        normalized_url: str,
+    ) -> tuple[AgentCardSnapshot | None, Exception | None]:
+        last_error: Exception | None = None
+        for path in (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH):
+            try:
+                response = await self._client.get(f"{normalized_url}{path}")
+                response.raise_for_status()
+                payload = response.json()
+                card = AgentCard(**payload)
+                return a2a_card_to_snapshot(card, normalized_url), None
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
+                    continue
+                break
+            except Exception as exc:
+                last_error = exc
+                break
+
+        return None, last_error
 
     async def supports_push_notifications(self, agent_url: str) -> bool:
         card = await self.resolve_card(agent_url)
