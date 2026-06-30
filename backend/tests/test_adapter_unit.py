@@ -563,6 +563,46 @@ async def test_card_resolver_falls_back_to_legacy_agent_json_path():
 
 
 @pytest.mark.asyncio
+async def test_card_resolver_retries_host_gateway_for_loopback_url(caplog):
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+
+    class _LoopbackCardClient:
+        def __init__(self):
+            self.requested_urls = []
+
+        async def get(self, url):
+            self.requested_urls.append(url)
+            if url.startswith("http://127.0.0.1:9060/"):
+                raise httpx.ConnectError("All connection attempts failed")
+            return _FakeResponse(
+                {
+                    "name": "Gateway Card Agent",
+                    "description": "Remote agent",
+                    "url": "http://127.0.0.1:9060",
+                    "version": "1.0.0",
+                    "capabilities": {},
+                    "defaultInputModes": ["text/plain"],
+                    "defaultOutputModes": ["text/plain"],
+                    "skills": [],
+                }
+            )
+
+    client = _LoopbackCardClient()
+    resolver = AgentCardResolverImpl(client=client, cache_ttl=300)
+
+    with caplog.at_level(logging.WARNING):
+        card = await resolver.resolve_card("http://127.0.0.1:9060")
+
+    assert card is not None
+    assert card.name == "Gateway Card Agent"
+    assert client.requested_urls == [
+        "http://127.0.0.1:9060/.well-known/agent-card.json",
+        "http://host.docker.internal:9060/.well-known/agent-card.json",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_card_resolver_expires_cached_card_after_ttl():
     from a2a_adapter.card_resolver import AgentCardResolverImpl
 

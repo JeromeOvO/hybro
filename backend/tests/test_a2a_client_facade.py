@@ -133,6 +133,55 @@ async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
 
 
 @pytest.mark.asyncio
+async def test_send_hitl_reply_falls_back_to_docker_host_for_loopback_url(
+    monkeypatch,
+    caplog,
+):
+    attempted_urls = []
+
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, **kwargs):
+            self.url = kwargs["url"]
+            attempted_urls.append(self.url)
+
+        async def send_message(self, request):
+            if self.url == "http://127.0.0.1:9060":
+                raise A2AClientHTTPError(
+                    503,
+                    "Network communication error: All connection attempts failed",
+                )
+            return SimpleNamespace(root=SimpleNamespace(result=_FacadeResult()))
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+
+    message_data = {
+        "messageId": "message-123",
+        "role": "user",
+        "parts": [{"kind": "text", "text": "approved"}],
+    }
+
+    with caplog.at_level(logging.WARNING):
+        result = await client_facade.send_hitl_reply(
+            "http://127.0.0.1:9060",
+            message_data,
+            timeout=1,
+        )
+
+    assert result["kind"] == "message"
+    assert attempted_urls == [
+        "http://127.0.0.1:9060",
+        "http://host.docker.internal:9060",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_fetch_agent_card_with_fallback_uses_previous_path_on_404(monkeypatch):
     captured_paths = []
 
@@ -168,6 +217,56 @@ async def test_fetch_agent_card_with_fallback_uses_previous_path_on_404(monkeypa
 
     assert captured_paths == ["/.well-known/agent-card.json", "/.well-known/agent.json"]
     assert result["name"] == "Fallback Agent"
+
+
+@pytest.mark.asyncio
+async def test_fetch_agent_card_with_fallback_retries_host_gateway_for_loopback_url(
+    monkeypatch,
+    caplog,
+):
+    attempted_urls = []
+
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _Resolver:
+        def __init__(self, client, agent_url, path):
+            attempted_urls.append(agent_url)
+            self.agent_url = agent_url
+
+        async def get_agent_card(self):
+            if self.agent_url == "http://127.0.0.1:9060":
+                raise A2AClientHTTPError(
+                    503,
+                    "Network communication error: All connection attempts failed",
+                )
+            return SimpleNamespace(
+                model_dump=lambda *, mode="json": {
+                    "name": "Fallback Agent",
+                    "url": "http://127.0.0.1:9060",
+                    "version": "1",
+                    "capabilities": {},
+                    "skills": [{"id": "s", "name": "Skill"}],
+                }
+            )
+
+    monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
+
+    with caplog.at_level(logging.WARNING):
+        result = await client_facade.fetch_agent_card_with_fallback(
+            "http://127.0.0.1:9060",
+            timeout=1,
+        )
+
+    assert result["name"] == "Fallback Agent"
+    assert attempted_urls == [
+        "http://127.0.0.1:9060",
+        "http://host.docker.internal:9060",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -306,7 +405,7 @@ async def test_send_message_falls_back_to_docker_host_for_loopback_card(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "fall_back from docker to local service" in caplog.text
+    assert "Retrying A2A request via host gateway" in caplog.text
 
 
 def test_normalize_response_returns_plain_error_dict():

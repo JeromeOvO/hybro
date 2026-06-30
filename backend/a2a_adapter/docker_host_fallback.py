@@ -8,10 +8,11 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from a2a.client.errors import A2AClientHTTPError
 
+from common.url_utils import LOCAL_HOST_ALIASES
+
 logger = logging.getLogger(__name__)
 
 _DOCKER_HOST = "host.docker.internal"
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 _NETWORK_ERROR_MARKERS = (
     "network communication",
     "connection",
@@ -32,6 +33,19 @@ async def with_docker_host_fallback[T](
         return await operation(fallback_card)
 
 
+async def with_docker_host_url_fallback[T](
+    url: str,
+    operation: Callable[[str], Awaitable[T]],
+) -> T:
+    try:
+        return await operation(url)
+    except Exception as exc:
+        fallback_url = docker_host_fallback_url_for_error(url, exc)
+        if fallback_url is None:
+            raise
+        return await operation(fallback_url)
+
+
 async def stream_with_docker_host_fallback[T](
     card: Any,
     operation: Callable[[Any], AsyncGenerator[T, None]],
@@ -49,17 +63,23 @@ async def stream_with_docker_host_fallback[T](
 
 def _fallback_card(card: Any, exc: Exception) -> Any | None:
     original_url = str(getattr(card, "url", "") or "")
-    fallback_url = docker_host_fallback_url(original_url)
-    if fallback_url is None or not _is_network_connection_error(exc):
+    fallback_url = docker_host_fallback_url_for_error(original_url, exc)
+    if fallback_url is None:
         return None
 
-    logger.warning(
-        "fall_back from docker to local service: retrying A2A request with %s "
-        "instead of %s",
-        fallback_url,
-        original_url,
-    )
     return _copy_card_with_url(card, fallback_url)
+
+
+def docker_host_fallback_url_for_error(url: str, exc: Exception) -> str | None:
+    fallback_url = docker_host_fallback_url(url)
+    if fallback_url is None or not _is_network_connection_error(exc):
+        return None
+    logger.warning(
+        "Retrying A2A request via host gateway: %s instead of %s",
+        fallback_url,
+        url,
+    )
+    return fallback_url
 
 
 def docker_host_fallback_url(url: str) -> str | None:
@@ -68,7 +88,7 @@ def docker_host_fallback_url(url: str) -> str | None:
     except ValueError:
         return None
     hostname = (parsed.hostname or "").lower()
-    if hostname not in _LOCAL_HOSTS:
+    if hostname not in LOCAL_HOST_ALIASES:
         return None
 
     port = parsed.port
@@ -111,6 +131,8 @@ def _copy_card_with_url(card: Any, url: str) -> Any:
 
 __all__ = [
     "docker_host_fallback_url",
+    "docker_host_fallback_url_for_error",
     "stream_with_docker_host_fallback",
     "with_docker_host_fallback",
+    "with_docker_host_url_fallback",
 ]

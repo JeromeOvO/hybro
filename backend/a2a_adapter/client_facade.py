@@ -28,6 +28,7 @@ from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PA
 from .docker_host_fallback import (
     stream_with_docker_host_fallback,
     with_docker_host_fallback,
+    with_docker_host_url_fallback,
 )
 from .message_factory import to_sdk_message
 
@@ -48,20 +49,10 @@ async def fetch_agent_card_with_fallback(
     timeout: float = 30.0,
 ) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for path in (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH):
-            resolver = SDKCardResolver(client, str(agent_url), path)
-            try:
-                card = await resolver.get_agent_card()
-                return card.model_dump(mode="json")
-            except A2AClientHTTPError as exc:
-                if exc.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
-                    continue
-                raise A2AClientFacadeError(
-                    f"Failed to fetch card: {exc}",
-                    status_code=exc.status_code,
-                ) from exc
-            except Exception as exc:
-                raise A2AClientFacadeError(str(exc)) from exc
+        return await with_docker_host_url_fallback(
+            str(agent_url),
+            lambda candidate_url: _fetch_agent_card_from_url(client, candidate_url),
+        )
     raise A2AClientFacadeError("Agent card not found at any known path")
 
 
@@ -182,10 +173,35 @@ async def send_hitl_reply(
         ),
     )
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await A2AClient(httpx_client=client, url=agent_url).send_message(
-            request
+        response = await with_docker_host_url_fallback(
+            agent_url,
+            lambda candidate_url: A2AClient(
+                httpx_client=client,
+                url=candidate_url,
+            ).send_message(request),
         )
     return _normalize_response(response)
+
+
+async def _fetch_agent_card_from_url(
+    client: httpx.AsyncClient,
+    agent_url: str,
+) -> dict[str, Any]:
+    for path in (AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH):
+        resolver = SDKCardResolver(client, str(agent_url), path)
+        try:
+            card = await resolver.get_agent_card()
+            return card.model_dump(mode="json")
+        except A2AClientHTTPError as exc:
+            if exc.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
+                continue
+            raise A2AClientFacadeError(
+                f"Failed to fetch card: {exc}",
+                status_code=exc.status_code,
+            ) from exc
+        except Exception as exc:
+            raise A2AClientFacadeError(str(exc)) from exc
+    raise A2AClientFacadeError("Agent card not found at any known path")
 
 
 def _normalize_response(response: Any) -> dict[str, Any]:

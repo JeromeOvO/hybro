@@ -28,6 +28,7 @@ from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PA
 from .docker_host_fallback import (
     stream_with_docker_host_fallback,
     with_docker_host_fallback,
+    with_docker_host_url_fallback,
 )
 
 
@@ -62,6 +63,16 @@ async def inspect_a2a_connection(
 
 
 async def _fetch_sdk_agent_card_with_fallback(
+    client: httpx.AsyncClient,
+    agent_url: str,
+) -> SDKAgentCard:
+    return await with_docker_host_url_fallback(
+        str(agent_url),
+        lambda candidate_url: _fetch_sdk_agent_card_from_url(client, candidate_url),
+    )
+
+
+async def _fetch_sdk_agent_card_from_url(
     client: httpx.AsyncClient,
     agent_url: str,
 ) -> SDKAgentCard:
