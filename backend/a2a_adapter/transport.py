@@ -19,6 +19,10 @@ from httpx_sse import aconnect_sse
 
 from common.dto import AgentStreamEvent, AgentTaskResult, InternalAgentMessage
 
+from .docker_host_fallback import (
+    stream_with_docker_host_url_fallback,
+    with_docker_host_url_fallback,
+)
 from .translators import (
     a2a_event_to_stream_event,
     a2a_task_to_result,
@@ -53,11 +57,19 @@ class AgentTransportImpl:
                 streaming=False,
                 accepted_output_modes=accepted_output_modes,
             )
-            response = await self._client.post(
+
+            async def _post(candidate_url: str) -> httpx.Response:
+                response = await self._client.post(
+                    candidate_url,
+                    json=request_payload,
+                )
+                response.raise_for_status()
+                return response
+
+            response = await with_docker_host_url_fallback(
                 agent_url.rstrip("/"),
-                json=request_payload,
+                _post,
             )
-            response.raise_for_status()
             payload = response.json()
             task_payload = payload
             if "jsonrpc" not in payload and isinstance(payload.get("result"), dict):
@@ -86,16 +98,24 @@ class AgentTransportImpl:
                 streaming=True,
                 accepted_output_modes=accepted_output_modes,
             )
-            async with aconnect_sse(
-                self._client,
-                "POST",
+
+            async def _stream(candidate_url: str) -> AsyncIterator[AgentStreamEvent]:
+                async with aconnect_sse(
+                    self._client,
+                    "POST",
+                    candidate_url,
+                    json=request_payload,
+                ) as event_source:
+                    async for sse in event_source.aiter_sse():
+                        event_data = json.loads(sse.data)
+                        event_data = _stream_event_payload(event_data)
+                        yield a2a_event_to_stream_event(event_data, message.agent_id)
+
+            async for event in stream_with_docker_host_url_fallback(
                 agent_url.rstrip("/"),
-                json=request_payload,
-            ) as event_source:
-                async for sse in event_source.aiter_sse():
-                    event_data = json.loads(sse.data)
-                    event_data = _stream_event_payload(event_data)
-                    yield a2a_event_to_stream_event(event_data, message.agent_id)
+                _stream,
+            ):
+                yield event
         except Exception as exc:
             yield AgentStreamEvent(
                 task_id="",
