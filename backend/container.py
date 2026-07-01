@@ -17,6 +17,7 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
+from api_gateway.file_storage import ObjectStorageFileStorage
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
 from common.dto import VectorRecord
@@ -36,6 +37,7 @@ from common.protocols import (
     ContextMemoryRuntime,
     EventPublisher,
     ExecutionEngine,
+    FileStorage,
     HITLManager,
     HubAgentResponseSink,
     HubDispatchPolicy,
@@ -318,6 +320,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from room.route_adapter import RoomRouteAdapter
 
             object_storage = create_object_storage_dal()
+            file_uploads_collection = mongo_dal.collection("file_uploads")
+            file_storage = create_file_storage(
+                object_storage=object_storage,
+                file_uploads_collection=file_uploads_collection,
+            )
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
                 storage_service=object_storage,
@@ -1234,7 +1241,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         orphaned_upload_cleaner.set_leader_election(_leader)
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(
-                file_uploads_collection=mongo_dal.collection("file_uploads"),
+                file_uploads_collection=file_uploads_collection,
                 room_user_messages_collection=mongo_dal.collection("room_user_messages"),
                 object_storage=object_storage,
             )
@@ -1344,7 +1351,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 discovery_service=None,
                 discovery_rate_limiter=None,
                 discovery_default_limit=runtime.settings.discovery_default_limit,
-                file_storage=None,
+                file_storage=file_storage,
                 room_ownership_reader=_room_deps.room_registry,
                 hitl_manager=_execution_deps.hitl_manager,
                 hub_relay_service=_relay_svc,
@@ -1947,6 +1954,17 @@ def create_object_storage_dal() -> ObjectStorageDAL:
     from dal.s3 import ObjectStorageDALImpl
 
     return ObjectStorageDALImpl()
+
+
+def create_file_storage(
+    *,
+    object_storage: ObjectStorageDAL,
+    file_uploads_collection: MongoCollection,
+) -> FileStorage:
+    return ObjectStorageFileStorage(
+        object_storage=object_storage,
+        file_uploads_collection=file_uploads_collection,
+    )
 
 
 def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
