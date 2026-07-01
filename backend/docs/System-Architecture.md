@@ -498,6 +498,14 @@ in-memory/offline queues for single-process/degraded operation.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
 - Convert inline binary artifacts to S3-backed references through bound storage.
+- Own Docker host fallback for backend-initiated agent endpoint calls. Owner
+  modules such as `agent.health`, `agent.resolver`, Execution jobs, and legacy
+  transport compatibility paths must call adapter helpers instead of opening
+  direct `httpx` or A2A SDK clients against agent URLs.
+- Keep registered `agent_card.url` values unchanged during fallback. The
+  adapter may retry `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` URLs through
+  `host.docker.internal` for connection-style failures, but that rewrite is
+  request-local and must not be persisted back to agent registration state.
 
 Owner services, jobs, execution transports, and room runtime code use
 `common.types`, plain DTO dictionaries, and adapter facades instead of importing
