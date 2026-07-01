@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
-from a2a_adapter.agent_card_health import fetch_agent_card_for_health
+from a2a_adapter import agent_card_health
+from a2a_adapter.agent_card_health import (
+    fetch_agent_card_for_health,
+    probe_agent_card_for_health,
+)
 from a2a_adapter.constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -54,6 +60,17 @@ class _Client:
     async def get(self, url: str):
         self.urls.append(url)
         return self.responses.pop(0)
+
+
+class _AsyncClientContext:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
 
 
 class _Repo:
@@ -116,6 +133,43 @@ async def test_fetch_agent_card_for_health_keeps_healthy_invalid_card_nonfatal()
 
     assert result.is_healthy is True
     assert result.card is None
+
+
+@pytest.mark.asyncio
+async def test_probe_agent_card_for_health_retries_host_gateway_for_loopback_url(
+    monkeypatch,
+    caplog,
+):
+    class _LoopbackClient:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        async def get(self, url: str):
+            self.urls.append(url)
+            if url.startswith("http://127.0.0.1:9060/"):
+                raise httpx.ConnectError("All connection attempts failed")
+            return _Response(200, _card_payload(url="http://127.0.0.1:9060"))
+
+    client = _LoopbackClient()
+    monkeypatch.setattr(
+        agent_card_health.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(client),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await probe_agent_card_for_health(
+            "http://127.0.0.1:9060",
+            timeout=1,
+        )
+
+    assert result.is_healthy is True
+    assert result.card is not None
+    assert client.urls == [
+        "http://127.0.0.1:9060" + AGENT_CARD_WELL_KNOWN_PATH,
+        "http://host.docker.internal:9060" + AGENT_CARD_WELL_KNOWN_PATH,
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
 
 
 @pytest.mark.asyncio
