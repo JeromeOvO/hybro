@@ -54,7 +54,7 @@ class APIGatewayDeps:
     discovery_service: GatewayDiscoveryProvider | None
     discovery_rate_limiter: APIKeyRateLimiter | None
     discovery_default_limit: int
-    file_storage: FileStorage | None
+    file_storage: FileStorage
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
     hub_relay_service: HubStatusReader
@@ -78,16 +78,15 @@ class APIGatewayDeps:
 def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
     if deps is None:
         return ["app.state.api_gateway_deps"]
-    
+
     optional_fields = {
         "api_key_store",
         "discovery_service",
         "discovery_rate_limiter",
-        "file_storage",
         "gateway_service",
-        "gateway_rate_limiter"
+        "gateway_rate_limiter",
     }
-    
+
     return [
         field.name
         for field in fields(APIGatewayDeps)
