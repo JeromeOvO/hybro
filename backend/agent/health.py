@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Protocol
 
-import httpx
 from loguru import logger
 
-from a2a_adapter.agent_card_health import fetch_agent_card_for_health
+from a2a_adapter.agent_card_health import probe_agent_card_for_health
 from common.config.settings import settings
 from common.protocols import LeaderElector
 from common.types import AgentCard as CommonAgentCard
@@ -100,12 +99,13 @@ class AgentHealthService:
         self, agent: Agent, *, timeout: float | None = None
     ) -> tuple[bool, CommonAgentCard | None]:
         """
-        Check if an agent is reachable by making an HTTP request to its URL.
+        Check if an agent is reachable by asking the A2A adapter to probe its
+        agent-card endpoint.
 
         A2A protocol agents typically only accept POST on root URL for message
-        sending, so we fall back to checking the agent card endpoint which
-        accepts GET requests.  When the endpoint returns a valid agent card,
-        it is parsed and returned so callers can update the DB.
+        sending, so the adapter checks the agent card endpoint which accepts GET
+        requests. When the endpoint returns a valid agent card, it is parsed and
+        returned so callers can update the DB.
 
         Args:
             agent: The agent to check
@@ -118,34 +118,29 @@ class AgentHealthService:
         effective_timeout = timeout if timeout is not None else self.timeout
 
         try:
-            async with httpx.AsyncClient(timeout=effective_timeout) as client:
-                result = await fetch_agent_card_for_health(agent_url, client)
-                if result.is_healthy:
-                    logger.debug(
-                        f"Agent {agent.agent_id} ({agent.agent_card.name}) is healthy"
-                    )
-                    if result.card is None:
-                        logger.debug(
-                            f"Could not parse agent card for {agent.agent_id}"
-                        )
-                else:
-                    logger.warning(
-                        f"Agent {agent.agent_id} ({agent.agent_card.name}) "
-                        f"returned status {result.status_code}"
-                    )
-
-                return result.is_healthy, result.card
-
-        except httpx.TimeoutException:
-            logger.warning(
-                f"Agent {agent.agent_id} ({agent.agent_card.name}) timed out"
+            result = await probe_agent_card_for_health(
+                agent_url,
+                timeout=effective_timeout,
             )
-            return False, None
-        except httpx.RequestError as e:
-            logger.warning(
-                f"Agent {agent.agent_id} ({agent.agent_card.name}) unreachable: {e}"
-            )
-            return False, None
+            if result.is_healthy:
+                logger.debug(
+                    f"Agent {agent.agent_id} ({agent.agent_card.name}) is healthy"
+                )
+                if result.card is None:
+                    logger.debug(f"Could not parse agent card for {agent.agent_id}")
+            elif result.status_code is not None:
+                logger.warning(
+                    f"Agent {agent.agent_id} ({agent.agent_card.name}) "
+                    f"returned status {result.status_code}"
+                )
+            else:
+                logger.warning(
+                    f"Agent {agent.agent_id} ({agent.agent_card.name}) "
+                    f"unreachable: {result.error or 'unknown adapter error'}"
+                )
+
+            return result.is_healthy, result.card
+
         except Exception as e:
             logger.error(f"Unexpected error checking agent {agent.agent_id}: {e}")
             return False, None

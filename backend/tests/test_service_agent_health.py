@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -173,13 +174,42 @@ async def test_probe_agent_card_for_health_retries_host_gateway_for_loopback_url
 
 
 @pytest.mark.asyncio
-async def test_check_agent_health_returns_unhealthy_on_request_errors(monkeypatch):
-    async def _raise_timeout(*_args, **_kwargs):
-        raise httpx.TimeoutException("timed out")
+async def test_check_agent_health_delegates_to_adapter_probe(monkeypatch):
+    captured = {}
+    live_card = AgentCard(**_card_payload(name="Live Health Agent"))
+
+    async def _probe(agent_url: str, *, timeout: float):
+        captured["agent_url"] = agent_url
+        captured["timeout"] = timeout
+        return SimpleNamespace(
+            is_healthy=True,
+            card=live_card,
+            status_code=200,
+            error=None,
+        )
 
     monkeypatch.setattr(
-        "agent.health.fetch_agent_card_for_health",
-        _raise_timeout,
+        "agent.health.probe_agent_card_for_health",
+        _probe,
+    )
+    service = AgentHealthService(repository=_Repo(), timeout_seconds=9)
+    agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))
+
+    assert await service.check_agent_health(agent, timeout=2) == (True, live_card)
+    assert captured == {
+        "agent_url": "https://agent.example",
+        "timeout": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_agent_health_returns_unhealthy_on_adapter_errors(monkeypatch):
+    async def _raise_adapter_error(*_args, **_kwargs):
+        raise RuntimeError("adapter broke")
+
+    monkeypatch.setattr(
+        "agent.health.probe_agent_card_for_health",
+        _raise_adapter_error,
     )
     service = AgentHealthService(repository=_Repo())
     agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))
