@@ -507,3 +507,55 @@ async def test_fetch_remote_task_returns_common_task(monkeypatch):
     assert isinstance(task, Task)
     assert type(task).__module__ == "common.types"
     assert task.id == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_task_falls_back_to_docker_host_for_loopback_card(
+    monkeypatch,
+    caplog,
+):
+    attempted_urls = []
+
+    monkeypatch.setattr(
+        remote_task.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, client, agent_card):
+            self.agent_card = agent_card
+            attempted_urls.append(agent_card.url)
+
+        async def get_task(self, request):
+            if self.agent_card.url == "http://127.0.0.1:9060":
+                raise A2AClientHTTPError(
+                    503,
+                    "Network communication error: All connection attempts failed",
+                )
+            task = Task(
+                id="task-1",
+                status={"state": "completed"},
+                artifacts=[],
+            )
+            return SimpleNamespace(root=SimpleNamespace(result=task))
+
+    monkeypatch.setattr("a2a.client.A2AClient", _A2AClient)
+    card = AgentCard(
+        name="Minimal",
+        url="http://127.0.0.1:9060",
+        version="1",
+        capabilities={},
+        skills=[{"id": "s", "name": "Skill"}],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        task = await remote_task.fetch_remote_task(card, "task-1", timeout=1)
+
+    assert isinstance(task, Task)
+    assert task.id == "task-1"
+    assert attempted_urls == [
+        "http://127.0.0.1:9060",
+        "http://host.docker.internal:9060",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
