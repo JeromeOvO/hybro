@@ -1,9 +1,8 @@
 import type { MutableRefObject } from 'react'
-import type { TaskState } from '@/lib/types/sse'
 import type { HitlPendingRequest } from '@/lib/api/hitl'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useMessageStore } from '@/stores/message-store'
-import { normalizeTimestampOrNow } from '@/lib/time'
+import { buildPendingHitlIncomingMessage } from '@/lib/hitl/hitl-message-projection'
 import type { HydrateRoomAgentResolver } from './types'
 
 export async function overlayPendingHitlRequests(
@@ -27,28 +26,26 @@ export async function overlayPendingHitlRequests(
 
   for (const { req, name } of resolved) {
     pendingMessageIds.add(req.message_id)
-    store.upsertMessage({
-      id: req.message_id,
+    store.upsertMessage(buildPendingHitlIncomingMessage({
       roomId,
-      messageType: 'agent',
-      content: req.prompt || '',
-      senderName: name,
-      timestamp: normalizeTimestampOrNow(req.created_at),
+      messageId: req.message_id,
+      requestId: req.request_id,
+      prompt: req.prompt,
+      promptType: req.prompt_type,
+      choices: req.choices,
+      timestamp: req.created_at,
       agentId: req.agent_id,
+      agentName: name,
       agentSource: deps.getAgentSource(req.agent_id),
-      taskStatus: 'input-required' as TaskState,
-      hitlRequestId: req.request_id,
-      hitlPrompt: req.prompt,
-      hitlPromptType: req.prompt_type || 'text',
-      hitlChoices: req.choices,
-      hitlExpiresAt: req.expires_at,
-      hitlResolved: false,
-      hitlGroupId: req.group_id ?? undefined,
-      hitlGroupTotal: req.group_total ?? undefined,
-      hitlGroupIndex: req.group_index ?? undefined,
-      relatedMessageId: req.related_message_id ?? undefined,
-      clientRequestId: req.client_request_id ?? undefined,
-    }, 'sse')
+      expiresAt: req.expires_at,
+      groupId: req.group_id,
+      groupTotal: req.group_total,
+      groupIndex: req.group_index,
+      stepNumber: undefined,
+      totalSteps: undefined,
+      relatedMessageId: req.related_message_id,
+      clientRequestId: req.client_request_id,
+    }), 'sse')
     deps.hitlRequestIndex.current.set(req.request_id, req.message_id)
   }
 

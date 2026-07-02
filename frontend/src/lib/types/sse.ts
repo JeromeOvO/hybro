@@ -179,13 +179,13 @@ export type HITLInputRequestedData = {
   agent_id?: string | null
   agent_name?: string | null
   source_step_id?: string | null
-  group_id?: string
-  group_total?: number
-  group_index?: number
+  group_id?: string | null
+  group_total?: number | null
+  group_index?: number | null
   step_number?: number | null
   total_steps?: number | null
   expires_at?: string | null
-  client_request_id: string
+  client_request_id?: string | null
 }
 
 export type HITLStatusUpdateData = {
@@ -198,10 +198,10 @@ export type HITLStatusUpdateData = {
   agent_id?: string | null
   agent_name?: string | null
   source_step_id?: string | null
-  group_id?: string
-  group_total?: number
-  group_index?: number
-  client_request_id: string
+  group_id?: string | null
+  group_total?: number | null
+  group_index?: number | null
+  client_request_id?: string | null
 }
 
 export type GenericRoomEventData = Record<string, unknown>

@@ -5,6 +5,7 @@ import {
   isRoomSSEType,
   PROCESSING_STATUS,
 } from '@/lib/types/sse'
+import type { RoomSSEFrameMap } from '@/lib/types/sse'
 
 describe('final room SSE types', () => {
   it('recognizes only final room SSE top-level types', () => {
@@ -81,5 +82,40 @@ describe('final room SSE types', () => {
     expect(isConnectedData({ connection_id: 'conn-1' })).toBe(true)
     expect(isConnectedData({})).toBe(false)
     expect(isConnectedData({ connection_id: '' })).toBe(false)
+  })
+})
+
+describe('RoomSSEFrameMap HITL durable events', () => {
+  it('allows hitl_request without client_request_id', () => {
+    const frame = {
+      type: 'hitl_request',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: {
+        request_id: 'hitl-1',
+        message_id: 'agent-msg-1',
+        source: 'agent',
+        prompt: 'Need revenue',
+        prompt_type: 'text',
+      },
+    } satisfies RoomSSEFrameMap['hitl_request']
+
+    expect(frame.data.request_id).toBe('hitl-1')
+  })
+
+  it('allows hitl_response without client_request_id', () => {
+    const frame = {
+      type: 'hitl_response',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: {
+        request_id: 'hitl-1',
+        message_id: 'agent-msg-1',
+        source: 'agent',
+        status: 'responded',
+      },
+    } satisfies RoomSSEFrameMap['hitl_response']
+
+    expect(frame.data.status).toBe('responded')
   })
 })

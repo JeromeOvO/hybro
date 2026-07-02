@@ -1,4 +1,5 @@
 import type { RoomSSEFrameMap, TaskState } from '@/lib/types/sse'
+import { buildPendingHitlIncomingMessage } from '@/lib/hitl/hitl-message-projection'
 import { useMessageStore } from '@/stores/message-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
@@ -69,31 +70,26 @@ export async function handleHitlRequest(
     resolvedAgentName = await ctx.getAgentName(agent_id)
   }
 
-  store.upsertMessage({
-    id: message_id,
+  store.upsertMessage(buildPendingHitlIncomingMessage({
     roomId,
-    messageType: 'agent',
-    content: prompt || '',
-    senderName: resolvedAgentName || 'Agent',
-    timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
-    agentId: agent_id ?? undefined,
+    messageId: message_id,
+    requestId: request_id,
+    prompt,
+    promptType: prompt_type,
+    choices: Array.isArray(choices) ? choices as string[] : null,
+    timestamp: sseMessage.timestamp,
+    agentId: agent_id,
+    agentName: resolvedAgentName,
     agentSource: ctx.getAgentSource(agent_id ?? undefined),
-    taskStatus: 'input-required' as TaskState,
-    hitlRequestId: request_id,
-    hitlPrompt: prompt,
-    hitlPromptType: (prompt_type as 'text' | 'choice' | 'confirmation') || 'text',
-    hitlChoices: Array.isArray(choices) ? choices as string[] : null,
-    hitlExpiresAt: expires_at ?? undefined,
-    hitlResolved: false,
-    hitlUserAnswer: '',
-    hitlGroupId: group_id ?? undefined,
-    hitlGroupTotal: group_total ?? undefined,
-    hitlGroupIndex: group_index ?? undefined,
-    stepNumber: step_number ?? undefined,
-    totalSteps: total_steps ?? undefined,
-    relatedMessageId: related_message_id ?? undefined,
+    expiresAt: expires_at,
+    groupId: group_id,
+    groupTotal: group_total,
+    groupIndex: group_index,
+    stepNumber: step_number,
+    totalSteps: total_steps,
+    relatedMessageId: related_message_id,
     clientRequestId: sseMessage.data.client_request_id,
-  }, 'sse')
+  }), 'sse')
   hitlRequestIndex.current.set(request_id, message_id)
 
   appendEvent(roomId, {
@@ -114,13 +110,21 @@ export function handleHitlResponse(
   if (!request_id) return
 
   const store = useMessageStore.getState()
-  const entityId = ctx.hitlRequestIndex.current.get(request_id)
+  const indexedEntityId = ctx.hitlRequestIndex.current.get(request_id)
+  const fallbackEntityId = sseMessage.data.message_id
+  const entityId = indexedEntityId ?? fallbackEntityId
   const entity = entityId ? store.entities[entityId] : undefined
   if (!entity) return
 
   if (entity.hitlRequestId && entity.hitlRequestId !== request_id) {
-    ctx.hitlRequestIndex.current.delete(request_id)
+    if (indexedEntityId) {
+      ctx.hitlRequestIndex.current.delete(request_id)
+    }
     return
+  }
+
+  if (!indexedEntityId) {
+    ctx.hitlRequestIndex.current.set(request_id, entity.id)
   }
 
   let resolvedTaskStatus = entity.taskStatus
