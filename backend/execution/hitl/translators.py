@@ -36,6 +36,7 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         a2a_context_id=getattr(request, "a2a_context_id", None),
         continuation_message_id=getattr(request, "continuation_message_id", None),
         display_message_id=getattr(request, "display_message_id", None),
+        client_request_id=getattr(request, "client_request_id", None),
         group_id=getattr(request, "group_id", None),
         group_total=getattr(request, "group_total", None),
         group_index=getattr(request, "group_index", None),

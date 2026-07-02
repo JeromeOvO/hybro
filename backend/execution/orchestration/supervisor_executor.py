@@ -932,6 +932,7 @@ class SupervisorExecutor:
                             a2a_task_id=ar.a2a_task_id,
                             a2a_context_id=ar.a2a_context_id,
                             continuation_message_id=ar.paused_message_id,
+                            display_message_id=ar.paused_message_id,
                         )
 
                         if request is None:
