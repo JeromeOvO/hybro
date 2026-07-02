@@ -211,10 +211,24 @@ class HITLService:
 
         # 1. Persist FIRST (so it survives SSE drops)
         doc = request.model_dump(mode="json")
-        saved = await self.persistence.create_hitl_request(doc)
-        if not saved:
-            logger.error("Failed to persist HITL request %s", request.request_id)
-            return None
+        use_agent_pending_identity = source == "agent" and (
+            display_message_id or continuation_message_id
+        )
+        hitl_request_created = False
+        if use_agent_pending_identity:
+            persisted = await self.persistence.create_or_reuse_pending_hitl_request(doc)
+            if not persisted:
+                logger.error("Failed to persist HITL request %s", request.request_id)
+                return None
+            persisted_doc, hitl_request_created = persisted
+            request = HITLRequest(
+                **{k: v for k, v in persisted_doc.items() if k != "_id"}
+            )
+        else:
+            saved = await self.persistence.create_hitl_request(doc)
+            if not saved:
+                logger.error("Failed to persist HITL request %s", request.request_id)
+                return None
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
@@ -223,21 +237,59 @@ class HITLService:
         # old answer as if the new request is already answered.
         # Also persist group metadata for multi-question groups so
         # convertApiMessageToIncoming can reconstruct group context.
-        if display_message_id:
-            await self.persistence.update_agent_message_task_state(
-                display_message_id, "input-required"
-            )
-            await self.persistence.persist_hitl_user_answer(
-                display_message_id,
-                None,
-            )
-            if group_id is not None:
-                await self.persistence.persist_hitl_group_metadata(
-                    display_message_id,
-                    group_id=group_id,
-                    group_total=group_total,
-                    group_index=group_index,
+        display_projection_message_id = (
+            request.display_message_id if source == "agent" else display_message_id
+        )
+        if display_projection_message_id:
+            if source == "agent":
+                projected = (
+                    await self.persistence.persist_pending_hitl_on_agent_message(
+                        display_projection_message_id,
+                        request_id=request.request_id,
+                        prompt=request.prompt,
+                        prompt_type=request.prompt_type,
+                        choices=request.choices,
+                        a2a_task_id=request.a2a_task_id,
+                        a2a_context_id=request.a2a_context_id,
+                        group_id=request.group_id,
+                        group_total=request.group_total,
+                        group_index=request.group_index,
+                    )
                 )
+                if not projected:
+                    logger.error(
+                        "Failed to project pending HITL onto agent display message",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": display_projection_message_id,
+                            "continuation_message_id": request.continuation_message_id,
+                            "a2a_task_id": request.a2a_task_id,
+                            "a2a_context_id": request.a2a_context_id,
+                        },
+                    )
+                    if hitl_request_created:
+                        await self.persistence.update_hitl_request(
+                            request.request_id,
+                            status=HITLStatus.CANCELED.value,
+                            error_message="failed_to_project_agent_message",
+                        )
+                    return None
+            else:
+                await self.persistence.update_agent_message_task_state(
+                    display_projection_message_id, "input-required"
+                )
+                await self.persistence.persist_hitl_user_answer(
+                    display_projection_message_id,
+                    None,
+                )
+                if group_id is not None:
+                    await self.persistence.persist_hitl_group_metadata(
+                        display_projection_message_id,
+                        group_id=group_id,
+                        group_total=group_total,
+                        group_index=group_index,
+                    )
 
         # 2. Emit SSE event
         await self._emit_hitl_event(

@@ -582,6 +582,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 update_agent_message_task_state=(
                     hitl_store.update_agent_message_task_state
                 ),
+                find_pending_hitl_request_for_agent_message=(
+                    hitl_store.find_pending_hitl_request_for_agent_message
+                ),
+                create_or_reuse_pending_hitl_request=(
+                    hitl_store.create_or_reuse_pending_hitl_request
+                ),
+                persist_pending_hitl_on_agent_message=(
+                    hitl_store.persist_pending_hitl_on_agent_message
+                ),
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
+                ),
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
                 get_hitl_request=hitl_store.get_hitl_request,
@@ -1084,8 +1099,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         else:
             if healed:
                 logger.info("startup heal: healed %s diverged run(s)", healed)
-        if runtime.settings.webhook_signing_key:
-            await hitl_store.ensure_hitl_indexes()
+        await hitl_store.ensure_hitl_indexes()
 
         # Init DAL Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.

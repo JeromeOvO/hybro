@@ -60,6 +60,9 @@ def mock_hitl_db_service():
     mock.get_pending_hitl_requests = AsyncMock(return_value=[])
     mock.get_pending_hitl_requests_for_message = AsyncMock(return_value=[])
     mock.count_hitl_requests_for_message = AsyncMock(return_value=0)
+    mock.find_pending_hitl_request_for_agent_message = AsyncMock(return_value=None)
+    mock.create_or_reuse_pending_hitl_request = AsyncMock(return_value=None)
+    mock.persist_pending_hitl_on_agent_message = AsyncMock(return_value=True)
     mock.claim_hitl_request = AsyncMock(return_value=None)
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
@@ -259,6 +262,208 @@ class TestRequestInput:
 
         assert result.prompt_type == HITLPromptType.CHOICE
         assert result.choices == choices
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_projection_persists_all_display_message_metadata(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Agent input-required HITL must be projected onto the display message."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=True
+        )
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
+            return_value=True
+        )
+        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(return_value=True)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            choices=None,
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is not None
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message.assert_not_awaited()
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        create_call = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args
+        )
+        assert create_call.args[0]["display_message_id"] == "agent-display-msg"
+        assert (
+            create_call.args[0]["continuation_message_id"] == "agent-continuation-msg"
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once_with(
+            "agent-display-msg",
+            request_id=result.request_id,
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            choices=None,
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            group_id=None,
+            group_total=None,
+            group_index=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_projection_failure_returns_none_without_emit(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Agent HITL request creation must fail closed if projection fails."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=False
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is None
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        create_call = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args
+        )
+        request_id = create_call.args[0]["request_id"]
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            request_id,
+            status=HITLStatus.CANCELED.value,
+            error_message="failed_to_project_agent_message",
+        )
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reused_agent_hitl_projection_failure_does_not_cancel_request(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Projection failure for reused HITL must not cancel an existing request."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            existing = dict(request_data)
+            existing["request_id"] = "existing-request"
+            return existing, False
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=False
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is None
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        mock_hitl_db_service.update_hitl_request.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reused_agent_hitl_projects_and_emits_persisted_display_message(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Reused agent HITL must use persisted display identity as source of truth."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            existing = dict(request_data)
+            existing["request_id"] = "existing-request"
+            existing["display_message_id"] = "existing-display-msg"
+            return existing, False
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=True
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="retry-display-msg",
+        )
+
+        assert result is not None
+        assert result.request_id == "existing-request"
+        assert result.display_message_id == "existing-display-msg"
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args[0] == "existing-display-msg"
+        mock_hitl_delivery.emit.assert_awaited_once()
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.request_id == "existing-request"
+        assert event.message_id == "existing-display-msg"
 
 
 # =============================================================================
