@@ -470,9 +470,14 @@ class HITLService:
                     responded_at=utcnow(),
                 )
 
+        follow_up_hitl_created = False
+
         async def _route_current_response() -> None:
+            nonlocal follow_up_hitl_created
             if request.source == "agent":
-                await self._handle_agent_response(request, user_input)
+                follow_up_hitl_created = (
+                    await self._handle_agent_response(request, user_input)
+                ) is True
             elif request.source == "supervisor":
                 if is_group:
                     group_docs = await self.persistence.get_hitl_group_requests(
@@ -663,7 +668,7 @@ class HITLService:
         )
 
         # Persist user's answer on the agent message for DB hydration
-        if request.display_message_id:
+        if request.display_message_id and not follow_up_hitl_created:
             await self.persistence.persist_hitl_user_answer(
                 request.display_message_id,
                 user_input,
@@ -689,7 +694,7 @@ class HITLService:
 
     async def _handle_agent_response(
         self, request: HITLRequest, user_input: str
-    ) -> None:
+    ) -> bool:
         """Send user's reply to the waiting A2A agent.
 
         For push-notification agents the reply is fire-and-forget: the agent
@@ -719,7 +724,7 @@ class HITLService:
         was_blocking = reply_result.get("blocking", False)
         if not was_blocking:
             # Push-notification mode — agent will POST webhook → resume_queue_from_continuation
-            return
+            return False
 
         task_state = reply_result.get("task_state")
 
@@ -757,7 +762,8 @@ class HITLService:
                     task_result_text=response_text,
                     failed=True,
                 )
-            return
+                return False
+            return True
 
         # Use the response text from the synchronous reply (authoritative,
         # no stale-DB risk).
@@ -804,6 +810,7 @@ class HITLService:
                 f"Failed to resume queue for message {request.continuation_message_id} "
                 "— continuation may have been lost or room lock timed out"
             )
+        return False
 
     # ------------------------------------------------------------------
     # Supervisor response routing

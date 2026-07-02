@@ -793,6 +793,76 @@ class TestRequestInput:
         )
 
     @pytest.mark.asyncio
+    async def test_blocking_followup_hitl_does_not_complete_new_pending_display_message(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        old_doc = {
+            "request_id": "hitl-old",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            next_doc = dict(request_data)
+            next_doc["request_id"] = "hitl-next"
+            return next_doc, True
+
+        agent_reply = MagicMock()
+        agent_reply.reply_to_task = AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": "Need employee count",
+            }
+        )
+        continuation = MagicMock()
+        continuation.resume_queue_from_continuation = AsyncMock(return_value=True)
+
+        mock_hitl_db_service.get_hitl_request = AsyncMock(return_value=old_doc)
+        mock_hitl_db_service.claim_hitl_request = AsyncMock(return_value=old_doc)
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        hitl_service._agent_reply = agent_reply
+        hitl_service._continuation = continuation
+
+        result = await hitl_service.handle_response(
+            room_id="room-123",
+            request_id="hitl-old",
+            user_input="5000000",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": "hitl-old"}
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args == ("agent-paused-msg",)
+        assert projection_call.kwargs["request_id"] == "hitl-next"
+        mock_hitl_db_service.persist_hitl_user_answer.assert_not_awaited()
+        mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
+        continuation.resume_queue_from_continuation.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(
         self,
         hitl_service,
