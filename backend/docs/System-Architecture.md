@@ -873,6 +873,32 @@ access, or the full repository-store aggregate. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
 
+### HITL Lifecycle Consistency
+
+HITL is a durable backend lifecycle object, not a transient streaming-only UI
+state. When an agent returns A2A `input-required`, backend execution must create
+or reuse a pending HITL request and project that request onto exactly one display
+agent message before emitting live SSE. The projection sets the agent message
+task state to `input-required` and writes `hitl_request_id`, prompt metadata, A2A
+task/context ids, group metadata, and clears any stale HITL answer. It does not
+copy HITL lifecycle status into agent message metadata; the durable HITL request
+document remains the source of truth for pending, responded, canceled, and
+expired states.
+
+The frontend treats `hitl_request` and `hitl_response` as durable lifecycle
+events keyed by `room_id`, `request_id`, and `message_id`. `client_request_id` is
+included when resolvable, is persisted on the HITL request as best-effort
+metadata, and helps attach processing logs to the current turn, but it is not
+required to apply a HITL request. This differs from streaming task/content events
+such as `processing_status`, `task_update`, and `agent_response_partial`, which
+remain strictly turn-correlated.
+
+Refresh and reconnect recovery must use
+`GET /api/v1/rooms/{room_id}/hitl/pending` and apply the same frontend
+projection as live `hitl_request` SSE. This keeps the UI consistent whether the
+user stays on the page, refreshes after the HITL is created, or reconnects after
+missing an SSE frame.
+
 ## Context Memory Workflow
 
 Room memory is updated and used across turns.
