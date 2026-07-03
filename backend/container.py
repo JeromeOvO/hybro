@@ -32,6 +32,7 @@ from common.protocols import (
     AgentRegistry,
     AgentRegistryWriter,
     AgentRepository,
+    AttachmentMetadataReader,
     ContentStorageRepository,
     ContextAssembler,
     ContextMemoryRuntime,
@@ -513,6 +514,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 mongo=mongo_dal,
                 agent_registry=_agent_deps.agent_registry,
                 membership_source=membership_source,
+                attachment_metadata_reader=file_storage,
             )
             _room_facade = _room_deps.room_registry
             # Runtime store aggregate: callers below receive focused runtime-store parts.
@@ -932,6 +934,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(object_storage)
+            room_runtime.bind_attachment_metadata_reader(file_storage)
+            room_runtime.bind_attachment_content_reader(file_storage)
+            room_runtime.bind_a2a_inline_file_limits(
+                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
+                max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
+            )
             route_room_center.bind_facade(_room_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
@@ -2191,6 +2199,7 @@ def create_room_deps(
     mongo: MongoDAL,
     agent_registry: AgentRegistry,
     membership_source: RoomMembershipSeedSource,
+    attachment_metadata_reader: AttachmentMetadataReader | None = None,
 ) -> RoomDeps:
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
@@ -2201,6 +2210,7 @@ def create_room_deps(
         agent_registry=agent_registry,
         membership_source=membership_source,
         quote_repository=quote_repository,
+        attachment_metadata_reader=attachment_metadata_reader,
         id_factory=lambda: uuid4().hex,
         now=utcnow,
     )

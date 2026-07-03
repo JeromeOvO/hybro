@@ -3,12 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from common.protocols import AttachmentMetadataReader
-from common.types import FileContent, FilePart, Part, TextPart
+from common.protocols import AttachmentContentReader, AttachmentMetadataReader
+from common.types import Part, TextPart
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import RoomAgentMessage, RoomUserMessage, UserAttachment
+from room.a2a_file_parts import (
+    AttachmentDispatchContext,
+    AttachmentPreflightFailure,
+    build_attachment_file_parts,
+)
 
 
 @dataclass
@@ -116,60 +121,38 @@ async def resolve_and_apply_room_attachments(
     return None
 
 
-FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
-FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
-FILE_CAPABLE_MIMES = frozenset(
-    {
-        "application/pdf",
-        "application/octet-stream",
-        "application/zip",
-        "application/x-tar",
-        "application/gzip",
-    }
-)
-
-
 async def build_message_parts(
     *,
     text: str,
     attachments: list[UserAttachment] | None,
     agent_card: Any,
-    object_storage,
-) -> list[Part]:
+    content_reader: AttachmentContentReader | None,
+    max_raw_bytes: int,
+    max_encoded_bytes: int,
+    context: AttachmentDispatchContext | None = None,
+) -> list[Part] | AttachmentPreflightFailure:
     parts = [Part(root=TextPart(text=text))]
     if not attachments:
         return parts
 
-    agent_input_modes_raw = getattr(agent_card, "default_input_modes", None)
-    if agent_input_modes_raw is None:
-        agent_input_modes_raw = getattr(agent_card, "defaultInputModes", None)
-    agent_input_modes = set(agent_input_modes_raw or ["text"])
-
-    supports_files = bool(
-        agent_input_modes & FILE_CAPABLE_EXACT
-        or agent_input_modes & FILE_CAPABLE_MIMES
-        or any(
-            any(mode.startswith(prefix) for prefix in FILE_CAPABLE_PREFIXES)
-            for mode in agent_input_modes
+    if content_reader is None:
+        return AttachmentPreflightFailure(
+            code="storage_unavailable",
+            message="Attachment content resolution unavailable.",
+            file_names=tuple(attachment.file_name for attachment in attachments),
         )
-    )
 
-    if supports_files:
-        for attachment in attachments:
-            presigned_url = await object_storage.generate_presigned_url(
-                attachment.s3_key
-            )
-            parts.append(
-                Part(
-                    root=FilePart(
-                        file=FileContent(
-                            uri=presigned_url,
-                            mimeType=attachment.mime_type,
-                            name=attachment.file_name,
-                        )
-                    )
-                )
-            )
+    result = await build_attachment_file_parts(
+        attachments=attachments,
+        agent_card=agent_card,
+        content_reader=content_reader,
+        max_raw_bytes=max_raw_bytes,
+        max_encoded_bytes=max_encoded_bytes,
+        context=context,
+    )
+    if result.failure is not None:
+        return result.failure
+    parts.extend(result.parts)
     return parts
 
 
@@ -207,10 +190,14 @@ async def refresh_artifact_presigned_urls(  # noqa: C901
     if not key_refs:
         return
 
-    url_map = await object_storage.batch_presigned_urls(
-        list({key for _, key in key_refs}),
-        filenames=key_filenames,
-    )
+    url_map: dict[str, str] = {}
+    for _, s3_key in key_refs:
+        if s3_key in url_map:
+            continue
+        url_map[s3_key] = await object_storage.get_presigned_url(
+            s3_key,
+            filename=key_filenames.get(s3_key),
+        )
     for file_content, s3_key in key_refs:
         new_url = url_map.get(s3_key)
         if new_url:

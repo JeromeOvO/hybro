@@ -32,6 +32,7 @@ from common.utils.context_utils import (
     build_minimal_context,
     migrate_legacy_memory,
 )
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from context_memory.projection import _human_size, build_turn_content
@@ -68,6 +69,7 @@ from models.room import (
     UserAttachment,
 )
 from models.room_services_models import ParseResult
+from room.a2a_file_parts import AttachmentDispatchContext, AttachmentPreflightFailure
 from room.attachments import (
     ResolvedAttachments as _ResolvedAttachments,
 )
@@ -146,6 +148,9 @@ class RoomServices:
         self._context_memory_runtime: ContextMemoryRuntime | None = None
         self._message_event_publisher = None
         self._attachment_metadata_reader = None
+        self._attachment_content_reader = None
+        self._a2a_inline_file_max_raw_bytes = 5 * 1024 * 1024
+        self._a2a_inline_message_max_encoded_bytes = 6_990_508
         self._attachment_cleanup = None
         self._quote_writer = None
 
@@ -213,6 +218,18 @@ class RoomServices:
 
     def bind_attachment_metadata_reader(self, reader) -> None:
         self._attachment_metadata_reader = reader
+
+    def bind_attachment_content_reader(self, reader) -> None:
+        self._attachment_content_reader = reader
+
+    def bind_a2a_inline_file_limits(
+        self,
+        *,
+        max_raw_bytes: int,
+        max_encoded_bytes: int,
+    ) -> None:
+        self._a2a_inline_file_max_raw_bytes = max_raw_bytes
+        self._a2a_inline_message_max_encoded_bytes = max_encoded_bytes
 
     def bind_attachment_cleanup(self, cleanup) -> None:
         self._attachment_cleanup = cleanup
@@ -999,12 +1016,22 @@ class RoomServices:
         text: str,
         attachments: list[UserAttachment] | None,
         agent_card,
-    ) -> list[Part]:
+        context: AttachmentDispatchContext | None = None,
+    ) -> list[Part] | AttachmentPreflightFailure:
         return await platform_build_message_parts(
             text=text,
             attachments=attachments,
             agent_card=agent_card,
-            object_storage=self.object_storage,
+            content_reader=getattr(self, "_attachment_content_reader", None),
+            max_raw_bytes=getattr(
+                self, "_a2a_inline_file_max_raw_bytes", 5 * 1024 * 1024
+            ),
+            max_encoded_bytes=getattr(
+                self,
+                "_a2a_inline_message_max_encoded_bytes",
+                6_990_508,
+            ),
+            context=context,
         )
 
     # room user message management
@@ -3147,46 +3174,93 @@ class RoomServices:
             # Log but continue with original message if context building fails
             logger.warning(f"Failed to build context for agent message: {e}")
 
-        # Append file parts from user attachments if the agent supports them
-        try:
-            # Trace back through agent message chain to find the originating user message.
-            # In chained mention flows, later agents have related_message_id pointing to
-            # a previous agent message, not the user message directly.
-            # Use a visited set for cycle detection instead of a fixed hop cap so
-            # arbitrarily long chains still resolve correctly.
-            user_msg = None
-            trace_id = message.related_message_id
-            visited: set[str] = set()
-            while trace_id and trace_id not in visited:
-                visited.add(trace_id)
-                message_info = None
-                if self._facade is not None:
-                    message_info = await self._facade.get_message(trace_id)
-                if message_info is not None and message_info.message_type == "user":
-                    user_msg = message_info
-                    break
-                trace_id = (
-                    message_info.parent_message_id if message_info else None
-                )
+        # Append file parts from user attachments after explicit preflight checks.
+        # Trace back through agent message chain to find the originating user message.
+        # In chained mention flows, later agents have related_message_id pointing to
+        # a previous agent message, not the user message directly.
+        # Use a visited set for cycle detection instead of a fixed hop cap so
+        # arbitrarily long chains still resolve correctly.
+        user_msg = None
+        trace_id = message.related_message_id
+        visited: set[str] = set()
+        while trace_id and trace_id not in visited:
+            visited.add(trace_id)
+            message_info = None
+            if self._facade is not None:
+                message_info = await self._facade.get_message(trace_id)
+            if message_info is not None and message_info.message_type == "user":
+                user_msg = message_info
+                break
+            trace_id = message_info.parent_message_id if message_info else None
 
-            user_attachments = []
-            if user_msg and isinstance(user_msg.content, dict):
-                for attachment in (user_msg.content.get("attachments") or []):
-                    if not isinstance(attachment, dict | UserAttachment):
-                        continue
-                    user_attachments.append(UserAttachment.model_validate(attachment))
-            if user_attachments:
+        user_attachments = []
+        if user_msg and isinstance(user_msg.content, dict):
+            for attachment in (user_msg.content.get("attachments") or []):
+                if not isinstance(attachment, dict | UserAttachment):
+                    continue
+                user_attachments.append(UserAttachment.model_validate(attachment))
+        if user_attachments:
+            agent_card_obj = getattr(agent, "agent_card", None)
+            if agent_card_obj is None:
                 agent_obj = await self._store.get_agent_by_agent_id(agent_id)
                 agent_card_obj = agent_obj.agent_card if agent_obj else None
-                if agent_card_obj:
-                    file_parts = await self._build_message_parts(
-                        "", user_attachments, agent_card_obj
-                    )
-                    for p in file_parts:
-                        if not isinstance(p.root, TextPart):
-                            agent_message.parts.append(p)
-        except Exception as e:
-            logger.warning("Failed to append attachment parts to agent message: %s", e)
+            if agent_card_obj is None:
+                failure = AttachmentPreflightFailure(
+                    code="agent_card_unavailable",
+                    message="Agent card unavailable for attachment preflight.",
+                    file_names=tuple(
+                        attachment.file_name for attachment in user_attachments
+                    ),
+                )
+                if message.extend_info is None or not isinstance(
+                    message.extend_info, dict
+                ):
+                    message.extend_info = {}
+                message.extend_info["attachment_preflight_failure"] = {
+                    "code": failure.code,
+                    "message": failure.message,
+                    "file_names": list(failure.file_names),
+                }
+                return RoomCenterAgentMessageResponse(
+                    message_id=message.message_id,
+                    message=message,
+                    a2a_message=None,
+                    success=False,
+                    error=failure.message,
+                    status_code=422,
+                )
+
+            file_parts = await self._build_message_parts(
+                "",
+                user_attachments,
+                agent_card_obj,
+                context=AttachmentDispatchContext(
+                    room_id=message.room_id,
+                    message_id=message.message_id,
+                    agent_id=agent_id,
+                ),
+            )
+            if isinstance(file_parts, AttachmentPreflightFailure):
+                if message.extend_info is None or not isinstance(
+                    message.extend_info, dict
+                ):
+                    message.extend_info = {}
+                message.extend_info["attachment_preflight_failure"] = {
+                    "code": file_parts.code,
+                    "message": file_parts.message,
+                    "file_names": list(file_parts.file_names),
+                }
+                return RoomCenterAgentMessageResponse(
+                    message_id=message.message_id,
+                    message=message,
+                    a2a_message=None,
+                    success=False,
+                    error=file_parts.message,
+                    status_code=422,
+                )
+            for p in file_parts:
+                if not isinstance(p.root, TextPart):
+                    agent_message.parts.append(p)
 
         # Return the prepared message without sending
         # RoomMessageCenter will handle the actual sending with streaming support
@@ -3259,7 +3333,18 @@ class RoomServices:
 
         if s3_keys:
             try:
-                url_map = await self.object_storage.batch_presigned_urls(s3_keys)
+                url_map = {}
+                for msg in messages:
+                    if msg.message_content and msg.message_content.attachments:
+                        for att in msg.message_content.attachments:
+                            if att.s3_key in url_map:
+                                continue
+                            url_map[att.s3_key] = (
+                                await self.object_storage.get_presigned_url(
+                                    att.s3_key,
+                                    filename=att.file_name,
+                                )
+                            )
                 for msg in messages:
                     if msg.message_content and msg.message_content.attachments:
                         for att in msg.message_content.attachments:
@@ -3411,70 +3496,7 @@ class RoomServices:
             # Process agent messages
             if agent_messages_response.success and agent_messages_response.message_list:
                 for agent_msg in agent_messages_response.message_list:
-                    # Extract content from task - try history first, then artifacts
-                    agent_content = ""
-                    task = (
-                        agent_msg.message_content.message_task
-                        if agent_msg.message_content
-                        else None
-                    )
-
-                    if task:
-                        # First, try artifacts — these represent the final
-                        # agent output and take priority over history which
-                        # may contain intermediate status messages.
-                        if task.artifacts:
-                            text_parts = []
-                            for artifact in task.artifacts:
-                                if not artifact.parts:
-                                    continue
-                                for part in artifact.parts:
-                                    # Handle different part type structures
-                                    text = None
-                                    if hasattr(part, "text") and part.text:
-                                        text = part.text
-                                    elif hasattr(part, "root"):
-                                        # Discriminated union wrapper
-                                        root = part.root
-                                        if hasattr(root, "text") and root.text:
-                                            text = root.text
-                                    if text:
-                                        text_parts.append(text)
-                            agent_content = "".join(text_parts) if text_parts else ""
-
-                        # Fallback to task.history (streaming agents that
-                        # accumulate content in history rather than artifacts)
-                        if not agent_content and task.history:
-                            # Find the latest message with role "agent"
-                            agent_messages = [
-                                msg for msg in task.history if msg.role == Role.AGENT
-                            ]
-
-                            if agent_messages:
-                                # Get the latest agent message
-                                latest_agent_message = agent_messages[-1]
-
-                                # Extract text parts from ALL message parts
-                                text_parts = []
-                                if (
-                                    hasattr(latest_agent_message, "parts")
-                                    and latest_agent_message.parts
-                                ):
-                                    for part in latest_agent_message.parts:
-                                        if hasattr(part, "root") and hasattr(
-                                            part.root, "text"
-                                        ):
-                                            text_parts.append(part.root.text)
-
-                                # Combine all text parts
-                                agent_content = (
-                                    "".join(text_parts) if text_parts else ""
-                                )
-
-                    # Fallback to existing message_text if task extraction yielded nothing
-                    # This preserves content that was stored directly (e.g., from webhook handler)
-                    if not agent_content and agent_msg.message_content:
-                        agent_content = agent_msg.message_content.message_text or ""
+                    agent_content = extract_agent_text_from_room_message(agent_msg) or ""
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
