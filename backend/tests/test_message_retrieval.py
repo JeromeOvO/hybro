@@ -1,8 +1,19 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.request import RoomCenterUserMessageRequest
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
+from models.request import RoomCenterRoomMessageRequest, RoomCenterUserMessageRequest
 from models.room import (
     MessageContent,
     RoomAgentMessage,
@@ -38,9 +49,8 @@ class TestMessageRetrieval:
         facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
         room_runtime.bind_facade(facade)
 
-        mock_s3 = MagicMock()
-        mock_s3.batch_presigned_urls = AsyncMock(
-            return_value={"uploads/r/f1/photo.png": "https://presigned"}
+        mock_s3 = SimpleNamespace(
+            get_presigned_url=AsyncMock(return_value="https://presigned")
         )
         room_runtime.bind_s3_service(mock_s3)
         result = await room_runtime.inquiry_user_messages_by_room_id(
@@ -49,6 +59,10 @@ class TestMessageRetrieval:
 
         assert result.success
         assert result.message_list[0].message_content.attachments[0].file_url == "https://presigned"
+        mock_s3.get_presigned_url.assert_awaited_once_with(
+            "uploads/r/f1/photo.png",
+            filename="photo.png",
+        )
 
     async def test_no_attachments_no_s3_call(self, room_runtime):
         msg = RoomUserMessage(
@@ -66,12 +80,59 @@ class TestMessageRetrieval:
         assert result.success
 
 
+class TestRoomMessageRetrieval:
+    async def test_agent_artifact_only_output_is_returned_as_message_text(
+        self,
+        room_runtime,
+    ):
+        task = Task(
+            id="task-1",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[
+                Artifact(
+                    artifact_id="artifact-1",
+                    parts=[Part(root=TextPart(text="final artifact answer"))],
+                )
+            ],
+            history=[
+                Message(
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text="intermediate status"))],
+                )
+            ],
+        )
+        agent_msg = RoomAgentMessage(
+            room_id="room1",
+            message_id="agent-msg1",
+            agent_id="agent1",
+            message_content=MessageContent(message_task=task),
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[])
+        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        room_runtime.bind_facade(facade)
+        room_runtime.bind_s3_service(
+            SimpleNamespace(get_presigned_url=AsyncMock())
+        )
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1")
+        )
+
+        assert result.success
+        assert len(result.message_list) == 1
+        assert (
+            result.message_list[0].message_content.message_text
+            == "final artifact answer"
+        )
+
+
 class TestRefreshArtifactPresignedUrls:
     """Test that _refresh_artifact_presigned_urls passes filenames through."""
 
-    async def test_filenames_passed_to_batch_presigned_urls(self, room_runtime):
+    async def test_filenames_passed_to_get_presigned_url(self, room_runtime):
         """When artifact file parts have a name, it should be passed to
-        batch_presigned_urls so the Content-Disposition header is set."""
+        get_presigned_url so the Content-Disposition header is set."""
         from a2a.types import (
             Artifact,
             FilePart,
@@ -114,18 +175,16 @@ class TestRefreshArtifactPresignedUrls:
             ),
         )
 
-        mock_s3 = MagicMock()
-        mock_s3.batch_presigned_urls = AsyncMock(
-            return_value={"artifacts/room1/msg1/inline-0.xlsx": "https://new-presigned"}
+        mock_s3 = SimpleNamespace(
+            get_presigned_url=AsyncMock(return_value="https://new-presigned")
         )
         room_runtime.bind_s3_service(mock_s3)
         await room_runtime._refresh_artifact_presigned_urls([msg])
 
-        mock_s3.batch_presigned_urls.assert_called_once()
-        call_kwargs = mock_s3.batch_presigned_urls.call_args
-        assert call_kwargs.kwargs["filenames"] == {
-            "artifacts/room1/msg1/inline-0.xlsx": "report.xlsx"
-        }
+        mock_s3.get_presigned_url.assert_awaited_once_with(
+            "artifacts/room1/msg1/inline-0.xlsx",
+            filename="report.xlsx",
+        )
 
         # URI should be updated
         refreshed_uri = msg.message_content.message_task.artifacts[0].parts[0].root.file.uri
@@ -174,12 +233,13 @@ class TestRefreshArtifactPresignedUrls:
             ),
         )
 
-        mock_s3 = MagicMock()
-        mock_s3.batch_presigned_urls = AsyncMock(
-            return_value={"artifacts/room1/msg1/inline-0.png": "https://new-presigned"}
+        mock_s3 = SimpleNamespace(
+            get_presigned_url=AsyncMock(return_value="https://new-presigned")
         )
         room_runtime.bind_s3_service(mock_s3)
         await room_runtime._refresh_artifact_presigned_urls([msg])
 
-        call_kwargs = mock_s3.batch_presigned_urls.call_args
-        assert call_kwargs.kwargs["filenames"] == {}
+        mock_s3.get_presigned_url.assert_awaited_once_with(
+            "artifacts/room1/msg1/inline-0.png",
+            filename=None,
+        )
