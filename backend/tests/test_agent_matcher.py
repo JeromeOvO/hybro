@@ -163,6 +163,16 @@ def test_capability_score_attachments_wildcard_capable():
     assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
 
 
+def test_capability_score_rejects_pdf_for_image_only_agent():
+    agent = create_test_agent("a1", "ImageOnly", input_modes=["image/*"])
+    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 0.0
+
+
+def test_capability_score_accepts_pdf_for_pdf_agent():
+    agent = create_test_agent("a1", "PDFAgent", input_modes=["application/pdf"])
+    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+
+
 # ---- ScoreRanker Tests ----
 
 

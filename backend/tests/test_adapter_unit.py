@@ -361,6 +361,36 @@ async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
     assert artifact.parts[0].root.file.mime_type == "image/png"
 
 
+def test_to_sdk_message_preserves_inline_file_bytes():
+    from a2a_adapter.message_factory import to_sdk_message
+    from common.types import FileContent, FilePart, Message, MessageRole, Part
+
+    internal_message = Message(
+        role=MessageRole.USER,
+        message_id="msg-inline-file",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="cGRmZGF0YQ==",
+                        mimeType="application/pdf",
+                        name="report.pdf",
+                    )
+                )
+            )
+        ],
+    )
+
+    sdk_message = to_sdk_message(internal_message)
+    dumped = sdk_message.model_dump(mode="json", by_alias=True)
+    file_data = dumped["parts"][0]["file"]
+
+    assert file_data["bytes"] == "cGRmZGF0YQ=="
+    assert file_data["mimeType"] == "application/pdf"
+    assert file_data["name"] == "report.pdf"
+    assert file_data.get("uri") is None
+
+
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
     from a2a_adapter.translators import a2a_task_to_result
 
