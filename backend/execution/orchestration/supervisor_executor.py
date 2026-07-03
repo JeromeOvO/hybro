@@ -1631,6 +1631,38 @@ class SupervisorExecutor:
                     )
 
                 is_success = result.status == ProcessingStatus.SUCCESS
+                error_text = None if is_success else (
+                    result.response_text or "Agent processing failed"
+                )
+                preflight_failure = (
+                    message.extend_info.get("attachment_preflight_failure")
+                    if isinstance(message.extend_info, dict)
+                    else None
+                )
+                error_code = None if preflight_failure is None else (
+                    str(preflight_failure.get("code"))
+                    if isinstance(preflight_failure, dict)
+                    and preflight_failure.get("code")
+                    else result.status_message
+                )
+                if not is_success and preflight_failure is not None:
+                    await self.tsm.fail_pre_dispatch_task(
+                        message,
+                        error=error_text,
+                        error_code=error_code,
+                    )
+                    await self.delivery.send_task_update(
+                        room_id=room_id,
+                        message_id=message.message_id,
+                        status="failed",
+                        error=error_text,
+                        agent_name=target.agent_name,
+                        agent_id=target.agent_id,
+                        step_number=step_number,
+                        total_steps=None,
+                        task_content=target.task,
+                        client_request_id=message.client_request_id,
+                    )
                 step_result = StepResult(
                     step_number=step_number,
                     agent_id=target.agent_id,
@@ -1639,9 +1671,7 @@ class SupervisorExecutor:
                     response_text=result.response_text,
                     success=is_success,
                     status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
-                    error_message=(
-                        "Agent processing failed" if not is_success else None
-                    ),
+                    error_message=error_text,
                     agent_message_id=message.message_id,
                 )
 

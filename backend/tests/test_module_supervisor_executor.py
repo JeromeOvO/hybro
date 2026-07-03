@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from execution.orchestration.supervisor_executor import SupervisorExecutor
+from models.processing import ProcessingResult, ProcessingStatus
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -49,6 +50,127 @@ def _make_supervisor_executor():
     se.rate_limit_service = MagicMock()
     se.hitl_coordinator = MagicMock()
     return se
+
+
+def _make_dispatch_target() -> DelegateTarget:
+    return DelegateTarget(
+        agent_id="agent-1",
+        agent_name="Test Agent",
+        task="Read the attachment.",
+    )
+
+
+def _make_agent_profile() -> AgentProfile:
+    return AgentProfile(agent_id="agent-1", agent_name="Test Agent")
+
+
+def _make_resolved_agent():
+    return SimpleNamespace(
+        agent_id="agent-1",
+        rate_limit_per_user_per_hour=100,
+        rate_limit_system_per_hour=1000,
+    )
+
+
+def _make_supervisor_agent_message(*, preflight: bool):
+    extend_info = None
+    if preflight:
+        extend_info = {
+            "attachment_preflight_failure": {
+                "code": "file_too_large",
+                "message": "Attached file report.pdf exceeds the inline A2A limit.",
+            }
+        }
+    return SimpleNamespace(
+        message_id="amsg-1",
+        turn_id=None,
+        client_request_id="client-req-1",
+        extend_info=extend_info,
+    )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=True)
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock()
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.FAILED,
+            response_text="Attached file report.pdf exceeds the inline A2A limit.",
+            status_message="file_too_large",
+        )
+    )
+    se.tsm.fail_pre_dispatch_task = AsyncMock()
+    se.delivery.send_task_update = AsyncMock()
+
+    results = await se._dispatch_targets(
+        [_make_dispatch_target()],
+        [_make_agent_profile()],
+        "room-1",
+        "umsg-1",
+        1,
+        None,
+        None,
+        None,
+    )
+
+    assert results[0].status == StepStatus.FAILED
+    assert results[0].error_message == (
+        "Attached file report.pdf exceeds the inline A2A limit."
+    )
+    se.tsm.fail_pre_dispatch_task.assert_awaited_once_with(
+        message,
+        error="Attached file report.pdf exceeds the inline A2A limit.",
+        error_code="file_too_large",
+    )
+    se.delivery.send_task_update.assert_awaited_once()
+    assert se.delivery.send_task_update.await_args.kwargs["status"] == "failed"
+    assert se.delivery.send_task_update.await_args.kwargs["error"] == (
+        "Attached file report.pdf exceeds the inline A2A limit."
+    )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_generic_failed_result_does_not_create_preflight_task():
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock()
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.FAILED,
+            response_text="Agent processing failed downstream.",
+            status_message=None,
+        )
+    )
+    se.tsm.fail_pre_dispatch_task = AsyncMock()
+    se.delivery.send_task_update = AsyncMock()
+
+    results = await se._dispatch_targets(
+        [_make_dispatch_target()],
+        [_make_agent_profile()],
+        "room-1",
+        "umsg-1",
+        1,
+        None,
+        None,
+        None,
+    )
+
+    assert results[0].status == StepStatus.FAILED
+    assert results[0].error_message == "Agent processing failed downstream."
+    se.tsm.fail_pre_dispatch_task.assert_not_awaited()
+    se.delivery.send_task_update.assert_not_awaited()
 
 
 def test_dispatch_targets_cancelled_error_handler_reraises():
