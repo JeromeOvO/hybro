@@ -55,10 +55,19 @@ def agent_accepts_required_input_modes(
 ) -> bool:
     if required_input_modes is None:
         return True
+    if not required_input_modes:
+        return agent_supports_any_file(agent_card)
     modes = agent_input_modes(agent_card)
     return all(
         mime_type_is_accepted(mime_type, modes) for mime_type in required_input_modes
     )
+
+
+def _mode_is_mime_like_file_capability(mode: str) -> bool:
+    if "/" not in mode or "://" in mode:
+        return False
+    top_level, subtype = mode.split("/", 1)
+    return bool(top_level and (subtype or mode.endswith("/")))
 
 
 def agent_supports_any_file(agent_card: Any) -> bool:
@@ -69,5 +78,6 @@ def agent_supports_any_file(agent_card: Any) -> bool:
         return True
     return any(
         any(mode.startswith(prefix) for prefix in FILE_CAPABLE_PREFIXES)
+        or _mode_is_mime_like_file_capability(mode)
         for mode in modes
     )

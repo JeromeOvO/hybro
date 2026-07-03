@@ -124,6 +124,15 @@ def test_agent_supports_files_zip():
     assert _agent_supports_files(agent) is True
 
 
+@pytest.mark.parametrize(
+    "input_mode",
+    ["application/json", "text/csv", "application/*", "application/"],
+)
+def test_agent_supports_files_generic_mime_modes(input_mode):
+    agent = create_test_agent("a1", "GenericFileAgent", input_modes=[input_mode])
+    assert _agent_supports_files(agent) is True
+
+
 def test_agent_no_file_support():
     """Test agent without file support."""
     agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
@@ -161,6 +170,19 @@ def test_capability_score_attachments_wildcard_capable():
     """Attachments + wildcard agent → 1.0."""
     agent = create_test_agent("a1", "WildcardAgent", input_modes=["*/*"])
     assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+
+
+def test_capability_score_empty_required_modes_requires_file_support():
+    text_agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
+    file_agent = create_test_agent("a2", "JsonAgent", input_modes=["application/json"])
+
+    assert compute_capability_score(text_agent, required_input_modes=[]) == 0.0
+    assert compute_capability_score(file_agent, required_input_modes=[]) == 1.0
+
+
+def test_capability_score_accepts_generic_mime_agent():
+    agent = create_test_agent("a1", "JsonAgent", input_modes=["application/json"])
+    assert compute_capability_score(agent, required_input_modes=["application/json"]) == 1.0
 
 
 def test_capability_score_rejects_pdf_for_image_only_agent():

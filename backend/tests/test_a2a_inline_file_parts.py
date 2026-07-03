@@ -1,5 +1,6 @@
 import base64
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,6 +47,20 @@ def test_mime_type_is_accepted_cases():
     assert mime_type_is_accepted("image/png", ["image/*"]) is True
     assert mime_type_is_accepted("image/png", ["image/"]) is True
     assert mime_type_is_accepted("application/pdf", ["text"]) is False
+
+
+def test_file_mode_helpers_normalize_object_cards():
+    from common.utils.a2a_file_modes import (
+        agent_accepts_required_input_modes,
+        agent_input_modes,
+        agent_supports_any_file,
+    )
+
+    card = SimpleNamespace(default_input_modes=[" Application/JSON ", " TEXT "])
+
+    assert agent_input_modes(card) == {"application/json", "text"}
+    assert agent_supports_any_file(card) is True
+    assert agent_accepts_required_input_modes(card, [" APPLICATION/JSON "]) is True
 
 
 @pytest.mark.parametrize(
@@ -178,6 +193,28 @@ async def test_build_attachment_file_parts_rejects_declared_aggregate_encoded_ov
     assert result.failure.code == "message_too_large"
     assert "aggregate" in result.failure.message.lower()
     assert reader.calls == []
+
+
+@pytest.mark.asyncio
+async def test_build_attachment_file_parts_rejects_actual_aggregate_encoded_oversize():
+    from room.a2a_file_parts import build_attachment_file_parts
+
+    reader = BytesReader({"uploads/room/file/report.pdf": b"pdfdata"})
+
+    result = await build_attachment_file_parts(
+        attachments=[_attachment(size_bytes=1)],
+        agent_card={"default_input_modes": ["application/pdf"]},
+        content_reader=reader,
+        max_raw_bytes=1024,
+        max_encoded_bytes=7,
+    )
+
+    assert result.parts == []
+    assert result.failure is not None
+    assert result.failure.code == "message_too_large"
+    assert "aggregate" in result.failure.message.lower()
+    assert result.failure.file_names == ("report.pdf",)
+    assert reader.calls == [("uploads/room/file/report.pdf", 1024)]
 
 
 @pytest.mark.asyncio

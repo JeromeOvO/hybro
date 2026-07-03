@@ -299,6 +299,7 @@ async def build_attachment_file_parts(
         )
 
     parts: list[Part] = []
+    actual_aggregate_encoded_size = 0
     for file in files:
         part = await build_inline_file_part(
             file,
@@ -308,5 +309,15 @@ async def build_attachment_file_parts(
         )
         if isinstance(part, AttachmentPreflightFailure):
             return AttachmentFilePartsResult(parts=[], failure=part)
+        actual_aggregate_encoded_size += len(part.root.file.bytes or "")
+        if actual_aggregate_encoded_size > max_encoded_bytes:
+            return _failure(
+                "message_too_large",
+                (
+                    "Uploaded files exceed the aggregate encoded message size limit "
+                    f"({actual_aggregate_encoded_size} > {max_encoded_bytes})."
+                ),
+                file_names=tuple(file.name for file in files),
+            )
         parts.append(part)
     return AttachmentFilePartsResult(parts=parts)
