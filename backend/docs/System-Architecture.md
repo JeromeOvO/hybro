@@ -206,6 +206,20 @@ runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
 property because it is server-injected runtime metadata, not user application
 configuration.
 
+#### A2A Inline File Dispatch Policy
+
+Under the active attachment policy, user-uploaded files sent to agents are
+dispatched as A2A `FileContent.bytes`. Presigned/platform storage URIs remain
+internal to Hybro for storage, retrieval, and artifact refresh behavior; they
+are not sent to agents for user-upload dispatch.
+
+`A2A_INLINE_FILE_MAX_RAW_BYTES` limits one raw file before base64 encoding.
+`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in
+one outbound A2A message. Attachment preflight failures create failed agent
+tasks before transport dispatch in both queue and supervisor execution paths,
+so validation failures are persisted and surfaced without attempting direct or
+relay transport.
+
 ### `llm_gateway`
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
