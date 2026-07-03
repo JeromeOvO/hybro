@@ -107,6 +107,40 @@ describe('upsert HITL fields', () => {
       expect(result).not.toBeNull()
       expect(result!.entities['msg-1'].hitlChoices).toEqual(['X', 'Y', 'Z'])
     })
+
+    it('clears stale HITL group fields when incoming projection is ungrouped', () => {
+      const existing = makeEntity({
+        hitlRequestId: 'req-old',
+        hitlPrompt: 'Old grouped prompt',
+        hitlPromptType: 'choice',
+        hitlChoices: ['A', 'B'],
+        hitlGroupId: 'old-group',
+        hitlGroupTotal: 2,
+        hitlGroupIndex: 1,
+      })
+      const incoming = makeIncoming({
+        hitlRequestId: 'req-new',
+        hitlPrompt: 'New single prompt',
+        hitlPromptType: 'text',
+        hitlChoices: null,
+        hitlGroupId: null,
+        hitlGroupTotal: null,
+        hitlGroupIndex: null,
+        taskStatus: 'input-required',
+      })
+
+      const result = applyUpsert({ 'msg-1': existing }, ['msg-1'], incoming, 'sse')
+
+      expect(result).not.toBeNull()
+      const entity = result!.entities['msg-1']
+      expect(entity.hitlRequestId).toBe('req-new')
+      expect(entity.hitlPrompt).toBe('New single prompt')
+      expect(entity.hitlPromptType).toBe('text')
+      expect(entity.hitlChoices).toBeNull()
+      expect(entity.hitlGroupId).toBeNull()
+      expect(entity.hitlGroupTotal).toBeNull()
+      expect(entity.hitlGroupIndex).toBeNull()
+    })
   })
 
   describe('isNoOpUpdate — HITL-aware', () => {

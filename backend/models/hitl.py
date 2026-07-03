@@ -95,6 +95,7 @@ class HITLRequest(BaseModel):
     # instead of continuation_message_id.  This prevents supervisor CLARIFY
     # HITL prompts from overwriting the user's own chat message entity.
     display_message_id: str | None = None
+    client_request_id: str | None = None
 
     # The question
     prompt: str

@@ -13,8 +13,6 @@ export const TURN_CORRELATED_EVENT_TYPES = new Set<RoomSSEType>([
   'artifact_update',
   'agent_response',
   'agent_response_partial',
-  'hitl_request',
-  'hitl_response',
 ])
 
 /** Events buffered until the send response resolves client_request_id to the user message id. */
@@ -25,8 +23,6 @@ export const CORRELATION_BUFFER_EVENT_TYPES = new Set<RoomSSEType>([
   'artifact_update',
   'agent_response',
   'agent_response_partial',
-  'hitl_request',
-  'hitl_response',
 ])
 
 export interface CorrelationResult {

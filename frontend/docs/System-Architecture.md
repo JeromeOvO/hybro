@@ -389,6 +389,14 @@ Legacy `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_up
 
 `createSSEDispatcher` resolves correlation before dispatch. Turn-correlated events must include a non-empty `client_request_id`; events without it are dropped defensively. Events that can arrive before the HTTP send response resolves the optimistic user message are buffered by `client_request_id`, then flushed once `useSendMessage` maps the request id to the server message id.
 
+`hitl_request` and `hitl_response` are durable HITL lifecycle events rather than
+strict turn-correlated streaming events. They may include `client_request_id`
+when the backend can resolve it, but the UI must still apply them by `room_id`,
+`request_id`, and `message_id` when it is absent or stale. Live HITL SSE and
+`GET /api/v1/rooms/{room_id}/hitl/pending` hydration share the same message
+projection path so a pending HITL appears whether the user stays on the page,
+reconnects, or refreshes.
+
 `processing_status` requires `message_id`, non-empty `client_request_id`, a known status, and `details` as either an object or `null`. Active statuses such as `queued`, `processing`, and `awaiting_input` keep the user turn active; terminal statuses mark the correlated user turn and clear the send guard only when they target the user message rather than a per-agent task. HITL resume can introduce a new backend `client_request_id`; in that case, a terminal frame with an agent-task `message_id` is accepted only when `related_message_id` points at the resolved user turn and the new request id differs from the user message's original request id.
 
 **Multi-agent turn completion fallback:** Per-agent terminal SSE alone does not complete a multi-agent turn. The backend emits a `turn_completion_kind` field (`"synthesis"` or `"deterministic"`) as part of the COMPLETED `processing_status` SSE `details` and persists it on the user message `extend_info` before emitting the event. The frontend stores this as `turnCompletionKind` on the user `MessageEntity`.

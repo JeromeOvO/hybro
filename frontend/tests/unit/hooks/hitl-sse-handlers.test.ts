@@ -190,6 +190,65 @@ describe('useRoomWebhook HITL SSE handling', () => {
       expect(entity.hitlChoices).toEqual(['Option A', 'Option B'])
     })
 
+    it('applies durable hitl_request events without client_request_id', async () => {
+      await mountHook()
+      expect(capturedOnMessage).toBeDefined()
+
+      await act(async () => {
+        await capturedOnMessage!({
+          type: 'hitl_request',
+          room_id: 'room-1',
+          timestamp: new Date().toISOString(),
+          data: {
+            request_id: 'req-no-client-id',
+            message_id: 'agent-msg-no-client-id',
+            prompt: 'Please provide more information',
+            prompt_type: 'text',
+            source: 'agent',
+            agent_id: 'agent-1',
+            agent_name: 'Broker',
+            related_message_id: 'user-msg-1',
+          },
+        } as AnySSEFrame)
+      })
+
+      const entity = useMessageStore.getState().entities['agent-msg-no-client-id']
+      expect(entity).toBeDefined()
+      expect(entity?.hitlRequestId).toBe('req-no-client-id')
+      expect(entity?.clientRequestId).toBeUndefined()
+      expect(entity?.taskStatus).toBe('input-required')
+    })
+
+    it('applies durable hitl_request events even when client_request_id is no longer locally resolved', async () => {
+      await mountHook()
+      expect(capturedOnMessage).toBeDefined()
+
+      await act(async () => {
+        await capturedOnMessage!({
+          type: 'hitl_request',
+          room_id: 'room-1',
+          timestamp: new Date().toISOString(),
+          data: {
+            request_id: 'req-stale-client-id',
+            message_id: 'agent-msg-stale-client-id',
+            client_request_id: 'cr-already-cleared',
+            prompt: 'Please provide more information',
+            prompt_type: 'text',
+            source: 'agent',
+            agent_id: 'agent-1',
+            agent_name: 'Broker',
+            related_message_id: 'user-msg-1',
+          },
+        } as AnySSEFrame)
+      })
+
+      const entity = useMessageStore.getState().entities['agent-msg-stale-client-id']
+      expect(entity).toBeDefined()
+      expect(entity?.hitlRequestId).toBe('req-stale-client-id')
+      expect(entity?.clientRequestId).toBe('cr-already-cleared')
+      expect(entity?.taskStatus).toBe('input-required')
+    })
+
     it('ignores hitl_request without request_id', async () => {
       await mountHook()
       const countBefore = useMessageStore.getState().orderedIds.length
@@ -303,6 +362,44 @@ describe('useRoomWebhook HITL SSE handling', () => {
       // No crash, no new entities
       const store = useMessageStore.getState()
       expect(Object.keys(store.entities).length).toBe(0)
+    })
+
+    it('applies durable hitl_response by message_id when request index is empty', async () => {
+      await mountHook()
+
+      act(() => {
+        useMessageStore.getState().upsertMessage({
+          id: 'agent-msg-response-fallback',
+          roomId: 'room-1',
+          messageType: 'agent',
+          content: 'Need revenue',
+          senderName: 'Broker',
+          timestamp: new Date().toISOString(),
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-response-fallback',
+          hitlPrompt: 'Need revenue',
+          hitlPromptType: 'text',
+          hitlResolved: false,
+        }, 'sse')
+      })
+
+      await act(async () => {
+        await capturedOnMessage!({
+          type: 'hitl_response',
+          room_id: 'room-1',
+          timestamp: new Date().toISOString(),
+          data: {
+            request_id: 'req-response-fallback',
+            message_id: 'agent-msg-response-fallback',
+            source: 'agent',
+            status: 'responded',
+          },
+        } as AnySSEFrame)
+      })
+
+      const entity = useMessageStore.getState().entities['agent-msg-response-fallback']
+      expect(entity?.hitlResolved).toBe(true)
+      expect(entity?.taskStatus).toBe('input-required')
     })
 
     it('keeps form open on "error" status (backend reverts to pending)', async () => {
@@ -526,6 +623,8 @@ describe('useRoomWebhook HITL SSE handling', () => {
       expect(entity.hitlResolved).toBe(false)
       expect(entity.taskStatus).toBe('input-required')
       expect(entity.senderName).toBe('Reconnect Agent')
+      expect(entity.relatedMessageId).toBeUndefined()
+      expect(entity.hitlChoices).toBeNull()
 
       // Verify hitlRequestIndex was populated by sending a status update
       // for the reconnected request — if the index is missing, this would be a no-op.

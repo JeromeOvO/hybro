@@ -31,9 +31,9 @@ export function selectPendingHitls(
       promptType: e.hitlPromptType ?? 'text',
       choices: e.hitlChoices ?? undefined,
       messageId: e.id,
-      groupId: e.hitlGroupId,
-      groupTotal: e.hitlGroupTotal,
-      groupIndex: e.hitlGroupIndex,
+      groupId: e.hitlGroupId ?? undefined,
+      groupTotal: e.hitlGroupTotal ?? undefined,
+      groupIndex: e.hitlGroupIndex ?? undefined,
       isAnswered: e.hitlResolved === true || !!e.hitlUserAnswer,
     }))
 }

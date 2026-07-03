@@ -72,6 +72,21 @@ def test_dispatch_targets_cancelled_error_handler_reraises():
         assert not any(isinstance(stmt, ast.Return) for stmt in handler.body)
 
 
+def test_supervisor_agent_hitl_request_passes_paused_message_as_display_id():
+    source = (
+        _ROOT / "execution" / "orchestration" / "supervisor_executor.py"
+    ).read_text()
+    start = source.index("request = await self.hitl_coordinator.request_input(")
+    end = source.index("if request is None:", start)
+    request_call = source[start:end]
+
+    assert "continuation_message_id=ar.paused_message_id" in request_call
+    assert "display_message_id=ar.paused_message_id" in request_call
+    assert request_call.index(
+        "continuation_message_id=ar.paused_message_id"
+    ) < request_call.index("display_message_id=ar.paused_message_id")
+
+
 # =============================================================================
 # _log_and_return Tests
 # =============================================================================

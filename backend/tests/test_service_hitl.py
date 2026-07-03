@@ -10,7 +10,7 @@ Tests cover:
 - SSE event emission
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -60,6 +60,12 @@ def mock_hitl_db_service():
     mock.get_pending_hitl_requests = AsyncMock(return_value=[])
     mock.get_pending_hitl_requests_for_message = AsyncMock(return_value=[])
     mock.count_hitl_requests_for_message = AsyncMock(return_value=0)
+    mock.find_pending_hitl_request_for_agent_message = AsyncMock(return_value=None)
+    mock.create_or_reuse_pending_hitl_request = AsyncMock(return_value=None)
+    mock.persist_pending_hitl_on_agent_message = AsyncMock(return_value=True)
+    mock.update_agent_message_task_state = AsyncMock(return_value=True)
+    mock.persist_hitl_user_answer = AsyncMock(return_value=True)
+    mock.persist_hitl_group_metadata = AsyncMock(return_value=True)
     mock.claim_hitl_request = AsyncMock(return_value=None)
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
@@ -102,11 +108,13 @@ def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request
     sample_hitl_request.group_id = "group-1"
     sample_hitl_request.group_total = 2
     sample_hitl_request.group_index = 1
+    sample_hitl_request.client_request_id = "cr-hitl-1"
 
     common = model_hitl_request_to_common(sample_hitl_request)
 
     assert common.request_id == sample_hitl_request.request_id
     assert common.message_id == "display-msg-1"
+    assert common.client_request_id == "cr-hitl-1"
     assert common.group_id == "group-1"
     assert common.group_total == 2
     assert common.group_index == 1
@@ -183,6 +191,13 @@ class TestRequestInput:
         self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
     ):
         """Should emit SSE event when request is created."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
 
@@ -193,12 +208,14 @@ class TestRequestInput:
             prompt="Need more info",
             agent_id="agent-789",
             agent_name="TestAgent",
+            continuation_message_id="agent-msg-789",
         )
 
         mock_hitl_delivery.emit.assert_awaited_once()
         event = mock_hitl_delivery.emit.await_args.args[0]
         assert event.room_id == "room-123"
         assert event.event_type == "hitl_request"
+        assert event.message_id == "agent-msg-789"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_max_rounds_exceeded(
@@ -259,6 +276,743 @@ class TestRequestInput:
 
         assert result.prompt_type == HITLPromptType.CHOICE
         assert result.choices == choices
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_projection_persists_all_display_message_metadata(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Agent input-required HITL must be projected onto the display message."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=True
+        )
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
+            return_value=True
+        )
+        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(return_value=True)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            choices=None,
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is not None
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message.assert_not_awaited()
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        create_call = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args
+        )
+        assert create_call.args[0]["display_message_id"] == "agent-display-msg"
+        assert (
+            create_call.args[0]["continuation_message_id"] == "agent-continuation-msg"
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once_with(
+            "agent-display-msg",
+            request_id=result.request_id,
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            choices=None,
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            group_id=None,
+            group_total=None,
+            group_index=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_projection_failure_returns_none_without_emit(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Agent HITL request creation must fail closed if projection fails."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=False
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is None
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        create_call = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args
+        )
+        request_id = create_call.args[0]["request_id"]
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            request_id,
+            status=HITLStatus.CANCELED.value,
+            error_message="failed_to_project_agent_message",
+        )
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reused_agent_hitl_projection_failure_does_not_cancel_request(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Projection failure for reused HITL must not cancel an existing request."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            existing = dict(request_data)
+            existing["request_id"] = "existing-request"
+            return existing, False
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=False
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is None
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        mock_hitl_db_service.update_hitl_request.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reused_agent_hitl_projects_and_emits_persisted_display_message(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        """Reused agent HITL must use persisted display identity as source of truth."""
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            existing = dict(request_data)
+            existing["request_id"] = "existing-request"
+            existing["display_message_id"] = "existing-display-msg"
+            return existing, False
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            return_value=True
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need policy effective date",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-continuation-msg",
+            display_message_id="retry-display-msg",
+        )
+
+        assert result is not None
+        assert result.request_id == "existing-request"
+        assert result.display_message_id == "existing-display-msg"
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args[0] == "existing-display-msg"
+        mock_hitl_delivery.emit.assert_awaited_once()
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.request_id == "existing-request"
+        assert event.message_id == "existing-display-msg"
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_persists_resolved_client_request_id(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        docs = []
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            docs.append(request_data)
+            return request_data, True
+
+        mock_hitl_db_service.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
+        mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-agent-hitl"
+        )
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need revenue",
+            continuation_message_id="agent-msg-789",
+        )
+
+        assert result is not None
+        assert result.client_request_id == "cr-agent-hitl"
+        assert docs[0]["client_request_id"] == "cr-agent-hitl"
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.client_request_id == "cr-agent-hitl"
+        mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_awaited_once_with(
+            "agent-msg-789"
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_ignores_client_request_id_resolver_failure(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
+        mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
+            side_effect=RuntimeError("resolver unavailable")
+        )
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need revenue",
+            continuation_message_id="agent-msg-789",
+        )
+
+        assert result is not None
+        assert result.client_request_id is None
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        mock_hitl_delivery.emit.assert_awaited_once()
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.client_request_id is None
+
+    @pytest.mark.asyncio
+    async def test_reused_agent_hitl_backfills_resolved_client_request_id(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        existing_doc = {
+            "request_id": "hitl-reused",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+
+        async def create_or_reuse_pending_hitl_request(_request_data):
+            return dict(existing_doc), False
+
+        mock_hitl_db_service.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
+        mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-reused-hitl"
+        )
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need revenue",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+        )
+
+        assert result is not None
+        assert result.request_id == "hitl-reused"
+        assert result.client_request_id == "cr-reused-hitl"
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            "hitl-reused",
+            client_request_id="cr-reused-hitl",
+        )
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.client_request_id == "cr-reused-hitl"
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_without_message_identity_does_not_create_or_emit(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need deductible amount",
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+        )
+
+        assert result is None
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message.assert_not_awaited()
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.create_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_uses_continuation_message_as_display_when_display_missing(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need company revenue",
+            continuation_message_id="agent-paused-msg",
+        )
+
+        assert result is not None
+        assert result.display_message_id == "agent-paused-msg"
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args == ("agent-paused-msg",)
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.message_id == "agent-paused-msg"
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_reuses_existing_pending_request_for_same_agent_message(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        events = []
+        existing_doc = {
+            "request_id": "hitl-existing",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need company revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            events.append(("reuse", request_data["display_message_id"]))
+            return dict(existing_doc), False
+
+        async def persist_pending_hitl_on_agent_message(_message_id, **kwargs):
+            events.append(("project", kwargs["request_id"]))
+            return True
+
+        async def emit(event):
+            events.append(("emit", event.request_id))
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message = AsyncMock(
+            side_effect=persist_pending_hitl_on_agent_message
+        )
+        mock_hitl_delivery.emit = AsyncMock(side_effect=emit)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        first = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need company revenue",
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+        )
+        second = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need company revenue",
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+        )
+
+        assert first is not None
+        assert second is not None
+        assert first.request_id == "hitl-existing"
+        assert second.request_id == "hitl-existing"
+        mock_hitl_db_service.create_hitl_request.assert_not_awaited()
+        assert events == [
+            ("reuse", "agent-paused-msg"),
+            ("project", "hitl-existing"),
+            ("emit", "hitl-existing"),
+            ("reuse", "agent-paused-msg"),
+            ("project", "hitl-existing"),
+            ("emit", "hitl-existing"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_agent_hitl_reuses_legacy_pending_request_with_only_continuation_id(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        existing_doc = {
+            "request_id": "hitl-legacy",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need company revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": None,
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return dict(existing_doc), False
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need company revenue",
+            agent_id="agent-broker",
+            agent_name="Cyber Broker Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-display-msg",
+        )
+
+        assert result is not None
+        assert result.request_id == "hitl-legacy"
+        assert result.display_message_id == "agent-paused-msg"
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_awaited_once()
+        create_call = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args
+        )
+        assert create_call.args[0]["display_message_id"] == "agent-display-msg"
+        assert create_call.args[0]["continuation_message_id"] == "agent-paused-msg"
+        mock_hitl_db_service.create_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            "hitl-legacy",
+            display_message_id="agent-paused-msg",
+        )
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args == ("agent-paused-msg",)
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.request_id == "hitl-legacy"
+        assert event.message_id == "agent-paused-msg"
+
+    @pytest.mark.asyncio
+    async def test_hitl_response_backfills_legacy_continuation_display_before_agent_message_update(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        legacy_doc = {
+            "request_id": "hitl-legacy",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need company revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": None,
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+        mock_hitl_db_service.get_hitl_request = AsyncMock(return_value=legacy_doc)
+        mock_hitl_db_service.claim_hitl_request = AsyncMock(return_value=legacy_doc)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        hitl_service._handle_agent_response = AsyncMock()
+
+        result = await hitl_service.handle_response(
+            room_id="room-123",
+            request_id="hitl-legacy",
+            user_input="5000000",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": "hitl-legacy"}
+        assert any(
+            call.kwargs.get("display_message_id") == "agent-paused-msg"
+            for call in mock_hitl_db_service.fenced_update_hitl_request.await_args_list
+        )
+        mock_hitl_db_service.persist_hitl_user_answer.assert_awaited_once_with(
+            "agent-paused-msg",
+            "5000000",
+        )
+        mock_hitl_db_service.update_agent_message_task_state.assert_awaited_once_with(
+            "agent-paused-msg",
+            "completed",
+        )
+
+    @pytest.mark.asyncio
+    async def test_blocking_followup_hitl_does_not_complete_new_pending_display_message(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        old_doc = {
+            "request_id": "hitl-old",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "prompt": "Need revenue",
+            "prompt_type": HITLPromptType.TEXT.value,
+            "choices": None,
+            "agent_id": "agent-broker",
+            "agent_name": "Cyber Broker Agent",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "status": HITLStatus.PENDING.value,
+            "expires_at": "2026-07-03T00:00:00Z",
+            "created_at": "2026-07-02T00:00:00Z",
+        }
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            next_doc = dict(request_data)
+            next_doc["request_id"] = "hitl-next"
+            return next_doc, True
+
+        agent_reply = MagicMock()
+        agent_reply.reply_to_task = AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": "Need employee count",
+            }
+        )
+        continuation = MagicMock()
+        continuation.resume_queue_from_continuation = AsyncMock(return_value=True)
+
+        mock_hitl_db_service.get_hitl_request = AsyncMock(return_value=old_doc)
+        mock_hitl_db_service.claim_hitl_request = AsyncMock(return_value=old_doc)
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        hitl_service._agent_reply = agent_reply
+        hitl_service._continuation = continuation
+
+        result = await hitl_service.handle_response(
+            room_id="room-123",
+            request_id="hitl-old",
+            user_input="5000000",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": "hitl-old"}
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
+        projection_call = (
+            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
+        )
+        assert projection_call.args == ("agent-paused-msg",)
+        assert projection_call.kwargs["request_id"] == "hitl-next"
+        mock_hitl_db_service.persist_hitl_user_answer.assert_not_awaited()
+        mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
+        continuation.resume_queue_from_continuation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        docs = []
+
+        async def create_hitl_request(doc):
+            docs.append(doc)
+            return True
+
+        mock_hitl_db_service.create_hitl_request = AsyncMock(
+            side_effect=create_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        first = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="supervisor",
+            prompt="Need revenue",
+            continuation_message_id="user-msg-456",
+            display_message_id="clarifier-msg-1",
+            group_id="clarifier-group",
+            group_total=2,
+            group_index=0,
+        )
+        second = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="supervisor",
+            prompt="Need employee count",
+            continuation_message_id="user-msg-456",
+            display_message_id="clarifier-msg-2",
+            group_id="clarifier-group",
+            group_total=2,
+            group_index=1,
+        )
+
+        assert first is not None
+        assert second is not None
+        assert mock_hitl_db_service.create_hitl_request.await_count == 2
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_not_awaited()
+        assert [doc["source"] for doc in docs] == ["supervisor", "supervisor"]
+        assert {doc["continuation_message_id"] for doc in docs} == {"user-msg-456"}
+        assert {doc["display_message_id"] for doc in docs} == {
+            "clarifier-msg-1",
+            "clarifier-msg-2",
+        }
 
 
 # =============================================================================
@@ -992,6 +1746,58 @@ class TestEmitHitlEvent:
 
 
 class TestRecoverStaleProcessing:
+    @pytest.mark.asyncio
+    async def test_finalizes_stale_processing_agent_hitl_when_followup_pending_exists(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        stale_doc = {
+            "request_id": "hitl-old",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "status": HITLStatus.PROCESSING.value,
+            "claim_id": "claim-old",
+            "routing_completed_at": None,
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "agent_id": "agent-broker",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+        }
+        mock_hitl_db_service.iter_stale_processing_hitl_requests = MagicMock(
+            return_value=_iter_docs([stale_doc])
+        )
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message = AsyncMock(
+            return_value={
+                "request_id": "hitl-next",
+                "room_id": "room-123",
+                "source": "agent",
+                "status": HITLStatus.PENDING.value,
+                "continuation_message_id": "agent-paused-msg",
+                "display_message_id": "agent-paused-msg",
+            }
+        )
+        hitl_service._persistence = mock_hitl_db_service
+
+        recovered = await hitl_service.recover_stale_processing()
+
+        assert recovered == 1
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message.assert_awaited_once_with(
+            room_id="room-123",
+            display_message_id="agent-paused-msg",
+            continuation_message_id="agent-paused-msg",
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+        )
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            "hitl-old",
+            expected_status=HITLStatus.PROCESSING.value,
+            status=HITLStatus.RESPONDED.value,
+            routing_completed_at=ANY,
+        )
+        mock_hitl_db_service.release_hitl_group_routing.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_releases_stale_group_routing_claim_before_reverting_to_pending(
         self, hitl_service, mock_hitl_db_service

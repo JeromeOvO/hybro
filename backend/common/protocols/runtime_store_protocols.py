@@ -273,6 +273,34 @@ class RuntimeHITLStore(Protocol):
         message_id: str,
         state: str,
     ) -> bool: ...
+    async def find_pending_hitl_request_for_agent_message(
+        self,
+        *,
+        room_id: str,
+        display_message_id: str | None,
+        continuation_message_id: str | None,
+        agent_id: str | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+    ) -> dict[str, Any] | None: ...
+    async def create_or_reuse_pending_hitl_request(
+        self,
+        request_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool] | None: ...
+    async def persist_pending_hitl_on_agent_message(
+        self,
+        message_id: str,
+        *,
+        request_id: str,
+        prompt: str,
+        prompt_type: Any,
+        choices: list[str] | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+        group_id: str | None,
+        group_total: int | None,
+        group_index: int | None,
+    ) -> bool: ...
     async def persist_hitl_user_answer(
         self,
         message_id: str,

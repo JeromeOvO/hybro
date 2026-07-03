@@ -3,10 +3,23 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 logger = get_logger(__name__)
+
+_PENDING_HITL_DISPLAY_INDEX = "uq_pending_hitl_display_message"
+_PENDING_HITL_CONTINUATION_INDEX = "uq_pending_hitl_continuation_message"
+
+
+def _duplicate_key_mentions_index(error: DuplicateKeyError, index_name: str) -> bool:
+    details = getattr(error, "details", None)
+    return index_name in str(error) or (
+        details is not None and index_name in repr(details)
+    )
 
 
 class HITLRuntimeStorePart:
@@ -202,6 +215,298 @@ class HITLRuntimeStorePart:
             logger.error("Failed to update agent message task state", exc_info=True)
             return False
 
+    async def find_pending_hitl_request_for_agent_message(
+        self,
+        *,
+        room_id: str,
+        display_message_id: str | None,
+        continuation_message_id: str | None,
+        agent_id: str | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+    ) -> dict[str, Any] | None:
+        try:
+            return await self._find_pending_hitl_request_for_agent_message(
+                room_id=room_id,
+                display_message_id=display_message_id,
+                continuation_message_id=continuation_message_id,
+            )
+        except Exception:
+            logger.error(
+                "Failed to find pending agent HITL request",
+                extra={
+                    "room_id": room_id,
+                    "display_message_id": display_message_id,
+                    "continuation_message_id": continuation_message_id,
+                    "agent_id": agent_id,
+                    "a2a_task_id": a2a_task_id,
+                    "a2a_context_id": a2a_context_id,
+                },
+                exc_info=True,
+            )
+            return None
+
+    async def _find_pending_hitl_request_for_agent_message(
+        self,
+        *,
+        room_id: str,
+        display_message_id: str | None,
+        continuation_message_id: str | None,
+    ) -> dict[str, Any] | None:
+        display_existing = None
+        continuation_existing = None
+        if display_message_id:
+            display_existing = await self._hitl_requests.find_one(
+                self._pending_agent_hitl_identity_query(
+                    room_id=room_id,
+                    identity_clause={"display_message_id": display_message_id},
+                )
+            )
+        if continuation_message_id:
+            continuation_existing = await self._hitl_requests.find_one(
+                self._pending_agent_hitl_identity_query(
+                    room_id=room_id,
+                    identity_clause={
+                        "continuation_message_id": continuation_message_id
+                    },
+                )
+            )
+        if display_existing and continuation_existing:
+            display_request_id = display_existing.get("request_id")
+            continuation_request_id = continuation_existing.get("request_id")
+            if display_request_id != continuation_request_id:
+                logger.error(
+                    "Ambiguous pending agent HITL request lookup",
+                    extra={
+                        "room_id": room_id,
+                        "display_message_id": display_message_id,
+                        "continuation_message_id": continuation_message_id,
+                        "display_request_id": display_request_id,
+                        "continuation_request_id": continuation_request_id,
+                    },
+                )
+                return None
+            return display_existing
+        return display_existing or continuation_existing
+
+    def _pending_agent_hitl_identity_query(
+        self,
+        *,
+        room_id: str,
+        identity_clause: dict[str, str],
+    ) -> dict[str, Any]:
+        return {
+            "room_id": room_id,
+            "status": "pending",
+            "source": "agent",
+            "$or": [identity_clause],
+        }
+
+    async def create_or_reuse_pending_hitl_request(
+        self,
+        request_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool] | None:
+        doc = dict(request_data)
+        try:
+            await self._hitl_requests.insert_one(doc)
+            return doc, True
+        except DuplicateKeyError as error:
+            existing = await self._read_pending_hitl_after_duplicate(doc, error)
+            if existing is not None:
+                return existing, False
+            logger.error(
+                "Failed to read existing pending agent HITL request after duplicate",
+                extra={
+                    "room_id": doc.get("room_id"),
+                    "display_message_id": doc.get("display_message_id"),
+                    "continuation_message_id": doc.get("continuation_message_id"),
+                },
+            )
+            return None
+        except Exception:
+            logger.error("Failed to create pending HITL request", exc_info=True)
+            return None
+
+    async def _find_pending_hitl_duplicate_identity(
+        self,
+        doc: dict[str, Any],
+        *,
+        display_message_id: str | None,
+        continuation_message_id: str | None,
+    ) -> dict[str, Any] | None:
+        return await self.find_pending_hitl_request_for_agent_message(
+            room_id=doc.get("room_id"),
+            display_message_id=display_message_id,
+            continuation_message_id=continuation_message_id,
+            agent_id=doc.get("agent_id"),
+            a2a_task_id=doc.get("a2a_task_id"),
+            a2a_context_id=doc.get("a2a_context_id"),
+        )
+
+    async def _read_pending_hitl_after_duplicate(
+        self,
+        doc: dict[str, Any],
+        error: DuplicateKeyError,
+    ) -> dict[str, Any] | None:
+        display_message_id = doc.get("display_message_id")
+        continuation_message_id = doc.get("continuation_message_id")
+
+        if display_message_id and continuation_message_id:
+            first_identity = (
+                "continuation"
+                if _duplicate_key_mentions_index(
+                    error, _PENDING_HITL_CONTINUATION_INDEX
+                )
+                else "display"
+            )
+            return await self._read_pending_hitl_duplicate_pair(
+                doc,
+                display_message_id=display_message_id,
+                continuation_message_id=continuation_message_id,
+                first_identity=first_identity,
+            )
+
+        if _duplicate_key_mentions_index(error, _PENDING_HITL_DISPLAY_INDEX):
+            return await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=display_message_id,
+                continuation_message_id=None,
+            )
+        if _duplicate_key_mentions_index(error, _PENDING_HITL_CONTINUATION_INDEX):
+            return await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=None,
+                continuation_message_id=continuation_message_id,
+            )
+
+        return await self._find_pending_hitl_duplicate_identity(
+            doc,
+            display_message_id=display_message_id,
+            continuation_message_id=continuation_message_id,
+        )
+
+    async def _read_pending_hitl_duplicate_pair(
+        self,
+        doc: dict[str, Any],
+        *,
+        display_message_id: str,
+        continuation_message_id: str,
+        first_identity: str,
+    ) -> dict[str, Any] | None:
+        display_existing = None
+        continuation_existing = None
+        if first_identity == "continuation":
+            continuation_existing = await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=None,
+                continuation_message_id=continuation_message_id,
+            )
+            display_existing = await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=display_message_id,
+                continuation_message_id=None,
+            )
+        else:
+            display_existing = await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=display_message_id,
+                continuation_message_id=None,
+            )
+            continuation_existing = await self._find_pending_hitl_duplicate_identity(
+                doc,
+                display_message_id=None,
+                continuation_message_id=continuation_message_id,
+            )
+
+        if display_existing and continuation_existing:
+            display_request_id = display_existing.get("request_id")
+            continuation_request_id = continuation_existing.get("request_id")
+            if display_request_id != continuation_request_id:
+                logger.error(
+                    "Ambiguous pending agent HITL duplicate readback",
+                    extra={
+                        "room_id": doc.get("room_id"),
+                        "display_message_id": display_message_id,
+                        "continuation_message_id": continuation_message_id,
+                        "display_request_id": display_request_id,
+                        "continuation_request_id": continuation_request_id,
+                    },
+                )
+                return None
+            return display_existing
+        return display_existing or continuation_existing
+
+    async def persist_pending_hitl_on_agent_message(
+        self,
+        message_id: str,
+        *,
+        request_id: str,
+        prompt: str,
+        prompt_type: Any,
+        choices: list[str] | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+        group_id: str | None,
+        group_total: int | None,
+        group_index: int | None,
+    ) -> bool:
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            metadata_prefix = "message_content.message_task.metadata"
+            updates: dict[str, Any] = {
+                "message_content.message_task.status.state": "input-required",
+                f"{metadata_prefix}.hitl_request_id": request_id,
+                f"{metadata_prefix}.hitl_prompt": prompt,
+                f"{metadata_prefix}.hitl_prompt_type": getattr(
+                    prompt_type, "value", prompt_type
+                ),
+                f"{metadata_prefix}.hitl_choices": choices,
+                f"{metadata_prefix}.user_answer": None,
+                "task_updated_at": utcnow(),
+            }
+            optional_metadata = {
+                f"{metadata_prefix}.hitl_a2a_task_id": a2a_task_id,
+                f"{metadata_prefix}.hitl_a2a_context_id": a2a_context_id,
+                f"{metadata_prefix}.hitl_group_id": group_id,
+                f"{metadata_prefix}.hitl_group_total": group_total,
+                f"{metadata_prefix}.hitl_group_index": group_index,
+            }
+            unsets: dict[str, str] = {}
+            for path, value in optional_metadata.items():
+                if value is None:
+                    unsets[path] = ""
+                else:
+                    updates[path] = value
+
+            update_doc: dict[str, Any] = {"$set": updates}
+            if unsets:
+                update_doc["$unset"] = unsets
+
+            projected = await self._room_agent_messages.find_one_and_update(
+                {"message_id": message_id},
+                update_doc,
+                return_document=ReturnDocument.AFTER,
+            )
+            if not projected:
+                return False
+
+            message_task = (
+                projected.get("message_content", {}).get("message_task", {})
+                if isinstance(projected, dict)
+                else {}
+            )
+            metadata = message_task.get("metadata") or {}
+            state = (message_task.get("status") or {}).get("state")
+            return (
+                state == "input-required"
+                and metadata.get("hitl_request_id") == request_id
+            )
+        except Exception:
+            logger.error(
+                "Failed to persist pending HITL on agent message", exc_info=True
+            )
+            return False
+
     async def _ensure_message_task_metadata(self, message_id: str) -> None:
         await self._room_agent_messages.update_one(
             {
@@ -276,13 +581,56 @@ class HITLRuntimeStorePart:
             yield doc
 
     async def ensure_hitl_indexes(self) -> None:
-        try:
-            await self._hitl_requests.create_index([("request_id", 1)], unique=True)
-            await self._hitl_requests.create_index([("room_id", 1), ("status", 1)])
-            await self._hitl_requests.create_index([("expires_at", 1), ("status", 1)])
-            await self._hitl_requests.create_index(
-                [("user_message_id", 1), ("status", 1)]
-            )
-            await self._hitl_requests.create_index([("continuation_message_id", 1)])
-        except Exception:
-            logger.error("Failed to create HITL indexes", exc_info=True)
+        noncritical_indexes = [
+            ((("request_id", 1),), {"unique": True}),
+            ((("room_id", 1), ("status", 1)), {}),
+            ((("expires_at", 1), ("status", 1)), {}),
+            ((("user_message_id", 1), ("status", 1)), {}),
+            ((("continuation_message_id", 1),), {}),
+        ]
+        for keys, kwargs in noncritical_indexes:
+            try:
+                await self._hitl_requests.create_index(list(keys), **kwargs)
+            except Exception:
+                logger.error(
+                    "Failed to create non-critical HITL index",
+                    extra={"index_keys": list(keys), "index_options": kwargs},
+                    exc_info=True,
+                )
+
+        critical_indexes = [
+            (
+                [("room_id", 1), ("display_message_id", 1)],
+                {
+                    "unique": True,
+                    "name": _PENDING_HITL_DISPLAY_INDEX,
+                    "partialFilterExpression": {
+                        "status": "pending",
+                        "source": "agent",
+                        "display_message_id": {"$type": "string"},
+                    },
+                },
+            ),
+            (
+                [("room_id", 1), ("continuation_message_id", 1)],
+                {
+                    "unique": True,
+                    "name": _PENDING_HITL_CONTINUATION_INDEX,
+                    "partialFilterExpression": {
+                        "status": "pending",
+                        "source": "agent",
+                        "continuation_message_id": {"$type": "string"},
+                    },
+                },
+            ),
+        ]
+        for keys, kwargs in critical_indexes:
+            try:
+                await self._hitl_requests.create_index(keys, **kwargs)
+            except Exception:
+                logger.error(
+                    "Failed to create critical HITL unique index",
+                    extra={"index_name": kwargs["name"]},
+                    exc_info=True,
+                )
+                raise

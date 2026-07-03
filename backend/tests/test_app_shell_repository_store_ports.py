@@ -353,6 +353,19 @@ def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
     }
 
 
+def test_container_binds_hitl_runtime_store_lifecycle_and_client_request_hooks():
+    tree = ast.parse(Path("container.py").read_text())
+    bound = _simple_namespace_keywords(tree, "hitl_runtime_store")
+
+    assert {
+        "find_pending_hitl_request_for_agent_message",
+        "create_or_reuse_pending_hitl_request",
+        "persist_pending_hitl_on_agent_message",
+        "get_room_user_message_by_message_id",
+        "resolve_client_request_id_for_message_id",
+    } <= bound
+
+
 def test_container_binds_room_runtime_to_focused_room_store_adapter():
     tree = ast.parse(Path("container.py").read_text())
     bound_store_name = None

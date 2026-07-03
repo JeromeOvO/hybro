@@ -664,6 +664,60 @@ class RuntimeRepositoryStore:
             message_id, state
         )
 
+    async def find_pending_hitl_request_for_agent_message(
+        self,
+        *,
+        room_id: str,
+        display_message_id: str | None,
+        continuation_message_id: str | None,
+        agent_id: str | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+    ) -> dict[str, Any] | None:
+        return await self._hitl_delegate().find_pending_hitl_request_for_agent_message(
+            room_id=room_id,
+            display_message_id=display_message_id,
+            continuation_message_id=continuation_message_id,
+            agent_id=agent_id,
+            a2a_task_id=a2a_task_id,
+            a2a_context_id=a2a_context_id,
+        )
+
+    async def create_or_reuse_pending_hitl_request(
+        self,
+        request_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool] | None:
+        return await self._hitl_delegate().create_or_reuse_pending_hitl_request(
+            request_data
+        )
+
+    async def persist_pending_hitl_on_agent_message(
+        self,
+        message_id: str,
+        *,
+        request_id: str,
+        prompt: str,
+        prompt_type: Any,
+        choices: list[str] | None,
+        a2a_task_id: str | None,
+        a2a_context_id: str | None,
+        group_id: str | None,
+        group_total: int | None,
+        group_index: int | None,
+    ) -> bool:
+        return await self._hitl_delegate().persist_pending_hitl_on_agent_message(
+            message_id,
+            request_id=request_id,
+            prompt=prompt,
+            prompt_type=prompt_type,
+            choices=choices,
+            a2a_task_id=a2a_task_id,
+            a2a_context_id=a2a_context_id,
+            group_id=group_id,
+            group_total=group_total,
+            group_index=group_index,
+        )
+
     async def _ensure_message_task_metadata(self, message_id: str) -> None:
         return await self._hitl_delegate()._ensure_message_task_metadata(message_id)
 
