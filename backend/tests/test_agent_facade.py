@@ -611,6 +611,62 @@ async def test_facade_match_excludes_agents_with_open_capability_issues():
 
 
 @pytest.mark.asyncio
+async def test_facade_match_prefilters_attachment_compatible_vector_candidates():
+    class CrowdedVector(FakeVector):
+        async def search(self, index, vector, top_k, filter=None):
+            self.searches.append(
+                {"index": index, "vector": vector, "top_k": top_k, "filter": filter}
+            )
+            allowed = set((filter or {}).get("agent_id", {}).get("$in", []))
+            ordered_ids = [f"text-{index:02d}" for index in range(16)] + ["pdf-agent"]
+            return [
+                VectorSearchResult(
+                    id=agent_id,
+                    score=1.0 if agent_id.startswith("text") else 0.2,
+                )
+                for agent_id in ordered_ids
+                if agent_id in allowed
+            ][:top_k]
+
+    text_agents = [
+        {
+            "agent_id": f"text-{index:02d}",
+            "is_public": True,
+            "agent_status": "active",
+            "agent_card": {
+                "name": f"Text {index}",
+                "url": f"https://text-{index}.example",
+                "defaultInputModes": ["text"],
+            },
+        }
+        for index in range(16)
+    ]
+    pdf_agent = {
+        "agent_id": "pdf-agent",
+        "is_public": True,
+        "agent_status": "active",
+        "agent_card": {
+            "name": "PDF Agent",
+            "url": "https://pdf.example",
+            "defaultInputModes": ["application/pdf"],
+        },
+    }
+    facade, _, vector, _, _ = _facade_with_docs(
+        [*text_agents, pdf_agent],
+        vector=CrowdedVector(),
+    )
+
+    matches = await facade.match_for_message(
+        "summarize this attachment",
+        limit=1,
+        required_input_modes=["application/pdf"],
+    )
+
+    assert [match["agent_id"] for match in matches] == ["pdf-agent"]
+    assert vector.searches[-1]["filter"] == {"agent_id": {"$in": ["pdf-agent"]}}
+
+
+@pytest.mark.asyncio
 async def test_facade_match_falls_back_to_visible_agents_when_vector_index_missing():
     from common.errors import VectorIndexUnavailableError
 
