@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
 import { GroupSelector } from '@/components/group-selector'
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('GroupSelector', () => {
   it('keeps mentioned agent display compact with avatar and count', () => {
@@ -40,5 +44,46 @@ describe('GroupSelector', () => {
     expect(screen.getByText('2 agents')).toBeInTheDocument()
     expect(screen.getByAltText('Agent One')).toBeInTheDocument()
     expect(screen.getByAltText('Agent Two')).toBeInTheDocument()
+  })
+
+  it('does not use a native title tooltip for the clear override control', () => {
+    render(
+      <GroupSelector
+        selectedGroup="all_agents"
+        onGroupChange={vi.fn()}
+        groups={[]}
+        isOverride
+        onClearOverride={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /clear override/i })).toBeInTheDocument()
+    expect(screen.queryByTitle('Clear override, use room default')).not.toBeInTheDocument()
+  })
+
+  it('keeps override controls inside the constrained selector width', () => {
+    render(
+      <GroupSelector
+        selectedGroup="insurance"
+        onGroupChange={vi.fn()}
+        groups={[
+          {
+            group_id: 'insurance',
+            name: 'Insurance Group',
+            type: 'user',
+            agents: ['agent-1'],
+            owner_id: 'user-1',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+        isOverride
+        onClearOverride={vi.fn()}
+        className="min-w-0 max-w-[11rem]"
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /insurance group/i }).className).toContain('flex-1')
+    expect(screen.getByRole('button', { name: /clear override/i }).className).toContain('shrink-0')
   })
 })

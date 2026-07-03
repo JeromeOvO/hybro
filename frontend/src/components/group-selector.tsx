@@ -198,7 +198,7 @@ export function GroupSelector({
   }
 
   return (
-    <div className={cn("flex items-center gap-1", className)}>
+    <div className={cn("flex min-w-0 items-center gap-1", className)}>
       <TooltipProvider delayDuration={100}>
         <DropdownMenu open={menuOpen} onOpenChange={(open) => {
           setMenuOpen(open)
@@ -218,7 +218,7 @@ export function GroupSelector({
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    "h-8 min-h-8 min-w-0 max-w-full px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
+                    "h-8 min-h-8 min-w-0 max-w-full flex-1 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
                     isOverride && "bg-primary/10"
                   )}
                   onMouseLeave={() => {
@@ -418,8 +418,8 @@ export function GroupSelector({
           variant="ghost"
           size="sm"
           onClick={onClearOverride}
-          className="h-8 min-h-8 px-2 text-muted-foreground hover:text-foreground flex items-center"
-          title="Clear override, use room default"
+          className="h-8 min-h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground flex items-center"
+          aria-label="Clear override, use room default"
         >
           <X className="h-3.5 w-3.5" />
         </Button>

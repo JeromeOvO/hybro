@@ -127,6 +127,19 @@ export function useProcessingRestore(
       // behind by missed terminal SSE without deleting per-turn update history.
       // But don't wipe it if a message send is still in flight (the SSE events
       // haven't arrived yet).
+      const liveLifecycleMessageId = lifecycle.getMessageId()
+      const liveLifecycleMessage = liveLifecycleMessageId
+        ? store.entities[liveLifecycleMessageId]
+        : undefined
+      if (
+        liveLifecycleMessage?.roomId === roomId &&
+        liveLifecycleMessage.messageType === 'user' &&
+        !liveLifecycleMessage.turnTerminalStatus &&
+        !allAgentsTerminalForUserMessage(store.entities, roomId, liveLifecycleMessage.id)
+      ) {
+        return
+      }
+
       if (lifecycle.isPlaceholderDismissed()) return
       const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
       if (sending) return

@@ -8,9 +8,11 @@ import { useRoomUiStore } from '@/stores/room-ui-store'
 function createLifecycle({
   placeholderDismissed,
   processingResolved,
+  messageId = null,
 }: {
   placeholderDismissed: boolean
   processingResolved: boolean
+  messageId?: string | null
 }): ProcessingLifecycle {
   return {
     setProcessing: vi.fn(),
@@ -22,7 +24,7 @@ function createLifecycle({
     setSendGuard: vi.fn(),
     isSendGuardActive: vi.fn(() => false),
     setMessageId: vi.fn(),
-    getMessageId: vi.fn(() => null),
+    getMessageId: vi.fn(() => messageId),
     dismissPlaceholder: vi.fn(),
     resetPlaceholder: vi.fn(),
     isPlaceholderDismissed: vi.fn(() => placeholderDismissed),
@@ -82,5 +84,39 @@ describe('useProcessingRestore', () => {
       ])
     })
     expect(lifecycle.startProcessing).toHaveBeenCalledWith('msg-active')
+  })
+
+  it('does not stop a live SSE lifecycle when the room active run snapshot is stale', async () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-live-sse',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Live SSE turn',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+      processingStatusLogs: [{
+        id: 'processing-log-live',
+        message: 'Working...',
+        timestamp: new Date().toISOString(),
+      }],
+    }, 'sse')
+
+    const lifecycle = createLifecycle({
+      placeholderDismissed: false,
+      processingResolved: false,
+      messageId: 'msg-live-sse',
+    })
+
+    renderHook(() => useProcessingRestore(
+      'room-1',
+      { active_runs: [] },
+      false,
+      lifecycle,
+      undefined,
+    ))
+
+    await waitFor(() => {
+      expect(lifecycle.stopProcessing).not.toHaveBeenCalled()
+    })
   })
 })

@@ -202,6 +202,23 @@ class A2ATaskTrackingService:
             raise ValueError(f"Agent message {message_id} not found")
 
         agent_url = msg.agent_url
+        agent_card = None
+        if msg.agent_id and (webhook_base_url or not agent_url):
+            agent_record = await self._tracking_store.get_agent_by_agent_id(msg.agent_id)
+            agent_card = getattr(agent_record, "agent_card", None)
+            if agent_card is None and webhook_base_url:
+                logger.warning(
+                    "hitl: could not load agent card for agent %s - disabling push notifications",
+                    msg.agent_id,
+                )
+
+        if not agent_url:
+            agent_url = _agent_card_url(agent_card)
+            if agent_url:
+                logger.warning(
+                    "hitl: agent message %s had no agent_url; using agent card URL",
+                    message_id,
+                )
         if not agent_url:
             raise ValueError(f"Agent message {message_id} has no agent_url")
 
@@ -216,16 +233,6 @@ class A2ATaskTrackingService:
                 f"Failed to rotate webhook token for message {message_id} - "
                 "agent callback would fail verification; aborting reply"
             )
-
-        agent_card = None
-        if webhook_base_url and msg.agent_id:
-            agent_record = await self._tracking_store.get_agent_by_agent_id(msg.agent_id)
-            agent_card = getattr(agent_record, "agent_card", None)
-            if agent_card is None:
-                logger.warning(
-                    "hitl: could not load agent card for agent %s - disabling push notifications",
-                    msg.agent_id,
-                )
 
         push_config = _build_push_config(
             agent_card=agent_card,
@@ -424,6 +431,19 @@ class A2ATaskTrackingService:
             message_id,
             failed_task.model_dump(mode="json"),
         )
+
+
+def _agent_card_url(agent_card: Any) -> str | None:
+    if agent_card is None:
+        return None
+    if isinstance(agent_card, dict):
+        raw_url = agent_card.get("url")
+    else:
+        raw_url = getattr(agent_card, "url", None)
+    if raw_url is None:
+        return None
+    url = str(raw_url).strip()
+    return url or None
 
 
 async def _best_effort_convert_pydantic_artifacts_to_s3(
