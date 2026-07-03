@@ -93,6 +93,8 @@ def rank_agent_docs(
     for doc in docs:
         vector_score = vector_scores.get(doc.get("agent_id"), 0.0)
         capability_score = compute_capability_score(doc, required_input_modes)
+        if required_input_modes is not None and capability_score <= 0:
+            continue
         ranked.append(
             {
                 "agent_id": doc.get("agent_id"),
