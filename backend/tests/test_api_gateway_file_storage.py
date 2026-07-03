@@ -143,6 +143,31 @@ async def test_object_storage_file_storage_uploads_and_records_metadata():
 
 
 @pytest.mark.asyncio
+async def test_object_storage_file_storage_rejects_uploads_over_configured_limit():
+    object_storage = RecordingObjectStorage()
+    collection = RecordingFileUploadsCollection()
+    storage = ObjectStorageFileStorage(
+        object_storage=object_storage,
+        file_uploads_collection=collection,
+        max_upload_bytes=5,
+    )
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await storage.upload(
+            file_bytes=b"123456",
+            filename="report.pdf",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="application/pdf",
+        )
+
+    assert exc_info.value.status_code == 413
+    assert "exceeds the maximum upload size" in exc_info.value.detail
+    assert object_storage.put_calls == []
+    assert collection.docs == []
+
+
+@pytest.mark.asyncio
 async def test_object_storage_file_storage_reads_and_deletes_existing_uploads():
     object_storage = RecordingObjectStorage()
     collection = RecordingFileUploadsCollection(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -190,14 +191,17 @@ async def refresh_artifact_presigned_urls(  # noqa: C901
     if not key_refs:
         return
 
-    url_map: dict[str, str] = {}
+    unique_key_filenames: dict[str, str | None] = {}
     for _, s3_key in key_refs:
-        if s3_key in url_map:
-            continue
-        url_map[s3_key] = await object_storage.get_presigned_url(
-            s3_key,
-            filename=key_filenames.get(s3_key),
+        unique_key_filenames.setdefault(s3_key, key_filenames.get(s3_key))
+
+    urls = await asyncio.gather(
+        *(
+            object_storage.get_presigned_url(s3_key, filename=filename)
+            for s3_key, filename in unique_key_filenames.items()
         )
+    )
+    url_map = dict(zip(unique_key_filenames, urls, strict=True))
     for file_content, s3_key in key_refs:
         new_url = url_map.get(s3_key)
         if new_url:

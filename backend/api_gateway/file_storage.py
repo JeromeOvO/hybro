@@ -29,12 +29,16 @@ class ObjectStorageFileStorage:
         file_id_factory: Callable[[], str] | None = None,
         now: Callable[[], datetime] = utcnow,
         presigned_url_ttl: int = DEFAULT_PRESIGNED_URL_TTL,
+        max_upload_bytes: int | None = None,
     ) -> None:
         self._object_storage = object_storage
         self._file_uploads_collection = file_uploads_collection
         self._file_id_factory = file_id_factory or (lambda: uuid4().hex)
         self._now = now
         self._presigned_url_ttl = presigned_url_ttl
+        self._max_upload_bytes = (
+            max(1, int(max_upload_bytes)) if max_upload_bytes is not None else None
+        )
 
     async def upload(
         self,
@@ -44,6 +48,18 @@ class ObjectStorageFileStorage:
         room_id: str,
         content_type: str | None = None,
     ) -> FileInfo:
+        if (
+            self._max_upload_bytes is not None
+            and len(file_bytes) > self._max_upload_bytes
+        ):
+            raise FileStoragePlatformError(
+                detail=(
+                    "Uploaded file exceeds the maximum upload size "
+                    f"({len(file_bytes)} > {self._max_upload_bytes} bytes)."
+                ),
+                status_code=413,
+            )
+
         file_id = self._file_id_factory()
         safe_name = _sanitize_filename(filename)
         mime_type = content_type or DEFAULT_MIME_TYPE

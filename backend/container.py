@@ -325,6 +325,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             file_storage = create_file_storage(
                 object_storage=object_storage,
                 file_uploads_collection=file_uploads_collection,
+                max_upload_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
             )
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
@@ -1982,10 +1983,12 @@ def create_file_storage(
     *,
     object_storage: ObjectStorageDAL,
     file_uploads_collection: MongoCollection,
+    max_upload_bytes: int | None = settings.a2a_inline_file_max_raw_bytes,
 ) -> FileStorage:
     return ObjectStorageFileStorage(
         object_storage=object_storage,
         file_uploads_collection=file_uploads_collection,
+        max_upload_bytes=max_upload_bytes,
     )
 
 

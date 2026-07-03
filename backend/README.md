@@ -37,7 +37,9 @@ The project will be accessible at [http://localhost:8000](http://localhost:8000)
 
 `A2A_INLINE_FILE_MAX_RAW_BYTES` limits the raw bytes for one user-uploaded file
 before it is base64 encoded into an outbound A2A message. The default is
-`5242880` bytes, or 5 MiB.
+`5242880` bytes, or 5 MiB. Room attachment uploads are capped at the same
+limit so accepted uploads do not later fail inline agent dispatch for size
+alone.
 
 `A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits the aggregate base64-encoded file
 bytes across all file parts in one outbound A2A message. The default is

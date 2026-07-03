@@ -1,3 +1,4 @@
+import asyncio
 import re
 import uuid
 from dataclasses import dataclass
@@ -26,13 +27,13 @@ from common.types import (
 from common.types import (
     MessageRole as Role,
 )
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
     build_context_for_agent,
     build_minimal_context,
     migrate_legacy_memory,
 )
-from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from context_memory.projection import _human_size, build_turn_content
@@ -1023,14 +1024,8 @@ class RoomServices:
             attachments=attachments,
             agent_card=agent_card,
             content_reader=getattr(self, "_attachment_content_reader", None),
-            max_raw_bytes=getattr(
-                self, "_a2a_inline_file_max_raw_bytes", 5 * 1024 * 1024
-            ),
-            max_encoded_bytes=getattr(
-                self,
-                "_a2a_inline_message_max_encoded_bytes",
-                6_990_508,
-            ),
+            max_raw_bytes=self._a2a_inline_file_max_raw_bytes,
+            max_encoded_bytes=self._a2a_inline_message_max_encoded_bytes,
             context=context,
         )
 
@@ -3325,26 +3320,24 @@ class RoomServices:
         messages = await self._require_facade().get_user_messages_for_room(room_id)
 
         # Inject presigned URLs for attachments
-        s3_keys = []
+        key_filenames: dict[str, str | None] = {}
         for msg in messages:
             if msg.message_content and msg.message_content.attachments:
                 for att in msg.message_content.attachments:
-                    s3_keys.append(att.s3_key)
+                    key_filenames.setdefault(att.s3_key, att.file_name)
 
-        if s3_keys:
+        if key_filenames:
             try:
-                url_map = {}
-                for msg in messages:
-                    if msg.message_content and msg.message_content.attachments:
-                        for att in msg.message_content.attachments:
-                            if att.s3_key in url_map:
-                                continue
-                            url_map[att.s3_key] = (
-                                await self.object_storage.get_presigned_url(
-                                    att.s3_key,
-                                    filename=att.file_name,
-                                )
-                            )
+                urls = await asyncio.gather(
+                    *(
+                        self.object_storage.get_presigned_url(
+                            s3_key,
+                            filename=filename,
+                        )
+                        for s3_key, filename in key_filenames.items()
+                    )
+                )
+                url_map = dict(zip(key_filenames, urls, strict=True))
                 for msg in messages:
                     if msg.message_content and msg.message_content.attachments:
                         for att in msg.message_content.attachments:
