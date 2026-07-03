@@ -130,10 +130,18 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
         error_code="file_too_large",
     )
     se.delivery.send_task_update.assert_awaited_once()
-    assert se.delivery.send_task_update.await_args.kwargs["status"] == "failed"
-    assert se.delivery.send_task_update.await_args.kwargs["error"] == (
-        "Attached file report.pdf exceeds the inline A2A limit."
-    )
+    assert se.delivery.send_task_update.await_args.kwargs == {
+        "room_id": "room-1",
+        "message_id": "amsg-1",
+        "status": "failed",
+        "error": "Attached file report.pdf exceeds the inline A2A limit.",
+        "agent_name": "Test Agent",
+        "agent_id": "agent-1",
+        "step_number": 1,
+        "total_steps": None,
+        "task_content": "Read the attachment.",
+        "client_request_id": "client-req-1",
+    }
 
 
 @pytest.mark.asyncio

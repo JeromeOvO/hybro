@@ -176,6 +176,7 @@ class TaskStateManager:
         if task is None:
             if message.message_content is None:
                 return
+            now = utcnow()
             task = Task(
                 id=SyntheticTaskId.FAILED,
                 context_id=message.message_id,
@@ -195,7 +196,10 @@ class TaskStateManager:
             )
             message.message_content.message_task = task
             message.message_content.message_text = error
-            message.task_updated_at = utcnow()
+            message.has_task_tracking = True
+            if message.task_created_at is None:
+                message.task_created_at = now
+            message.task_updated_at = now
             await self.persist_message(message)
             return
 
@@ -212,7 +216,11 @@ class TaskStateManager:
         if error_code:
             task.metadata = dict(task.metadata or {})
             task.metadata["preflight_failure_code"] = error_code
-        message.task_updated_at = utcnow()
+        now = utcnow()
+        message.has_task_tracking = True
+        if message.task_created_at is None:
+            message.task_created_at = now
+        message.task_updated_at = now
         await self.persist_message(message)
 
     # ------------------------------------------------------------------

@@ -236,6 +236,8 @@ async def test_fail_pre_dispatch_task_creates_failed_task_when_missing():
     assert msg.message_content.message_text == (
         "Attached file report.pdf exceeds the inline A2A limit."
     )
+    assert msg.has_task_tracking is True
+    assert msg.task_created_at is not None
     assert msg.task_updated_at is not None
     room_svc.update_agent_message_by_message_id.assert_awaited_once()
 
@@ -264,6 +266,8 @@ async def test_fail_pre_dispatch_task_transitions_existing_task_once_with_metada
         "Attached file report.pdf exceeds the inline A2A limit."
     )
     assert task.metadata["preflight_failure_code"] == "file_too_large"
+    assert msg.has_task_tracking is True
+    assert msg.task_created_at is not None
     assert msg.task_updated_at is not None
     room_svc.update_agent_message_by_message_id.assert_awaited_once()
 
@@ -292,6 +296,8 @@ async def test_fail_pre_dispatch_task_leaves_terminal_task_unchanged():
     assert task.status.state == CommonTaskState.completed
     assert task.metadata is None
     assert msg.message_content.message_text == "before"
+    assert msg.has_task_tracking is False
+    assert msg.task_created_at is None
     assert msg.task_updated_at is None
     room_svc.update_agent_message_by_message_id.assert_not_awaited()
 
