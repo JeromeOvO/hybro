@@ -26,6 +26,7 @@ class RecordingObjectStorage:
         self.put_calls = []
         self.presign_calls = []
         self.delete_calls = []
+        self.get_bytes_calls = []
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         self.put_calls.append((key, data, content_type))
@@ -40,6 +41,10 @@ class RecordingObjectStorage:
     async def delete(self, key: str) -> bool:
         self.delete_calls.append(key)
         return True
+
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
+        self.get_bytes_calls.append((key, max_bytes))
+        return b"stored-bytes"
 
 
 class RecordingFileUploadsCollection:
@@ -172,6 +177,22 @@ async def test_object_storage_file_storage_reads_and_deletes_existing_uploads():
     assert object_storage.delete_calls == ["uploads/room-1/file-1/a.txt"]
     assert collection.delete_queries == [{"file_id": "file-1"}]
     assert deleted is True
+
+
+@pytest.mark.asyncio
+async def test_object_storage_file_storage_reads_bytes_by_storage_key():
+    object_storage = RecordingObjectStorage()
+    storage = ObjectStorageFileStorage(
+        object_storage=object_storage,
+        file_uploads_collection=RecordingFileUploadsCollection(),
+    )
+
+    data = await storage.get_bytes("uploads/room/file/report.pdf", max_bytes=1024)
+
+    assert data == b"stored-bytes"
+    assert object_storage.get_bytes_calls == [
+        ("uploads/room/file/report.pdf", 1024)
+    ]
 
 
 @pytest.mark.asyncio

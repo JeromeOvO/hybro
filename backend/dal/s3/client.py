@@ -101,6 +101,55 @@ class ObjectStorageDALImpl:
         except Exception as exc:
             raise _object_storage_error("get_text", key, exc) from exc
 
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
+        try:
+            async with self._session.client("s3", region_name=self._region) as client:
+                response = await client.get_object(Bucket=self._bucket, Key=key)
+                content_length = response.get("ContentLength")
+                if (
+                    max_bytes is not None
+                    and content_length is not None
+                    and int(content_length) > max_bytes
+                ):
+                    raise ObjectStorageError(
+                        (
+                            f"Object storage get_bytes failed for {key}: "
+                            "object exceeds max_bytes"
+                        ),
+                        details={
+                            "operation": "get_bytes",
+                            "key": key,
+                            "content_length": int(content_length),
+                            "max_bytes": max_bytes,
+                        },
+                    )
+                body = response.get("Body")
+                if body is None:
+                    raise ValueError("S3 get_object response did not include Body")
+                data = await body.read(max_bytes + 1)
+                if max_bytes is not None and len(data) > max_bytes:
+                    raise ObjectStorageError(
+                        (
+                            f"Object storage get_bytes failed for {key}: "
+                            "body exceeds max_bytes"
+                        ),
+                        details={
+                            "operation": "get_bytes",
+                            "key": key,
+                            "content_length": len(data),
+                            "max_bytes": max_bytes,
+                        },
+                    )
+                return data
+        except ClientError as exc:
+            if _is_missing_object(exc):
+                return None
+            raise _object_storage_error("get_bytes", key, exc) from exc
+        except ObjectStorageError:
+            raise
+        except Exception as exc:
+            raise _object_storage_error("get_bytes", key, exc) from exc
+
     async def delete(self, key: str) -> bool:
         try:
             async with self._session.client("s3", region_name=self._region) as client:
