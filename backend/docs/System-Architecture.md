@@ -899,6 +899,13 @@ projection as live `hitl_request` SSE. This keeps the UI consistent whether the
 user stays on the page, refreshes after the HITL is created, or reconnects after
 missing an SSE frame.
 
+Before rolling out the pending agent HITL unique partial indexes, run
+`uv run python scripts/check_pending_hitl_unique_index_readiness.py` from the
+backend directory against the target database. The script exits non-zero and
+prints duplicate pending `(room_id, display_message_id)` or
+`(room_id, continuation_message_id)` groups that must be resolved before index
+creation.
+
 ## Context Memory Workflow
 
 Room memory is updated and used across turns.

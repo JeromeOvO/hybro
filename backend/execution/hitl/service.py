@@ -245,6 +245,28 @@ class HITLService:
             request = HITLRequest(
                 **{k: v for k, v in persisted_doc.items() if k != "_id"}
             )
+            if (
+                not hitl_request_created
+                and resolved_client_request_id
+                and not request.client_request_id
+            ):
+                backfilled_client_request_id = (
+                    await self.persistence.update_hitl_request(
+                        request.request_id,
+                        client_request_id=resolved_client_request_id,
+                    )
+                )
+                if backfilled_client_request_id:
+                    request.client_request_id = resolved_client_request_id
+                else:
+                    logger.warning(
+                        "Failed to backfill client_request_id on reused HITL request",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": request.display_message_id,
+                        },
+                    )
         else:
             saved = await self.persistence.create_hitl_request(doc)
             if not saved:
@@ -439,7 +461,9 @@ class HITLService:
         is_group = request.group_id is not None
         is_last_in_group = True
         if is_group:
-            remaining = await self.persistence.count_pending_in_hitl_group(request.group_id)
+            remaining = await self.persistence.count_pending_in_hitl_group(
+                request.group_id
+            )
             if remaining < 0:
                 logger.warning(
                     "Failed to count pending in HITL group %s — "
@@ -644,8 +668,8 @@ class HITLService:
             )
 
         if is_group and not routed_response and finalized:
-            remaining_after_finalize = await self.persistence.count_pending_in_hitl_group(
-                request.group_id
+            remaining_after_finalize = (
+                await self.persistence.count_pending_in_hitl_group(request.group_id)
             )
             if remaining_after_finalize <= 0:
                 route_claimed = await self.persistence.claim_hitl_group_routing(
@@ -709,7 +733,9 @@ class HITLService:
         next HITL cycle will handle.
         """
         # Reset last_notified_state so multi-round input_required works
-        await self.persistence.reset_last_notified_state(request.continuation_message_id)
+        await self.persistence.reset_last_notified_state(
+            request.continuation_message_id
+        )
 
         reply_result = await self.agent_reply.reply_to_task(
             message_id=request.continuation_message_id,
@@ -867,7 +893,9 @@ class HITLService:
         self, user_message_id: str
     ) -> list[HITLRequest]:
         """Get pending HITL requests associated with a specific user message."""
-        docs = await self.persistence.get_pending_hitl_requests_for_message(user_message_id)
+        docs = await self.persistence.get_pending_hitl_requests_for_message(
+            user_message_id
+        )
         return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
 
     # ------------------------------------------------------------------
@@ -1021,12 +1049,19 @@ class HITLService:
         )
         user_message = None
         if callable(get_user_message):
-            maybe_user_message = get_user_message(user_message_id)
-            user_message = (
-                await maybe_user_message
-                if inspect.isawaitable(maybe_user_message)
-                else maybe_user_message
-            )
+            try:
+                maybe_user_message = get_user_message(user_message_id)
+                user_message = (
+                    await maybe_user_message
+                    if inspect.isawaitable(maybe_user_message)
+                    else maybe_user_message
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve HITL client_request_id from user message",
+                    extra={"user_message_id": user_message_id},
+                    exc_info=True,
+                )
         client_request_id = (
             user_message.client_request_id
             if user_message and isinstance(user_message.client_request_id, str)
@@ -1042,14 +1077,21 @@ class HITLService:
                 None,
             )
             if callable(resolve_fn):
-                maybe_resolved = resolve_fn(message_id.strip())
-                resolved = (
-                    await maybe_resolved
-                    if inspect.isawaitable(maybe_resolved)
-                    else maybe_resolved
-                )
-                if isinstance(resolved, str) and resolved.strip():
-                    return resolved.strip()
+                try:
+                    maybe_resolved = resolve_fn(message_id.strip())
+                    resolved = (
+                        await maybe_resolved
+                        if inspect.isawaitable(maybe_resolved)
+                        else maybe_resolved
+                    )
+                    if isinstance(resolved, str) and resolved.strip():
+                        return resolved.strip()
+                except Exception:
+                    logger.warning(
+                        "Failed to resolve HITL client_request_id from message id",
+                        extra={"message_id": message_id},
+                        exc_info=True,
+                    )
         return None
 
     async def _emit_hitl_event(
