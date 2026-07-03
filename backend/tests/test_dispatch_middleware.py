@@ -465,3 +465,56 @@ class TestAMPRelayDispatch:
         )
         assert result.status_message == "agent_card_unavailable"
         dt.dispatch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_room_runtime_missing_prepared_message_preserves_preflight_reason(self):
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
+
+        room_runtime = MagicMock()
+        process_resp = MagicMock()
+        process_resp.success = True
+        process_resp.error = "Attached file report.pdf could not be prepared."
+        process_resp.a2a_message = None
+        process_resp.message = None
+        room_runtime.process_agent_message = AsyncMock(return_value=process_resp)
+
+        db_service = MagicMock()
+        db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
+
+        dt = MagicMock()
+        dt.dispatch = AsyncMock()
+
+        amp = AgentMessageProcessor(
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
+            room_memory_reader=db_service,
+            task_tracker=MagicMock(),
+            transports={"direct": dt},
+            dispatch_chain=DispatchChain(),
+        )
+
+        agent = _make_agent(source="cloud")
+        msg = RoomAgentMessage(
+            room_id="room-001",
+            message_id="amsg-missing-prepared",
+            agent_id=agent.agent_id,
+            message_content=MessageContent(message_text=""),
+            extend_info={
+                "attachment_preflight_failure": {
+                    "code": "file_prepare_failed",
+                    "message": "Attached file report.pdf could not be prepared.",
+                }
+            },
+        )
+
+        result = await amp.process_single_message(
+            msg,
+            "room-001",
+            agent,
+            "umsg-001",
+        )
+
+        assert result.status == ProcessingStatus.FAILED
+        assert result.response_text == "Attached file report.pdf could not be prepared."
+        assert result.status_message == "file_prepare_failed"
+        dt.dispatch.assert_not_awaited()

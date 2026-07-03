@@ -199,17 +199,21 @@ class TaskStateManager:
             await self.persist_message(message)
             return
 
-        await self.transition_task(
-            message,
-            TaskState.failed,
-            error=error,
-            persist=True,
-        )
-        task = get_task(message)
-        if task is not None and error_code:
+        if task.status and is_terminal_state(task.status.state):
+            logger.warning(
+                "Attempted to transition already-terminal task %s from %s to %s",
+                message.message_id,
+                state_str(task.status.state),
+                state_str(TaskState.failed),
+            )
+            return
+
+        task.status = build_task_status(TaskState.failed, error_text=error)
+        if error_code:
             task.metadata = dict(task.metadata or {})
             task.metadata["preflight_failure_code"] = error_code
-            await self.persist_message(message)
+        message.task_updated_at = utcnow()
+        await self.persist_message(message)
 
     # ------------------------------------------------------------------
     # Convenience wrappers

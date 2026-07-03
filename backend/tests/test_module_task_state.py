@@ -14,10 +14,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import TaskState, TaskStatus
 
+from common.types import Task as CommonTask
 from common.types import TaskState as CommonTaskState
+from common.types import TaskStatus as CommonTaskStatus
 from execution.state.task_state_manager import TaskStateManager, get_task, state_str
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
-from models.room import RoomAgentMessage
+from models.room import MessageContent, RoomAgentMessage
 from models.supervisor import RunStatus
 
 
@@ -40,6 +42,30 @@ def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:
     msg.total_steps = 3
     msg.task_content = "Test task"
     return msg
+
+
+def _make_real_message_with_common_task(
+    state: CommonTaskState | None = None,
+) -> RoomAgentMessage:
+    task = (
+        CommonTask(
+            id="task-001",
+            context_id="msg-preflight",
+            status=CommonTaskStatus(state=state),
+        )
+        if state is not None
+        else None
+    )
+    return RoomAgentMessage(
+        room_id="room-001",
+        message_id="msg-preflight",
+        agent_id="agent-001",
+        message_content=MessageContent(
+            message_text="before",
+            message_task=task,
+        ),
+        task_updated_at=None,
+    )
 
 
 # =============================================================================
@@ -192,11 +218,7 @@ async def test_fail_pre_dispatch_task_creates_failed_task_when_missing():
     notif_svc.send_task_update = AsyncMock()
     tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
 
-    msg = MagicMock(spec=RoomAgentMessage)
-    msg.message_id = "msg-preflight"
-    msg.message_content = MagicMock()
-    msg.message_content.message_task = None
-    msg.task_updated_at = None
+    msg = _make_real_message_with_common_task()
 
     await tsm.fail_pre_dispatch_task(
         msg,
@@ -211,7 +233,67 @@ async def test_fail_pre_dispatch_task_creates_failed_task_when_missing():
         "Attached file report.pdf exceeds the inline A2A limit."
     )
     assert task.metadata["preflight_failure_code"] == "file_too_large"
+    assert msg.message_content.message_text == (
+        "Attached file report.pdf exceeds the inline A2A limit."
+    )
+    assert msg.task_updated_at is not None
     room_svc.update_agent_message_by_message_id.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fail_pre_dispatch_task_transitions_existing_task_once_with_metadata():
+    room_svc = MagicMock()
+    room_svc.update_agent_message_by_message_id = AsyncMock(
+        return_value=MagicMock(success=True)
+    )
+    notif_svc = MagicMock()
+    notif_svc.send_task_update = AsyncMock()
+    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+
+    msg = _make_real_message_with_common_task(CommonTaskState.submitted)
+
+    await tsm.fail_pre_dispatch_task(
+        msg,
+        error="Attached file report.pdf exceeds the inline A2A limit.",
+        error_code="file_too_large",
+    )
+
+    task = get_task(msg)
+    assert task.status.state == CommonTaskState.failed
+    assert task.status.message.parts[0].root.text == (
+        "Attached file report.pdf exceeds the inline A2A limit."
+    )
+    assert task.metadata["preflight_failure_code"] == "file_too_large"
+    assert msg.task_updated_at is not None
+    room_svc.update_agent_message_by_message_id.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fail_pre_dispatch_task_leaves_terminal_task_unchanged():
+    room_svc = MagicMock()
+    room_svc.update_agent_message_by_message_id = AsyncMock(
+        return_value=MagicMock(success=True)
+    )
+    notif_svc = MagicMock()
+    notif_svc.send_task_update = AsyncMock()
+    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+
+    msg = _make_real_message_with_common_task(CommonTaskState.completed)
+    task = get_task(msg)
+    original_status = task.status
+
+    await tsm.fail_pre_dispatch_task(
+        msg,
+        error="Attached file report.pdf exceeds the inline A2A limit.",
+        error_code="file_too_large",
+    )
+
+    assert task.status is original_status
+    assert task.status.state == CommonTaskState.completed
+    assert task.metadata is None
+    assert msg.message_content.message_text == "before"
+    assert msg.task_updated_at is None
+    room_svc.update_agent_message_by_message_id.assert_not_awaited()
 
 
 # =============================================================================
