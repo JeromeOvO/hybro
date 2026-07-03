@@ -255,6 +255,42 @@ async def test_build_attachment_file_parts_normalizes_storage_exceptions(caplog)
 
 
 @pytest.mark.asyncio
+async def test_build_attachment_file_parts_reports_storage_oversize_as_file_too_large():
+    from common.errors import ObjectStorageError
+    from room.a2a_file_parts import build_attachment_file_parts
+
+    reader = BytesReader(
+        {
+            "uploads/room/file/report.pdf": ObjectStorageError(
+                (
+                    "Object storage get_bytes failed for uploads/room/file/report.pdf: "
+                    "body exceeds max_bytes"
+                ),
+                details={
+                    "operation": "get_bytes",
+                    "key": "uploads/room/file/report.pdf",
+                    "content_length": 1025,
+                    "max_bytes": 1024,
+                },
+            )
+        }
+    )
+
+    result = await build_attachment_file_parts(
+        attachments=[_attachment()],
+        agent_card={"default_input_modes": ["application/pdf"]},
+        content_reader=reader,
+        max_raw_bytes=1024,
+        max_encoded_bytes=2048,
+    )
+
+    assert result.parts == []
+    assert result.failure is not None
+    assert result.failure.code == "file_too_large"
+    assert result.failure.file_names == ("report.pdf",)
+
+
+@pytest.mark.asyncio
 async def test_build_uri_file_part_sets_uri_without_bytes():
     from room.a2a_file_parts import (
         A2AOutboundFile,

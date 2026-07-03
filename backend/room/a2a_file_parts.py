@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Protocol
 
+from common.errors import ObjectStorageError
 from common.protocols import AttachmentContentReader
 from common.types import FileContent, FilePart, Part
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
@@ -108,6 +109,19 @@ def _preflight_failure(
     )
 
 
+def _object_storage_error_exceeds_max_bytes(exc: ObjectStorageError) -> bool:
+    details = exc.details or {}
+    content_length = details.get("content_length")
+    max_bytes = details.get("max_bytes")
+    if content_length is not None and max_bytes is not None:
+        try:
+            if int(content_length) > int(max_bytes):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return "exceeds max_bytes" in str(exc).lower()
+
+
 async def build_inline_file_part(
     file: A2AOutboundFile,
     *,
@@ -118,6 +132,31 @@ async def build_inline_file_part(
     context = context or AttachmentDispatchContext()
     try:
         raw = await content_reader.get_bytes(file.storage_key, max_bytes=max_raw_bytes)
+    except ObjectStorageError as exc:
+        if _object_storage_error_exceeds_max_bytes(exc):
+            return _preflight_failure(
+                "file_too_large",
+                f"Uploaded file '{file.name}' exceeds the maximum raw file size.",
+                file_names=(file.name,),
+            )
+        logger.exception(
+            "Attachment storage read failed during A2A inline dispatch",
+            extra={
+                "room_id": context.room_id,
+                "message_id": context.message_id,
+                "agent_id": context.agent_id,
+                "storage_key": file.storage_key,
+                "file_name": file.name,
+                "mime_type": file.mime_type,
+                "declared_size_bytes": file.size_bytes,
+                "max_raw_bytes": max_raw_bytes,
+            },
+        )
+        return _preflight_failure(
+            "storage_unavailable",
+            f"Uploaded file '{file.name}' is temporarily unavailable.",
+            file_names=(file.name,),
+        )
     except Exception:
         logger.exception(
             "Attachment storage read failed during A2A inline dispatch",
