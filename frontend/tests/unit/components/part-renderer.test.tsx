@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { PartRenderer } from '@/components/part-renderer'
+import { CollapsibleJsonBlock, PartRenderer } from '@/components/part-renderer'
 import type { ArtifactPart } from '@/stores/message-store/types'
 
 describe('PartRenderer', () => {
@@ -90,6 +90,15 @@ describe('PartRenderer', () => {
     const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
     expect(trigger).toBeTruthy()
     expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('renders only one collapsible trigger when a JSON block is open', () => {
+    const data = { foo: 'bar', count: 42 }
+    const { container } = render(
+      <CollapsibleJsonBlock data={data} open={true} onOpenChange={() => {}} />
+    )
+
+    expect(container.querySelectorAll('[data-slot="collapsible-trigger"]')).toHaveLength(1)
   })
 
   it('renders text part containing a JSON array as collapsible JSON block', () => {

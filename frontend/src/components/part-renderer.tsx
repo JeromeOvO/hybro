@@ -176,7 +176,11 @@ export function CollapsibleJsonBlock({ data, open, onOpenChange }: {
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="mt-1">
-          <MarkdownContent content={fenced} autoFormatJson={false} />
+          <MarkdownContent
+            content={fenced}
+            autoFormatJson={false}
+            collapseJsonCodeBlocks={false}
+          />
         </div>
       </CollapsibleContent>
     </Collapsible>
