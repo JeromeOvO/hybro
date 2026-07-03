@@ -142,6 +142,55 @@ def test_runtime_config_unification_env_overrides(monkeypatch: pytest.MonkeyPatc
     assert settings.memory_search_index_name == "memory-custom"
 
 
+def test_a2a_inline_file_dispatch_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("A2A_INLINE_FILE_MAX_RAW_BYTES", raising=False)
+    monkeypatch.delenv("A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.a2a_inline_file_max_raw_bytes == 5 * 1024 * 1024
+    assert settings.a2a_inline_message_max_encoded_bytes == 6_990_508
+
+
+def test_a2a_inline_file_dispatch_env_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("A2A_INLINE_FILE_MAX_RAW_BYTES", "1024")
+    monkeypatch.setenv("A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES", "2048")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.a2a_inline_file_max_raw_bytes == 1024
+    assert settings.a2a_inline_message_max_encoded_bytes == 2048
+
+
+@pytest.mark.parametrize(
+    ("raw_file_limit", "raw_message_limit", "expected_raw", "expected_encoded"),
+    [
+        ("", "", 5 * 1024 * 1024, 6_990_508),
+        ("0", "0", 1, 4),
+        ("-9", "-1", 1, 4),
+        ("3", "0", 3, 4),
+        ("4", "", 4, 8),
+        ("bad", "also-bad", 5 * 1024 * 1024, 6_990_508),
+    ],
+)
+def test_a2a_inline_file_dispatch_normalizes_limits(
+    raw_file_limit: str,
+    raw_message_limit: str,
+    expected_raw: int,
+    expected_encoded: int,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        a2a_inline_file_max_raw_bytes=raw_file_limit,
+        a2a_inline_message_max_encoded_bytes=raw_message_limit,
+    )
+
+    assert settings.a2a_inline_file_max_raw_bytes == expected_raw
+    assert settings.a2a_inline_message_max_encoded_bytes == expected_encoded
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
