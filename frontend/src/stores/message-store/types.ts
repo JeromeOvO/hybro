@@ -77,9 +77,9 @@ export interface MessageEntity {
   hitlChoices?: string[] | null
   hitlExpiresAt?: string
   hitlResolved?: boolean
-  hitlGroupId?: string
-  hitlGroupTotal?: number
-  hitlGroupIndex?: number
+  hitlGroupId?: string | null
+  hitlGroupTotal?: number | null
+  hitlGroupIndex?: number | null
   hitlUserAnswer?: string
 
   // ── Provenance & conflict resolution ──────────────────────
@@ -153,9 +153,9 @@ export interface IncomingMessage {
   hitlChoices?: string[] | null
   hitlExpiresAt?: string
   hitlResolved?: boolean
-  hitlGroupId?: string
-  hitlGroupTotal?: number
-  hitlGroupIndex?: number
+  hitlGroupId?: string | null
+  hitlGroupTotal?: number | null
+  hitlGroupIndex?: number | null
   hitlUserAnswer?: string
   isEphemeral?: boolean
   artifacts?: ArtifactData[]

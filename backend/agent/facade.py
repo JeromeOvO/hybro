@@ -38,6 +38,7 @@ from common.protocols import (
     VectorDAL,
 )
 from common.protocols.hub_protocols import validate_hub_liveness_reader
+from common.utils.a2a_file_modes import agent_accepts_required_input_modes
 
 logger = logging.getLogger(__name__)
 
@@ -553,6 +554,18 @@ class AgentFacade:
                 doc
                 for doc in candidates
                 if doc.get("agent_id") not in excluded_agent_ids
+            ]
+            if not candidates:
+                return []
+
+        if required_input_modes is not None:
+            candidates = [
+                doc
+                for doc in candidates
+                if agent_accepts_required_input_modes(
+                    doc.get("agent_card") or {},
+                    required_input_modes,
+                )
             ]
             if not candidates:
                 return []

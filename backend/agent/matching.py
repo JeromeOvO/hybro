@@ -3,16 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from common.config import settings
-
-FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
-FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
-FILE_CAPABLE_MIMES = frozenset({
-    "application/pdf",
-    "application/octet-stream",
-    "application/zip",
-    "application/x-tar",
-    "application/gzip",
-})
+from common.utils.a2a_file_modes import (
+    agent_accepts_required_input_modes,
+    agent_supports_any_file,
+)
 
 
 VECTOR_WEIGHT = settings.match_vector_weight
@@ -24,30 +18,17 @@ QUALITY_THRESHOLD = settings.match_quality_threshold
 
 def supports_files(agent: dict[str, Any]) -> bool:
     card = agent.get("agent_card") or {}
-    raw_modes = (
-        card.get("default_input_modes")
-        or card.get("defaultInputModes")
-        or card.get("default_input_modes".lower())
-        or ["text"]
-    )
-    modes = set(raw_modes)
-    if modes & FILE_CAPABLE_EXACT:
-        return True
-    if modes & FILE_CAPABLE_MIMES:
-        return True
-    return any(
-        any(mode.startswith(prefix) for prefix in FILE_CAPABLE_PREFIXES)
-        for mode in modes
-    )
+    return agent_supports_any_file(card)
 
 
 def compute_capability_score(
     agent: dict[str, Any],
     required_input_modes: list[str] | None = None,
 ) -> float:
-    if required_input_modes is None:
+    card = agent.get("agent_card") or {}
+    if agent_accepts_required_input_modes(card, required_input_modes):
         return 1.0
-    return 1.0 if supports_files(agent) else 0.0
+    return 0.0
 
 
 def compute_final_score(
@@ -112,6 +93,8 @@ def rank_agent_docs(
     for doc in docs:
         vector_score = vector_scores.get(doc.get("agent_id"), 0.0)
         capability_score = compute_capability_score(doc, required_input_modes)
+        if required_input_modes is not None and capability_score <= 0:
+            continue
         ranked.append(
             {
                 "agent_id": doc.get("agent_id"),

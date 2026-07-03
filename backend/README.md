@@ -31,6 +31,28 @@ The project will be accessible at [http://localhost:8000](http://localhost:8000)
 
 ---
 
+## Environment Configuration
+
+### A2A Inline File Dispatch Limits
+
+`A2A_INLINE_FILE_MAX_RAW_BYTES` limits the raw bytes for one user-uploaded file
+before it is base64 encoded into an outbound A2A message. The default is
+`5242880` bytes, or 5 MiB. Room attachment uploads are capped at the same
+limit so accepted uploads do not later fail inline agent dispatch for size
+alone.
+
+`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits the aggregate base64-encoded file
+bytes across all file parts in one outbound A2A message. The default is
+`6990508` bytes. When this setting is `0` or blank, the backend derives it from
+`A2A_INLINE_FILE_MAX_RAW_BYTES` as `4 * ceil(raw_limit / 3)`.
+
+Treat these values as memory and backpressure controls for inline bytes
+dispatch. They are not URI-dispatch feature flags: user-uploaded files that are
+sent to agents use inline A2A file bytes, while platform storage URIs stay
+internal to Hybro.
+
+---
+
 ## Dependency Management with uv
 
 - **Add a new dependency:**

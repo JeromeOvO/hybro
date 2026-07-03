@@ -177,7 +177,11 @@ function isConversationMarkdownClass(className?: string): boolean {
 const OlDepthContext = React.createContext(0)
 
 /** Shared custom component overrides used by all Streamdown instances. */
-function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
+function makeComponents(
+  isStreaming: boolean,
+  conversationTypography: boolean,
+  collapseJsonCodeBlocks: boolean,
+) {
   const blockSpacing = conversationTypography ? undefined : 'mb-2 last:mb-0'
   const listSpacing = conversationTypography ? undefined : 'mb-2 ml-4 list-disc'
   const orderedListSpacing = conversationTypography ? undefined : 'mb-2 ml-4 list-decimal'
@@ -230,7 +234,7 @@ function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
       )
     }
     const isJson = match?.[1] === 'json'
-    if (isJson && !isStreaming) {
+    if (isJson && !isStreaming && collapseJsonCodeBlocks) {
       const text = extractText(children)
       const lineCount = text.split('\n').filter((l, i, a) => i < a.length - 1 || l.trim()).length
       return (
@@ -350,16 +354,20 @@ function makeComponents(isStreaming: boolean, conversationTypography: boolean) {
  * @param isStreaming    - Pass true while tokens are still arriving.
  * @param autoFormatJson - When true (default), raw JSON strings are wrapped in
  *                         a fenced code block for pretty-printing.
+ * @param collapseJsonCodeBlocks - When true (default), JSON fenced code blocks
+ *                                 get their own collapsible wrapper.
  */
 export function MarkdownContent({
   content,
   isStreaming = false,
   autoFormatJson = true,
+  collapseJsonCodeBlocks = true,
   className,
 }: {
   content: string
   isStreaming?: boolean
   autoFormatJson?: boolean
+  collapseJsonCodeBlocks?: boolean
   className?: string
 }) {
   const contentRef = useRef<HTMLDivElement>(null)
@@ -373,8 +381,8 @@ export function MarkdownContent({
   // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const components = React.useMemo(
-    () => makeComponents(isStreaming, conversationTypography),
-    [isStreaming, conversationTypography],
+    () => makeComponents(isStreaming, conversationTypography, collapseJsonCodeBlocks),
+    [isStreaming, conversationTypography, collapseJsonCodeBlocks],
   )
   const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     const container = contentRef.current

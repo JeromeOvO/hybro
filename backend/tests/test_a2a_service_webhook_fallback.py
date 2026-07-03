@@ -580,6 +580,52 @@ class TestReplyToTaskWebhookFallback:
         assert cfg["push_notification_config"] is None
         assert cfg["blocking"] is True
 
+    @pytest.mark.asyncio
+    async def test_hitl_missing_message_agent_url_uses_agent_card_url(self):
+        """HITL: legacy messages without agent_url can still route via agent_id."""
+        from a2a_adapter.runtime_service import A2AService
+
+        captured_request = {}
+
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message(agent_url=None)
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-legacy")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(
+            return_value=_make_agent_record(push_capable=False)
+        )
+        mock_db.update_task_on_message = AsyncMock()
+        service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
+
+        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
+            captured_request["agent_url"] = agent_url
+            captured_request["message_data"] = message_data
+            captured_request.update(kwargs)
+            return _task_facade_response()
+
+        with (
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
+                fake_send_hitl_reply,
+            ),
+        ):
+            await service.reply_to_task(
+                message_id="msg-hitl-legacy",
+                task_id="task-hitl-legacy",
+                context_id="ctx-hitl-legacy",
+                user_input="continue",
+            )
+
+        assert captured_request["agent_url"] == "http://remote-agent:8080/"
+        assert captured_request["push_notification_config"] is None
+        assert captured_request["blocking"] is True
+
 
 # ---------------------------------------------------------------------------
 # Tests for persisted flag propagation

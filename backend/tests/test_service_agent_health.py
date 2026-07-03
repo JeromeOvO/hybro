@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import logging
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
-from a2a_adapter.agent_card_health import fetch_agent_card_for_health
+from a2a_adapter import agent_card_health
+from a2a_adapter.agent_card_health import (
+    fetch_agent_card_for_health,
+    probe_agent_card_for_health,
+)
 from a2a_adapter.constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -54,6 +61,17 @@ class _Client:
     async def get(self, url: str):
         self.urls.append(url)
         return self.responses.pop(0)
+
+
+class _AsyncClientContext:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
 
 
 class _Repo:
@@ -119,13 +137,79 @@ async def test_fetch_agent_card_for_health_keeps_healthy_invalid_card_nonfatal()
 
 
 @pytest.mark.asyncio
-async def test_check_agent_health_returns_unhealthy_on_request_errors(monkeypatch):
-    async def _raise_timeout(*_args, **_kwargs):
-        raise httpx.TimeoutException("timed out")
+async def test_probe_agent_card_for_health_retries_host_gateway_for_loopback_url(
+    monkeypatch,
+    caplog,
+):
+    class _LoopbackClient:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        async def get(self, url: str):
+            self.urls.append(url)
+            if url.startswith("http://127.0.0.1:9060/"):
+                raise httpx.ConnectError("All connection attempts failed")
+            return _Response(200, _card_payload(url="http://127.0.0.1:9060"))
+
+    client = _LoopbackClient()
+    monkeypatch.setattr(
+        agent_card_health.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(client),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await probe_agent_card_for_health(
+            "http://127.0.0.1:9060",
+            timeout=1,
+        )
+
+    assert result.is_healthy is True
+    assert result.card is not None
+    assert client.urls == [
+        "http://127.0.0.1:9060" + AGENT_CARD_WELL_KNOWN_PATH,
+        "http://host.docker.internal:9060" + AGENT_CARD_WELL_KNOWN_PATH,
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_check_agent_health_delegates_to_adapter_probe(monkeypatch):
+    captured = {}
+    live_card = AgentCard(**_card_payload(name="Live Health Agent"))
+
+    async def _probe(agent_url: str, *, timeout: float):
+        captured["agent_url"] = agent_url
+        captured["timeout"] = timeout
+        return SimpleNamespace(
+            is_healthy=True,
+            card=live_card,
+            status_code=200,
+            error=None,
+        )
 
     monkeypatch.setattr(
-        "agent.health.fetch_agent_card_for_health",
-        _raise_timeout,
+        "agent.health.probe_agent_card_for_health",
+        _probe,
+    )
+    service = AgentHealthService(repository=_Repo(), timeout_seconds=9)
+    agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))
+
+    assert await service.check_agent_health(agent, timeout=2) == (True, live_card)
+    assert captured == {
+        "agent_url": "https://agent.example",
+        "timeout": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_agent_health_returns_unhealthy_on_adapter_errors(monkeypatch):
+    async def _raise_adapter_error(*_args, **_kwargs):
+        raise RuntimeError("adapter broke")
+
+    monkeypatch.setattr(
+        "agent.health.probe_agent_card_for_health",
+        _raise_adapter_error,
     )
     service = AgentHealthService(repository=_Repo())
     agent = Agent(agent_id="agent-1", agent_card=AgentCard(**_card_payload()))

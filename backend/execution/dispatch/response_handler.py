@@ -25,8 +25,7 @@ class ResponseMessageWriter(Protocol):
         artifact: dict,
         *,
         append: bool = False,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class ResponseTaskWriter(Protocol):
@@ -39,45 +38,36 @@ class ResponseTaskWriter(Protocol):
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
-    ) -> tuple[bool, str | None]:
-        ...
+    ) -> tuple[bool, str | None]: ...
 
 
 class ResponseContinuationStore(Protocol):
     async def get_pending_continuation_on_message(
         self,
         message_id: str,
-    ) -> dict | None:
-        ...
+    ) -> dict | None: ...
 
 
 class ResponseClientRequestResolver(Protocol):
     async def resolve_client_request_id_for_message_id(
         self, message_id: str
-    ) -> str | None:
-        ...
+    ) -> str | None: ...
 
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ):
-        ...
+    async def get_room_agent_message_by_message_id(self, message_id: str): ...
 
     async def resolve_client_request_id_for_agent_message(
         self, room_agent_message
-    ) -> str | None:
-        ...
+    ) -> str | None: ...
 
 
 class ResponseRoomReader(Protocol):
-    async def get_room_by_room_id(self, room_id: str):
-        ...
+    async def get_room_by_room_id(self, room_id: str): ...
 
 
 class ResponseHITLReader(Protocol):
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str
-    ) -> list[dict]:
-        ...
+    ) -> list[dict]: ...
 
 
 logger = get_logger(__name__)
@@ -136,19 +126,27 @@ class AgentResponseHandler:
             return None
 
         resolve_from_message_id = getattr(
-            self._client_request_resolver, "resolve_client_request_id_for_message_id", None
+            self._client_request_resolver,
+            "resolve_client_request_id_for_message_id",
+            None,
         )
         if callable(resolve_from_message_id):
             maybe_resolved = resolve_from_message_id(message_id)
             resolved = (
-                await maybe_resolved if inspect.isawaitable(maybe_resolved) else maybe_resolved
+                await maybe_resolved
+                if inspect.isawaitable(maybe_resolved)
+                else maybe_resolved
             )
             if isinstance(resolved, str) and resolved.strip():
                 return resolved.strip()
 
-        get_agent_message = getattr(self._client_request_resolver, "get_room_agent_message_by_message_id", None)
+        get_agent_message = getattr(
+            self._client_request_resolver, "get_room_agent_message_by_message_id", None
+        )
         resolve_from_agent_message = getattr(
-            self._client_request_resolver, "resolve_client_request_id_for_agent_message", None
+            self._client_request_resolver,
+            "resolve_client_request_id_for_agent_message",
+            None,
         )
         if callable(get_agent_message) and callable(resolve_from_agent_message):
             maybe_room_agent_message = get_agent_message(message_id)
@@ -349,9 +347,7 @@ class AgentResponseHandler:
             )
             if resolved_text:
                 display_text = resolved_text
-        await self._notify_terminal_best_effort(
-            e, coerce_task_state("completed")
-        )
+        await self._notify_terminal_best_effort(e, coerce_task_state("completed"))
         await self._terminate_slot(
             e,
             "completed",
@@ -406,11 +402,6 @@ class AgentResponseHandler:
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
-        await self._notify(
-            e,
-            coerce_task_state(state),
-            emit_processing_status=not is_interactive_state(state),
-        )
 
         # For async transports (relay, webhook) the queue has already moved
         # to PAUSED before this callback fires, so QueueExecutor never sees
@@ -419,6 +410,12 @@ class AgentResponseHandler:
         if is_interactive_state(state):
             await self._maybe_create_hitl_for_async_interactive(e)
 
+        await self._notify(
+            e,
+            coerce_task_state(state),
+            emit_processing_status=not is_interactive_state(state),
+        )
+
     async def _maybe_create_hitl_for_async_interactive(self, e: AgentEvent) -> None:
         """Create HITL request for async transports (relay / webhook).
 
@@ -426,7 +423,11 @@ class AgentResponseHandler:
         which proves this is an async callback — not an inline direct dispatch
         where QueueExecutor handles HITL creation itself.
         """
-        continuation = await self._continuation_store.get_pending_continuation_on_message(e.message_id)
+        continuation = (
+            await self._continuation_store.get_pending_continuation_on_message(
+                e.message_id
+            )
+        )
         if not continuation:
             return
 
@@ -441,14 +442,10 @@ class AgentResponseHandler:
                 e.message_id,
             )
             return
-        if await self._has_pending_hitl_for_continuation(user_message_id, e.message_id):
-            logger.info(
-                "Skipping duplicate HITL request for async interactive event on %s",
-                e.message_id,
-            )
-            return
 
-        msg = await self._client_request_resolver.get_room_agent_message_by_message_id(e.message_id)
+        msg = await self._client_request_resolver.get_room_agent_message_by_message_id(
+            e.message_id
+        )
         agent_name = e.agent_name
         if not agent_name and msg:
             try:
@@ -482,23 +479,6 @@ class AgentResponseHandler:
                 hitl_req.request_id,
                 e.message_id,
             )
-
-    async def _has_pending_hitl_for_continuation(
-        self, user_message_id: str, continuation_message_id: str
-    ) -> bool:
-        get_pending = getattr(self._hitl_reader, "get_pending_hitl_requests_for_message", None)
-        if not callable(get_pending):
-            return False
-        result = get_pending(user_message_id)
-        pending = await result if inspect.isawaitable(result) else result
-        if not isinstance(pending, list):
-            return False
-        return any(
-            item.get("continuation_message_id") == continuation_message_id
-            and item.get("status") == "pending"
-            for item in pending
-            if isinstance(item, dict)
-        )
 
     # --- Non-terminal events ---
 
@@ -654,7 +634,9 @@ class AgentResponseHandler:
         because it uses injected services instead of global singletons.
         """
         if self._task_notifier is None or self._task_notification_impl is None:
-            raise RuntimeError("Task notification runtime dependencies have not been bound")
+            raise RuntimeError(
+                "Task notification runtime dependencies have not been bound"
+            )
         if self._task_notification_store is None:
             raise RuntimeError("Task notification store dependency has not been bound")
 

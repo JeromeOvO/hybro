@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from a2a.types import TaskState
+from a2a_adapter.task_status import coerce_task_state
 
 from common.dto import MessageCommitted
 from common.utils.cancellation import CancellationToken
@@ -262,6 +263,91 @@ class TestProcessQueue:
 
         assert result.result == QueueResult.COMPLETED
         assert qe._process_single_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_process_queue_failed_result_persists_preflight_reason(self):
+        qe = _make_queue_executor()
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info={
+                "attachment_preflight_failure": {
+                    "code": "file_too_large",
+                    "message": "Attached file report.pdf exceeds the inline A2A limit.",
+                }
+            },
+            agent_id="a1",
+            user_id="u1",
+            turn_id=None,
+        )
+        queue = deque([msg])
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card = MagicMock()
+        agent.agent_card.name = "TestAgent"
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(
+                ProcessingStatus.FAILED,
+                response_text="Attached file report.pdf exceeds the inline A2A limit.",
+                status_message="file_too_large",
+            )
+        )
+        qe.tsm.fail_pre_dispatch_task = AsyncMock()
+        qe.response_handler.notify_task_update = AsyncMock()
+        qe.message_writer.cancel_descendants = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.FAILED
+        qe.tsm.fail_pre_dispatch_task.assert_awaited_once_with(
+            msg,
+            error="Attached file report.pdf exceeds the inline A2A limit.",
+            error_code="file_too_large",
+        )
+        qe.response_handler.notify_task_update.assert_awaited_once_with(
+            message_id="msg-1",
+            state=coerce_task_state("failed"),
+            room_id="room-1",
+            user_id="u1",
+            error="Attached file report.pdf exceeds the inline A2A limit.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_queue_generic_failed_result_does_not_create_preflight_task(self):
+        qe = _make_queue_executor()
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+            turn_id=None,
+        )
+        queue = deque([msg])
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card = MagicMock()
+        agent.agent_card.name = "TestAgent"
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(
+                ProcessingStatus.FAILED,
+                response_text="Agent processing failed downstream.",
+                status_message=None,
+            )
+        )
+        qe.tsm.fail_pre_dispatch_task = AsyncMock()
+        qe.response_handler.notify_task_update = AsyncMock()
+        qe.message_writer.cancel_descendants = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.FAILED
+        qe.tsm.fail_pre_dispatch_task.assert_not_awaited()
+        qe.response_handler.notify_task_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_process_queue_submits_system_hybro_task_through_focused_ports(self):

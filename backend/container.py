@@ -32,6 +32,7 @@ from common.protocols import (
     AgentRegistry,
     AgentRegistryWriter,
     AgentRepository,
+    AttachmentMetadataReader,
     ContentStorageRepository,
     ContextAssembler,
     ContextMemoryRuntime,
@@ -324,6 +325,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             file_storage = create_file_storage(
                 object_storage=object_storage,
                 file_uploads_collection=file_uploads_collection,
+                max_upload_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
             )
 
             a2a_artifact_storage.bind_a2a_storage_dependencies(
@@ -513,6 +515,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 mongo=mongo_dal,
                 agent_registry=_agent_deps.agent_registry,
                 membership_source=membership_source,
+                attachment_metadata_reader=file_storage,
             )
             _room_facade = _room_deps.room_registry
             # Runtime store aggregate: callers below receive focused runtime-store parts.
@@ -581,6 +584,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 create_hitl_request=hitl_store.create_hitl_request,
                 update_agent_message_task_state=(
                     hitl_store.update_agent_message_task_state
+                ),
+                find_pending_hitl_request_for_agent_message=(
+                    hitl_store.find_pending_hitl_request_for_agent_message
+                ),
+                create_or_reuse_pending_hitl_request=(
+                    hitl_store.create_or_reuse_pending_hitl_request
+                ),
+                persist_pending_hitl_on_agent_message=(
+                    hitl_store.persist_pending_hitl_on_agent_message
+                ),
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
+                resolve_client_request_id_for_message_id=(
+                    task_store.resolve_client_request_id_for_message_id
                 ),
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
@@ -917,6 +935,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
             room_runtime.bind_object_storage(object_storage)
+            room_runtime.bind_attachment_metadata_reader(file_storage)
+            room_runtime.bind_attachment_content_reader(file_storage)
+            room_runtime.bind_a2a_inline_file_limits(
+                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
+                max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
+            )
             route_room_center.bind_facade(_room_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
@@ -1084,8 +1108,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         else:
             if healed:
                 logger.info("startup heal: healed %s diverged run(s)", healed)
-        if runtime.settings.webhook_signing_key:
-            await hitl_store.ensure_hitl_indexes()
+        await hitl_store.ensure_hitl_indexes()
 
         # Init DAL Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
@@ -1960,10 +1983,12 @@ def create_file_storage(
     *,
     object_storage: ObjectStorageDAL,
     file_uploads_collection: MongoCollection,
+    max_upload_bytes: int | None = settings.a2a_inline_file_max_raw_bytes,
 ) -> FileStorage:
     return ObjectStorageFileStorage(
         object_storage=object_storage,
         file_uploads_collection=file_uploads_collection,
+        max_upload_bytes=max_upload_bytes,
     )
 
 
@@ -2177,6 +2202,7 @@ def create_room_deps(
     mongo: MongoDAL,
     agent_registry: AgentRegistry,
     membership_source: RoomMembershipSeedSource,
+    attachment_metadata_reader: AttachmentMetadataReader | None = None,
 ) -> RoomDeps:
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
@@ -2187,6 +2213,7 @@ def create_room_deps(
         agent_registry=agent_registry,
         membership_source=membership_source,
         quote_repository=quote_repository,
+        attachment_metadata_reader=attachment_metadata_reader,
         id_factory=lambda: uuid4().hex,
         now=utcnow,
     )

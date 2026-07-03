@@ -218,11 +218,13 @@ def extract_text_from_artifacts(artifacts: list) -> str | None:
 def extract_agent_text_from_room_message(msg: object) -> str | None:
     """Safely extract the agent's latest response text from a RoomAgentMessage.
 
-    Checks two storage locations in priority order:
-    1. Agent-role entries in ``message_content.message_task.history`` (most
-       reliable for push-notification and streaming agents).
-    2. ``message_content.message_text`` (populated by the DirectTransport sync
-       path, which does not append to history).
+    Checks storage locations in canonical-output priority order:
+    1. ``message_content.message_task.artifacts`` (A2A-compliant task output).
+    2. ``message_content.message_text`` (the backend's canonical display text).
+    3. ``message_content.message_task.status.message`` (compatibility fallback
+       for agents that put completed output in status.message).
+    4. Agent-role entries in ``message_content.message_task.history`` (last
+       fallback; history can contain intermediate status/progress messages).
 
     All parts of the latest agent-role message are joined so that multi-part
     responses are preserved (e.g. reasoning part + answer part).
@@ -236,6 +238,25 @@ def extract_agent_text_from_room_message(msg: object) -> str | None:
 
         task = getattr(mc, "message_task", None)
         if task is not None:
+            artifacts = getattr(task, "artifacts", None)
+            if isinstance(artifacts, list) and artifacts:
+                text = extract_text_from_artifacts(artifacts)
+                if text:
+                    return text
+
+        message_text = getattr(mc, "message_text", None)
+        if isinstance(message_text, str) and message_text:
+            return message_text
+
+        if task is not None:
+            status = getattr(task, "status", None)
+            status_message = getattr(status, "message", None)
+            status_parts = getattr(status_message, "parts", None)
+            if isinstance(status_parts, list) and status_parts:
+                text = extract_parts(status_parts).text
+                if text:
+                    return text
+
             history = getattr(task, "history", None)
             if history:
                 for entry in reversed(history):
@@ -246,10 +267,6 @@ def extract_agent_text_from_room_message(msg: object) -> str | None:
                             text = extract_parts(parts).text
                             if text:
                                 return text
-
-        message_text = getattr(mc, "message_text", None)
-        if message_text:
-            return message_text
 
         return None
     except (AttributeError, IndexError, TypeError):

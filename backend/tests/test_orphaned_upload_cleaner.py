@@ -24,7 +24,13 @@ class AsyncCursor:
             raise StopAsyncIteration from exc
 
 
-def _cleaner_with_deps(*, docs, reference=None, storage_deleted=True):
+def _cleaner_with_deps(
+    *,
+    docs,
+    reference=None,
+    storage_deleted=True,
+    storage_error: Exception | None = None,
+):
     file_uploads = MagicMock()
     file_uploads.find.return_value = AsyncCursor(docs)
     file_uploads.delete_one = AsyncMock()
@@ -33,7 +39,9 @@ def _cleaner_with_deps(*, docs, reference=None, storage_deleted=True):
     messages.find_one = AsyncMock(return_value=reference)
 
     storage = MagicMock()
-    storage.delete_file = AsyncMock(return_value=storage_deleted)
+    storage.delete = AsyncMock(return_value=storage_deleted)
+    if storage_error is not None:
+        storage.delete.side_effect = storage_error
 
     cleaner = OrphanedUploadCleaner()
     cleaner.set_cleanup_deps(
@@ -62,7 +70,7 @@ async def test_orphaned_upload_cleaner_deletes_unreferenced_upload():
     messages.find_one.assert_awaited_once_with(
         {"message_content.attachments.file_id": "file-1"}
     )
-    storage.delete_file.assert_awaited_once_with("uploads/file-1")
+    storage.delete.assert_awaited_once_with("uploads/file-1")
     file_uploads.delete_one.assert_awaited_once_with({"_id": "mongo-id"})
 
 
@@ -77,7 +85,7 @@ async def test_orphaned_upload_cleaner_keeps_referenced_upload():
     deleted = await cleaner.cleanup_orphaned_uploads()
 
     assert deleted == 0
-    storage.delete_file.assert_not_awaited()
+    storage.delete.assert_not_awaited()
     file_uploads.delete_one.assert_not_awaited()
 
 
@@ -92,5 +100,20 @@ async def test_orphaned_upload_cleaner_keeps_metadata_when_storage_delete_fails(
     deleted = await cleaner.cleanup_orphaned_uploads()
 
     assert deleted == 0
-    storage.delete_file.assert_awaited_once_with("uploads/file-1")
+    storage.delete.assert_awaited_once_with("uploads/file-1")
+    file_uploads.delete_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_orphaned_upload_cleaner_keeps_metadata_when_storage_delete_raises():
+    doc = {"_id": "mongo-id", "file_id": "file-1", "s3_key": "uploads/file-1"}
+    cleaner, file_uploads, _messages, storage = _cleaner_with_deps(
+        docs=[doc],
+        storage_error=RuntimeError("s3 unavailable"),
+    )
+
+    deleted = await cleaner.cleanup_orphaned_uploads()
+
+    assert deleted == 0
+    storage.delete.assert_awaited_once_with("uploads/file-1")
     file_uploads.delete_one.assert_not_awaited()

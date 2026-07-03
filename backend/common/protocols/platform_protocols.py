@@ -113,6 +113,11 @@ class AttachmentMetadataReader(Protocol):
 
 
 @runtime_checkable
+class AttachmentContentReader(Protocol):
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None: ...
+
+
+@runtime_checkable
 class AttachmentCleanupPort(Protocol):
     async def delete_for_room(self, room_id: str) -> int: ...
 
@@ -128,6 +133,7 @@ __all__ = [
     "GatewayDiscoveryProvider",
     "HealthCheck",
     "AttachmentCleanupPort",
+    "AttachmentContentReader",
     "AttachmentMetadataReader",
     "GatewayService",
     "RateLimiter",

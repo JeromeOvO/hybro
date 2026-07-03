@@ -28,11 +28,15 @@ class LeaderGate(Protocol):
     async def release(self, name: str) -> None: ...
 
 
+class ObjectStorageDeletePort(Protocol):
+    async def delete(self, key: str) -> bool: ...
+
+
 @dataclass(frozen=True)
 class OrphanedUploadCleanerDeps:
     file_uploads_collection: Any
     room_user_messages_collection: Any
-    object_storage: Any
+    object_storage: ObjectStorageDeletePort
 
 
 class OrphanedUploadCleaner:
@@ -124,7 +128,15 @@ class OrphanedUploadCleaner:
                 {"message_content.attachments.file_id": doc["file_id"]}
             )
             if ref is None:
-                storage_deleted = await deps.object_storage.delete_file(doc["s3_key"])
+                try:
+                    storage_deleted = await deps.object_storage.delete(doc["s3_key"])
+                except Exception:
+                    logger.warning(
+                        "Object deletion failed for orphan %s — keeping metadata for retry",
+                        doc["file_id"],
+                        exc_info=True,
+                    )
+                    continue
                 if not storage_deleted:
                     logger.warning(
                         "Object deletion failed for orphan %s — keeping metadata for retry",

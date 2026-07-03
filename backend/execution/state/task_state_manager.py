@@ -14,9 +14,19 @@ from __future__ import annotations
 
 from collections import deque
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from a2a_adapter.task_status import build_task_status, coerce_task_state
-from common.a2a_constants import is_terminal_state
+from common.a2a_constants import SyntheticTaskId, is_terminal_state
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.processing import ProcessingContext
@@ -154,6 +164,64 @@ class TaskStateManager:
 
         if persist:
             await self.persist_message(message)
+
+    async def fail_pre_dispatch_task(
+        self,
+        message: RoomAgentMessage,
+        *,
+        error: str,
+        error_code: str | None = None,
+    ) -> None:
+        task = get_task(message)
+        if task is None:
+            if message.message_content is None:
+                return
+            now = utcnow()
+            task = Task(
+                id=SyntheticTaskId.FAILED,
+                context_id=message.message_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=Message(
+                        role=MessageRole.AGENT,
+                        parts=[Part(root=TextPart(text=error))],
+                        message_id=str(uuid4()),
+                    ),
+                ),
+                metadata=(
+                    {"preflight_failure_code": error_code}
+                    if error_code
+                    else None
+                ),
+            )
+            message.message_content.message_task = task
+            message.message_content.message_text = error
+            message.has_task_tracking = True
+            if message.task_created_at is None:
+                message.task_created_at = now
+            message.task_updated_at = now
+            await self.persist_message(message)
+            return
+
+        if task.status and is_terminal_state(task.status.state):
+            logger.warning(
+                "Attempted to transition already-terminal task %s from %s to %s",
+                message.message_id,
+                state_str(task.status.state),
+                state_str(TaskState.failed),
+            )
+            return
+
+        task.status = build_task_status(TaskState.failed, error_text=error)
+        if error_code:
+            task.metadata = dict(task.metadata or {})
+            task.metadata["preflight_failure_code"] = error_code
+        now = utcnow()
+        message.has_task_tracking = True
+        if message.task_created_at is None:
+            message.task_created_at = now
+        message.task_updated_at = now
+        await self.persist_message(message)
 
     # ------------------------------------------------------------------
     # Convenience wrappers

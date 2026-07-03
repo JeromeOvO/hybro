@@ -206,6 +206,20 @@ runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
 property because it is server-injected runtime metadata, not user application
 configuration.
 
+#### A2A Inline File Dispatch Policy
+
+Under the active attachment policy, user-uploaded files sent to agents are
+dispatched as A2A `FileContent.bytes`. Presigned/platform storage URIs remain
+internal to Hybro for storage, retrieval, and artifact refresh behavior; they
+are not sent to agents for user-upload dispatch.
+
+`A2A_INLINE_FILE_MAX_RAW_BYTES` limits one raw file before base64 encoding.
+`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in
+one outbound A2A message. Attachment preflight failures create failed agent
+tasks before transport dispatch in both queue and supervisor execution paths,
+so validation failures are persisted and surfaced without attempting direct or
+relay transport.
+
 ### `llm_gateway`
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
@@ -498,6 +512,14 @@ in-memory/offline queues for single-process/degraded operation.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
 - Convert inline binary artifacts to S3-backed references through bound storage.
+- Own Docker host fallback for backend-initiated agent endpoint calls. Owner
+  modules such as `agent.health`, `agent.resolver`, Execution jobs, and legacy
+  transport compatibility paths must call adapter helpers instead of opening
+  direct `httpx` or A2A SDK clients against agent URLs.
+- Keep registered `agent_card.url` values unchanged during fallback. The
+  adapter may retry `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` URLs through
+  `host.docker.internal` for connection-style failures, but that rewrite is
+  request-local and must not be persisted back to agent registration state.
 
 Owner services, jobs, execution transports, and room runtime code use
 `common.types`, plain DTO dictionaries, and adapter facades instead of importing
@@ -864,6 +886,39 @@ and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
 access, or the full repository-store aggregate. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
+
+### HITL Lifecycle Consistency
+
+HITL is a durable backend lifecycle object, not a transient streaming-only UI
+state. When an agent returns A2A `input-required`, backend execution must create
+or reuse a pending HITL request and project that request onto exactly one display
+agent message before emitting live SSE. The projection sets the agent message
+task state to `input-required` and writes `hitl_request_id`, prompt metadata, A2A
+task/context ids, group metadata, and clears any stale HITL answer. It does not
+copy HITL lifecycle status into agent message metadata; the durable HITL request
+document remains the source of truth for pending, responded, canceled, and
+expired states.
+
+The frontend treats `hitl_request` and `hitl_response` as durable lifecycle
+events keyed by `room_id`, `request_id`, and `message_id`. `client_request_id` is
+included when resolvable, is persisted on the HITL request as best-effort
+metadata, and helps attach processing logs to the current turn, but it is not
+required to apply a HITL request. This differs from streaming task/content events
+such as `processing_status`, `task_update`, and `agent_response_partial`, which
+remain strictly turn-correlated.
+
+Refresh and reconnect recovery must use
+`GET /api/v1/rooms/{room_id}/hitl/pending` and apply the same frontend
+projection as live `hitl_request` SSE. This keeps the UI consistent whether the
+user stays on the page, refreshes after the HITL is created, or reconnects after
+missing an SSE frame.
+
+Before rolling out the pending agent HITL unique partial indexes, run
+`uv run python scripts/check_pending_hitl_unique_index_readiness.py` from the
+backend directory against the target database. The script exits non-zero and
+prints duplicate pending `(room_id, display_message_id)` or
+`(room_id, continuation_message_id)` groups that must be resolved before index
+creation.
 
 ## Context Memory Workflow
 

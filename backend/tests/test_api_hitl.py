@@ -167,6 +167,7 @@ class TestGetPendingHitlRequests:
                 source=sample_hitl_request.source,
                 prompt=sample_hitl_request.prompt,
                 display_message_id=sample_hitl_request.display_message_id,
+                client_request_id="cr-pending-hitl",
             )
         ]
 
@@ -180,6 +181,7 @@ class TestGetPendingHitlRequests:
         assert "requests" in result
         assert len(result["requests"]) == 1
         assert result["requests"][0]["request_id"] == sample_hitl_request.request_id
+        assert result["requests"][0]["client_request_id"] == "cr-pending-hitl"
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_pending(

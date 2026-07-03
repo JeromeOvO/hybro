@@ -46,6 +46,25 @@ async def with_docker_host_url_fallback[T](
         return await operation(fallback_url)
 
 
+async def stream_with_docker_host_url_fallback[T](
+    url: str,
+    operation: Callable[[str], AsyncGenerator[T, None]],
+) -> AsyncGenerator[T, None]:
+    yielded_any = False
+    try:
+        async for item in operation(url):
+            yielded_any = True
+            yield item
+    except Exception as exc:
+        if yielded_any:
+            raise
+        fallback_url = docker_host_fallback_url_for_error(url, exc)
+        if fallback_url is None:
+            raise
+        async for item in operation(fallback_url):
+            yield item
+
+
 async def stream_with_docker_host_fallback[T](
     card: Any,
     operation: Callable[[Any], AsyncGenerator[T, None]],
@@ -133,6 +152,7 @@ __all__ = [
     "docker_host_fallback_url",
     "docker_host_fallback_url_for_error",
     "stream_with_docker_host_fallback",
+    "stream_with_docker_host_url_fallback",
     "with_docker_host_fallback",
     "with_docker_host_url_fallback",
 ]

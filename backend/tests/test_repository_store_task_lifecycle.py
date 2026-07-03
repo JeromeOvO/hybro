@@ -397,6 +397,30 @@ class TestRepositoryStoreHITL:
             ([("expires_at", 1), ("status", 1)], {}),
             ([("user_message_id", 1), ("status", 1)], {}),
             ([("continuation_message_id", 1)], {}),
+            (
+                [("room_id", 1), ("display_message_id", 1)],
+                {
+                    "unique": True,
+                    "name": "uq_pending_hitl_display_message",
+                    "partialFilterExpression": {
+                        "status": "pending",
+                        "source": "agent",
+                        "display_message_id": {"$type": "string"},
+                    },
+                },
+            ),
+            (
+                [("room_id", 1), ("continuation_message_id", 1)],
+                {
+                    "unique": True,
+                    "name": "uq_pending_hitl_continuation_message",
+                    "partialFilterExpression": {
+                        "status": "pending",
+                        "source": "agent",
+                        "continuation_message_id": {"$type": "string"},
+                    },
+                },
+            ),
         ]
 
     @pytest.mark.asyncio

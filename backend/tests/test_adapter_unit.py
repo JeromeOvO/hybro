@@ -361,6 +361,36 @@ async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
     assert artifact.parts[0].root.file.mime_type == "image/png"
 
 
+def test_to_sdk_message_preserves_inline_file_bytes():
+    from a2a_adapter.message_factory import to_sdk_message
+    from common.types import FileContent, FilePart, Message, MessageRole, Part
+
+    internal_message = Message(
+        role=MessageRole.USER,
+        message_id="msg-inline-file",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="cGRmZGF0YQ==",
+                        mimeType="application/pdf",
+                        name="report.pdf",
+                    )
+                )
+            )
+        ],
+    )
+
+    sdk_message = to_sdk_message(internal_message)
+    dumped = sdk_message.model_dump(mode="json", by_alias=True)
+    file_data = dumped["parts"][0]["file"]
+
+    assert file_data["bytes"] == "cGRmZGF0YQ=="
+    assert file_data["mimeType"] == "application/pdf"
+    assert file_data["name"] == "report.pdf"
+    assert file_data.get("uri") is None
+
+
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
     from a2a_adapter.translators import a2a_task_to_result
 
@@ -791,6 +821,49 @@ async def test_transport_send_message_returns_error_result_on_http_error():
 
 
 @pytest.mark.asyncio
+async def test_transport_send_message_retries_host_gateway_for_loopback_url(caplog):
+    from a2a_adapter.transport import AgentTransportImpl
+
+    class _LoopbackPostClient:
+        def __init__(self):
+            self.posts = []
+
+        async def post(self, url, json):
+            self.posts.append({"url": url, "json": json})
+            if url == "http://127.0.0.1:9060/a2a":
+                raise httpx.ConnectError("All connection attempts failed")
+            return _FakeResponse(
+                {
+                    "result": {
+                        "id": "task-1",
+                        "status": {"state": "completed"},
+                    }
+                }
+            )
+
+    client = _LoopbackPostClient()
+    transport = AgentTransportImpl(timeout=1, client=client)
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await transport.send_message(
+            "http://127.0.0.1:9060/a2a",
+            message,
+        )
+
+    assert result.task_id == "task-1"
+    assert [post["url"] for post in client.posts] == [
+        "http://127.0.0.1:9060/a2a",
+        "http://host.docker.internal:9060/a2a",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_transport_aclose_closes_owned_client(monkeypatch):
     from a2a_adapter import transport as transport_module
 
@@ -894,6 +967,82 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
     assert events[0].final is True
     assert events[0].payload["raw"]["id"] == "rpc-1"
     assert events[0].payload["raw"]["result"]["taskId"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_transport_stream_message_retries_host_gateway_for_loopback_url(
+    monkeypatch,
+    caplog,
+):
+    from a2a_adapter import transport as transport_module
+
+    attempted_urls = []
+
+    @asynccontextmanager
+    async def fake_aconnect_sse(client, method, url, **kwargs):
+        attempted_urls.append(url)
+        if url == "http://127.0.0.1:9060/a2a":
+            raise httpx.ConnectError("All connection attempts failed")
+        yield _FakeEventSource(
+            [
+                {
+                    "taskId": "task-1",
+                    "type": "status",
+                    "status": {"state": "completed"},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(transport_module, "aconnect_sse", fake_aconnect_sse)
+    transport = transport_module.AgentTransportImpl(timeout=1, client=MagicMock())
+    message = InternalAgentMessage(
+        agent_id="agent-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "hello"}],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        events = [
+            event
+            async for event in transport.stream_message(
+                "http://127.0.0.1:9060/a2a",
+                message,
+            )
+        ]
+
+    assert len(events) == 1
+    assert events[0].task_id == "task-1"
+    assert events[0].event_type == "status"
+    assert attempted_urls == [
+        "http://127.0.0.1:9060/a2a",
+        "http://host.docker.internal:9060/a2a",
+    ]
+    assert "Retrying A2A request via host gateway" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stream_with_docker_host_url_fallback_does_not_retry_after_yield():
+    from a2a_adapter.docker_host_fallback import (
+        stream_with_docker_host_url_fallback,
+    )
+
+    attempted_urls = []
+    yielded_items = []
+
+    async def _operation(url: str):
+        attempted_urls.append(url)
+        yield "first-event"
+        raise httpx.ConnectError("All connection attempts failed")
+
+    with pytest.raises(httpx.ConnectError):
+        async for item in stream_with_docker_host_url_fallback(
+            "http://127.0.0.1:9060/a2a",
+            _operation,
+        ):
+            yielded_items.append(item)
+
+    assert yielded_items == ["first-event"]
+    assert attempted_urls == ["http://127.0.0.1:9060/a2a"]
 
 
 @pytest.mark.asyncio

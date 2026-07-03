@@ -1219,6 +1219,125 @@ class TestHandleSyncResponseInteractive:
         assert task.status.message is None
 
     @pytest.mark.asyncio
+    async def test_degraded_input_required_persists_agent_url_for_hitl_reply(self):
+        """When task tracking setup fails, HITL replies still need agent_url."""
+        proc = _make_processor()
+        current_message = _make_room_agent_message(agent_url=None)
+        agent_card = MagicMock(spec_set=["name", "url"])
+        agent_card.name = "test-agent"
+        agent_card.url = "http://localhost:9060"
+
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                None,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=None,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.delivery.send_task_submitted = AsyncMock()
+        proc.a2a_transport.send_message_sync = AsyncMock(
+            return_value={
+                "kind": "task",
+                "result": {
+                    "kind": "task",
+                    "id": "real-agent-task-abc123",
+                    "status": {"state": "input-required"},
+                    "artifacts": [],
+                },
+                "error": None,
+            }
+        )
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+
+        success, text, paused, agent_task_id = await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=MagicMock(),
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        assert success is True
+        assert text is None
+        assert paused == current_message.message_id
+        assert agent_task_id == "real-agent-task-abc123"
+        assert current_message.agent_url == "http://localhost:9060"
+        proc.tsm.persist_message.assert_awaited_once_with(current_message)
+
+    @pytest.mark.asyncio
+    async def test_degraded_input_required_stores_status_message_for_hitl_prompt(self):
+        """Degraded sync fallback must keep the A2A status.message prompt."""
+        proc = _make_processor()
+        current_message = _make_room_agent_message(agent_url=None)
+        agent_card = MagicMock(spec_set=["name", "url"])
+        agent_card.name = "test-agent"
+        agent_card.url = "http://localhost:9060"
+
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                None,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=None,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.delivery.send_task_submitted = AsyncMock()
+        proc.a2a_transport.send_message_sync = AsyncMock(
+            return_value={
+                "kind": "task",
+                "result": {
+                    "kind": "task",
+                    "id": "real-agent-task-abc123",
+                    "status": {
+                        "state": "input-required",
+                        "message": {
+                            "kind": "message",
+                            "role": "agent",
+                            "messageId": "status-msg-1",
+                            "parts": [
+                                {
+                                    "kind": "text",
+                                    "text": "Which revenue period should I use?",
+                                }
+                            ],
+                        },
+                    },
+                    "artifacts": [],
+                },
+                "error": None,
+            }
+        )
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+
+        await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=MagicMock(),
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        task = current_message.message_content.message_task
+        assert task is not None
+        assert task.status.message is not None
+        assert get_text_from_message(task.status.message) == (
+            "Which revenue period should I use?"
+        )
+
+    @pytest.mark.asyncio
     async def test_requires_auth_without_status_sets_auth_required_state(self):
         """requires_auth=True without status must not leave task in working."""
         proc = _make_processor()

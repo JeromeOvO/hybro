@@ -1,3 +1,4 @@
+import math
 import os
 
 from pydantic import field_validator, model_validator
@@ -227,6 +228,8 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     max_file_size_mb: int = 50
+    a2a_inline_file_max_raw_bytes: int = 5 * 1024 * 1024
+    a2a_inline_message_max_encoded_bytes: int = 0
 
     # AWS Bedrock Settings (Supervisor LLM)
     bedrock_region: str = "us-east-1"
@@ -316,6 +319,30 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() not in {"0", "false", "off"}
+
+    @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
+    @classmethod
+    def normalize_a2a_inline_file_max_raw_bytes(cls, value):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 5 * 1024 * 1024
+
+    @field_validator("a2a_inline_message_max_encoded_bytes", mode="before")
+    @classmethod
+    def normalize_a2a_inline_message_max_encoded_bytes(cls, value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @model_validator(mode="after")
+    def apply_a2a_inline_encoded_default(self):
+        if self.a2a_inline_message_max_encoded_bytes <= 0:
+            self.a2a_inline_message_max_encoded_bytes = (
+                4 * math.ceil(self.a2a_inline_file_max_raw_bytes / 3)
+            )
+        return self
 
     @model_validator(mode="after")
     def apply_gemini_api_key_fallback(self):

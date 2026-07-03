@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from api_gateway.file_storage import ObjectStorageFileStorage
-from common.errors import FileStoragePlatformError
+from common.errors import FileStoragePlatformError, ObjectStorageError
 
 
 class AsyncCursor:
@@ -26,6 +26,7 @@ class RecordingObjectStorage:
         self.put_calls = []
         self.presign_calls = []
         self.delete_calls = []
+        self.get_bytes_calls = []
 
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         self.put_calls.append((key, data, content_type))
@@ -40,6 +41,10 @@ class RecordingObjectStorage:
     async def delete(self, key: str) -> bool:
         self.delete_calls.append(key)
         return True
+
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
+        self.get_bytes_calls.append((key, max_bytes))
+        return b"stored-bytes"
 
 
 class RecordingFileUploadsCollection:
@@ -83,6 +88,13 @@ class RecordingFileUploadsCollection:
 class FailingObjectStorage:
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         raise RuntimeError("missing credentials")
+
+
+class OversizeObjectStorage:
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
+        raise ObjectStorageError(
+            f"Object storage get_bytes failed for {key}: body exceeds max_bytes"
+        )
 
 
 @pytest.mark.asyncio
@@ -131,6 +143,31 @@ async def test_object_storage_file_storage_uploads_and_records_metadata():
 
 
 @pytest.mark.asyncio
+async def test_object_storage_file_storage_rejects_uploads_over_configured_limit():
+    object_storage = RecordingObjectStorage()
+    collection = RecordingFileUploadsCollection()
+    storage = ObjectStorageFileStorage(
+        object_storage=object_storage,
+        file_uploads_collection=collection,
+        max_upload_bytes=5,
+    )
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await storage.upload(
+            file_bytes=b"123456",
+            filename="report.pdf",
+            owner_id="user-1",
+            room_id="room-1",
+            content_type="application/pdf",
+        )
+
+    assert exc_info.value.status_code == 413
+    assert "exceeds the maximum upload size" in exc_info.value.detail
+    assert object_storage.put_calls == []
+    assert collection.docs == []
+
+
+@pytest.mark.asyncio
 async def test_object_storage_file_storage_reads_and_deletes_existing_uploads():
     object_storage = RecordingObjectStorage()
     collection = RecordingFileUploadsCollection(
@@ -172,6 +209,33 @@ async def test_object_storage_file_storage_reads_and_deletes_existing_uploads():
     assert object_storage.delete_calls == ["uploads/room-1/file-1/a.txt"]
     assert collection.delete_queries == [{"file_id": "file-1"}]
     assert deleted is True
+
+
+@pytest.mark.asyncio
+async def test_object_storage_file_storage_reads_bytes_by_storage_key():
+    object_storage = RecordingObjectStorage()
+    storage = ObjectStorageFileStorage(
+        object_storage=object_storage,
+        file_uploads_collection=RecordingFileUploadsCollection(),
+    )
+
+    data = await storage.get_bytes("uploads/room/file/report.pdf", max_bytes=1024)
+
+    assert data == b"stored-bytes"
+    assert object_storage.get_bytes_calls == [
+        ("uploads/room/file/report.pdf", 1024)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_object_storage_file_storage_propagates_object_storage_error():
+    storage = ObjectStorageFileStorage(
+        object_storage=OversizeObjectStorage(),
+        file_uploads_collection=RecordingFileUploadsCollection(),
+    )
+
+    with pytest.raises(ObjectStorageError, match="exceeds max_bytes"):
+        await storage.get_bytes("uploads/room/file/report.pdf", max_bytes=1024)
 
 
 @pytest.mark.asyncio

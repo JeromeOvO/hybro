@@ -18,12 +18,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Protocol
 
-import httpx
-
-from a2a_adapter.constants import (
-    AGENT_CARD_WELL_KNOWN_PATH,
-    PREV_AGENT_CARD_WELL_KNOWN_PATH,
-)
+from a2a_adapter.agent_card_health import probe_agent_card_for_health
 from agent.service import _agent_info_to_legacy_agent
 from common.config.settings import settings
 from common.dto import AgentRoutingCandidate
@@ -389,10 +384,10 @@ class AgentResolverService:
 
     @staticmethod
     async def _probe_agent(agent: Agent) -> bool:
-        """Lightweight HTTP probe to check if an agent is reachable.
+        """Lightweight adapter probe to check if an agent is reachable.
 
         Hub-associated agents are not probed over HTTP (their local URLs
-        are unreachable from the cloud server).  Liveness is determined
+        are unreachable from the cloud server). Liveness is determined
         by the relay heartbeat via ``is_hub_online``.
 
         Uses a short timeout (3 s) to keep the critical path fast.
@@ -400,36 +395,30 @@ class AgentResolverService:
         if agent.hub_id:
             return agent.is_hub_online
 
-        agent_url = agent.agent_card.url
         try:
-            async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT) as client:
-                card_url = agent_url.rstrip("/") + AGENT_CARD_WELL_KNOWN_PATH
-                response = await client.get(card_url)
-
-                # Fall back to previous well-known path if not found
-                if response.status_code == 404:
-                    card_url = (
-                        agent_url.rstrip("/") + PREV_AGENT_CARD_WELL_KNOWN_PATH
-                    )
-                    response = await client.get(card_url)
-
-                return response.status_code < 400
-
-        except httpx.TimeoutException:
-            logger.debug(
-                "AgentResolver: Probe timed out for agent %s (%s)",
-                agent.agent_id,
-                agent.agent_card.name,
+            result = await probe_agent_card_for_health(
+                agent.agent_card.url,
+                timeout=_PROBE_TIMEOUT,
             )
+            if result.is_healthy:
+                return True
+
+            if result.status_code is not None:
+                logger.debug(
+                    "AgentResolver: Probe returned status %s for agent %s (%s)",
+                    result.status_code,
+                    agent.agent_id,
+                    agent.agent_card.name,
+                )
+            else:
+                logger.debug(
+                    "AgentResolver: Probe failed for agent %s (%s): %s",
+                    agent.agent_id,
+                    agent.agent_card.name,
+                    result.error or "unknown adapter error",
+                )
             return False
-        except httpx.RequestError as exc:
-            logger.debug(
-                "AgentResolver: Probe failed for agent %s (%s): %s",
-                agent.agent_id,
-                agent.agent_card.name,
-                exc,
-            )
-            return False
+
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "AgentResolver: Unexpected error probing agent %s: %s",

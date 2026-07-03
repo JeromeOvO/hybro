@@ -172,6 +172,26 @@ class HITLService:
         if source == "agent" and prompt_type == HITLPromptType.TEXT:
             prompt_type = _infer_prompt_type(prompt)
 
+        resolved_display_message_id = display_message_id
+        if source == "agent" and resolved_display_message_id is None:
+            resolved_display_message_id = continuation_message_id
+
+        if source == "agent" and not resolved_display_message_id:
+            logger.error(
+                "Agent HITL request has no display or continuation message id",
+                extra={
+                    "room_id": room_id,
+                    "user_message_id": user_message_id,
+                    "agent_id": agent_id,
+                },
+            )
+            return None
+
+        resolved_client_request_id = await self._resolve_hitl_client_request_id(
+            user_message_id=user_message_id,
+            message_id=resolved_display_message_id or continuation_message_id,
+        )
+
         if continuation_message_id:
             # For grouped questions, only count the first question (group_index == 0)
             # against the per-message round limit.  Questions 1..N in the same group
@@ -202,7 +222,8 @@ class HITLService:
             a2a_task_id=a2a_task_id,
             a2a_context_id=a2a_context_id,
             continuation_message_id=continuation_message_id,
-            display_message_id=display_message_id,
+            display_message_id=resolved_display_message_id,
+            client_request_id=resolved_client_request_id,
             expires_at=utcnow() + timedelta(hours=expires_in_hours),
             group_id=group_id,
             group_total=group_total,
@@ -211,10 +232,46 @@ class HITLService:
 
         # 1. Persist FIRST (so it survives SSE drops)
         doc = request.model_dump(mode="json")
-        saved = await self.persistence.create_hitl_request(doc)
-        if not saved:
-            logger.error("Failed to persist HITL request %s", request.request_id)
-            return None
+        hitl_request_created = False
+        if source == "agent":
+            persisted = await self.persistence.create_or_reuse_pending_hitl_request(doc)
+            if not persisted:
+                logger.error(
+                    "Failed to create or reuse HITL request for agent message %s",
+                    request.display_message_id,
+                )
+                return None
+            persisted_doc, hitl_request_created = persisted
+            request = HITLRequest(
+                **{k: v for k, v in persisted_doc.items() if k != "_id"}
+            )
+            if (
+                not hitl_request_created
+                and resolved_client_request_id
+                and not request.client_request_id
+            ):
+                backfilled_client_request_id = (
+                    await self.persistence.update_hitl_request(
+                        request.request_id,
+                        client_request_id=resolved_client_request_id,
+                    )
+                )
+                if backfilled_client_request_id:
+                    request.client_request_id = resolved_client_request_id
+                else:
+                    logger.warning(
+                        "Failed to backfill client_request_id on reused HITL request",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": request.display_message_id,
+                        },
+                    )
+        else:
+            saved = await self.persistence.create_hitl_request(doc)
+            if not saved:
+                logger.error("Failed to persist HITL request %s", request.request_id)
+                return None
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
@@ -223,21 +280,73 @@ class HITLService:
         # old answer as if the new request is already answered.
         # Also persist group metadata for multi-question groups so
         # convertApiMessageToIncoming can reconstruct group context.
-        if display_message_id:
-            await self.persistence.update_agent_message_task_state(
-                display_message_id, "input-required"
-            )
-            await self.persistence.persist_hitl_user_answer(
-                display_message_id,
-                None,
-            )
-            if group_id is not None:
-                await self.persistence.persist_hitl_group_metadata(
-                    display_message_id,
-                    group_id=group_id,
-                    group_total=group_total,
-                    group_index=group_index,
+        display_projection_message_id = request.display_message_id
+        if source == "agent" and display_projection_message_id is None:
+            display_projection_message_id = request.continuation_message_id
+            if display_projection_message_id:
+                backfilled = await self.persistence.update_hitl_request(
+                    request.request_id,
+                    display_message_id=display_projection_message_id,
                 )
+                if not backfilled:
+                    logger.error(
+                        "Failed to backfill HITL request %s display_message_id %s",
+                        request.request_id,
+                        display_projection_message_id,
+                    )
+                    return None
+                request.display_message_id = display_projection_message_id
+
+        if display_projection_message_id:
+            if source == "agent":
+                projected = (
+                    await self.persistence.persist_pending_hitl_on_agent_message(
+                        display_projection_message_id,
+                        request_id=request.request_id,
+                        prompt=request.prompt,
+                        prompt_type=request.prompt_type,
+                        choices=request.choices,
+                        a2a_task_id=request.a2a_task_id,
+                        a2a_context_id=request.a2a_context_id,
+                        group_id=request.group_id,
+                        group_total=request.group_total,
+                        group_index=request.group_index,
+                    )
+                )
+                if not projected:
+                    logger.error(
+                        "Failed to project pending HITL onto agent display message",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": display_projection_message_id,
+                            "continuation_message_id": request.continuation_message_id,
+                            "a2a_task_id": request.a2a_task_id,
+                            "a2a_context_id": request.a2a_context_id,
+                        },
+                    )
+                    if hitl_request_created:
+                        await self.persistence.update_hitl_request(
+                            request.request_id,
+                            status=HITLStatus.CANCELED.value,
+                            error_message="failed_to_project_agent_message",
+                        )
+                    return None
+            else:
+                await self.persistence.update_agent_message_task_state(
+                    display_projection_message_id, "input-required"
+                )
+                await self.persistence.persist_hitl_user_answer(
+                    display_projection_message_id,
+                    None,
+                )
+                if group_id is not None:
+                    await self.persistence.persist_hitl_group_metadata(
+                        display_projection_message_id,
+                        group_id=group_id,
+                        group_total=group_total,
+                        group_index=group_index,
+                    )
 
         # 2. Emit SSE event
         await self._emit_hitl_event(
@@ -322,6 +431,25 @@ class HITLService:
             )
             raise HITLRoomMismatchError("Room mismatch")
 
+        if (
+            request.source == "agent"
+            and request.display_message_id is None
+            and request.continuation_message_id
+        ):
+            backfilled = await self.persistence.fenced_update_hitl_request(
+                request_id,
+                claim_id,
+                display_message_id=request.continuation_message_id,
+            )
+            if not backfilled:
+                logger.warning(
+                    "HITL request %s display_message_id backfill lost claim %s",
+                    request_id,
+                    claim_id,
+                )
+                return {"status": "ok", "request_id": request_id, "reclaimed": True}
+            request.display_message_id = request.continuation_message_id
+
         # Phase 2: Route — revert to PENDING on failure (fenced).
         # A background heartbeat task bumps responded_at every
         # LEASE_HEARTBEAT_SECONDS while routing is in-flight, preventing
@@ -333,7 +461,9 @@ class HITLService:
         is_group = request.group_id is not None
         is_last_in_group = True
         if is_group:
-            remaining = await self.persistence.count_pending_in_hitl_group(request.group_id)
+            remaining = await self.persistence.count_pending_in_hitl_group(
+                request.group_id
+            )
             if remaining < 0:
                 logger.warning(
                     "Failed to count pending in HITL group %s — "
@@ -364,9 +494,14 @@ class HITLService:
                     responded_at=utcnow(),
                 )
 
+        follow_up_hitl_created = False
+
         async def _route_current_response() -> None:
+            nonlocal follow_up_hitl_created
             if request.source == "agent":
-                await self._handle_agent_response(request, user_input)
+                follow_up_hitl_created = (
+                    await self._handle_agent_response(request, user_input)
+                ) is True
             elif request.source == "supervisor":
                 if is_group:
                     group_docs = await self.persistence.get_hitl_group_requests(
@@ -533,8 +668,8 @@ class HITLService:
             )
 
         if is_group and not routed_response and finalized:
-            remaining_after_finalize = await self.persistence.count_pending_in_hitl_group(
-                request.group_id
+            remaining_after_finalize = (
+                await self.persistence.count_pending_in_hitl_group(request.group_id)
             )
             if remaining_after_finalize <= 0:
                 route_claimed = await self.persistence.claim_hitl_group_routing(
@@ -557,7 +692,7 @@ class HITLService:
         )
 
         # Persist user's answer on the agent message for DB hydration
-        if request.display_message_id:
+        if request.display_message_id and not follow_up_hitl_created:
             await self.persistence.persist_hitl_user_answer(
                 request.display_message_id,
                 user_input,
@@ -583,7 +718,7 @@ class HITLService:
 
     async def _handle_agent_response(
         self, request: HITLRequest, user_input: str
-    ) -> None:
+    ) -> bool:
         """Send user's reply to the waiting A2A agent.
 
         For push-notification agents the reply is fire-and-forget: the agent
@@ -598,7 +733,9 @@ class HITLService:
         next HITL cycle will handle.
         """
         # Reset last_notified_state so multi-round input_required works
-        await self.persistence.reset_last_notified_state(request.continuation_message_id)
+        await self.persistence.reset_last_notified_state(
+            request.continuation_message_id
+        )
 
         reply_result = await self.agent_reply.reply_to_task(
             message_id=request.continuation_message_id,
@@ -613,7 +750,7 @@ class HITLService:
         was_blocking = reply_result.get("blocking", False)
         if not was_blocking:
             # Push-notification mode — agent will POST webhook → resume_queue_from_continuation
-            return
+            return False
 
         task_state = reply_result.get("task_state")
 
@@ -651,7 +788,8 @@ class HITLService:
                     task_result_text=response_text,
                     failed=True,
                 )
-            return
+                return False
+            return True
 
         # Use the response text from the synchronous reply (authoritative,
         # no stale-DB risk).
@@ -698,6 +836,7 @@ class HITLService:
                 f"Failed to resume queue for message {request.continuation_message_id} "
                 "— continuation may have been lost or room lock timed out"
             )
+        return False
 
     # ------------------------------------------------------------------
     # Supervisor response routing
@@ -754,7 +893,9 @@ class HITLService:
         self, user_message_id: str
     ) -> list[HITLRequest]:
         """Get pending HITL requests associated with a specific user message."""
-        docs = await self.persistence.get_pending_hitl_requests_for_message(user_message_id)
+        docs = await self.persistence.get_pending_hitl_requests_for_message(
+            user_message_id
+        )
         return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
 
     # ------------------------------------------------------------------
@@ -814,6 +955,57 @@ class HITLService:
     PROCESSING_TIMEOUT_SECONDS = 600
     LEASE_HEARTBEAT_SECONDS = 120
 
+    async def _find_pending_followup_for_stale_agent_hitl(
+        self, doc: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if doc.get("source") != "agent":
+            return None
+
+        room_id = doc.get("room_id")
+        display_message_id = doc.get("display_message_id")
+        continuation_message_id = doc.get("continuation_message_id")
+        if not room_id or not (display_message_id or continuation_message_id):
+            return None
+
+        find_pending = getattr(
+            self.persistence, "find_pending_hitl_request_for_agent_message", None
+        )
+        if not callable(find_pending):
+            return None
+
+        try:
+            maybe_pending = find_pending(
+                room_id=room_id,
+                display_message_id=display_message_id,
+                continuation_message_id=continuation_message_id,
+                agent_id=doc.get("agent_id"),
+                a2a_task_id=doc.get("a2a_task_id"),
+                a2a_context_id=doc.get("a2a_context_id"),
+            )
+            pending = (
+                await maybe_pending
+                if inspect.isawaitable(maybe_pending)
+                else maybe_pending
+            )
+        except Exception:
+            logger.warning(
+                "Failed to check pending follow-up HITL during stale recovery",
+                extra={
+                    "hitl_request_id": doc.get("request_id"),
+                    "room_id": room_id,
+                    "display_message_id": display_message_id,
+                    "continuation_message_id": continuation_message_id,
+                },
+                exc_info=True,
+            )
+            return None
+
+        if not isinstance(pending, dict):
+            return None
+        if pending.get("request_id") == doc.get("request_id"):
+            return None
+        return pending
+
     async def recover_stale_processing(self) -> int:
         """Recover HITL requests stuck in 'processing' after a crash.
 
@@ -855,6 +1047,32 @@ class HITLService:
                         req_id,
                     )
             else:
+                pending_followup = (
+                    await self._find_pending_followup_for_stale_agent_hitl(doc)
+                )
+                if pending_followup:
+                    ok = await self.persistence.cas_update_hitl_request(
+                        req_id,
+                        expected_status=HITLStatus.PROCESSING.value,
+                        status=HITLStatus.RESPONDED.value,
+                        routing_completed_at=utcnow(),
+                    )
+                    if ok:
+                        logger.warning(
+                            "Finalized stale PROCESSING HITL request %s to "
+                            "RESPONDED because pending follow-up request %s "
+                            "already exists",
+                            req_id,
+                            pending_followup.get("request_id"),
+                        )
+                        recovered += 1
+                    else:
+                        logger.info(
+                            "Skipped recovery of HITL request %s — status already changed",
+                            req_id,
+                        )
+                    continue
+
                 group_id = doc.get("group_id")
                 claim_id = doc.get("claim_id")
                 if group_id and claim_id:
@@ -897,6 +1115,62 @@ class HITLService:
     # SSE emission helper
     # ------------------------------------------------------------------
 
+    async def _resolve_hitl_client_request_id(
+        self,
+        *,
+        user_message_id: str,
+        message_id: str | None,
+    ) -> str | None:
+        get_user_message = getattr(
+            self.persistence, "get_room_user_message_by_message_id", None
+        )
+        user_message = None
+        if callable(get_user_message):
+            try:
+                maybe_user_message = get_user_message(user_message_id)
+                user_message = (
+                    await maybe_user_message
+                    if inspect.isawaitable(maybe_user_message)
+                    else maybe_user_message
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve HITL client_request_id from user message",
+                    extra={"user_message_id": user_message_id},
+                    exc_info=True,
+                )
+        client_request_id = (
+            user_message.client_request_id
+            if user_message and isinstance(user_message.client_request_id, str)
+            else None
+        )
+        if isinstance(client_request_id, str) and client_request_id.strip():
+            return client_request_id.strip()
+
+        if isinstance(message_id, str) and message_id.strip():
+            resolve_fn = getattr(
+                self.persistence,
+                "resolve_client_request_id_for_message_id",
+                None,
+            )
+            if callable(resolve_fn):
+                try:
+                    maybe_resolved = resolve_fn(message_id.strip())
+                    resolved = (
+                        await maybe_resolved
+                        if inspect.isawaitable(maybe_resolved)
+                        else maybe_resolved
+                    )
+                    if isinstance(resolved, str) and resolved.strip():
+                        return resolved.strip()
+                except Exception:
+                    logger.warning(
+                        "Failed to resolve HITL client_request_id from message id",
+                        extra={"message_id": message_id},
+                        exc_info=True,
+                    )
+        return None
+
     async def _emit_hitl_event(
         self,
         room_id: str,
@@ -915,43 +1189,14 @@ class HITLService:
             "source": request.source,
             "related_message_id": request.user_message_id,
         }
-        get_user_message = getattr(
-            self.persistence, "get_room_user_message_by_message_id", None
-        )
-        user_message = None
-        if callable(get_user_message):
-            maybe_user_message = get_user_message(request.user_message_id)
-            user_message = (
-                await maybe_user_message
-                if inspect.isawaitable(maybe_user_message)
-                else maybe_user_message
+        client_request_id = request.client_request_id
+        if not (isinstance(client_request_id, str) and client_request_id.strip()):
+            client_request_id = await self._resolve_hitl_client_request_id(
+                user_message_id=request.user_message_id,
+                message_id=data.get("message_id"),
             )
-        client_request_id = (
-            user_message.client_request_id
-            if user_message and isinstance(user_message.client_request_id, str)
-            else None
-        )
-        if client_request_id:
-            data["client_request_id"] = client_request_id
-        else:
-            # Match delivery turn-correlation: resolve from display/continuation/agent
-            # message_id when the user row lacks client_request_id (strict frontend).
-            mid = data.get("message_id")
-            if isinstance(mid, str) and mid.strip():
-                resolve_fn = getattr(
-                    self.persistence,
-                    "resolve_client_request_id_for_message_id",
-                    None,
-                )
-                if callable(resolve_fn):
-                    maybe_resolved = resolve_fn(mid.strip())
-                    resolved = (
-                        await maybe_resolved
-                        if inspect.isawaitable(maybe_resolved)
-                        else maybe_resolved
-                    )
-                    if isinstance(resolved, str) and resolved.strip():
-                        data["client_request_id"] = resolved.strip()
+        if isinstance(client_request_id, str) and client_request_id.strip():
+            data["client_request_id"] = client_request_id.strip()
 
         source = getattr(request.source, "value", request.source)
         prompt_type = getattr(request.prompt_type, "value", request.prompt_type)

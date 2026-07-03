@@ -21,6 +21,7 @@ from agent.matcher import (
     compute_capability_score,
     select_top_agents,
 )
+from agent.matching import rank_agent_docs
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
 
@@ -124,6 +125,15 @@ def test_agent_supports_files_zip():
     assert _agent_supports_files(agent) is True
 
 
+@pytest.mark.parametrize(
+    "input_mode",
+    ["application/json", "text/csv", "application/*", "application/"],
+)
+def test_agent_supports_files_generic_mime_modes(input_mode):
+    agent = create_test_agent("a1", "GenericFileAgent", input_modes=[input_mode])
+    assert _agent_supports_files(agent) is True
+
+
 def test_agent_no_file_support():
     """Test agent without file support."""
     agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
@@ -161,6 +171,70 @@ def test_capability_score_attachments_wildcard_capable():
     """Attachments + wildcard agent → 1.0."""
     agent = create_test_agent("a1", "WildcardAgent", input_modes=["*/*"])
     assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+
+
+def test_capability_score_empty_required_modes_requires_file_support():
+    text_agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
+    file_agent = create_test_agent("a2", "JsonAgent", input_modes=["application/json"])
+
+    assert compute_capability_score(text_agent, required_input_modes=[]) == 0.0
+    assert compute_capability_score(file_agent, required_input_modes=[]) == 1.0
+
+
+def test_capability_score_accepts_generic_mime_agent():
+    agent = create_test_agent("a1", "JsonAgent", input_modes=["application/json"])
+    assert compute_capability_score(agent, required_input_modes=["application/json"]) == 1.0
+
+
+def test_capability_score_rejects_pdf_for_image_only_agent():
+    agent = create_test_agent("a1", "ImageOnly", input_modes=["image/*"])
+    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 0.0
+
+
+def test_capability_score_accepts_pdf_for_pdf_agent():
+    agent = create_test_agent("a1", "PDFAgent", input_modes=["application/pdf"])
+    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+
+
+def test_rank_agent_docs_filters_incompatible_attachment_agents():
+    text_agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
+    pdf_agent = create_test_agent("a2", "PDFAgent", input_modes=["application/pdf"])
+    docs = [
+        {
+            "agent_id": text_agent.agent_id,
+            "agent_card": text_agent.agent_card.model_dump(mode="json"),
+        },
+        {
+            "agent_id": pdf_agent.agent_id,
+            "agent_card": pdf_agent.agent_card.model_dump(mode="json"),
+        },
+    ]
+
+    ranked = rank_agent_docs(
+        docs,
+        {text_agent.agent_id: 1.0, pdf_agent.agent_id: 0.75},
+        required_input_modes=["application/pdf"],
+    )
+
+    assert [match["agent_id"] for match in ranked] == [pdf_agent.agent_id]
+    assert ranked[0]["capability_score"] == 1.0
+
+
+def test_rank_agent_docs_returns_empty_when_no_agent_accepts_attachment():
+    text_agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
+
+    ranked = rank_agent_docs(
+        [
+            {
+                "agent_id": text_agent.agent_id,
+                "agent_card": text_agent.agent_card.model_dump(mode="json"),
+            }
+        ],
+        {text_agent.agent_id: 1.0},
+        required_input_modes=["application/pdf"],
+    )
+
+    assert ranked == []
 
 
 # ---- ScoreRanker Tests ----

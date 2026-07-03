@@ -405,6 +405,31 @@ class QueueExecutor:
                 )
 
                 if result.status == ProcessingStatus.FAILED:
+                    error_text = result.response_text or "Agent processing failed"
+                    preflight_failure = (
+                        current_message.extend_info.get("attachment_preflight_failure")
+                        if isinstance(current_message.extend_info, dict)
+                        else None
+                    )
+                    if preflight_failure is not None:
+                        error_code = (
+                            str(preflight_failure.get("code"))
+                            if isinstance(preflight_failure, dict)
+                            and preflight_failure.get("code")
+                            else result.status_message
+                        )
+                        await self.tsm.fail_pre_dispatch_task(
+                            current_message,
+                            error=error_text,
+                            error_code=error_code,
+                        )
+                        await self.response_handler.notify_task_update(
+                            message_id=current_message.message_id,
+                            state=coerce_task_state("failed"),
+                            room_id=room_id,
+                            user_id=current_message.user_id or "",
+                            error=error_text,
+                        )
                     queue_result = QueueResult.FAILED
                     break
 

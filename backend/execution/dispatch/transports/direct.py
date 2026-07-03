@@ -1258,6 +1258,20 @@ class DirectTransport(AgentTransport):
         return CommonTaskState.WORKING
 
     @staticmethod
+    def _agent_card_url(agent_card: Any) -> str | None:
+        """Read the declared agent URL without applying Docker host rewrites."""
+        if agent_card is None:
+            return None
+        if isinstance(agent_card, dict):
+            raw_url = agent_card.get("url")
+        else:
+            raw_url = getattr(agent_card, "url", None)
+        if raw_url is None:
+            return None
+        url = str(raw_url).strip()
+        return url or None
+
+    @staticmethod
     def _parse_sync_fallback_response(
         raw_response,
         message_id: str,
@@ -1308,6 +1322,9 @@ class DirectTransport(AgentTransport):
                 parsed["requires_auth"] = (
                     state_value == CommonTaskState.AUTH_REQUIRED.value
                 )
+                status_message = get_text_from_message(result.status.message)
+                if status_message:
+                    parsed["message"] = status_message
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import (
                     extract_parts_from_artifacts as _epfa,
@@ -1632,6 +1649,12 @@ class DirectTransport(AgentTransport):
                             parts=[Part(root=TextPart(text=msg_text))],
                             message_id=uuid.uuid4().hex,
                         )
+                if not task_info:
+                    current_message.agent_url = (
+                        current_message.agent_url
+                        or self._agent_card_url(agent_card)
+                    )
+                    await self.tsm.persist_message(current_message)
                 return True, None, message_id, response.get("task_id")
 
             if self.a2a_transport.has_push_notification_capability(agent_card):
