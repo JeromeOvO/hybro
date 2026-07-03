@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from api_gateway.file_storage import ObjectStorageFileStorage
-from common.errors import FileStoragePlatformError
+from common.errors import FileStoragePlatformError, ObjectStorageError
 
 
 class AsyncCursor:
@@ -88,6 +88,13 @@ class RecordingFileUploadsCollection:
 class FailingObjectStorage:
     async def put(self, key: str, data: bytes, content_type: str = "") -> str:
         raise RuntimeError("missing credentials")
+
+
+class OversizeObjectStorage:
+    async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
+        raise ObjectStorageError(
+            f"Object storage get_bytes failed for {key}: body exceeds max_bytes"
+        )
 
 
 @pytest.mark.asyncio
@@ -193,6 +200,17 @@ async def test_object_storage_file_storage_reads_bytes_by_storage_key():
     assert object_storage.get_bytes_calls == [
         ("uploads/room/file/report.pdf", 1024)
     ]
+
+
+@pytest.mark.asyncio
+async def test_object_storage_file_storage_propagates_object_storage_error():
+    storage = ObjectStorageFileStorage(
+        object_storage=OversizeObjectStorage(),
+        file_uploads_collection=RecordingFileUploadsCollection(),
+    )
+
+    with pytest.raises(ObjectStorageError, match="exceeds max_bytes"):
+        await storage.get_bytes("uploads/room/file/report.pdf", max_bytes=1024)
 
 
 @pytest.mark.asyncio

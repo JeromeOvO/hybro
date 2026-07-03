@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from common.dto import FileInfo
-from common.errors import FileStoragePlatformError
+from common.errors import FileStoragePlatformError, ObjectStorageError
 from common.protocols import ObjectStorageDAL
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -119,6 +119,8 @@ class ObjectStorageFileStorage:
     async def get_bytes(self, key: str, *, max_bytes: int) -> bytes | None:
         try:
             return await self._object_storage.get_bytes(key, max_bytes=max_bytes)
+        except ObjectStorageError:
+            raise
         except Exception as exc:
             _raise_file_storage_error("get_bytes", exc)
 

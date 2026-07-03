@@ -813,7 +813,7 @@ async def test_object_storage_dal_get_bytes_returns_object_bytes():
     from dal.s3.client import ObjectStorageDALImpl
 
     body = AsyncMock()
-    body.read.return_value = b"pdf-bytes"
+    body.read.side_effect = [b"pdf-bytes", b""]
     client = AsyncMock()
     client.get_object.return_value = {"Body": body, "ContentLength": 9}
     context = AsyncMock()
@@ -827,6 +827,7 @@ async def test_object_storage_dal_get_bytes_returns_object_bytes():
         Bucket="bucket",
         Key="uploads/r/f/doc.pdf",
     )
+    assert body.read.await_args_list[0].args == (21,)
 
 
 @pytest.mark.asyncio
@@ -853,8 +854,9 @@ async def test_object_storage_dal_get_bytes_returns_none_for_missing_key():
 async def test_object_storage_dal_get_bytes_rejects_declared_oversize():
     from dal.s3.client import ObjectStorageDALImpl
 
+    body = AsyncMock()
     client = AsyncMock()
-    client.get_object.return_value = {"Body": AsyncMock(), "ContentLength": 21}
+    client.get_object.return_value = {"Body": body, "ContentLength": 21}
     context = AsyncMock()
     context.__aenter__.return_value = client
     session = MagicMock()
@@ -863,6 +865,8 @@ async def test_object_storage_dal_get_bytes_rejects_declared_oversize():
 
     with pytest.raises(ObjectStorageError, match="exceeds max_bytes"):
         await storage.get_bytes("too-large", max_bytes=20)
+
+    body.read.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -883,6 +887,42 @@ async def test_object_storage_dal_get_bytes_uses_bounded_body_read_when_length_m
         await storage.get_bytes("unknown-length", max_bytes=20)
 
     body.read.assert_awaited_once_with(21)
+
+
+@pytest.mark.asyncio
+async def test_object_storage_dal_get_bytes_rejects_short_chunk_oversize_body():
+    from dal.s3.client import ObjectStorageDALImpl
+
+    body = AsyncMock()
+    body.read.side_effect = [b"x" * 10, b"y" * 11]
+    client = AsyncMock()
+    client.get_object.return_value = {"Body": body}
+    context = AsyncMock()
+    context.__aenter__.return_value = client
+    session = MagicMock()
+    session.client.return_value = context
+    storage = ObjectStorageDALImpl(session=session, bucket="bucket", region="us-west-2")
+
+    with pytest.raises(ObjectStorageError, match="exceeds max_bytes"):
+        await storage.get_bytes("short-chunk-oversize", max_bytes=20)
+
+    assert body.read.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_bytes", [0, -1])
+async def test_object_storage_dal_get_bytes_rejects_non_positive_max_bytes_before_s3_call(
+    max_bytes,
+):
+    from dal.s3.client import ObjectStorageDALImpl
+
+    session = MagicMock()
+    storage = ObjectStorageDALImpl(session=session, bucket="bucket", region="us-west-2")
+
+    with pytest.raises(ObjectStorageError, match="max_bytes must be positive"):
+        await storage.get_bytes("key", max_bytes=max_bytes)
+
+    session.client.assert_not_called()
 
 
 @pytest.mark.asyncio
