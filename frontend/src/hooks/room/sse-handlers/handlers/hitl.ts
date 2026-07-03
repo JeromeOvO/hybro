@@ -10,7 +10,7 @@ import type { SSEHandlerDeps } from '../types'
 export async function handleHitlRequest(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['hitl_request'],
-  correlation: CorrelationResult,
+  _correlation: CorrelationResult,
 ): Promise<void> {
   const {
     request_id, message_id, prompt, prompt_type, choices,
@@ -23,25 +23,30 @@ export async function handleHitlRequest(
   const store = useMessageStore.getState()
   const { lifecycle, hitlRequestIndex, roomId } = ctx
 
-  store.removeMessage(lifecycle.placeholderId(roomId))
-  lifecycle.dismissPlaceholder()
-
+  const eventClientRequestId =
+    typeof sseMessage.data.client_request_id === 'string' &&
+    sseMessage.data.client_request_id.length > 0
+      ? sseMessage.data.client_request_id
+      : undefined
+  const hasEventTurnIdentity = !!eventClientRequestId || !!related_message_id
   const processingUser =
     findProcessingStatusUserEntity(roomId, {
-      clientRequestId: correlation.clientReqId,
+      clientRequestId: eventClientRequestId,
       relatedMessageId: related_message_id,
-      latestWithLogs: true,
+      latestWithLogs: !hasEventTurnIdentity,
     }) ??
-    findProcessingStatusUserEntity(roomId, {
-      messageId: lifecycle.getMessageId(),
-      latestWithLogs: true,
-    })
+    (!hasEventTurnIdentity
+      ? findProcessingStatusUserEntity(roomId, {
+          messageId: lifecycle.getMessageId(),
+          latestWithLogs: true,
+        })
+      : undefined)
   const activeClientRequestId = lifecycle.getPendingRunEventAck()
   const lifecycleMessageId = lifecycle.getMessageId()
   const eventMatchesActiveAck =
     !!activeClientRequestId &&
-    !!correlation.clientReqId &&
-    activeClientRequestId === correlation.clientReqId
+    !!eventClientRequestId &&
+    activeClientRequestId === eventClientRequestId
   const userMatchesActiveAck =
     !!activeClientRequestId &&
     !!processingUser?.clientRequestId &&
@@ -55,6 +60,8 @@ export async function handleHitlRequest(
     userMatchesLifecycle ||
     (!activeClientRequestId && !lifecycleMessageId && !!processingUser)
   if (isCurrentTurnHitl) {
+    store.removeMessage(lifecycle.placeholderId(roomId))
+    lifecycle.dismissPlaceholder()
     lifecycle.markProcessingResolved()
     lifecycle.stopProcessing({ clearMessageId: false })
   }

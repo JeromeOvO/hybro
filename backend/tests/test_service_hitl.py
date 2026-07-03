@@ -10,7 +10,7 @@ Tests cover:
 - SSE event emission
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -1746,6 +1746,58 @@ class TestEmitHitlEvent:
 
 
 class TestRecoverStaleProcessing:
+    @pytest.mark.asyncio
+    async def test_finalizes_stale_processing_agent_hitl_when_followup_pending_exists(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        stale_doc = {
+            "request_id": "hitl-old",
+            "room_id": "room-123",
+            "user_message_id": "user-msg-456",
+            "source": "agent",
+            "status": HITLStatus.PROCESSING.value,
+            "claim_id": "claim-old",
+            "routing_completed_at": None,
+            "continuation_message_id": "agent-paused-msg",
+            "display_message_id": "agent-paused-msg",
+            "agent_id": "agent-broker",
+            "a2a_task_id": "a2a-task-1",
+            "a2a_context_id": "a2a-context-1",
+        }
+        mock_hitl_db_service.iter_stale_processing_hitl_requests = MagicMock(
+            return_value=_iter_docs([stale_doc])
+        )
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message = AsyncMock(
+            return_value={
+                "request_id": "hitl-next",
+                "room_id": "room-123",
+                "source": "agent",
+                "status": HITLStatus.PENDING.value,
+                "continuation_message_id": "agent-paused-msg",
+                "display_message_id": "agent-paused-msg",
+            }
+        )
+        hitl_service._persistence = mock_hitl_db_service
+
+        recovered = await hitl_service.recover_stale_processing()
+
+        assert recovered == 1
+        mock_hitl_db_service.find_pending_hitl_request_for_agent_message.assert_awaited_once_with(
+            room_id="room-123",
+            display_message_id="agent-paused-msg",
+            continuation_message_id="agent-paused-msg",
+            agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+        )
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once_with(
+            "hitl-old",
+            expected_status=HITLStatus.PROCESSING.value,
+            status=HITLStatus.RESPONDED.value,
+            routing_completed_at=ANY,
+        )
+        mock_hitl_db_service.release_hitl_group_routing.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_releases_stale_group_routing_claim_before_reverting_to_pending(
         self, hitl_service, mock_hitl_db_service

@@ -82,12 +82,18 @@ def _base_event(**overrides):
 
 
 def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
-    path = Path(__file__).resolve().parents[1] / "execution" / "dispatch" / "response_handler.py"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "execution"
+        / "dispatch"
+        / "response_handler.py"
+    )
     tree = ast.parse(path.read_text(), filename=str(path))
     fn = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_processing_status"
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_on_processing_status"
     )
     emit_lines = [
         node.lineno
@@ -130,12 +136,16 @@ class TestArtifactUpdateEvent:
     async def test_persists_and_sends_sse(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=[{"id": "a1"}],
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=[{"id": "a1"}],
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-001", {"id": "a1"}, append=False,
+            "msg-001",
+            {"id": "a1"},
+            append=False,
         )
         h._delivery.send_artifact_update.assert_awaited_once_with(
             room_id="room-001",
@@ -150,8 +160,11 @@ class TestArtifactUpdateEvent:
     async def test_skip_persist_still_broadcasts(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=[{"id": "a1"}], skip_persist=True,
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=[{"id": "a1"}],
+            skip_persist=True,
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
@@ -161,12 +174,17 @@ class TestArtifactUpdateEvent:
     async def test_append_flag_passed(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=[{"id": "a1"}], append=True,
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=[{"id": "a1"}],
+            append=True,
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-001", {"id": "a1"}, append=True,
+            "msg-001",
+            {"id": "a1"},
+            append=True,
         )
         h._delivery.send_artifact_update.assert_awaited_once()
         call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
@@ -176,8 +194,11 @@ class TestArtifactUpdateEvent:
     async def test_last_chunk_flag_passed(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            artifacts=[{"id": "a1"}], append=True, last_chunk=True,
+            kind="artifact_update",
+            **_base_event(),
+            artifacts=[{"id": "a1"}],
+            append=True,
+            last_chunk=True,
         )
         await h.handle(event)
         call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
@@ -188,8 +209,12 @@ class TestArtifactUpdateEvent:
         """Text-only artifact_update (no artifact object) wraps text as artifact."""
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=None, append=True, last_chunk=False,
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=None,
+            append=True,
+            last_chunk=False,
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
@@ -202,8 +227,10 @@ class TestArtifactUpdateEvent:
     async def test_no_artifacts_no_text_sends_nothing(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="", artifacts=None,
+            kind="artifact_update",
+            **_base_event(),
+            text="",
+            artifacts=None,
         )
         await h.handle(event)
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
@@ -215,10 +242,16 @@ class TestArtifactUpdateEvent:
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
-            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+            "parts": [
+                {
+                    "kind": "file",
+                    "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"},
+                }
+            ],
         }
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
+            kind="artifact_update",
+            **_base_event(),
             artifacts=[artifact],
         )
 
@@ -239,10 +272,16 @@ class TestArtifactUpdateEvent:
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
-            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+            "parts": [
+                {
+                    "kind": "file",
+                    "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"},
+                }
+            ],
         }
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
+            kind="artifact_update",
+            **_base_event(),
             artifacts=[artifact],
             s3_converted=True,
         )
@@ -267,10 +306,16 @@ class TestArtifactUpdateEvent:
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
-            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+            "parts": [
+                {
+                    "kind": "file",
+                    "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"},
+                }
+            ],
         }
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
+            kind="artifact_update",
+            **_base_event(),
             artifacts=[artifact],
         )
 
@@ -308,7 +353,10 @@ class TestResponseEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "completed", message_text="Done!", artifacts=None,
+            "msg-001",
+            "completed",
+            message_text="Done!",
+            artifacts=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
@@ -332,7 +380,10 @@ class TestResponseEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "completed", message_text="Done!", artifacts=None,
+            "msg-001",
+            "completed",
+            message_text="Done!",
+            artifacts=None,
         )
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
@@ -345,7 +396,9 @@ class TestResponseEvent:
             has_partial_content=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text="Done!", failed=False,
+            message_id="msg-001",
+            task_result_text="Done!",
+            failed=False,
         )
 
     @pytest.mark.asyncio
@@ -367,18 +420,25 @@ class TestResponseEvent:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "completed", message_text=None, artifacts=None,
+            "msg-001",
+            "completed",
+            message_text=None,
+            artifacts=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text="resolved from artifacts", failed=False,
+            message_id="msg-001",
+            task_result_text="resolved from artifacts",
+            failed=False,
         )
 
     @pytest.mark.asyncio
     async def test_skip_persist_response(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="response", **_base_event(),
-            text="Done!", skip_persist=True,
+            kind="response",
+            **_base_event(),
+            text="Done!",
+            skip_persist=True,
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -394,8 +454,10 @@ class TestResponseEvent:
     async def test_sends_agent_response_for_parts(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="response", **_base_event(),
-            text="Done!", parts=[{"kind": "file"}],
+            kind="response",
+            **_base_event(),
+            text="Done!",
+            parts=[{"kind": "file"}],
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -419,8 +481,10 @@ class TestErrorEvent:
     async def test_persists_error_state(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="error", **_base_event(),
-            error_text="boom", state="failed",
+            kind="error",
+            **_base_event(),
+            error_text="boom",
+            state="failed",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -431,10 +495,14 @@ class TestErrorEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "failed", message_text="boom",
+            "msg-001",
+            "failed",
+            message_text="boom",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
@@ -459,7 +527,9 @@ class TestErrorEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "failed", message_text="boom",
+            "msg-001",
+            "failed",
+            message_text="boom",
         )
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
@@ -472,15 +542,19 @@ class TestErrorEvent:
             has_partial_content=True,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
     async def test_preserves_rejected_state(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="error", **_base_event(),
-            error_text="nope", state="rejected",
+            kind="error",
+            **_base_event(),
+            error_text="nope",
+            state="rejected",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -491,7 +565,9 @@ class TestErrorEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "rejected", message_text="nope",
+            "msg-001",
+            "rejected",
+            message_text="nope",
         )
 
 
@@ -514,10 +590,14 @@ class TestCanceledEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "canceled", message_text="stopped",
+            "msg-001",
+            "canceled",
+            message_text="stopped",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
@@ -540,7 +620,9 @@ class TestCanceledEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "canceled", message_text="stopped",
+            "msg-001",
+            "canceled",
+            message_text="stopped",
         )
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
@@ -553,7 +635,9 @@ class TestCanceledEvent:
             has_partial_content=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
 
@@ -567,9 +651,12 @@ class TestInteractiveEvent:
     async def test_persists_interactive(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="interactive", **_base_event(),
-            text="need input", state="input-required",
-            task_id="t-1", context_id="c-1",
+            kind="interactive",
+            **_base_event(),
+            text="need input",
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -580,13 +667,17 @@ class TestInteractiveEvent:
             await h.handle(event)
 
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "input-required",
-            message_text="need input", task_id="t-1", context_id="c-1",
+            "msg-001",
+            "input-required",
+            message_text="need input",
+            task_id="t-1",
+            context_id="c-1",
         )
         h._rmc.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
+        call_order = []
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -602,7 +693,14 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_input=AsyncMock(
+                side_effect=lambda **_kwargs: (
+                    call_order.append("hitl") or SimpleNamespace(request_id="hitl-001")
+                )
+            )
+        )
+        mock_impl.side_effect = lambda *_args, **_kwargs: (
+            call_order.append("task_update") or True
         )
         h = _make_handler(
             db=db,
@@ -611,15 +709,19 @@ class TestInteractiveEvent:
             task_notification_store=db,
         )
         event = AgentEvent(
-            kind="interactive", **_base_event(),
-            text="need input", state="input-required",
-            task_id="t-1", context_id="c-1",
+            kind="interactive",
+            **_base_event(),
+            text="need input",
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
         )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
 
         await h.handle(event)
 
+        assert call_order == ["hitl", "task_update"]
         mock_impl.assert_awaited_once()
         task_update_call = mock_impl.call_args.kwargs
         assert task_update_call["message_id"] == "msg-001"
@@ -675,9 +777,12 @@ class TestInteractiveEvent:
             task_notification_store=db,
         )
         event = AgentEvent(
-            kind="interactive", **_base_event(),
-            text="Please authenticate.", state="auth-required",
-            task_id="t-1", context_id="c-1",
+            kind="interactive",
+            **_base_event(),
+            text="Please authenticate.",
+            state="auth-required",
+            task_id="t-1",
+            context_id="c-1",
         )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
@@ -711,7 +816,9 @@ class TestInteractiveEvent:
         )
 
     @pytest.mark.asyncio
-    async def test_skips_duplicate_hitl_request_for_existing_async_pending(self):
+    async def test_reuses_existing_async_pending_hitl_request_for_reprojection_and_sse(
+        self,
+    ):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
@@ -730,14 +837,21 @@ class TestInteractiveEvent:
         db.get_room_agent_message_by_message_id = AsyncMock(
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
-        hitl = SimpleNamespace(request_input=AsyncMock())
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(
+                return_value=SimpleNamespace(request_id="hitl-existing")
+            )
+        )
         h = _make_handler(db=db, hitl_coordinator=hitl)
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="interactive", **_base_event(),
-            text="need input", state="input-required",
-            task_id="t-1", context_id="c-1",
+            kind="interactive",
+            **_base_event(),
+            text="need input",
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -747,8 +861,19 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        hitl.request_input.assert_not_awaited()
-        emitter.assert_not_awaited()
+        hitl.request_input.assert_awaited_once_with(
+            room_id="room-001",
+            user_message_id="user-msg-001",
+            source="agent",
+            prompt="need input",
+            agent_id="agent-001",
+            agent_name=None,
+            a2a_task_id="t-1",
+            a2a_context_id="c-1",
+            continuation_message_id="msg-001",
+            display_message_id="display-msg-001",
+        )
+        emitter.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
@@ -770,9 +895,12 @@ class TestInteractiveEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="interactive", **_base_event(),
-            text="need input", state="input-required",
-            task_id="t-1", context_id="c-1",
+            kind="interactive",
+            **_base_event(),
+            text="need input",
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
         )
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
@@ -800,8 +928,10 @@ class TestSubmittedEvent:
     async def test_sends_sse_submitted(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="task_submitted", **_base_event(),
-            task_id="t-1", agent_name="Agent X",
+            kind="task_submitted",
+            **_base_event(),
+            task_id="t-1",
+            agent_name="Agent X",
         )
         await h.handle(event)
         h._delivery.send_task_submitted.assert_awaited_once()
@@ -810,13 +940,13 @@ class TestSubmittedEvent:
     @pytest.mark.asyncio
     async def test_sends_sse_submitted_with_resolved_client_request_id(self):
         db = MagicMock()
-        db.resolve_client_request_id_for_message_id = AsyncMock(
-            return_value="cr-001"
-        )
+        db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-001")
         h = _make_handler(db=db)
         event = AgentEvent(
-            kind="task_submitted", **_base_event(),
-            task_id="t-1", agent_name="Agent X",
+            kind="task_submitted",
+            **_base_event(),
+            task_id="t-1",
+            agent_name="Agent X",
         )
         await h.handle(event)
 
@@ -830,7 +960,9 @@ class TestStatusUpdateEvent:
     async def test_sends_task_update_for_text(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="status_update", **_base_event(), text="still working",
+            kind="status_update",
+            **_base_event(),
+            text="still working",
         )
         await h.handle(event)
         h._delivery.send_task_update.assert_awaited_once()
@@ -842,7 +974,9 @@ class TestStatusUpdateEvent:
     async def test_no_sse_for_empty_text(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="status_update", **_base_event(), text="",
+            kind="status_update",
+            **_base_event(),
+            text="",
         )
         await h.handle(event)
         h._delivery.send_task_update.assert_not_awaited()
@@ -850,12 +984,12 @@ class TestStatusUpdateEvent:
     @pytest.mark.asyncio
     async def test_sends_task_update_with_resolved_client_request_id(self):
         db = MagicMock()
-        db.resolve_client_request_id_for_message_id = AsyncMock(
-            return_value="cr-002"
-        )
+        db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-002")
         h = _make_handler(db=db)
         event = AgentEvent(
-            kind="status_update", **_base_event(), text="still working",
+            kind="status_update",
+            **_base_event(),
+            text="still working",
         )
         await h.handle(event)
 
@@ -871,9 +1005,11 @@ class TestProcessingStatusEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="processing_status", **_base_event(),
+            kind="processing_status",
+            **_base_event(),
             lifecycle_message_id="umsg-001",
-            state="completed", details="all done",
+            state="completed",
+            details="all done",
         )
         await h.handle(event)
         emitter.assert_awaited_once_with(
@@ -894,7 +1030,8 @@ class TestProcessingStatusEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="processing_status", **_base_event(message_id="display-msg-001"),
+            kind="processing_status",
+            **_base_event(message_id="display-msg-001"),
             lifecycle_message_id="umsg-001",
             state="completed",
             details="all done",
@@ -921,8 +1058,10 @@ class TestProcessingStatusEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="processing_status", **_base_event(),
-            state="completed", details="all done",
+            kind="processing_status",
+            **_base_event(),
+            state="completed",
+            details="all done",
         )
 
         await h.handle(event)
@@ -940,9 +1079,11 @@ class TestProcessingStatusEvent:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="processing_status", **_base_event(),
+            kind="processing_status",
+            **_base_event(),
             lifecycle_message_id="umsg-001",
-            state="completed", details="all done",
+            state="completed",
+            details="all done",
         )
 
         await h.handle(event)
@@ -972,7 +1113,9 @@ class TestResumeOrchestrationErrorHandling:
         rmc.resume_queue_from_continuation = AsyncMock(side_effect=RuntimeError("boom"))
         h = _make_handler(rmc=rmc)
         event = AgentEvent(
-            kind="response", **_base_event(), text="Done!",
+            kind="response",
+            **_base_event(),
+            text="Done!",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -996,8 +1139,12 @@ class TestArtifactTextFallback:
     async def test_text_only_uses_artifact_update(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=None, append=True, last_chunk=False,
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=None,
+            append=True,
+            last_chunk=False,
         )
         await h.handle(event)
         h._delivery.send_artifact_update.assert_awaited_once()
@@ -1015,7 +1162,9 @@ class TestStatusUpdateSendsTaskUpdate:
     async def test_status_uses_task_update(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="status_update", **_base_event(), text="Searching the web...",
+            kind="status_update",
+            **_base_event(),
+            text="Searching the web...",
         )
         await h.handle(event)
         h._delivery.send_task_update.assert_awaited_once()
@@ -1086,7 +1235,8 @@ class TestHandlerNotifyTaskUpdate:
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
-            kind="processing_status", **_base_event(),
+            kind="processing_status",
+            **_base_event(),
             lifecycle_message_id="umsg-001",
             state="completed",
         )
@@ -1117,7 +1267,8 @@ class TestHandlerNotifyTaskUpdate:
         from a2a.types import TaskState
 
         event = AgentEvent(
-            kind="response", **_base_event(),
+            kind="response",
+            **_base_event(),
             text="Done!",
             parts=[{"kind": "text"}],
         )

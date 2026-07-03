@@ -955,6 +955,57 @@ class HITLService:
     PROCESSING_TIMEOUT_SECONDS = 600
     LEASE_HEARTBEAT_SECONDS = 120
 
+    async def _find_pending_followup_for_stale_agent_hitl(
+        self, doc: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if doc.get("source") != "agent":
+            return None
+
+        room_id = doc.get("room_id")
+        display_message_id = doc.get("display_message_id")
+        continuation_message_id = doc.get("continuation_message_id")
+        if not room_id or not (display_message_id or continuation_message_id):
+            return None
+
+        find_pending = getattr(
+            self.persistence, "find_pending_hitl_request_for_agent_message", None
+        )
+        if not callable(find_pending):
+            return None
+
+        try:
+            maybe_pending = find_pending(
+                room_id=room_id,
+                display_message_id=display_message_id,
+                continuation_message_id=continuation_message_id,
+                agent_id=doc.get("agent_id"),
+                a2a_task_id=doc.get("a2a_task_id"),
+                a2a_context_id=doc.get("a2a_context_id"),
+            )
+            pending = (
+                await maybe_pending
+                if inspect.isawaitable(maybe_pending)
+                else maybe_pending
+            )
+        except Exception:
+            logger.warning(
+                "Failed to check pending follow-up HITL during stale recovery",
+                extra={
+                    "hitl_request_id": doc.get("request_id"),
+                    "room_id": room_id,
+                    "display_message_id": display_message_id,
+                    "continuation_message_id": continuation_message_id,
+                },
+                exc_info=True,
+            )
+            return None
+
+        if not isinstance(pending, dict):
+            return None
+        if pending.get("request_id") == doc.get("request_id"):
+            return None
+        return pending
+
     async def recover_stale_processing(self) -> int:
         """Recover HITL requests stuck in 'processing' after a crash.
 
@@ -996,6 +1047,32 @@ class HITLService:
                         req_id,
                     )
             else:
+                pending_followup = (
+                    await self._find_pending_followup_for_stale_agent_hitl(doc)
+                )
+                if pending_followup:
+                    ok = await self.persistence.cas_update_hitl_request(
+                        req_id,
+                        expected_status=HITLStatus.PROCESSING.value,
+                        status=HITLStatus.RESPONDED.value,
+                        routing_completed_at=utcnow(),
+                    )
+                    if ok:
+                        logger.warning(
+                            "Finalized stale PROCESSING HITL request %s to "
+                            "RESPONDED because pending follow-up request %s "
+                            "already exists",
+                            req_id,
+                            pending_followup.get("request_id"),
+                        )
+                        recovered += 1
+                    else:
+                        logger.info(
+                            "Skipped recovery of HITL request %s — status already changed",
+                            req_id,
+                        )
+                    continue
+
                 group_id = doc.get("group_id")
                 claim_id = doc.get("claim_id")
                 if group_id and claim_id:
