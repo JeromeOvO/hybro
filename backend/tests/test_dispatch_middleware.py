@@ -353,3 +353,115 @@ class TestAMPRelayDispatch:
 
         assert result.status == ProcessingStatus.SUCCESS
         dt.dispatch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_room_runtime_preflight_failure_preserves_reason_and_skips_transport(self):
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
+
+        room_runtime = MagicMock()
+        process_resp = MagicMock()
+        process_resp.success = False
+        process_resp.error = "Attached file report.pdf exceeds the inline A2A limit."
+        process_resp.a2a_message = None
+        process_resp.message = None
+        room_runtime.process_agent_message = AsyncMock(return_value=process_resp)
+
+        db_service = MagicMock()
+        db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
+
+        dt = MagicMock()
+        dt.dispatch = AsyncMock()
+
+        amp = AgentMessageProcessor(
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
+            room_memory_reader=db_service,
+            task_tracker=MagicMock(),
+            transports={"direct": dt},
+            dispatch_chain=DispatchChain(),
+        )
+
+        agent = _make_agent(source="cloud")
+        msg = RoomAgentMessage(
+            room_id="room-001",
+            message_id="amsg-preflight",
+            agent_id=agent.agent_id,
+            message_content=MessageContent(message_text=""),
+            extend_info={
+                "attachment_preflight_failure": {
+                    "code": "file_too_large",
+                    "message": "Attached file report.pdf exceeds the inline A2A limit.",
+                }
+            },
+        )
+
+        result = await amp.process_single_message(
+            msg,
+            "room-001",
+            agent,
+            "umsg-001",
+        )
+
+        assert result.status == ProcessingStatus.FAILED
+        assert (
+            result.response_text
+            == "Attached file report.pdf exceeds the inline A2A limit."
+        )
+        assert result.status_message == "file_too_large"
+        dt.dispatch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_room_runtime_agent_card_preflight_failure_preserves_code(self):
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
+
+        room_runtime = MagicMock()
+        process_resp = MagicMock()
+        process_resp.success = False
+        process_resp.error = "Agent card unavailable while preparing attached files."
+        process_resp.a2a_message = None
+        process_resp.message = None
+        room_runtime.process_agent_message = AsyncMock(return_value=process_resp)
+
+        db_service = MagicMock()
+        db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
+
+        dt = MagicMock()
+        dt.dispatch = AsyncMock()
+
+        amp = AgentMessageProcessor(
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
+            room_memory_reader=db_service,
+            task_tracker=MagicMock(),
+            transports={"direct": dt},
+            dispatch_chain=DispatchChain(),
+        )
+
+        agent = _make_agent(source="cloud")
+        msg = RoomAgentMessage(
+            room_id="room-001",
+            message_id="amsg-no-card",
+            agent_id=agent.agent_id,
+            message_content=MessageContent(message_text=""),
+            extend_info={
+                "attachment_preflight_failure": {
+                    "code": "agent_card_unavailable",
+                    "message": "Agent card unavailable while preparing attached files.",
+                }
+            },
+        )
+
+        result = await amp.process_single_message(
+            msg,
+            "room-001",
+            agent,
+            "umsg-001",
+        )
+
+        assert result.status == ProcessingStatus.FAILED
+        assert (
+            result.response_text
+            == "Agent card unavailable while preparing attached files."
+        )
+        assert result.status_message == "agent_card_unavailable"
+        dt.dispatch.assert_not_awaited()

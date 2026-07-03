@@ -14,9 +14,19 @@ from __future__ import annotations
 
 from collections import deque
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from a2a_adapter.task_status import build_task_status, coerce_task_state
-from common.a2a_constants import is_terminal_state
+from common.a2a_constants import SyntheticTaskId, is_terminal_state
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.processing import ProcessingContext
@@ -153,6 +163,52 @@ class TaskStateManager:
         message.task_updated_at = utcnow()
 
         if persist:
+            await self.persist_message(message)
+
+    async def fail_pre_dispatch_task(
+        self,
+        message: RoomAgentMessage,
+        *,
+        error: str,
+        error_code: str | None = None,
+    ) -> None:
+        task = get_task(message)
+        if task is None:
+            if message.message_content is None:
+                return
+            task = Task(
+                id=SyntheticTaskId.FAILED,
+                context_id=message.message_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=Message(
+                        role=MessageRole.AGENT,
+                        parts=[Part(root=TextPart(text=error))],
+                        message_id=str(uuid4()),
+                    ),
+                ),
+                metadata=(
+                    {"preflight_failure_code": error_code}
+                    if error_code
+                    else None
+                ),
+            )
+            message.message_content.message_task = task
+            message.message_content.message_text = error
+            message.task_updated_at = utcnow()
+            await self.persist_message(message)
+            return
+
+        await self.transition_task(
+            message,
+            TaskState.failed,
+            error=error,
+            persist=True,
+        )
+        task = get_task(message)
+        if task is not None and error_code:
+            task.metadata = dict(task.metadata or {})
+            task.metadata["preflight_failure_code"] = error_code
             await self.persist_message(message)
 
     # ------------------------------------------------------------------

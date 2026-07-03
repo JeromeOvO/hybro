@@ -182,6 +182,38 @@ class TestTransitionTask:
         tsm.room_runtime.update_agent_message_by_message_id.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_fail_pre_dispatch_task_creates_failed_task_when_missing():
+    room_svc = MagicMock()
+    room_svc.update_agent_message_by_message_id = AsyncMock(
+        return_value=MagicMock(success=True)
+    )
+    notif_svc = MagicMock()
+    notif_svc.send_task_update = AsyncMock()
+    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+
+    msg = MagicMock(spec=RoomAgentMessage)
+    msg.message_id = "msg-preflight"
+    msg.message_content = MagicMock()
+    msg.message_content.message_task = None
+    msg.task_updated_at = None
+
+    await tsm.fail_pre_dispatch_task(
+        msg,
+        error="Attached file report.pdf exceeds the inline A2A limit.",
+        error_code="file_too_large",
+    )
+
+    task = get_task(msg)
+    assert task is not None
+    assert task.status.state.value == "failed"
+    assert task.status.message.parts[0].root.text == (
+        "Attached file report.pdf exceeds the inline A2A limit."
+    )
+    assert task.metadata["preflight_failure_code"] == "file_too_large"
+    room_svc.update_agent_message_by_message_id.assert_awaited_once()
+
+
 # =============================================================================
 # cancel_remaining_queue Tests
 # =============================================================================

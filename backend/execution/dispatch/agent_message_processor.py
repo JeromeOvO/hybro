@@ -187,12 +187,33 @@ class AgentMessageProcessor:
             orchestration_user_message_id=user_message_id,
         )
 
+        preflight_failure = (
+            current_message.extend_info.get("attachment_preflight_failure")
+            if isinstance(current_message.extend_info, dict)
+            else None
+        )
+        preflight_code = (
+            str(preflight_failure.get("code"))
+            if isinstance(preflight_failure, dict) and preflight_failure.get("code")
+            else None
+        )
+
         if not process_response.success:
-            return ProcessingResult(ProcessingStatus.FAILED)
+            return ProcessingResult(
+                ProcessingStatus.FAILED,
+                response_text=process_response.error
+                or "Agent message preparation failed",
+                status_message=preflight_code,
+            )
 
         prepared_message = process_response.a2a_message
         if prepared_message is None:
-            return ProcessingResult(ProcessingStatus.FAILED)
+            return ProcessingResult(
+                ProcessingStatus.FAILED,
+                response_text=process_response.error
+                or "Agent message preparation failed",
+                status_message=preflight_code,
+            )
 
         ctx = DispatchContext(
             agent=agent,
