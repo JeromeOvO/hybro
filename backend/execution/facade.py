@@ -499,6 +499,32 @@ class ExecutionFacade:
         if active_run_rejection is not None:
             return active_run_rejection
 
+        room_request_extend_info: dict[str, Any] = {}
+        if (
+            request.mode != "direct"
+            or request.selected_agent_ids is not None
+            or request.candidate_scope_mode is not None
+            or request.candidate_scope_group_id is not None
+            or request.orchestration_schema_version is not None
+        ):
+            room_request_extend_info["mode"] = request.mode
+        if request.selected_agent_ids is not None:
+            room_request_extend_info["selected_agent_ids"] = list(
+                request.selected_agent_ids
+            )
+        if request.candidate_scope_mode is not None:
+            room_request_extend_info["candidate_scope_mode"] = (
+                request.candidate_scope_mode
+            )
+        if request.candidate_scope_group_id is not None:
+            room_request_extend_info["candidate_scope_group_id"] = (
+                request.candidate_scope_group_id
+            )
+        if request.orchestration_schema_version is not None:
+            room_request_extend_info["orchestration_schema_version"] = (
+                request.orchestration_schema_version
+            )
+
         room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
@@ -507,6 +533,7 @@ class ExecutionFacade:
             attachments=request.attachments,
             inline_file_ids=request.inline_file_ids,
             client_request_id=request.client_request_id,
+            extend_info=room_request_extend_info or None,
         )
         persisted_response, preflight_context = await self._room_center.persist_message_to_room(
             room_request,

@@ -107,6 +107,7 @@ class RoomMessagePreflightContext:
     message_text: str
     pre_resolved_mentions: list[dict] | None
     pre_resolved_scope: tuple[dict, bool, list] | None
+    pre_resolved_selected_scope: tuple[dict, bool, list] | None
     token: CancellationToken
 
 
@@ -1622,6 +1623,143 @@ class RoomServices:
                 )
         return registry
 
+    @staticmethod
+    def _orchestration_request_info(
+        request: RoomCenterUserMessageRequest,
+    ) -> dict:
+        info = request.extend_info if isinstance(request.extend_info, dict) else {}
+        return dict(info)
+
+    @classmethod
+    def _is_v2_orchestration_request(
+        cls,
+        request: RoomCenterUserMessageRequest,
+    ) -> bool:
+        info = cls._orchestration_request_info(request)
+        return (
+            info.get("mode") == "supervisor"
+            and info.get("orchestration_schema_version") == 2
+        )
+
+    @classmethod
+    def _selected_agent_ids_from_request(
+        cls,
+        request: RoomCenterUserMessageRequest,
+    ) -> list[str] | None:
+        value = cls._orchestration_request_info(request).get("selected_agent_ids")
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            return None
+        selected_agent_ids: list[str] = []
+        for agent_id in value:
+            if isinstance(agent_id, str) and agent_id.strip():
+                selected_agent_ids.append(agent_id.strip())
+        return selected_agent_ids
+
+    async def _resolve_selected_candidate_scope(
+        self,
+        selected_agent_ids: list[str],
+        sender_user_id: str | None,
+    ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
+        selected_agent_set: dict[str, str] = {}
+        agents: list = []
+        invalid_ids: list[str] = []
+
+        for agent_id in selected_agent_ids:
+            if agent_id in selected_agent_set:
+                continue
+            agent = await self._store.get_agent_by_agent_id(agent_id)
+            if not agent or agent.agent_status != AgentStatus.active:
+                invalid_ids.append(agent_id)
+                continue
+            if (
+                not agent.is_public
+                and getattr(agent, "provider_id", None) != sender_user_id
+            ):
+                invalid_ids.append(agent_id)
+                continue
+            selected_agent_set[agent_id] = agent.agent_card.name
+            agents.append(agent)
+
+        if invalid_ids:
+            error_msg = (
+                "Invalid or unauthorized selected candidate targets: "
+                f"{', '.join(invalid_ids)}"
+            )
+            logger.warning(
+                "Selected candidate targets rejected (invalid/unauthorized): %s",
+                invalid_ids,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="unauthorized_candidate_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        if not selected_agent_set:
+            error_msg = "Selected candidate scope is empty."
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="empty_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        return selected_agent_set, False, agents
+
+    async def _prepare_v2_orchestration_envelope(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        selected_agent_set: dict,
+        explicit_mentions: list[dict] | None,
+        client_request_id: str | None,
+    ) -> ParseResult:
+        info = self._orchestration_request_info(request)
+        candidate_scope_mode = info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
+
+        envelope = {
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": user_message.message_id,
+            "candidate_scope_mode": candidate_scope_mode,
+            "candidate_agent_ids": list(selected_agent_set.keys()),
+            "candidate_scope_snapshot_version": 1,
+            "mentioned_agent_ids": [
+                mention["agent_id"] for mention in (explicit_mentions or [])
+            ],
+            "client_request_id": client_request_id,
+        }
+        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        if isinstance(candidate_scope_group_id, str) and candidate_scope_group_id:
+            envelope["candidate_scope_group_id"] = candidate_scope_group_id
+
+        user_message.extend_info = envelope
+        await self._store.update_room_user_message_by_message_id(
+            user_message.message_id,
+            user_message,
+        )
+        logger.info(
+            "RoomServices: v2 orchestration envelope prepared for message %s (%d candidates)",
+            user_message.message_id,
+            len(selected_agent_set),
+        )
+        return ParseResult(success=True)
+
     async def _prepare_for_supervisor(
         self,
         room: Room,
@@ -2030,8 +2168,26 @@ class RoomServices:
         # - inline text mentions: best-effort, not covered (persists first)
         pre_resolved_mentions: list[dict] | None = None
         pre_resolved_scope: tuple[dict, bool, list] | None = None
+        pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
+        selected_agent_ids = self._selected_agent_ids_from_request(request)
+        v2_orchestration_requested = self._is_v2_orchestration_request(request)
 
-        if mentioned_agent_ids:
+        if v2_orchestration_requested and selected_agent_ids is not None:
+            scope_result = await self._resolve_selected_candidate_scope(
+                selected_agent_ids,
+                sender_user_id=request.user_id,
+            )
+            if isinstance(scope_result, RoomCenterUserMessageResponse):
+                return scope_result, None
+            pre_resolved_selected_scope = scope_result
+            if mentioned_agent_ids:
+                mention_result = await self._validate_canonical_mentions(
+                    mentioned_agent_ids, sender_user_id=request.user_id,
+                )
+                if isinstance(mention_result, RoomCenterUserMessageResponse):
+                    return mention_result, None
+                pre_resolved_mentions = mention_result
+        elif mentioned_agent_ids:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids, sender_user_id=request.user_id,
             )
@@ -2107,6 +2263,7 @@ class RoomServices:
                 message_text=message_text,
                 pre_resolved_mentions=pre_resolved_mentions,
                 pre_resolved_scope=pre_resolved_scope,
+                pre_resolved_selected_scope=pre_resolved_selected_scope,
                 token=token,
             ),
         )
@@ -2125,12 +2282,21 @@ class RoomServices:
         message_text = context.message_text
         pre_resolved_mentions = context.pre_resolved_mentions
         pre_resolved_scope = context.pre_resolved_scope
+        pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
+        v2_orchestration_active = (
+            use_supervisor and self._is_v2_orchestration_request(request)
+        )
+        selected_scope_locked = (
+            v2_orchestration_active and pre_resolved_selected_scope is not None
+        )
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
         # In non-supervisor rooms, explicit mentions are hard routing. In
         # supervisor rooms, mentions are strong intent signals for the planner.
-        if pre_resolved_mentions:
+        if selected_scope_locked:
+            selected_agent_set, auto_assign, agents = pre_resolved_selected_scope
+        elif pre_resolved_mentions:
             if use_supervisor:
                 selected_agent_set = {
                     mention["agent_id"]: mention["agent_name"]
@@ -2174,25 +2340,28 @@ class RoomServices:
             if mentions:
                 if use_supervisor:
                     pre_resolved_mentions = mentions
-                    selected_agent_set = {
-                        mention["agent_id"]: mention["agent_name"]
-                        for mention in mentions
-                    }
-                    agents = []
-                    for mention in mentions:
-                        agent = await self._store.get_agent_by_agent_id(
-                            mention["agent_id"]
-                        )
-                        if agent is not None:
-                            agents.append(agent)
-                    auto_assign = False
+                    if not selected_scope_locked:
+                        selected_agent_set = {
+                            mention["agent_id"]: mention["agent_name"]
+                            for mention in mentions
+                        }
+                        agents = []
+                        for mention in mentions:
+                            agent = await self._store.get_agent_by_agent_id(
+                                mention["agent_id"]
+                            )
+                            if agent is not None:
+                                agents.append(agent)
+                        auto_assign = False
                 else:
                     return await self._handle_mentions_flow(
                         request, user_message, mentions
                     )
 
         # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
-        if pre_resolved_mentions and use_supervisor:
+        if selected_scope_locked:
+            pass
+        elif pre_resolved_mentions and use_supervisor:
             pass
         elif target_group == "all_agents":
             required_modes = self._derive_required_input_modes(user_message)
@@ -2230,11 +2399,12 @@ class RoomServices:
             "dispatch_strategy": dispatch_strategy.value,
         }
 
-        # Fetch room memory for context assembly.
-        # supervisor always needs room_memory for ContextAssemblyService (§11.1).
-        # Non-supervisor multi-agent paths need it for build_minimal_context.
+        # Fetch room memory for legacy context assembly. V2 supervisor requests
+        # persist only the lightweight orchestration envelope here.
         room_memory = None
-        if use_supervisor or len(selected_agent_set) > 1:
+        if (use_supervisor and not v2_orchestration_active) or (
+            not use_supervisor and len(selected_agent_set) > 1
+        ):
             room_memory = await self._store.get_room_memory_by_room_id(
                 request.room_id
             )
@@ -2262,40 +2432,49 @@ class RoomServices:
 
         # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
-            # --- Clarify resume check (§7.4) ---
-            clarify_resume_prepared = False
-            pending_clarify_msg_id = (
-                room.extend_info.get("pending_clarification_message_id")
-                if isinstance(room.extend_info, dict)
-                else None
-            )
-            if pending_clarify_msg_id:
-                clarify_resume_prepared = await self._prepare_clarify_resume(
-                    room=room,
+            if v2_orchestration_active:
+                parse_result = await self._prepare_v2_orchestration_envelope(
+                    request=request,
                     user_message=user_message,
-                    message_text=message_text,
-                    pending_clarify_msg_id=pending_clarify_msg_id,
-                    agents=agents,
                     selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
                     explicit_mentions=pre_resolved_mentions,
+                    client_request_id=client_request_id,
                 )
-
-            if clarify_resume_prepared:
-                parse_result = ParseResult(success=True)
             else:
-                parse_result = await self._prepare_for_supervisor(
-                    room=room,
-                    user_message=user_message,
-                    message_text=message_text,
-                    agents=agents,
-                    selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
-                    token=token,
-                    explicit_mentions=pre_resolved_mentions,
+                # --- Clarify resume check (§7.4) ---
+                clarify_resume_prepared = False
+                pending_clarify_msg_id = (
+                    room.extend_info.get("pending_clarification_message_id")
+                    if isinstance(room.extend_info, dict)
+                    else None
                 )
+                if pending_clarify_msg_id:
+                    clarify_resume_prepared = await self._prepare_clarify_resume(
+                        room=room,
+                        user_message=user_message,
+                        message_text=message_text,
+                        pending_clarify_msg_id=pending_clarify_msg_id,
+                        agents=agents,
+                        selected_agent_set=selected_agent_set,
+                        is_debate_mode=is_debate_mode,
+                        room_memory=room_memory,
+                        explicit_mentions=pre_resolved_mentions,
+                    )
+
+                if clarify_resume_prepared:
+                    parse_result = ParseResult(success=True)
+                else:
+                    parse_result = await self._prepare_for_supervisor(
+                        room=room,
+                        user_message=user_message,
+                        message_text=message_text,
+                        agents=agents,
+                        selected_agent_set=selected_agent_set,
+                        is_debate_mode=is_debate_mode,
+                        room_memory=room_memory,
+                        token=token,
+                        explicit_mentions=pre_resolved_mentions,
+                    )
         else:
             parse_result = await self.parse_user_message(
                 request.room_id,

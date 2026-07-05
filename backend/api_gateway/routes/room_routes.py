@@ -359,6 +359,34 @@ async def send_message(
     room_id = request_data.get("room_id")
     message = request_data.get("message")
     client_request_id = request_data.get("client_request_id")
+    mode = request_data.get("mode", "direct")
+    if mode is None:
+        mode = "direct"
+    if not isinstance(mode, str) or mode not in {"direct", "supervisor", "debate"}:
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="mode must be one of: direct, supervisor, debate",
+            status_code=400,
+        )
+
+    orchestration_schema_version = request_data.get("orchestration_schema_version")
+    if orchestration_schema_version is not None and (
+        isinstance(orchestration_schema_version, bool)
+        or not isinstance(orchestration_schema_version, int)
+    ):
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="orchestration_schema_version must be an integer",
+            status_code=400,
+        )
+    is_v2_supervisor_orchestration = (
+        mode == "supervisor" and orchestration_schema_version == 2
+    )
+
     if not isinstance(client_request_id, str) or not client_request_id.strip():
         return RoomCenterUserMessageResponse(
             message_id=None,
@@ -380,7 +408,49 @@ async def send_message(
     message_target_mode = request_data.get("message_target_mode")
     target_group_id = request_data.get("target_group_id")
     mentioned_agent_ids = request_data.get("mentioned_agent_ids")
+    selected_agent_ids = request_data.get("selected_agent_ids")
+    candidate_scope_mode = request_data.get("candidate_scope_mode")
+    candidate_scope_group_id = request_data.get("candidate_scope_group_id")
     has_target_group_id = "target_group_id" in request_data
+
+    if selected_agent_ids is not None:
+        if not isinstance(selected_agent_ids, list) or not all(
+            isinstance(agent_id, str) and agent_id.strip()
+            for agent_id in selected_agent_ids
+        ):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="selected_agent_ids must be a list of non-empty strings",
+                status_code=400,
+            )
+        selected_agent_ids = [agent_id.strip() for agent_id in selected_agent_ids]
+
+    if candidate_scope_mode is not None:
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode.strip():
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="candidate_scope_mode must be a non-empty string",
+                status_code=400,
+            )
+        candidate_scope_mode = candidate_scope_mode.strip()
+
+    if candidate_scope_group_id is not None:
+        if (
+            not isinstance(candidate_scope_group_id, str)
+            or not candidate_scope_group_id.strip()
+        ):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="candidate_scope_group_id must be a non-empty string",
+                status_code=400,
+            )
+        candidate_scope_group_id = candidate_scope_group_id.strip()
 
     if mentioned_agent_ids is not None:
         if not isinstance(mentioned_agent_ids, list) or not all(
@@ -397,7 +467,11 @@ async def send_message(
         mentioned_agent_ids = [agent_id.strip() for agent_id in mentioned_agent_ids]
 
     # Reject mixed payloads: mentions + target mode should not coexist.
-    if mentioned_agent_ids and message_target_mode is not None:
+    if (
+        mentioned_agent_ids
+        and message_target_mode is not None
+        and not is_v2_supervisor_orchestration
+    ):
         return RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
@@ -457,6 +531,16 @@ async def send_message(
                 ),
                 status_code=400,
             )
+    elif is_v2_supervisor_orchestration and selected_agent_ids:
+        if has_target_group_id:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="target_group_id is only supported when message_target_mode is saved_group",
+                status_code=400,
+            )
+        target_group = "room_team"
     elif mentioned_agent_ids:
         if has_target_group_id:
             return RoomCenterUserMessageResponse(
@@ -498,7 +582,12 @@ async def send_message(
         target_group_id=target_group_id,
         message_target_mode=message_target_mode,
         mentioned_agent_ids=mentioned_agent_ids,
+        selected_agent_ids=selected_agent_ids,
+        candidate_scope_mode=candidate_scope_mode,
+        candidate_scope_group_id=candidate_scope_group_id,
+        orchestration_schema_version=orchestration_schema_version,
         parent_message_id=related_message_id or None,
+        mode=mode,
     )
     ack = await engine.execute(execution_request)
 
