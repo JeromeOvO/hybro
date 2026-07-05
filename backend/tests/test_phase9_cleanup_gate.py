@@ -22,7 +22,7 @@ PRODUCTION_ROOTS = (
     "execution",
     "hub_runtime_bridge",
     "llm_gateway",
-    "platform_module",
+    
     "dal",
     "jobs",
     "models",
@@ -108,7 +108,7 @@ FORBIDDEN_COMMON_IMPORT_PREFIXES = (
     "hub_runtime_bridge",
     "llm_gateway",
     "models",
-    "platform_module",
+    
     "a2a_adapter",
     "room",
 )
@@ -129,14 +129,14 @@ SDK_CONFINEMENT_ROOTS = (
     "hub_runtime_bridge",
     "jobs",
     "models",
-    "platform_module",
+    
     "scripts",
 )
 
 PHASE9_IMPORT_SMOKE_MODULES = (
     "hub_runtime_bridge",
     "hub_runtime_bridge.service.hub_publish",
-    "platform_module",
+    
 )
 
 FORBIDDEN_SDK_IMPORT_PREFIXES = ("a2a",)

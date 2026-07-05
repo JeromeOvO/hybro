@@ -2392,22 +2392,13 @@ class RoomMessageCenter:
         if failed and task_result_text is None:
             task_result_text = ""
 
-        # Peek at the continuation data to detect supervisor before QueueExecutor
-        # consumes it (get_and_clear is destructive). The supervisor flag is checked
-        # first; if present, we handle it here instead of delegating to the
-        # V1 QueueExecutor path.
+        # Peek at the continuation data non-destructively to get the room_id
+        # before acquiring the lock.
         continuation = (
-            await self.continuation_store.get_and_clear_continuation_on_message(
+            await self.continuation_store.get_pending_continuation_on_message(
                 message_id
             )
         )
-        # Also check user messages (HITL_SUPERVISOR stores continuations there)
-        if not continuation:
-            continuation = (
-                await self.continuation_store.get_and_clear_continuation_on_user_message(
-                    message_id
-                )
-            )
         if not continuation:
             logger.debug(
                 "RoomMessageCenter: No continuation found for message %s",
@@ -2424,23 +2415,12 @@ class RoomMessageCenter:
             if lock_owner is None:
                 logger.error(
                     "RoomMessageCenter: Timed out waiting for room lock on %s "
-                    "during resume (message %s). Re-saving continuation.",
+                    "during resume (message %s).",
                     room_id,
                     message_id,
                 )
-                # Re-save so the continuation isn't lost.
-                # HITL_SUPERVISOR continuations are stored on user messages,
-                # not agent messages — use the correct collection.
-                from models.hitl import InterruptKind
-                interrupt_kind_raw = continuation.get("interrupt_kind")
-                if interrupt_kind_raw == InterruptKind.HITL_SUPERVISOR.value:
-                    await self.continuation_store.save_continuation_on_user_message(
-                        message_id, continuation
-                    )
-                else:
-                    await self.continuation_store.save_continuation_on_message(
-                        message_id, continuation
-                    )
+                # Because the initial read was non-destructive, the continuation
+                # remains in the DB safely. No need to re-save it.
                 return False
         else:
             lock_owner = None
@@ -2451,8 +2431,26 @@ class RoomMessageCenter:
             )
 
         try:
+            # Safely perform the destructive read *inside* the locked section.
+            # This prevents concurrent webhooks from reading stale trajectories.
+            locked_continuation = (
+                await self.continuation_store.get_and_clear_continuation_on_message(
+                    message_id
+                )
+            )
+            if not locked_continuation:
+                locked_continuation = (
+                    await self.continuation_store.get_and_clear_continuation_on_user_message(
+                        message_id
+                    )
+                )
+
+            if not locked_continuation:
+                # E.g. another concurrent resume already processed it.
+                return False
+
             return await self._resume_continuation_locked(
-                continuation, message_id, task_result_text
+                locked_continuation, message_id, task_result_text
             )
         finally:
             if room_id is not None:
