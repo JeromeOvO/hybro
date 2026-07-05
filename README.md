@@ -19,12 +19,20 @@ Hybro AI allows you to run, manage, and coordinate a cluster of intelligent agen
 - Python 3.12+ (if running the backend outside of Docker)
 
 ### Quick Start (Docker)
-The easiest way to get started is by using the provided `docker-compose.yml` file, which spins up the backend, frontend, MongoDB, and Redis instance all pre-configured.
+The easiest way to get started is using the automated installation script, which will clone the repository, set up the environment, and spin up the Docker containers.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
+```
+
+Alternatively, you can manually clone and run:
+
+```bash
+git clone https://github.com/hybroai/hybro.git
 cd hybro
 docker compose up -d --build
 ```
+
 - **Developer Portal**: http://localhost:3000
 - **API Server**: http://localhost:8000
 
