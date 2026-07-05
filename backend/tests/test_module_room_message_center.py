@@ -913,3 +913,110 @@ def test_clarifying_soft_complete_appends_turn_completed_before_frontend_complet
         ("SSEProcessingStatus.COMPLETED",),
         emit_occurrence=2,
     )
+
+@pytest.mark.asyncio
+async def test_supervisor_resume_race_condition():
+    """
+    Tests that resume_queue_from_continuation correctly handles concurrent resumes
+    for the same room by locking before doing a destructive read, avoiding stale trajectory state.
+    """
+    from datetime import datetime, timezone
+    from models.supervisor import DelegateTarget
+
+    continuation_store = AsyncMock()
+    now = datetime.now(timezone.utc)
+    trajectory = SupervisorTrajectory(
+        room_id="room-1",
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                started_at=now,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="go",
+                    targets=[
+                        DelegateTarget(agent_id="a1", agent_name="A1", task="t"),
+                        DelegateTarget(agent_id="a2", agent_name="A2", task="t"),
+                    ]
+                ),
+                results=[
+                    StepResult(step_number=1, agent_id="a1", agent_name="A1", task="t", response_text="", status=StepStatus.PAUSED, agent_message_id="msg-1", paused_message_id="msg-1"),
+                    StepResult(step_number=1, agent_id="a2", agent_name="A2", task="t", response_text="", status=StepStatus.PAUSED, agent_message_id="msg-2", paused_message_id="msg-2"),
+                ]
+            )
+        ]
+    )
+
+    # Initial state shared by both
+    continuation_state = {
+        "room_id": "room-1",
+        "supervisor": True,
+        "agent_registry": [],
+        "room_config": {},
+        "trajectory": trajectory.model_dump(mode="json")
+    }
+
+    # Simulate get_pending_continuation_on_message being called concurrently and returning the same state.
+    async def mock_get_pending(msg_id):
+        await asyncio.sleep(0.01) # force yield
+        return continuation_state.copy()
+        
+    continuation_store.get_pending_continuation_on_message.side_effect = mock_get_pending
+    
+    # Track when get_and_clear is called to verify they get sequential, updated state
+    cleared_msgs = set()
+    async def mock_get_and_clear(msg_id):
+        if msg_id in cleared_msgs:
+            return None
+        cleared_msgs.add(msg_id)
+        return continuation_state.copy()
+
+    continuation_store.get_and_clear_continuation_on_message.side_effect = mock_get_and_clear
+    continuation_store.get_and_clear_continuation_on_user_message.return_value = None
+
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.continuation_store = continuation_store
+    
+    # Real asyncio lock for the room
+    room_locks = {}
+    async def mock_acquire(room_id):
+        if room_id not in room_locks:
+            room_locks[room_id] = asyncio.Lock()
+        await room_locks[room_id].acquire()
+        return "owner"
+    
+    async def mock_release(room_id, owner, acquired_at=None):
+        room_locks[room_id].release()
+        
+    rmc._acquire_room_lock = AsyncMock(side_effect=mock_acquire)
+    rmc._release_room_lock = AsyncMock(side_effect=mock_release)
+
+    async def mock_resume_supervisor(continuation, msg_id, result_text):
+        traj = SupervisorTrajectory.model_validate(continuation["trajectory"])
+        # Complete the agent that resumed
+        for entry in traj.entries:
+            for res in entry.results:
+                if res.agent_message_id == msg_id:
+                    res.status = StepStatus.SUCCESS
+        
+        # Save mutated state back so the next lock owner sees it
+        continuation_state["trajectory"] = traj.model_dump(mode="json")
+        return RunStatus.PAUSED if any(r.status == StepStatus.PAUSED for e in traj.entries for r in e.results) else RunStatus.COMPLETED
+
+    rmc._resume_supervisor = AsyncMock(side_effect=mock_resume_supervisor)
+
+    # Run both concurrently
+    results = await asyncio.gather(
+        rmc.resume_queue_from_continuation("msg-1", "result 1"),
+        rmc.resume_queue_from_continuation("msg-2", "result 2"),
+    )
+    
+    # Both should return successfully
+    assert all(results)
+    
+    # Both messages should have been processed
+    assert len(cleared_msgs) == 2
+    
+    # The final state in continuation_state should have both agents SUCCESS
+    final_traj = SupervisorTrajectory.model_validate(continuation_state["trajectory"])
+    assert all(r.status == StepStatus.SUCCESS for e in final_traj.entries for r in e.results)

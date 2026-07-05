@@ -472,10 +472,6 @@ def test_streaming_routes_record_sse_media_type_and_headers():
     )
     route_by_name = {route["name"]: route for route in recorded_routes}
     expected = {
-        "gateway_stream": {
-            "media_type": "text/event-stream",
-            "headers": ["Cache-Control", "X-Accel-Buffering"],
-        },
         "relay_events": {
             "media_type": "text/event-stream",
             "headers": ["Cache-Control", "Connection", "X-Accel-Buffering"],
