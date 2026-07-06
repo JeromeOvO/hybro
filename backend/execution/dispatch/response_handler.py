@@ -374,10 +374,10 @@ class AgentResponseHandler:
             e,
             status="completed",
             text=display_text,
-            artifacts=(
-                display_artifacts if display_artifacts is not None else artifacts_for_db
-            )
-            or [],
+            artifacts=self._orchestration_result_artifacts(
+                e,
+                persisted_artifacts=artifacts_for_db,
+            ),
         )
         await self._resume_orchestration(e.message_id, display_text or "")
 
@@ -738,6 +738,20 @@ class AgentResponseHandler:
                 e.message_id,
                 exc_info=True,
             )
+
+    @staticmethod
+    def _orchestration_result_artifacts(
+        e: AgentEvent,
+        *,
+        persisted_artifacts: list[dict] | None = None,
+    ) -> list[dict]:
+        if e.artifacts:
+            return e.artifacts
+        if e.parts:
+            non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
+            if non_text:
+                return [{"name": "agent-output", "parts": non_text}]
+        return persisted_artifacts or []
 
     @staticmethod
     def _terminal_result_error(e: AgentEvent, status: str) -> str | None:

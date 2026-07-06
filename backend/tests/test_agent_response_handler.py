@@ -19,7 +19,8 @@ from execution.dispatch.response_handler import (
     ResponseTaskWriter,
     bind_orchestration_result_ingestor,
 )
-from execution.orchestration.result_ingestor import AgentResultRead
+from execution.orchestration.result_ingestor import AgentResultIngestor, AgentResultRead
+from models.orchestration import OrchestrationRunState
 
 # =============================================================================
 # Fixtures
@@ -580,6 +581,46 @@ class TestOrchestrationResultIngestorHook:
             task_result_text="Done!",
             failed=False,
         )
+
+    @pytest.mark.asyncio
+    async def test_parts_only_response_ingestion_is_idempotent(self):
+        state = OrchestrationRunState(
+            run_id="run-001",
+            room_id="room-001",
+            user_message_id="user-msg-001",
+            goal="collect artifact",
+            candidate_agent_ids=["agent-001"],
+        )
+        ingestor = AgentResultIngestor()
+
+        async def ingest(result):
+            nonlocal state
+            state = ingestor.ingest(state, result)
+
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(side_effect=ingest)
+        bind_orchestration_result_ingestor(service)
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="Done!",
+            parts=[{"kind": "data", "data": {"value": 1}}],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+            await h.handle(event)
+
+        assert service.ingest_agent_result.await_count == 2
+        assert len(state.artifacts) == 1
+        assert state.agent_outputs[0].artifact_keys == [
+            state.artifacts[0]["artifact_key"]
+        ]
 
     @pytest.mark.asyncio
     async def test_hook_maps_error_and_canceled_terminal_events(self):
