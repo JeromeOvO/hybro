@@ -844,18 +844,26 @@ class RoomSupervisorService:
         except ValueError as exc:
             raise ValueError(f"unknown planner action: {raw_action}") from exc
 
-        raw_targets = response_json.get("targets") or []
+        raw_targets = response_json["targets"] if "targets" in response_json else []
         if not isinstance(raw_targets, list):
             raise ValueError("planner action targets must be a list")
         targets = []
         for target in raw_targets:
             if not isinstance(target, dict):
                 raise ValueError("planner action target must be an object")
+            agent_id = target.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("planner action target requires agent_id")
+            task = target.get("task", "")
+            if planner_action_type == PlannerActionType.DELEGATE and (
+                not isinstance(task, str) or not task.strip()
+            ):
+                raise ValueError("delegate planner action target requires task")
             targets.append(
                 {
-                    "agent_id": target.get("agent_id"),
+                    "agent_id": agent_id,
                     "agent_name": target.get("agent_name"),
-                    "task": target.get("task", ""),
+                    "task": task,
                 }
             )
 

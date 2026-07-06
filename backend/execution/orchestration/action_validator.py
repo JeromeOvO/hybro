@@ -18,10 +18,10 @@ class PlannerActionValidator:
     def validate(
         action: PlannerAction,
         *,
-        candidate_agent_ids: Iterable[str],
-        steps_used: int,
-        step_budget: int,
-        has_agent_output: bool,
+        candidate_agent_ids: Iterable[str] = (),
+        steps_used: int = 0,
+        step_budget: int = 8,
+        has_agent_output: bool = False,
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 

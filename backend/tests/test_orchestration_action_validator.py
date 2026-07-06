@@ -57,6 +57,25 @@ def test_valid_delegate_returns_action_unchanged():
     assert result is action
 
 
+def test_validate_can_be_called_with_default_context_for_valid_action():
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="cannot proceed",
+        failure_reason="no viable plan",
+    )
+
+    result = PlannerActionValidator.validate(action)
+
+    assert result is action
+
+
+def test_validate_default_context_raises_domain_error_for_delegate():
+    action = _action(PlannerActionType.DELEGATE, targets=[_target()])
+
+    with pytest.raises(PlannerActionValidationError, match="candidate"):
+        PlannerActionValidator.validate(action)
+
+
 def test_out_of_scope_delegate_target_is_rejected():
     action = _action(
         PlannerActionType.DELEGATE,
@@ -200,5 +219,62 @@ def test_v2_adapter_missing_action_raises():
         RoomSupervisorService._parse_legacy_action_as_planner_action(
             {
                 "reasoning": "test",
+            }
+        )
+
+
+def test_v2_adapter_rejects_non_list_targets_when_present():
+    with pytest.raises(ValueError, match="targets"):
+        RoomSupervisorService._parse_legacy_action_as_planner_action(
+            {
+                "action": "delegate",
+                "reasoning": "test",
+                "targets": "",
+            }
+        )
+
+
+def test_v2_adapter_rejects_non_object_target():
+    with pytest.raises(ValueError, match="target"):
+        RoomSupervisorService._parse_legacy_action_as_planner_action(
+            {
+                "action": "delegate",
+                "reasoning": "test",
+                "targets": ["not an object"],
+            }
+        )
+
+
+def test_v2_adapter_rejects_delegate_target_missing_agent_id():
+    with pytest.raises(ValueError, match="agent_id"):
+        RoomSupervisorService._parse_legacy_action_as_planner_action(
+            {
+                "action": "delegate",
+                "reasoning": "test",
+                "targets": [
+                    {
+                        "agent_name": "Agent One",
+                        "task": "do work",
+                    }
+                ],
+            }
+        )
+
+
+@pytest.mark.parametrize("task_value", [None, "", "  "])
+def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
+    target = {
+        "agent_id": "agent-1",
+        "agent_name": "Agent One",
+    }
+    if task_value is not None:
+        target["task"] = task_value
+
+    with pytest.raises(ValueError, match="task"):
+        RoomSupervisorService._parse_legacy_action_as_planner_action(
+            {
+                "action": "delegate",
+                "reasoning": "test",
+                "targets": [target],
             }
         )
