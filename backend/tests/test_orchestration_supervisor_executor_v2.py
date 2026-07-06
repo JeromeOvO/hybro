@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.config.settings import Settings
+from common.utils.time import utcnow
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
@@ -19,7 +20,18 @@ from models.orchestration import (
 from models.processing import ProcessingResult, ProcessingStatus
 from models.response import OrchestrationResponse
 from models.room import MessageContent, Room, RoomUserMessage
-from models.supervisor import AgentProfile, RoomConfig, RunStatus
+from models.supervisor import (
+    ActionType,
+    AgentProfile,
+    DelegateTarget,
+    RoomConfig,
+    RunStatus,
+    StepResult,
+    StepStatus,
+    SupervisorAction,
+    SupervisorTrajectory,
+    TrajectoryEntry,
+)
 
 
 class RecordingPlanner:
@@ -184,6 +196,173 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
         for call in executor.message_writer.add_room_agent_message.await_args_list
     ]
     assert added_message_ids == ["sys-message-1", intent.planned_agent_message_id]
+
+
+@pytest.mark.asyncio
+async def test_run_v2_resume_ingests_paused_result_before_planning():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="dispatch async agent",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Handle the request",
+                )
+            ],
+        )
+    )
+    first_executor = _executor(
+        store=store,
+        planner=first_planner,
+        user_message=user_message,
+    )
+    first_executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.PAUSED,
+            message_id="run-message-1:step-1:target-1:message",
+        )
+    )
+    first_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    paused = await first_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+    assert paused.status == RunStatus.PAUSED
+
+    resumed_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resumed delegate",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Handle the request",
+                        )
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Handle the request",
+                        response_text="Webhook result",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="run-message-1:step-1:target-1:message",
+                    )
+                ],
+                started_at=utcnow(),
+            )
+        ]
+    )
+    second_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="summarize after webhook",
+            synthesis_instruction="Summarize",
+        )
+    )
+    second_executor = _executor(
+        store=store,
+        planner=second_planner,
+        user_message=user_message,
+    )
+
+    result = await second_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    context = second_planner.contexts[0]
+    assert context.state_context.current_step.steps_used == 1
+    assert context.state_context.agent_outputs[0]["text"] == "Webhook result"
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.agent_outputs[0].text == "Webhook result"
+    assert state.dispatch_intents[0].status == StepStatus.SUCCESS.value
+
+
+@pytest.mark.asyncio
+async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert hitl_kwargs["source"] == "supervisor"
+    assert hitl_kwargs["prompt"] == "Which account?"
+    assert hitl_kwargs["orchestration_run_id"] == "run-message-1"
+    executor._save_interrupted_state.assert_awaited_once()
+    assert executor._save_interrupted_state.await_args.kwargs["kind"].value == (
+        "hitl_supervisor"
+    )
 
 
 def _supervisor_agent(agent_id: str, name: str) -> SimpleNamespace:
