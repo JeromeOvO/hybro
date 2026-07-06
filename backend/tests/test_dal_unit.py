@@ -136,6 +136,8 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agent_memories",
         "agents",
         "conversation_content",
+        "orchestration_run_events",
+        "orchestration_runs",
         "room_agent_messages",
         "room_memories",
         "room_quotes",

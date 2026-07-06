@@ -2189,9 +2189,15 @@ class RoomMessageCenter:
         ):
             if not isinstance(user_message.extend_info, dict):
                 user_message.extend_info = {}
-            user_message.extend_info["supervisor_trajectory"] = (
-                result.trajectory.model_dump(mode="json")
-            )
+            if self._is_v2_supervisor_envelope(user_message.extend_info):
+                user_message.extend_info.pop("supervisor_trajectory", None)
+                user_message.extend_info["orchestration_status"] = (
+                    result.trajectory.status.value
+                )
+            else:
+                user_message.extend_info["supervisor_trajectory"] = (
+                    result.trajectory.model_dump(mode="json")
+                )
             await self.message_writer.update_room_user_message_by_message_id(
                 user_message_id, user_message
             )

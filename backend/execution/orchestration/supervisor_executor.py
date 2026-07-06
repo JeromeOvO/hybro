@@ -47,6 +47,7 @@ from execution.orchestration.run_store import (
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.hitl import HITLPromptType, InterruptKind
 from models.orchestration import (
+    TERMINAL_ORCHESTRATION_STATUSES,
     AgentOutputRecord,
     DispatchIntent,
     OrchestrationEventType,
@@ -272,6 +273,9 @@ class SupervisorExecutor:
             agent_registry=agent_registry,
             user_message=user_message,
         )
+        terminal_result = await self._v2_terminal_result_if_done(room_id, state)
+        if terminal_result is not None:
+            return terminal_result
         state = await self._ensure_v2_running_state(state)
         state = await self._resolve_v2_hitl_if_answered(state, trajectory)
         state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
@@ -727,6 +731,17 @@ class SupervisorExecutor:
         awaiting = [
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
+        if paused:
+            await self._reconcile_paused_results(paused, trajectory, room_id)
+            results = entry.results
+            paused = [
+                result for result in results if result.status == StepStatus.PAUSED
+            ]
+            awaiting = [
+                result
+                for result in results
+                if result.status == StepStatus.AWAITING_INPUT
+            ]
 
         if awaiting:
             trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -975,6 +990,30 @@ class SupervisorExecutor:
             mutate=lambda updated: updated.pending_hitl_request_ids.clear(),
         )
 
+    async def _v2_terminal_result_if_done(
+        self,
+        room_id: str,
+        state: OrchestrationRunState,
+    ) -> SupervisorRunResult | None:
+        if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
+            return None
+
+        trajectory = SupervisorTrajectory()
+        status = RunStatus.FAILED
+        if state.status == OrchestrationStatus.COMPLETED:
+            trajectory.status = TrajectoryStatus.COMPLETED
+            status = RunStatus.COMPLETED
+        elif state.status == OrchestrationStatus.CANCELED:
+            trajectory.status = TrajectoryStatus.CANCELED
+            status = RunStatus.CANCELED
+        else:
+            trajectory.status = TrajectoryStatus.FAILED
+        return await self._log_and_return(
+            room_id,
+            trajectory,
+            SupervisorRunResult(status=status, trajectory=trajectory),
+        )
+
     async def _sync_v2_resumed_trajectory(
         self,
         state: OrchestrationRunState,
@@ -993,6 +1032,7 @@ class SupervisorExecutor:
             if entry.step_number <= synced.steps_used:
                 continue
 
+            self._resolve_v2_pending_results_from_outputs(synced, entry)
             pending = [
                 result
                 for result in entry.results
@@ -1077,6 +1117,47 @@ class SupervisorExecutor:
                 return synced, blocking_run_status
 
         return synced, None
+
+    @staticmethod
+    def _resolve_v2_pending_results_from_outputs(
+        state: OrchestrationRunState,
+        entry: TrajectoryEntry,
+    ) -> None:
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        for index, result in enumerate(entry.results):
+            if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
+                continue
+            message_id = result.agent_message_id or result.paused_message_id
+            if not message_id:
+                continue
+            output = outputs_by_message_id.get(message_id)
+            if output is None:
+                continue
+            try:
+                output_status = StepStatus(output.status)
+            except ValueError:
+                continue
+            if output_status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
+                continue
+            entry.results[index] = StepResult(
+                step_number=entry.step_number,
+                agent_id=result.agent_id,
+                agent_name=result.agent_name,
+                task=result.task,
+                response_text=output.text or "",
+                success=output_status == StepStatus.SUCCESS,
+                status=output_status,
+                error_message=output.error,
+                agent_message_id=message_id,
+                completed_at=utcnow(),
+            )
+        if not any(
+            result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+            for result in entry.results
+        ):
+            entry.completed_at = entry.completed_at or utcnow()
 
     async def _run_v2_ask_user_action(
         self,
@@ -1332,6 +1413,18 @@ class SupervisorExecutor:
 
         if trajectory.system_agent_message_id:
             try:
+                db_msg = (
+                    await self.message_reader.get_room_agent_message_by_message_id(
+                        trajectory.system_agent_message_id
+                    )
+                )
+                if db_msg and db_msg.message_content:
+                    db_msg.message_content.message_text = synthesis
+                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id,
+                        db_msg.message_content,
+                    )
+
                 await self.delivery.send_agent_response(
                     room_id=room_id,
                     message_id=trajectory.system_agent_message_id,
@@ -3369,6 +3462,30 @@ class SupervisorExecutor:
             if user_message:
                 if not isinstance(user_message.extend_info, dict):
                     user_message.extend_info = {}
+                envelope = self._v2_envelope_from_user_message(user_message)
+                if self._v2_envelope_str(
+                    envelope,
+                    "orchestration_run_id",
+                ) or envelope.get("orchestration_schema_version") == 2:
+                    user_message.extend_info.pop("supervisor_trajectory", None)
+                    user_message.extend_info.setdefault(
+                        "orchestration_schema_version",
+                        2,
+                    )
+                    run_id = self._v2_envelope_str(
+                        envelope,
+                        "orchestration_run_id",
+                    )
+                    if run_id:
+                        user_message.extend_info["orchestration_run_id"] = run_id
+                    user_message.extend_info["orchestration_status"] = (
+                        trajectory.status.value
+                    )
+                    await self.message_writer.update_room_user_message_by_message_id(
+                        user_message_id,
+                        user_message,
+                    )
+                    return user_message
                 user_message.extend_info["supervisor_trajectory"] = (
                     trajectory.model_dump(mode="json")
                 )

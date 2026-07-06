@@ -207,12 +207,167 @@ class InMemoryOrchestrationRunStore:
             self._latest_run_by_user_message_id[state.user_message_id] = state.run_id
 
 
+class MongoOrchestrationRunStore:
+    """Durable orchestration sidecar store backed by MongoDB collections."""
+
+    def __init__(
+        self,
+        mongo,
+        *,
+        runs_collection_name: str = "orchestration_runs",
+        events_collection_name: str = "orchestration_run_events",
+    ) -> None:
+        self._runs = mongo.collection(runs_collection_name)
+        self._events = mongo.collection(events_collection_name)
+
+    async def create_run(
+        self,
+        state: OrchestrationRunState,
+    ) -> OrchestrationRunState:
+        existing = await self._runs.find_one({"run_id": state.run_id})
+        if existing is not None:
+            raise OrchestrationStoreConflict(
+                f"run_id {state.run_id!r} already exists"
+            )
+        await self._runs.insert_one(_state_doc(state))
+        return _copy_state(state)
+
+    async def get_run(self, run_id: str) -> OrchestrationRunState | None:
+        doc = await self._runs.find_one({"run_id": run_id})
+        return _state_from_doc(doc) if doc is not None else None
+
+    async def get_latest_by_user_message_id(
+        self,
+        user_message_id: str,
+    ) -> OrchestrationRunState | None:
+        doc = await self._runs.find_one(
+            {"user_message_id": user_message_id},
+            sort=[("created_at", -1), ("run_id", -1)],
+        )
+        return _state_from_doc(doc) if doc is not None else None
+
+    async def save_state(
+        self,
+        state: OrchestrationRunState,
+        *,
+        expected_version: int,
+    ) -> OrchestrationRunState:
+        current = await self._runs.find_one({"run_id": state.run_id})
+        if current is None:
+            raise KeyError(f"run_id {state.run_id!r} does not exist")
+        current_version = current.get("state_version")
+        if current_version != expected_version:
+            raise OrchestrationStoreConflict(
+                "state_version conflict for "
+                f"run_id {state.run_id!r}: expected {expected_version}, "
+                f"found {current_version}"
+            )
+        next_version = expected_version + 1
+        if state.state_version != next_version:
+            raise OrchestrationStoreConflict(
+                "state_version must advance by one for "
+                f"run_id {state.run_id!r}: expected supplied state_version "
+                f"{next_version}, found {state.state_version}"
+            )
+        replaced = await self._runs.replace_one(
+            {
+                "run_id": state.run_id,
+                "state_version": expected_version,
+            },
+            _state_doc(state),
+        )
+        if not replaced:
+            raise OrchestrationStoreConflict(
+                "state_version conflict for "
+                f"run_id {state.run_id!r}: expected {expected_version}"
+            )
+        return _copy_state(state)
+
+    async def append_event(
+        self,
+        event: OrchestrationRunEvent,
+    ) -> OrchestrationRunEvent:
+        current = await self._runs.find_one({"run_id": event.run_id})
+        if current is None:
+            raise KeyError(f"run_id {event.run_id!r} does not exist")
+        if await self._events.find_one({"event_id": event.event_id}) is not None:
+            raise OrchestrationStoreConflict(
+                f"event_id {event.event_id!r} already exists"
+            )
+        current_version = current.get("state_version", 0)
+        if event.state_version > current_version:
+            raise OrchestrationStoreConflict(
+                "event state_version cannot be ahead of current state for "
+                f"run_id {event.run_id!r}: event {event.state_version}, "
+                f"current {current_version}"
+            )
+        await self._events.insert_one(_event_doc(event))
+        return _copy_event(event)
+
+    async def list_recoverable(
+        self,
+        limit: int = 100,
+    ) -> list[OrchestrationRunState]:
+        if limit <= 0:
+            return []
+        docs = await self._runs.find(
+            {
+                "status": {
+                    "$nin": [
+                        status.value for status in TERMINAL_ORCHESTRATION_STATUSES
+                    ]
+                }
+            },
+            sort=[("updated_at", 1), ("created_at", 1), ("run_id", 1)],
+            limit=limit,
+        )
+        return [_state_from_doc(doc) for doc in docs]
+
+    async def reconstruct_from_envelope(
+        self,
+        *,
+        run_id: str,
+        room_id: str,
+        user_message_id: str,
+        envelope: Mapping[str, Any] | None,
+        goal: str,
+    ) -> OrchestrationRunState:
+        normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
+        return OrchestrationRunState(
+            run_id=run_id,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            goal=goal,
+            candidate_agent_ids=_candidate_agent_ids_from_envelope(
+                normalized_envelope
+            ),
+            client_request_id=_client_request_id_from_envelope(
+                normalized_envelope
+            ),
+            schema_version=2,
+        )
+
+
 def _copy_state(state: OrchestrationRunState) -> OrchestrationRunState:
     return state.model_copy(deep=True)
 
 
 def _copy_event(event: OrchestrationRunEvent) -> OrchestrationRunEvent:
     return event.model_copy(deep=True)
+
+
+def _state_doc(state: OrchestrationRunState) -> dict[str, Any]:
+    return state.model_dump(mode="json")
+
+
+def _event_doc(event: OrchestrationRunEvent) -> dict[str, Any]:
+    return event.model_dump(mode="json")
+
+
+def _state_from_doc(doc: Mapping[str, Any]) -> OrchestrationRunState:
+    payload = dict(doc)
+    payload.pop("_id", None)
+    return OrchestrationRunState.model_validate(payload)
 
 
 def _candidate_agent_ids_from_envelope(envelope: Mapping[str, Any]) -> list[str]:
@@ -287,6 +442,7 @@ def _is_sequence(value: Any) -> bool:
 
 __all__ = [
     "InMemoryOrchestrationRunStore",
+    "MongoOrchestrationRunStore",
     "OrchestrationRunStore",
     "OrchestrationStoreConflict",
 ]

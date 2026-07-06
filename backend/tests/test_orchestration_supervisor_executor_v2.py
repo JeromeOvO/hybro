@@ -29,6 +29,7 @@ from models.supervisor import (
     StepResult,
     StepStatus,
     SupervisorAction,
+    SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
 )
@@ -196,6 +197,7 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
         for call in executor.message_writer.add_room_agent_message.await_args_list
     ]
     assert added_message_ids == ["sys-message-1", intent.planned_agent_message_id]
+    assert "supervisor_trajectory" not in user_message.extend_info
 
 
 @pytest.mark.asyncio
@@ -682,6 +684,259 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
 
 
 @pytest.mark.asyncio
+async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="dispatch both async agents",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="First task",
+                ),
+                PlannedDelegateTarget(
+                    agent_id="agent-2",
+                    agent_name="Agent Two",
+                    task="Second task",
+                ),
+            ],
+        )
+    )
+    first_executor = _executor(
+        store=store,
+        planner=first_planner,
+        user_message=user_message,
+    )
+    first_executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=[
+            ProcessingResult(
+                ProcessingStatus.PAUSED,
+                message_id="run-message-1:step-1:target-1:message",
+            ),
+            ProcessingResult(
+                ProcessingStatus.PAUSED,
+                message_id="run-message-1:step-1:target-2:message",
+            ),
+        ]
+    )
+    first_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    paused = await first_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+    assert paused.status == RunStatus.PAUSED
+
+    first_resume = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=paused.trajectory.entries[0].action,
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="First task",
+                        response_text="First result",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="run-message-1:step-1:target-1:message",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-2",
+                        agent_name="Agent Two",
+                        task="Second task",
+                        response_text="",
+                        success=True,
+                        status=StepStatus.PAUSED,
+                        paused_message_id="run-message-1:step-1:target-2:message",
+                        agent_message_id="run-message-1:step-1:target-2:message",
+                    ),
+                ],
+                started_at=utcnow(),
+            )
+        ]
+    )
+    first_resume_executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    still_paused = await first_resume_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        resumed_trajectory=first_resume,
+        user_message=user_message,
+    )
+    assert still_paused.status == RunStatus.PAUSED
+
+    stale_second_resume = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=paused.trajectory.entries[0].action,
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="First task",
+                        response_text="",
+                        success=True,
+                        status=StepStatus.PAUSED,
+                        paused_message_id="run-message-1:step-1:target-1:message",
+                        agent_message_id="run-message-1:step-1:target-1:message",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-2",
+                        agent_name="Agent Two",
+                        task="Second task",
+                        response_text="Second result",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="run-message-1:step-1:target-2:message",
+                    ),
+                ],
+                started_at=utcnow(),
+            )
+        ]
+    )
+    final_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="summarize both completed siblings",
+            synthesis_instruction="Summarize",
+        )
+    )
+    final_executor = _executor(
+        store=store,
+        planner=final_planner,
+        user_message=user_message,
+    )
+
+    result = await final_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        resumed_trajectory=stale_second_resume,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert final_planner.contexts[0].state_context.current_step.steps_used == 1
+    output_texts = {
+        output["agent_message_id"]: output["text"]
+        for output in final_planner.contexts[0].state_context.agent_outputs
+    }
+    assert output_texts["run-message-1:step-1:target-1:message"] == "First result"
+    assert output_texts["run-message-1:step-1:target-2:message"] == "Second result"
+
+
+@pytest.mark.asyncio
+async def test_run_v2_paused_result_reconciles_terminal_agent_before_waiting():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="dispatch async agent",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Async task",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="terminal result already visible",
+            synthesis_instruction="Summarize",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.PAUSED,
+            message_id="run-message-1:step-1:target-1:message",
+        )
+    )
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id="run-message-1:step-1:target-1:message",
+            last_notified_state="completed",
+            message_content=SimpleNamespace(message_text="Fast webhook result"),
+        )
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    executor._save_interrupted_state.assert_not_awaited()
+    assert planner.contexts[1].state_context.agent_outputs[0]["text"] == (
+        "Fast webhook result"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -860,6 +1115,115 @@ async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner(
     assert state.dispatch_intents[0].status == StepStatus.FAILED.value
 
 
+@pytest.mark.asyncio
+async def test_run_v2_synthesis_persists_system_message_content():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Use selected agent",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Handle",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="summarize",
+            synthesis_instruction="Summarize",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    system_db_msg = _agent_message("sys-message-1")
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=system_db_msg
+    )
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
+        "sys-message-1",
+        system_db_msg.message_content,
+    )
+    assert system_db_msg.message_content.message_text == "Final summary"
+
+
+@pytest.mark.asyncio
+async def test_run_v2_existing_terminal_state_returns_idempotently():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.COMPLETE,
+                reasoning="already done",
+            )
+        ),
+        user_message=user_message,
+    )
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.COMPLETED
+    state.terminal_reason = "previously completed"
+    await store.create_run(state)
+
+    result = await first_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert first_executor.orchestration_planner.contexts == []
+
+
 def _supervisor_agent(agent_id: str, name: str) -> SimpleNamespace:
     return SimpleNamespace(
         agent_id=agent_id,
@@ -953,6 +1317,44 @@ async def test_persisted_schema_version_routes_to_run_v2_without_current_flag():
     )
     rmc.supervisor_executor.run_v2.assert_awaited_once()
     rmc.supervisor_executor.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "supervisor_trajectory": {"status": "legacy-running"},
+        },
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock()
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.PAUSED,
+            trajectory=SupervisorTrajectory(status="running"),
+        ),
+        room_id="room-1",
+        user_message_id="message-1",
+        user_message=user_message,
+    )
+
+    assert "supervisor_trajectory" not in user_message.extend_info
+    assert user_message.extend_info["orchestration_run_id"] == "run-message-1"
+    assert user_message.extend_info["orchestration_status"] == "running"
 
 
 @pytest.mark.parametrize(

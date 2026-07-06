@@ -423,7 +423,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_message_center as execution_room_message_center,
             )
             from execution.orchestration.planner import RoomSupervisorPlannerAdapter
-            from execution.orchestration.run_store import InMemoryOrchestrationRunStore
+            from execution.orchestration.run_store import MongoOrchestrationRunStore
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
@@ -977,7 +977,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_rate_limiter = app.state.agent_rate_limiter_factory(
                     runtime.settings, mongo_dal
                 )
-            orchestration_run_store = InMemoryOrchestrationRunStore()
+            orchestration_run_store = MongoOrchestrationRunStore(mongo_dal)
             orchestration_planner = RoomSupervisorPlannerAdapter(
                 supervisor_service=room_supervisor_service
             )
@@ -1651,6 +1651,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> None:
     await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
+    await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
 
@@ -1857,6 +1858,41 @@ async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
         "run_events",
         [("room_id", 1), ("ts", -1)],
         name="room_ts",
+    )
+
+
+async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("run_id", 1)],
+        name="orchestration_run_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("user_message_id", 1), ("created_at", -1)],
+        name="orchestration_user_message_created_at",
+    )
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("status", 1), ("updated_at", 1)],
+        name="orchestration_status_updated_at",
+    )
+    await _create_index(
+        mongo,
+        "orchestration_run_events",
+        [("event_id", 1)],
+        name="orchestration_event_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "orchestration_run_events",
+        [("run_id", 1), ("created_at", 1)],
+        name="orchestration_run_created_at",
     )
 
 
