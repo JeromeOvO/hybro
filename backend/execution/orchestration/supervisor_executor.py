@@ -28,7 +28,10 @@ from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.orchestration.action_validator import PlannerActionValidator
+from execution.orchestration.action_validator import (
+    PlannerActionValidationError,
+    PlannerActionValidator,
+)
 from execution.orchestration.context_builder import build_orchestration_planner_context
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from execution.orchestration.planner import (
@@ -348,13 +351,30 @@ class SupervisorExecutor:
                     ),
                 )
 
-            planner_action = PlannerActionValidator.validate(
-                planner_action,
-                candidate_agent_ids=context.candidate_agent_ids,
-                steps_used=state.steps_used,
-                step_budget=state.step_budget,
-                has_agent_output=bool(state.agent_outputs),
-            )
+            try:
+                planner_action = PlannerActionValidator.validate(
+                    planner_action,
+                    candidate_agent_ids=context.candidate_agent_ids,
+                    steps_used=state.steps_used,
+                    step_budget=state.step_budget,
+                    has_agent_output=bool(state.agent_outputs),
+                )
+            except PlannerActionValidationError as exc:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason=str(exc),
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED,
+                        trajectory=trajectory,
+                    ),
+                )
             state = await self._record_v2_planner_action(state, planner_action)
 
             match planner_action.action:
@@ -708,6 +728,46 @@ class SupervisorExecutor:
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
 
+        if awaiting:
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            if paused:
+                saved = await self._save_interrupted_state(
+                    kind=InterruptKind.PUSH_NOTIFICATION,
+                    trajectory=trajectory,
+                    paused_results=paused,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    request_user_id=request_user_id,
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    conversation_context=conversation_context,
+                    quoted_text=quoted_text,
+                )
+                if not saved:
+                    trajectory.status = TrajectoryStatus.FAILED
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason="failed to save paused v2 continuation",
+                    )
+                    return state, RunStatus.FAILED
+            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
+                state=state,
+                results=results,
+                awaiting=awaiting,
+                trajectory=trajectory,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+            )
+            return state, awaiting_status
+
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
             saved = await self._save_interrupted_state(
@@ -743,24 +803,6 @@ class SupervisorExecutor:
                 ),
             )
             return state, RunStatus.PAUSED
-
-        if awaiting:
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
-            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
-                state=state,
-                results=results,
-                awaiting=awaiting,
-                trajectory=trajectory,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-            )
-            return state, awaiting_status
 
         state = await self._save_v2_state(
             state,
@@ -1403,22 +1445,41 @@ class SupervisorExecutor:
             output.agent_message_id: output for output in state.agent_outputs
         }
         for result in results:
-            if result.agent_message_id:
-                output = outputs_by_message_id.get(result.agent_message_id)
+            matched_intent = next(
+                (
+                    intent
+                    for intent in state.dispatch_intents
+                    if (
+                        intent.planned_agent_message_id == result.agent_message_id
+                        if result.agent_message_id
+                        else intent.agent_id == result.agent_id
+                        and intent.task == result.task
+                        and intent.status == "planned"
+                    )
+                ),
+                None,
+            )
+            output_message_id = result.agent_message_id or (
+                matched_intent.planned_agent_message_id if matched_intent else None
+            )
+            if output_message_id:
+                output = outputs_by_message_id.get(output_message_id)
                 if output is None:
                     output = AgentOutputRecord(
-                        agent_message_id=result.agent_message_id,
+                        agent_message_id=output_message_id,
                         agent_id=result.agent_id,
                         status=result.status.value,
                     )
                     state.agent_outputs.append(output)
-                    outputs_by_message_id[result.agent_message_id] = output
+                    outputs_by_message_id[output_message_id] = output
                 output.agent_id = result.agent_id
                 output.status = result.status.value
                 output.text = result.response_text or None
                 output.error = result.error_message
             for intent in state.dispatch_intents:
-                if intent.planned_agent_message_id == result.agent_message_id:
+                if intent is matched_intent or intent.planned_agent_message_id == (
+                    result.agent_message_id
+                ):
                     intent.status = result.status.value
         if advance_step:
             state.steps_used += 1
