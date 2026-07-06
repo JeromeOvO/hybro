@@ -1754,6 +1754,34 @@ class RoomMessageCenter:
                 getattr(original_user_message_for_resume, "extend_info", None)
             )
 
+        def context_agent_set_for_resume(
+            fallback: dict[str, str] | None,
+        ) -> dict[str, str]:
+            if not is_v2_resume:
+                return fallback or {}
+            serialized_room_config = continuation.get("room_config", {})
+            if isinstance(serialized_room_config, dict):
+                serialized_room_agent_set = serialized_room_config.get(
+                    "room_agent_set"
+                )
+                if isinstance(serialized_room_agent_set, dict):
+                    return {
+                        str(agent_id): str(agent_name)
+                        for agent_id, agent_name in serialized_room_agent_set.items()
+                    }
+            serialized_registry = continuation.get("agent_registry", [])
+            if isinstance(serialized_registry, list):
+                registry_agent_set = {
+                    str(profile["agent_id"]): str(
+                        profile.get("agent_name") or profile["agent_id"]
+                    )
+                    for profile in serialized_registry
+                    if isinstance(profile, dict) and profile.get("agent_id")
+                }
+                if registry_agent_set:
+                    return registry_agent_set
+            return fallback or {}
+
         # 3. Branch on interrupt_kind
         if interrupt_kind in (
             InterruptKind.PUSH_NOTIFICATION,
@@ -1796,9 +1824,9 @@ class RoomMessageCenter:
                         await self._refresh_supervisor_conversation_context(
                             room_id=room_id,
                             room_memory=room_memory,
-                            room_agent_set=(room_tmp.room_agent_set or {})
-                            if room_tmp
-                            else {},
+                            room_agent_set=context_agent_set_for_resume(
+                                room_tmp.room_agent_set if room_tmp else {}
+                            ),
                             message_text=message_text,
                         )
                     )
@@ -1845,6 +1873,8 @@ class RoomMessageCenter:
             )
             return RunStatus.FAILED
 
+        context_room_agent_set = context_agent_set_for_resume(room.room_agent_set)
+
         # 5b. Refresh conversation_context from room memory (§7.6).
         # The serialized context may be stale after a push-notification pause
         # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
@@ -1859,7 +1889,7 @@ class RoomMessageCenter:
                         await self._refresh_supervisor_conversation_context(
                             room_id=room_id,
                             room_memory=room_memory,
-                            room_agent_set=room.room_agent_set or {},
+                            room_agent_set=context_room_agent_set,
                             message_text=message_text,
                         )
                     )

@@ -276,7 +276,7 @@ class SupervisorExecutor:
         terminal_result = await self._v2_terminal_result_if_done(room_id, state)
         if terminal_result is not None:
             return terminal_result
-        if state.pending_hitl_request_ids and not (
+        if state.status == OrchestrationStatus.AWAITING_USER and state.pending_hitl_request_ids and not (
             trajectory.hitl_user_reply or trajectory.clarify_user_reply
         ):
             trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -1360,12 +1360,15 @@ class SupervisorExecutor:
             return state
 
         resolved_request_ids = list(state.pending_hitl_request_ids)
-        return await self._save_v2_state(
+        resolved_state = await self._save_v2_state(
             state,
             event_type=OrchestrationEventType.HITL_RESOLVED,
             payload={"request_ids": resolved_request_ids},
             mutate=lambda updated: updated.pending_hitl_request_ids.clear(),
         )
+        trajectory.hitl_user_reply = None
+        trajectory.clarify_user_reply = None
+        return resolved_state
 
     async def _v2_terminal_result_if_done(
         self,
@@ -1590,7 +1593,7 @@ class SupervisorExecutor:
         )
 
         def mark_pending_hitl(updated: OrchestrationRunState) -> None:
-            updated.status = OrchestrationStatus.AWAITING_USER
+            updated.status = OrchestrationStatus.INGESTING
             updated.steps_used += 1
             for request_id in pending_request_ids:
                 if request_id not in updated.pending_hitl_request_ids:
@@ -1600,7 +1603,7 @@ class SupervisorExecutor:
             state,
             event_type=OrchestrationEventType.HITL_REQUESTED,
             payload={
-                "status": OrchestrationStatus.AWAITING_USER.value,
+                "status": OrchestrationStatus.INGESTING.value,
                 "request_ids": pending_request_ids,
                 "pending_artifacts": True,
             },

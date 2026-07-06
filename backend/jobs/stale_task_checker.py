@@ -929,7 +929,7 @@ class StaleTaskChecker:
         for state in states:
             if ensure_utc(state.updated_at) > cutoff:
                 continue
-            if state.status.value == "awaiting_user" or state.pending_hitl_request_ids:
+            if state.status.value == "awaiting_user":
                 logger.info(
                     "orchestration_v2_recovery: skipping run %s — awaiting user input",
                     state.run_id,

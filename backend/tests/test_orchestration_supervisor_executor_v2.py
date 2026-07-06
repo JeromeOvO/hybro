@@ -426,7 +426,7 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_ask_user_marks_sidecar_awaiting_before_hitl_request():
+async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -454,7 +454,7 @@ async def test_run_v2_ask_user_marks_sidecar_awaiting_before_hitl_request():
     async def request_input(**_kwargs):
         state = await store.get_run("run-message-1")
         assert state is not None
-        assert state.status == OrchestrationStatus.AWAITING_USER
+        assert state.status == OrchestrationStatus.INGESTING
         assert state.pending_hitl_request_ids == [
             "run-message-1:step-1:supervisor-hitl-1"
         ]
@@ -1169,6 +1169,101 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
     state = await store.get_run("run-message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == []
+
+
+@pytest.mark.asyncio
+async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need first choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    first_executor = _executor(store=store, planner=first_planner, user_message=user_message)
+    first_executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    first_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    first_result = await first_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    resumed_trajectory = first_result.trajectory
+    resumed_trajectory.hitl_user_reply = "Account A"
+    second_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need second choice",
+            questions=[{"prompt": "Which region?", "prompt_type": "text"}],
+        )
+    )
+    second_executor = _executor(store=store, planner=second_planner, user_message=user_message)
+    second_executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-2"))
+    )
+    second_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    second_result = await second_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert second_result.status == RunStatus.AWAITING_INPUT
+    assert second_result.trajectory.hitl_user_reply is None
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.pending_hitl_request_ids == ["hitl-2"]
+
+    third_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="should not be planned without the second reply",
+        )
+    )
+    third_executor = _executor(store=store, planner=third_planner, user_message=user_message)
+
+    third_result = await third_executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        resumed_trajectory=second_result.trajectory,
+        user_message=user_message,
+    )
+
+    assert third_result.status == RunStatus.AWAITING_INPUT
+    assert third_planner.contexts == []
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.pending_hitl_request_ids == ["hitl-2"]
 
 
 @pytest.mark.asyncio
@@ -1948,8 +2043,19 @@ async def test_room_message_center_v2_resume_preserves_serialized_candidate_regi
     rmc.message_reader = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
     )
-    rmc.memory_reader = SimpleNamespace(get_room_memory_by_room_id=AsyncMock(return_value=None))
-    rmc.context_memory_runtime = None
+    room_memory = SimpleNamespace(room_id="room-1")
+    assemble_context = MagicMock(
+        return_value=SimpleNamespace(
+            metadata={"context": "Context from selected agent", "occupancy_pct": 10.0}
+        )
+    )
+    rmc.memory_reader = SimpleNamespace(
+        get_room_memory_by_room_id=AsyncMock(return_value=room_memory)
+    )
+    rmc.context_memory_runtime = SimpleNamespace(
+        legacy_search=AsyncMock(return_value={"results": []}),
+        assemble_supervisor_context_from_memory=assemble_context,
+    )
     rmc.room_reader = SimpleNamespace(
         get_room_by_room_id=AsyncMock(
             return_value=Room(
@@ -1997,6 +2103,10 @@ async def test_room_message_center_v2_resume_preserves_serialized_candidate_regi
     assert run_kwargs["room_config"].room_agent_set == {
         "agent-2": "Selected External Agent"
     }
+    assert run_kwargs["conversation_context"] == "Context from selected agent"
+    assert assemble_context.call_args.kwargs["agent_registry"] == [
+        {"agent_id": "agent-2", "agent_name": "Selected External Agent"}
+    ]
 
 
 @pytest.mark.parametrize(
