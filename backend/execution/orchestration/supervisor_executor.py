@@ -270,7 +270,20 @@ class SupervisorExecutor:
             user_message=user_message,
         )
         state = await self._ensure_v2_running_state(state)
-        state = await self._sync_v2_resumed_trajectory(state, trajectory)
+        state = await self._resolve_v2_hitl_if_answered(state, trajectory)
+        state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
+            state,
+            trajectory,
+        )
+        if blocking_resume_status is not None:
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=blocking_resume_status,
+                    trajectory=trajectory,
+                ),
+            )
         await self._ensure_v2_system_task(
             room_id=room_id,
             user_message_id=user_message_id,
@@ -733,18 +746,21 @@ class SupervisorExecutor:
 
         if awaiting:
             trajectory.status = TrajectoryStatus.AWAITING_INPUT
-            state = await self._save_v2_state(
-                state,
-                event_type=OrchestrationEventType.HITL_REQUESTED,
-                payload={"status": OrchestrationStatus.AWAITING_USER.value},
-                mutate=lambda updated: self._apply_v2_results(
-                    updated,
-                    results,
-                    status=OrchestrationStatus.AWAITING_USER,
-                    advance_step=False,
-                ),
+            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
+                state=state,
+                results=results,
+                awaiting=awaiting,
+                trajectory=trajectory,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
             )
-            return state, RunStatus.AWAITING_INPUT
+            return state, awaiting_status
 
         state = await self._save_v2_state(
             state,
@@ -764,14 +780,167 @@ class SupervisorExecutor:
         )
         return state, None
 
-    async def _sync_v2_resumed_trajectory(
+    async def _run_v2_agent_awaiting_input_action(
+        self,
+        *,
+        state: OrchestrationRunState,
+        results: list[StepResult],
+        awaiting: list[StepResult],
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+    ) -> tuple[OrchestrationRunState, RunStatus]:
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
+
+        for extra in awaiting[1:]:
+            extra.status = StepStatus.FAILED
+            extra.success = False
+            extra.error_message = (
+                "Deferred: another agent is awaiting human input first. "
+                "Will be re-evaluated on resume."
+            )
+
+        awaiting_result = awaiting[0]
+        continuation_message_id = (
+            awaiting_result.paused_message_id
+            or awaiting_result.agent_message_id
+        )
+        display_message_id = (
+            awaiting_result.agent_message_id
+            or awaiting_result.paused_message_id
+        )
+        if not continuation_message_id:
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="v2 agent HITL result missing continuation message id",
+            )
+            return state, RunStatus.FAILED
+
+        request = await self.hitl_coordinator.request_input(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            source="agent",
+            prompt=(
+                awaiting_result.status_message
+                or "The agent needs additional information."
+            ),
+            agent_id=awaiting_result.agent_id,
+            agent_name=awaiting_result.agent_name,
+            a2a_task_id=awaiting_result.a2a_task_id,
+            a2a_context_id=awaiting_result.a2a_context_id,
+            continuation_message_id=continuation_message_id,
+            display_message_id=display_message_id,
+            orchestration_run_id=state.run_id,
+            orchestration_schema_version=state.schema_version,
+        )
+        if request is None:
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to create v2 agent HITL request",
+            )
+            return state, RunStatus.FAILED
+
+        saved = await self._save_interrupted_state(
+            kind=InterruptKind.HITL_AGENT,
+            trajectory=trajectory,
+            message_id=continuation_message_id,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            hitl_request_id=request.request_id,
+        )
+        if not saved:
+            cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
+            if cancel_request is not None:
+                try:
+                    await cancel_request(request.request_id, room_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to cancel orphaned v2 agent HITL request %s",
+                        request.request_id,
+                    )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 agent HITL continuation",
+            )
+            return state, RunStatus.FAILED
+
+        def mark_awaiting_user(updated: OrchestrationRunState) -> None:
+            self._apply_v2_results(
+                updated,
+                results,
+                status=OrchestrationStatus.AWAITING_USER,
+                advance_step=False,
+            )
+            if request.request_id not in updated.pending_hitl_request_ids:
+                updated.pending_hitl_request_ids.append(request.request_id)
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_REQUESTED,
+            payload={
+                "status": OrchestrationStatus.AWAITING_USER.value,
+                "request_ids": [request.request_id],
+            },
+            mutate=mark_awaiting_user,
+        )
+
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+            )
+        except Exception:
+            logger.debug("SSE v2 agent HITL notification failed", exc_info=True)
+
+        return state, RunStatus.AWAITING_INPUT
+
+    async def _resolve_v2_hitl_if_answered(
         self,
         state: OrchestrationRunState,
         trajectory: SupervisorTrajectory,
     ) -> OrchestrationRunState:
+        if not state.pending_hitl_request_ids:
+            return state
+        if not (trajectory.hitl_user_reply or trajectory.clarify_user_reply):
+            return state
+
+        resolved_request_ids = list(state.pending_hitl_request_ids)
+        return await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_RESOLVED,
+            payload={"request_ids": resolved_request_ids},
+            mutate=lambda updated: updated.pending_hitl_request_ids.clear(),
+        )
+
+    async def _sync_v2_resumed_trajectory(
+        self,
+        state: OrchestrationRunState,
+        trajectory: SupervisorTrajectory,
+    ) -> tuple[OrchestrationRunState, RunStatus | None]:
         """Ingest completed legacy resume entries into the sidecar run state."""
         if not trajectory.entries:
-            return state
+            return state, None
 
         synced = state
         for entry in sorted(trajectory.entries, key=lambda item: item.step_number):
@@ -781,34 +950,91 @@ class SupervisorExecutor:
                 continue
             if entry.step_number <= synced.steps_used:
                 continue
-            if any(
-                result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
-                for result in entry.results
-            ):
-                continue
 
-            agent_message_ids = [
-                result.agent_message_id
+            pending = [
+                result
                 for result in entry.results
-                if result.agent_message_id
+                if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
-            synced = await self._save_v2_state(
-                synced,
-                event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
-                payload={
-                    "resumed": True,
-                    "step_number": entry.step_number,
-                    "agent_message_ids": agent_message_ids,
-                },
-                mutate=lambda updated, results=entry.results: self._apply_v2_results(
-                    updated,
-                    results,
-                    status=OrchestrationStatus.RUNNING,
-                    advance_step=True,
-                ),
-            )
+            terminal_results = [
+                result
+                for result in entry.results
+                if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+            ]
+            if terminal_results:
+                next_status = (
+                    OrchestrationStatus.AWAITING_USER
+                    if any(
+                        result.status == StepStatus.AWAITING_INPUT
+                        for result in pending
+                    )
+                    else (
+                        OrchestrationStatus.WAITING_AGENT
+                        if pending
+                        else OrchestrationStatus.RUNNING
+                    )
+                )
+                should_advance = not pending
 
-        return synced
+                def ingest_terminal_results(
+                    updated: OrchestrationRunState,
+                    *,
+                    results: list[StepResult] = terminal_results,
+                    status: OrchestrationStatus = next_status,
+                    advance: bool = should_advance,
+                ) -> None:
+                    self._apply_v2_results(
+                        updated,
+                        results,
+                        status=status,
+                        advance_step=advance,
+                    )
+                    if advance:
+                        updated.pending_hitl_request_ids.clear()
+
+                synced = await self._save_v2_state(
+                    synced,
+                    event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+                    payload={
+                        "resumed": True,
+                        "step_number": entry.step_number,
+                        "agent_message_ids": [
+                            result.agent_message_id
+                            for result in terminal_results
+                            if result.agent_message_id
+                        ],
+                    },
+                    mutate=ingest_terminal_results,
+                )
+
+            if pending:
+                pending_status = (
+                    OrchestrationStatus.AWAITING_USER
+                    if any(
+                        result.status == StepStatus.AWAITING_INPUT
+                        for result in pending
+                    )
+                    else OrchestrationStatus.WAITING_AGENT
+                )
+                blocking_run_status = (
+                    RunStatus.AWAITING_INPUT
+                    if pending_status == OrchestrationStatus.AWAITING_USER
+                    else RunStatus.PAUSED
+                )
+                if synced.status != pending_status:
+                    synced = await self._save_v2_state(
+                        synced,
+                        event_type=OrchestrationEventType.STATE_REDUCED,
+                        payload={"status": pending_status.value},
+                        mutate=lambda updated, status=pending_status: setattr(
+                            updated,
+                            "status",
+                            status,
+                        ),
+                    )
+                return synced, blocking_run_status
+
+        return synced, None
 
     async def _run_v2_ask_user_action(
         self,
