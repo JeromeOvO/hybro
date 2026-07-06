@@ -571,12 +571,18 @@ class AgentResponseHandler:
         # out exactly as _on_response/_on_error would.
         # The idempotency check in notify_task_update (update_last_notified_state)
         # prevents duplicate SSE on paths where agent_response was already sent.
+        terminal_result_status: str | None = None
         if e.state:
             try:
                 from common.a2a_constants import TERMINAL_STATES
 
                 _state_enum = coerce_task_state(e.state)
                 if _state_enum in TERMINAL_STATES:
+                    terminal_result_status = getattr(
+                        _state_enum,
+                        "value",
+                        str(_state_enum),
+                    )
                     try:
                         await self._task_writer.update_task_state_on_message(
                             e.message_id, e.state
@@ -604,6 +610,15 @@ class AgentResponseHandler:
                     e.message_id,
                     exc_info=True,
                 )
+
+        if terminal_result_status is not None:
+            await self._ingest_orchestration_result(
+                e,
+                status=terminal_result_status,
+                text=e.text or None,
+                artifacts=e.artifacts or [],
+                error=self._terminal_result_error(e, terminal_result_status),
+            )
 
         await self._emit_processing_status(
             room_id=e.room_id,
@@ -723,6 +738,21 @@ class AgentResponseHandler:
                 e.message_id,
                 exc_info=True,
             )
+
+    @staticmethod
+    def _terminal_result_error(e: AgentEvent, status: str) -> str | None:
+        if status not in {"failed", "canceled", "rejected", "error"}:
+            return None
+        if e.error_text:
+            return e.error_text
+        if e.text:
+            return e.text
+        if isinstance(e.details, str):
+            return e.details
+        if isinstance(e.details, dict):
+            details_message = e.details.get("message") or e.details.get("error")
+            return str(details_message) if details_message is not None else None
+        return None
 
     async def _ingest_orchestration_result(
         self,
