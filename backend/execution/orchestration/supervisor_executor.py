@@ -276,6 +276,18 @@ class SupervisorExecutor:
         terminal_result = await self._v2_terminal_result_if_done(room_id, state)
         if terminal_result is not None:
             return terminal_result
+        if state.pending_hitl_request_ids and not (
+            trajectory.hitl_user_reply or trajectory.clarify_user_reply
+        ):
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.AWAITING_INPUT,
+                    trajectory=trajectory,
+                ),
+            )
         state = await self._ensure_v2_running_state(state)
         state = await self._resolve_v2_hitl_if_answered(state, trajectory)
         state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
@@ -1693,6 +1705,7 @@ class SupervisorExecutor:
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
+            updated.steps_used += 1
             for request_id in created_request_ids:
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
@@ -3281,6 +3294,38 @@ class SupervisorExecutor:
     # Concurrent agent dispatch
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _step_result_from_existing_agent_message(
+        message,
+        *,
+        target: DelegateTarget,
+        step_number: int,
+        agent_message_id: str,
+    ) -> StepResult | None:
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        last_state = getattr(message, "last_notified_state", None)
+        if last_state not in terminal_states:
+            return None
+
+        is_success = last_state == "completed"
+        response_text = ""
+        message_content = getattr(message, "message_content", None)
+        if message_content and getattr(message_content, "message_text", None):
+            response_text = message_content.message_text
+
+        return StepResult(
+            step_number=step_number,
+            agent_id=target.agent_id,
+            agent_name=target.agent_name,
+            task=target.task,
+            response_text=response_text,
+            success=is_success,
+            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+            error_message=None if is_success else "Agent task failed",
+            agent_message_id=agent_message_id,
+            completed_at=utcnow(),
+        )
+
     async def _dispatch_targets(
         self,
         targets: list[DelegateTarget],
@@ -3403,7 +3448,44 @@ class SupervisorExecutor:
                 )
                 if planned_message_id:
                     message.message_id = planned_message_id
-                await self.message_writer.add_room_agent_message(message)
+                inserted = await self.message_writer.add_room_agent_message(message)
+                if inserted is False:
+                    existing = (
+                        await self.message_reader.get_room_agent_message_by_message_id(
+                            message.message_id
+                        )
+                    )
+                    if existing is not None:
+                        terminal_result = self._step_result_from_existing_agent_message(
+                            existing,
+                            target=target,
+                            step_number=step_number,
+                            agent_message_id=message.message_id,
+                        )
+                        if terminal_result is not None:
+                            return terminal_result
+                        return StepResult(
+                            step_number=step_number,
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                            task=target.task,
+                            response_text="",
+                            success=True,
+                            status=StepStatus.PAUSED,
+                            paused_message_id=message.message_id,
+                            agent_message_id=message.message_id,
+                        )
+                    return StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Failed to create agent message",
+                        agent_message_id=message.message_id,
+                    )
 
                 # --- Emit slot_opened (Phase 1b) ---
                 if getattr(self, "_slot_lifecycle", None) and message.turn_id:

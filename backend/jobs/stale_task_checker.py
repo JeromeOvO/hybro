@@ -929,6 +929,12 @@ class StaleTaskChecker:
         for state in states:
             if ensure_utc(state.updated_at) > cutoff:
                 continue
+            if state.status.value == "awaiting_user" or state.pending_hitl_request_ids:
+                logger.info(
+                    "orchestration_v2_recovery: skipping run %s — awaiting user input",
+                    state.run_id,
+                )
+                continue
             if self._recovery_semaphore.locked():
                 logger.info(
                     "Recovery slots full, deferring remaining v2 orchestration recoveries"

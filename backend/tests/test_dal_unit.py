@@ -177,6 +177,12 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         name="room_task_created_sparse",
         sparse=True,
     )
+    assert _has_create_index(
+        collections["room_agent_messages"],
+        [("message_id", 1)],
+        unique=True,
+        name="room_agent_message_id_unique",
+    )
 
 
 def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:

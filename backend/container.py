@@ -1922,6 +1922,13 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
         "room_agent_messages",
+        [("message_id", 1)],
+        name="room_agent_message_id_unique",
+        unique=True,
+    )
+    await _create_index(
+        mongo,
+        "room_agent_messages",
         [("has_task_tracking", 1)],
         name="has_task_tracking_sparse",
         sparse=True,

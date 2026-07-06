@@ -367,6 +367,62 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
     assert executor._save_interrupted_state.await_args.kwargs["kind"].value == (
         "hitl_supervisor"
     )
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.steps_used == 1
+
+
+@pytest.mark.asyncio
+async def test_run_v2_pending_hitl_without_reply_returns_awaiting_without_planning():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.AWAITING_USER
+    state.pending_hitl_request_ids = ["hitl-1"]
+    await store.create_run(state)
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="should not plan before user reply",
+            synthesis_instruction="Summarize",
+        )
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    assert planner.contexts == []
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.AWAITING_USER
+    assert state.pending_hitl_request_ids == ["hitl-1"]
 
 
 @pytest.mark.asyncio
@@ -1251,6 +1307,83 @@ async def test_run_v2_reentry_replays_planned_intent_without_created_message():
     ]
     assert "run-message-1:step-1:target-1:message" in added_message_ids
     assert planner.contexts[0].state_context.current_step.steps_used == 1
+
+
+@pytest.mark.asyncio
+async def test_run_v2_replay_waits_when_planned_message_already_exists():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.DISPATCHING
+    state.summary_intent_id = "run-message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.dispatch_intents.append(
+        DispatchIntent(
+            step_id="run-message-1:step-1",
+            step_target_id="run-message-1:step-1:target-1",
+            dispatch_intent_id="run-message-1:step-1:target-1:intent",
+            planned_agent_message_id="run-message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            task="Handle",
+            task_hash="hash",
+            status="planned",
+        )
+    )
+    await store.create_run(state)
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="should not be reached while existing dispatch is pending",
+            synthesis_instruction="Summarize",
+        )
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.message_writer.add_room_agent_message = AsyncMock(
+        side_effect=[True, False]
+    )
+    existing_message = SimpleNamespace(
+        message_id="run-message-1:step-1:target-1:message",
+        last_notified_state="working",
+        message_content=SimpleNamespace(message_text=""),
+    )
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=[None, existing_message]
+    )
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.PAUSED
+    executor.agent_message_processor.process_single_message.assert_not_awaited()
+    assert planner.contexts == []
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.WAITING_AGENT
 
 
 @pytest.mark.asyncio

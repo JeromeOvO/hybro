@@ -354,6 +354,60 @@ class TestStaleTaskCheckerSemaphore:
         assert request.room_user_message_id == "msg-1"
 
     @pytest.mark.asyncio
+    async def test_v2_orchestration_recovery_skips_awaiting_user_runs(self):
+        from jobs.stale_task_checker import (
+            StaleOrchestrationRunRecoveryDeps,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+        from models.orchestration import OrchestrationRunState, OrchestrationStatus
+
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
+        scheduled = []
+
+        def schedule_recovery(request, *, reason):
+            scheduled.append((request, reason))
+            return MagicMock(add_done_callback=MagicMock())
+
+        run_state = OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Coordinate this",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.AWAITING_USER,
+            pending_hitl_request_ids=["hitl-1"],
+            updated_at=utcnow() - timedelta(minutes=10),
+        )
+        run_store = SimpleNamespace(
+            list_recoverable=AsyncMock(return_value=[run_state]),
+            save_state=AsyncMock(),
+            append_event=AsyncMock(),
+        )
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=SimpleNamespace(is_message_cancelled=AsyncMock(return_value=False)),
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=schedule_recovery)
+        )
+        checker.set_orchestration_run_recovery_deps(
+            StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
+        )
+
+        await checker._recover_stuck_orchestration_runs()
+
+        assert scheduled == []
+        run_store.save_state.assert_not_awaited()
+        run_store.append_event.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_stale_checker_uses_bound_hitl_recovery_deps(self, monkeypatch):
         from jobs import stale_task_checker as mod
         from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
