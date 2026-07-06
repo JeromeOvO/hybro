@@ -7,11 +7,13 @@ import pytest
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
+from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.orchestration import (
+    DispatchIntent,
     OrchestrationStatus,
     PlannedDelegateTarget,
     PlannerAction,
@@ -1056,6 +1058,134 @@ async def test_run_v2_invalid_planner_action_marks_sidecar_failed():
 
 
 @pytest.mark.asyncio
+async def test_run_v2_adapter_validation_error_marks_sidecar_failed():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+
+    async def invalid_raw_action(_context):
+        return {
+            "action": "delegate",
+            "reasoning": "invalid target",
+            "targets": [
+                {
+                    "agent_id": "agent-2",
+                    "agent_name": "Agent Two",
+                    "task": "Not in scope",
+                }
+            ],
+        }
+
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RoomSupervisorPlannerAdapter(raw_action_provider=invalid_raw_action),
+        user_message=user_message,
+    )
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.FAILED
+    assert "not in candidate_agent_ids" in (state.terminal_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.DISPATCHING
+    state.state_version = 0
+    state.summary_intent_id = "run-message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.dispatch_intents.append(
+        DispatchIntent(
+            step_id="run-message-1:step-1",
+            step_target_id="run-message-1:step-1:target-1",
+            dispatch_intent_id="run-message-1:step-1:target-1:intent",
+            planned_agent_message_id="run-message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            task="Handle",
+            task_hash="hash",
+        )
+    )
+    await store.create_run(state)
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="summarize recovered output",
+            synthesis_instruction="Summarize",
+        )
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=lambda message_id: SimpleNamespace(
+            message_id=message_id,
+            last_notified_state="completed",
+            message_content=SimpleNamespace(message_text="Recovered output"),
+        )
+        if message_id == "run-message-1:step-1:target-1:message"
+        else None
+    )
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert planner.contexts[0].state_context.current_step.steps_used == 1
+    assert planner.contexts[0].state_context.agent_outputs[0]["text"] == (
+        "Recovered output"
+    )
+    executor.agent_message_processor.process_single_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -1355,6 +1485,99 @@ async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight(
     assert "supervisor_trajectory" not in user_message.extend_info
     assert user_message.extend_info["orchestration_run_id"] == "run-message-1"
     assert user_message.extend_info["orchestration_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_room_message_center_v2_resume_preserves_serialized_candidate_registry():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    trajectory = SupervisorTrajectory()
+    continuation = {
+        "supervisor": True,
+        "interrupt_kind": "push_notification",
+        "trajectory": trajectory.model_dump(mode="json"),
+        "room_id": "room-1",
+        "user_message_id": "message-1",
+        "message_text": "Coordinate this",
+        "agent_registry": [
+            {
+                "agent_id": "agent-2",
+                "agent_name": "Selected External Agent",
+                "description": "",
+                "skills": [],
+                "is_healthy": True,
+            }
+        ],
+        "room_config": {
+            "room_agent_set": {"agent-2": "Selected External Agent"},
+            "is_debate_mode": False,
+        },
+        "conversation_context": None,
+        "request_user_id": "user-1",
+        "quoted_text": None,
+    }
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-2"],
+        },
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+    )
+    rmc.memory_reader = SimpleNamespace(get_room_memory_by_room_id=AsyncMock(return_value=None))
+    rmc.context_memory_runtime = None
+    rmc.room_reader = SimpleNamespace(
+        get_room_by_room_id=AsyncMock(
+            return_value=Room(
+                room_id="room-1",
+                room_name="Room",
+                room_owner_id="user-1",
+                room_owner_name="User",
+                room_agent_set={"agent-1": "Room Agent"},
+                extend_info={"use_supervisor": True, "debateMode": False},
+            )
+        )
+    )
+    rmc.agent_lookup = SimpleNamespace(
+        get_agent_by_agent_id=AsyncMock(return_value=_supervisor_agent("agent-1", "Room Agent"))
+    )
+    token = SimpleNamespace(is_cancelled=False)
+    rmc.delivery = SimpleNamespace(
+        get_token=MagicMock(return_value=token),
+        create_token=MagicMock(return_value=token),
+        clear_cancellation=MagicMock(),
+    )
+    supervisor_result = SupervisorRunResult(
+        status=RunStatus.PAUSED,
+        trajectory=trajectory,
+    )
+    rmc.supervisor_executor = SimpleNamespace(
+        run=AsyncMock(),
+        run_v2=AsyncMock(return_value=supervisor_result),
+    )
+    rmc._handle_supervisor_run_result = AsyncMock()
+    rmc._log_room_memory_stats = AsyncMock()
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc._turn_event_appender = None
+
+    result = await rmc._resume_supervisor(
+        continuation=continuation,
+        paused_message_id="run-message-1:step-1:target-1:message",
+        task_result_text=None,
+    )
+
+    assert result == RunStatus.PAUSED
+    run_kwargs = rmc.supervisor_executor.run_v2.await_args.kwargs
+    assert [agent.agent_id for agent in run_kwargs["agent_registry"]] == ["agent-2"]
+    assert run_kwargs["room_config"].room_agent_set == {
+        "agent-2": "Selected External Agent"
+    }
 
 
 @pytest.mark.parametrize(

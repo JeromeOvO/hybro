@@ -22,6 +22,7 @@ BASE_TIME = datetime(2026, 7, 5, 12, 0, tzinfo=UTC)
 class FakeMongoCollection:
     def __init__(self) -> None:
         self.docs: list[dict] = []
+        self.insert_error: Exception | None = None
 
     async def find_one(self, query: dict, **kwargs) -> dict | None:
         docs = [doc for doc in self.docs if self._matches(doc, query)]
@@ -41,6 +42,8 @@ class FakeMongoCollection:
         return [dict(doc) for doc in docs]
 
     async def insert_one(self, document: dict) -> str:
+        if self.insert_error is not None:
+            raise self.insert_error
         self.docs.append(dict(document))
         return document.get("run_id") or document.get("event_id") or "inserted"
 
@@ -298,6 +301,17 @@ async def test_mongo_store_persists_runs_across_store_instances_and_versions():
     assert mongo.collections["orchestration_run_events"].docs[0]["event_id"] == (
         "event-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_normalizes_duplicate_insert_to_conflict():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+    runs = mongo.collection("orchestration_runs")
+    runs.insert_error = RuntimeError("E11000 duplicate key error")
+
+    with pytest.raises(OrchestrationStoreConflict, match="already exists"):
+        await store.create_run(_state())
 
 
 @pytest.mark.asyncio

@@ -229,7 +229,14 @@ class MongoOrchestrationRunStore:
             raise OrchestrationStoreConflict(
                 f"run_id {state.run_id!r} already exists"
             )
-        await self._runs.insert_one(_state_doc(state))
+        try:
+            await self._runs.insert_one(_state_doc(state))
+        except Exception as exc:
+            if _is_duplicate_key_error(exc):
+                raise OrchestrationStoreConflict(
+                    f"run_id {state.run_id!r} already exists"
+                ) from exc
+            raise
         return _copy_state(state)
 
     async def get_run(self, run_id: str) -> OrchestrationRunState | None:
@@ -354,6 +361,13 @@ def _copy_state(state: OrchestrationRunState) -> OrchestrationRunState:
 
 def _copy_event(event: OrchestrationRunEvent) -> OrchestrationRunEvent:
     return event.model_copy(deep=True)
+
+
+def _is_duplicate_key_error(exc: Exception) -> bool:
+    if exc.__class__.__name__ == "DuplicateKeyError":
+        return True
+    message = str(exc).lower()
+    return "e11000" in message or "duplicate key" in message
 
 
 def _state_doc(state: OrchestrationRunState) -> dict[str, Any]:

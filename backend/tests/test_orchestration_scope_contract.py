@@ -500,7 +500,10 @@ async def test_v2_saved_group_rejects_selected_agents_outside_group(
 
 
 @pytest.mark.asyncio
-async def test_v2_saved_group_requires_selected_agent_snapshot():
+async def test_v2_saved_group_requires_selected_agent_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(

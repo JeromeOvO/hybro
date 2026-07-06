@@ -298,6 +298,21 @@ class SupervisorExecutor:
             trajectory=trajectory,
             state=state,
         )
+        state, recovered_status = await self._recover_v2_inflight_dispatch(
+            state=state,
+            trajectory=trajectory,
+            agent_registry=agent_registry,
+            room_id=room_id,
+        )
+        if recovered_status is not None:
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=recovered_status,
+                    trajectory=trajectory,
+                ),
+            )
 
         while state.steps_used < state.step_budget:
             if token and token.is_cancelled:
@@ -351,6 +366,22 @@ class SupervisorExecutor:
                     trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED,
+                        trajectory=trajectory,
+                    ),
+                )
+            except (PlannerActionValidationError, ValueError) as exc:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason=str(exc),
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED,
                         trajectory=trajectory,
                     ),
                 )
@@ -836,6 +867,192 @@ class SupervisorExecutor:
             cached_user_message=user_message,
         )
         return state, None
+
+    async def _recover_v2_inflight_dispatch(
+        self,
+        *,
+        state: OrchestrationRunState,
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_id: str,
+    ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        step_number = state.steps_used + 1
+        step_id = f"{state.run_id}:step-{step_number}"
+        terminal_statuses = {
+            StepStatus.SUCCESS.value,
+            StepStatus.FAILED.value,
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+        }
+        current_intents = [
+            intent
+            for intent in state.dispatch_intents
+            if intent.step_id == step_id and intent.status not in terminal_statuses
+        ]
+        if not current_intents:
+            return state, None
+
+        agent_names = {agent.agent_id: agent.agent_name for agent in agent_registry}
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        results: list[StepResult] = []
+        unresolved = False
+
+        for intent in current_intents:
+            result = self._v2_result_from_output_record(
+                intent,
+                outputs_by_message_id.get(intent.planned_agent_message_id),
+                agent_names,
+                step_number,
+            )
+            if result is None:
+                result = await self._v2_result_from_committed_agent_message(
+                    intent,
+                    agent_names,
+                    step_number,
+                )
+            if result is None:
+                unresolved = True
+            else:
+                results.append(result)
+
+        if unresolved:
+            if state.status != OrchestrationStatus.WAITING_AGENT:
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.STATE_REDUCED,
+                    payload={"status": OrchestrationStatus.WAITING_AGENT.value},
+                    mutate=lambda updated: setattr(
+                        updated,
+                        "status",
+                        OrchestrationStatus.WAITING_AGENT,
+                    ),
+                )
+            return state, RunStatus.PAUSED
+
+        if not results:
+            return state, None
+
+        entry = self._v2_recovered_trajectory_entry(
+            step_number=step_number,
+            intents=current_intents,
+            results=results,
+            agent_names=agent_names,
+        )
+        trajectory.entries.append(entry)
+
+        for result in results:
+            if result.status == StepStatus.SUCCESS and result.success:
+                await self._publish_agent_message_committed(
+                    room_id=room_id,
+                    agent_id=result.agent_id,
+                    agent_name=result.agent_name or "Agent",
+                    was_successful=True,
+                    message_id=result.agent_message_id,
+                )
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+            payload={"agent_message_ids": [result.agent_message_id for result in results]},
+            mutate=lambda updated: self._apply_v2_results(
+                updated,
+                results,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=True,
+            ),
+        )
+        return state, None
+
+    @staticmethod
+    def _v2_result_from_output_record(
+        intent: DispatchIntent,
+        output: AgentOutputRecord | None,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        if output is None or output.status not in {
+            StepStatus.SUCCESS.value,
+            StepStatus.FAILED.value,
+        }:
+            return None
+        status = StepStatus(output.status)
+        return StepResult(
+            step_number=step_number,
+            agent_id=output.agent_id or intent.agent_id,
+            agent_name=agent_names.get(output.agent_id or intent.agent_id),
+            task=intent.task,
+            response_text=output.text or "",
+            success=status == StepStatus.SUCCESS,
+            status=status,
+            error_message=output.error,
+            agent_message_id=output.agent_message_id,
+            completed_at=utcnow(),
+        )
+
+    async def _v2_result_from_committed_agent_message(
+        self,
+        intent: DispatchIntent,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        msg = await self.message_reader.get_room_agent_message_by_message_id(
+            intent.planned_agent_message_id
+        )
+        if not msg or getattr(msg, "last_notified_state", None) not in terminal_states:
+            return None
+
+        last_state = msg.last_notified_state
+        is_success = last_state == "completed"
+        response_text = ""
+        message_content = getattr(msg, "message_content", None)
+        if message_content and getattr(message_content, "message_text", None):
+            response_text = message_content.message_text
+
+        return StepResult(
+            step_number=step_number,
+            agent_id=intent.agent_id,
+            agent_name=agent_names.get(intent.agent_id),
+            task=intent.task,
+            response_text=response_text,
+            success=is_success,
+            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+            error_message=None if is_success else "Agent task failed",
+            agent_message_id=intent.planned_agent_message_id,
+            completed_at=utcnow(),
+        )
+
+    @staticmethod
+    def _v2_recovered_trajectory_entry(
+        *,
+        step_number: int,
+        intents: list[DispatchIntent],
+        results: list[StepResult],
+        agent_names: dict[str, str],
+    ) -> TrajectoryEntry:
+        return TrajectoryEntry(
+            step_number=step_number,
+            action=SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning="Recovered in-flight v2 dispatch from committed agent messages",
+                targets=[
+                    DelegateTarget(
+                        agent_id=intent.agent_id,
+                        agent_name=agent_names.get(intent.agent_id)
+                        or intent.agent_id,
+                        task=intent.task,
+                    )
+                    for intent in intents
+                ],
+            ),
+            results=results,
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
 
     async def _run_v2_agent_awaiting_input_action(
         self,

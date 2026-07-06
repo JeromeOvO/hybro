@@ -2286,15 +2286,16 @@ class RoomServices:
         v2_orchestration_requested = self._is_v2_orchestration_request(request)
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
 
         if (
             v2_orchestration_requested
             and candidate_scope_mode == "saved_group"
-            and selected_agent_ids is None
+            and not selected_agent_ids
         ):
             error_msg = (
-                "selected_agent_ids is required to snapshot a saved_group "
-                "candidate scope"
+                "selected_agent_ids is required for saved_group candidate scope"
             )
             return (
                 RoomCenterUserMessageResponse(

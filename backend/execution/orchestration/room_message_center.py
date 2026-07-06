@@ -1634,6 +1634,7 @@ class RoomMessageCenter:
         message_text = continuation.get("message_text", "")
         request_user_id = continuation.get("request_user_id")
         conversation_context = continuation.get("conversation_context")
+        original_user_message_for_resume = None
 
         # Reload quoted text from DB (QUOTE_REPLY: prefer TurnContext over continuation)
         quoted_text: str | None = None
@@ -1647,6 +1648,7 @@ class RoomMessageCenter:
                 user_message_id
             )
             if um:
+                original_user_message_for_resume = um
                 try:
                     _tc = await load_turn_context(self.message_reader, um)
                     quoted_text = _tc.quoted_text
@@ -1711,6 +1713,11 @@ class RoomMessageCenter:
                 "interrupt_kind": interrupt_kind.value,
             },
         )
+        is_v2_resume = continuation.get("orchestration_schema_version") == 2
+        if not is_v2_resume:
+            is_v2_resume = self._is_v2_supervisor_envelope(
+                getattr(original_user_message_for_resume, "extend_info", None)
+            )
 
         # 3. Branch on interrupt_kind
         if interrupt_kind in (
@@ -1783,7 +1790,9 @@ class RoomMessageCenter:
                     f"{conversation_context or ''}\n\n{hitl_block}"
                 ).strip()
 
-        # 5. Refresh agent registry from database (not serialized)
+        # 5. Refresh agent registry from database for legacy resumes. V2 resumes
+        # must preserve the serialized candidate snapshot because the selected
+        # scope may intentionally include agents outside current room membership.
         room = await self.room_reader.get_room_by_room_id(room_id)
         if not room:
             logger.error(
@@ -1833,8 +1842,21 @@ class RoomMessageCenter:
                 )
 
         agent_registry: list[AgentProfile] = []
+        serialized_registry = continuation.get("agent_registry", [])
+        if is_v2_resume and serialized_registry:
+            try:
+                agent_registry = [
+                    AgentProfile(**profile)
+                    for profile in serialized_registry
+                    if isinstance(profile, dict)
+                ]
+            except (TypeError, KeyError) as e:
+                logger.warning(
+                    "RoomMessageCenter: Supervisor v2 resume registry failed: %s", e
+                )
+
         room_agent_items = list((room.room_agent_set or {}).items())
-        if room_agent_items:
+        if not agent_registry and room_agent_items:
             agents = await asyncio.gather(
                 *(
                     self.agent_lookup.get_agent_by_agent_id(aid)
@@ -1859,7 +1881,7 @@ class RoomMessageCenter:
             try:
                 agent_registry = [
                     AgentProfile(**p)
-                    for p in continuation.get("agent_registry", [])
+                    for p in serialized_registry
                 ]
             except (TypeError, KeyError) as e:
                 logger.warning(
@@ -1878,7 +1900,14 @@ class RoomMessageCenter:
             if isinstance(room.extend_info, dict)
             else False
         )
-        room_config.room_agent_set = room.room_agent_set or {}
+        if is_v2_resume:
+            if not room_config.room_agent_set:
+                room_config.room_agent_set = {
+                    profile.agent_id: profile.agent_name
+                    for profile in agent_registry
+                }
+        else:
+            room_config.room_agent_set = room.room_agent_set or {}
 
         # --- Debate participant preservation ---
         # If this is a debate resume, ensure all original debate participants
@@ -1950,20 +1979,6 @@ class RoomMessageCenter:
 
         # 7. Resume the supervisor loop
         try:
-            is_v2_resume = continuation.get("orchestration_schema_version") == 2
-            original_user_message_for_resume = None
-            if not is_v2_resume:
-                try:
-                    original_user_message_for_resume = (
-                        await self.message_reader.get_room_user_message_by_message_id(
-                            user_message_id
-                        )
-                    )
-                    is_v2_resume = self._is_v2_supervisor_envelope(
-                        getattr(original_user_message_for_resume, "extend_info", None)
-                    )
-                except Exception:
-                    is_v2_resume = False
             run_supervisor = (
                 self.supervisor_executor.run_v2
                 if is_v2_resume
