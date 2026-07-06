@@ -97,6 +97,10 @@ class HITLRequest(BaseModel):
     display_message_id: str | None = None
     client_request_id: str | None = None
 
+    # Dynamic orchestration v2 linkage.  Optional for legacy HITL records.
+    orchestration_run_id: str | None = None
+    orchestration_schema_version: int | None = None
+
     # The question
     prompt: str
     prompt_type: HITLPromptType = HITLPromptType.TEXT

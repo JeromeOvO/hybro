@@ -158,6 +158,8 @@ class HITLService:
         a2a_context_id: str | None = None,
         continuation_message_id: str | None = None,
         display_message_id: str | None = None,
+        orchestration_run_id: str | None = None,
+        orchestration_schema_version: int | None = None,
         expires_in_hours: float = 24.0,
         group_id: str | None = None,
         group_total: int | None = None,
@@ -224,6 +226,8 @@ class HITLService:
             continuation_message_id=continuation_message_id,
             display_message_id=resolved_display_message_id,
             client_request_id=resolved_client_request_id,
+            orchestration_run_id=orchestration_run_id,
+            orchestration_schema_version=orchestration_schema_version,
             expires_at=utcnow() + timedelta(hours=expires_in_hours),
             group_id=group_id,
             group_total=group_total,
@@ -902,6 +906,83 @@ class HITLService:
     # Cancellation
     # ------------------------------------------------------------------
 
+    async def _pending_group_terminalization_requests(
+        self,
+        request: HITLRequest,
+    ) -> list[HITLRequest]:
+        requests = [request]
+        if request.group_id is None:
+            return requests
+
+        docs = await self.persistence.get_hitl_group_requests(request.group_id)
+        seen_request_ids = {request.request_id}
+        for doc in docs:
+            if doc.get("request_id") in seen_request_ids:
+                continue
+            sibling = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
+            seen_request_ids.add(sibling.request_id)
+            if (
+                sibling.room_id == request.room_id
+                and sibling.status == HITLStatus.PENDING
+            ):
+                requests.append(sibling)
+        return requests
+
+    async def _clear_hitl_continuation_once(
+        self,
+        request: HITLRequest,
+        cleared_continuation_ids: set[str],
+    ) -> None:
+        if not request.continuation_message_id:
+            return
+        if request.continuation_message_id in cleared_continuation_ids:
+            return
+        cleared_continuation_ids.add(request.continuation_message_id)
+        await self.persistence.get_and_clear_continuation_on_message(
+            request.continuation_message_id
+        )
+        # Also try clearing from user messages (HITL_SUPERVISOR)
+        await self.persistence.get_and_clear_continuation_on_user_message(
+            request.continuation_message_id
+        )
+
+    async def _terminalize_pending_requests(
+        self,
+        request: HITLRequest,
+        *,
+        status: HITLStatus,
+        event_type: HITLEventType,
+    ) -> bool:
+        requests_to_terminalize = await self._pending_group_terminalization_requests(
+            request
+        )
+        cleared_continuation_ids: set[str] = set()
+        terminalized_any = False
+        for terminal_request in requests_to_terminalize:
+            terminalized = await self.persistence.cas_update_hitl_request(
+                terminal_request.request_id,
+                expected_status=HITLStatus.PENDING.value,
+                status=status.value,
+            )
+            if not terminalized:
+                continue
+
+            terminalized_any = True
+            # Clear the orphaned continuation
+            await self._clear_hitl_continuation_once(
+                terminal_request,
+                cleared_continuation_ids,
+            )
+
+            # Notify frontend
+            await self._emit_hitl_event(
+                room_id=terminal_request.room_id,
+                event_type=event_type,
+                request=terminal_request,
+            )
+
+        return terminalized_any
+
     async def cancel_request(self, request_id: str, room_id: str | None = None) -> None:
         """Cancel a pending HITL request."""
         doc = await self.persistence.get_hitl_request(request_id)
@@ -913,33 +994,43 @@ class HITLService:
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 
-        canceled = await self.persistence.cas_update_hitl_request(
-            request_id,
-            expected_status=HITLStatus.PENDING.value,
-            status=HITLStatus.CANCELED.value,
-        )
-        if not canceled:
-            return
-
-        # Clear the orphaned continuation
-        if request.continuation_message_id:
-            await self.persistence.get_and_clear_continuation_on_message(
-                request.continuation_message_id
-            )
-            # Also try clearing from user messages (HITL_SUPERVISOR)
-            await self.persistence.get_and_clear_continuation_on_user_message(
-                request.continuation_message_id
-            )
-
-        # Notify frontend
-        await self._emit_hitl_event(
-            room_id=request.room_id,
+        terminalized = await self._terminalize_pending_requests(
+            request,
+            status=HITLStatus.CANCELED,
             event_type=HITLEventType.INPUT_CANCELED,
-            request=request,
         )
+        if not terminalized:
+            return
 
         logger.info(
             "hitl_request_canceled",
+            extra={
+                "hitl_request_id": request_id,
+                "room_id": request.room_id,
+            },
+        )
+
+    async def expire_request(self, request_id: str, room_id: str | None = None) -> None:
+        """Expire a pending HITL request."""
+        doc = await self.persistence.get_hitl_request(request_id)
+        if not doc:
+            raise HITLNotFoundError("HITL request not found")
+        request = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
+        if room_id is not None and request.room_id != room_id:
+            raise HITLRoomMismatchError("Room mismatch")
+        if request.status != HITLStatus.PENDING:
+            return  # Already resolved, no-op
+
+        terminalized = await self._terminalize_pending_requests(
+            request,
+            status=HITLStatus.EXPIRED,
+            event_type=HITLEventType.INPUT_EXPIRED,
+        )
+        if not terminalized:
+            return
+
+        logger.info(
+            "hitl_request_expired",
             extra={
                 "hitl_request_id": request_id,
                 "room_id": request.room_id,
@@ -1220,6 +1311,8 @@ class HITLService:
                     group_index=request.group_index,
                     related_message_id=data["related_message_id"],
                     client_request_id=data.get("client_request_id"),
+                    orchestration_run_id=request.orchestration_run_id,
+                    orchestration_schema_version=request.orchestration_schema_version,
                 )
             )
             return
@@ -1240,6 +1333,8 @@ class HITLService:
                 related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),
+                orchestration_run_id=request.orchestration_run_id,
+                orchestration_schema_version=request.orchestration_schema_version,
             )
         )
 
