@@ -203,6 +203,59 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
 
 
 @pytest.mark.asyncio
+async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Use one budgeted agent step",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Handle the request",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="Summarize after budget is consumed",
+            synthesis_instruction="Summarize the answer",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.MAX_STEPS = 1
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.synthesis_text == "Final summary"
+    assert len(planner.contexts) == 2
+    assert planner.contexts[1].state_context.current_step.steps_used == 1
+
+
+@pytest.mark.asyncio
 async def test_run_v2_resume_ingests_paused_result_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -370,6 +423,59 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
     state = await store.get_run("run-message-1")
     assert state is not None
     assert state.steps_used == 1
+
+
+@pytest.mark.asyncio
+async def test_run_v2_ask_user_marks_sidecar_awaiting_before_hitl_request():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    async def request_input(**_kwargs):
+        state = await store.get_run("run-message-1")
+        assert state is not None
+        assert state.status == OrchestrationStatus.AWAITING_USER
+        assert state.pending_hitl_request_ids == [
+            "run-message-1:step-1:supervisor-hitl-1"
+        ]
+        return SimpleNamespace(request_id="hitl-1")
+
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock(side_effect=request_input))
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.pending_hitl_request_ids == ["hitl-1"]
 
 
 @pytest.mark.asyncio

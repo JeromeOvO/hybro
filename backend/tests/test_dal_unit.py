@@ -185,6 +185,44 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "critical_index_name",
+    [
+        "orchestration_run_id_unique",
+        "orchestration_event_id_unique",
+        "room_agent_message_id_unique",
+    ],
+)
+async def test_ensure_runtime_indexes_raises_for_critical_unique_index_failures(
+    critical_index_name: str,
+):
+    from container import ensure_runtime_indexes
+
+    collections: dict[str, MagicMock] = {}
+
+    def _collection(name: str):
+        if name not in collections:
+            collection = MagicMock()
+
+            async def create_index(_keys, **kwargs):
+                if kwargs.get("name") == critical_index_name:
+                    raise ValueError("index failure")
+                return f"{name}_idx"
+
+            collection.create_index = AsyncMock(side_effect=create_index)
+            collection.index_information = AsyncMock(return_value={})
+            collection.drop_index = AsyncMock()
+            collections[name] = collection
+        return collections[name]
+
+    mongo = MagicMock()
+    mongo.collection.side_effect = _collection
+
+    with pytest.raises(RuntimeError, match="Critical index creation failed"):
+        await ensure_runtime_indexes(mongo=mongo)
+
+
 def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
     return any(
         call.args == (keys,) and call.kwargs == kwargs

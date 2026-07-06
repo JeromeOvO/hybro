@@ -334,7 +334,7 @@ class SupervisorExecutor:
                 ),
             )
 
-        while state.steps_used < state.step_budget:
+        while state.steps_used <= state.step_budget:
             if token and token.is_cancelled:
                 trajectory.status = TrajectoryStatus.CANCELED
                 state = await self._mark_v2_terminal(
@@ -1578,11 +1578,33 @@ class SupervisorExecutor:
         group_id = uuid4().hex if len(questions) > 1 else None
         created_messages: list[str] = []
         created_request_ids: list[str] = []
+        pending_request_ids = [
+            f"{state.run_id}:step-{step_number}:supervisor-hitl-{index}"
+            for index in range(1, len(questions) + 1)
+        ]
         last_request = None
         client_req_id = state.client_request_id or (
             await self.task_state_store.resolve_client_request_id_for_message_id(
                 user_message_id
             )
+        )
+
+        def mark_pending_hitl(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.AWAITING_USER
+            updated.steps_used += 1
+            for request_id in pending_request_ids:
+                if request_id not in updated.pending_hitl_request_ids:
+                    updated.pending_hitl_request_ids.append(request_id)
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_REQUESTED,
+            payload={
+                "status": OrchestrationStatus.AWAITING_USER.value,
+                "request_ids": pending_request_ids,
+                "pending_artifacts": True,
+            },
+            mutate=mark_pending_hitl,
         )
 
         async def cleanup_created_artifacts() -> None:
@@ -1705,7 +1727,11 @@ class SupervisorExecutor:
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
-            updated.steps_used += 1
+            updated.pending_hitl_request_ids = [
+                request_id
+                for request_id in updated.pending_hitl_request_ids
+                if request_id not in pending_request_ids
+            ]
             for request_id in created_request_ids:
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)

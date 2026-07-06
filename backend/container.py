@@ -1874,6 +1874,7 @@ async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
         [("run_id", 1)],
         name="orchestration_run_id_unique",
         unique=True,
+        critical=True,
     )
     await _create_index(
         mongo,
@@ -1893,6 +1894,7 @@ async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
         [("event_id", 1)],
         name="orchestration_event_id_unique",
         unique=True,
+        critical=True,
     )
     await _create_index(
         mongo,
@@ -1925,6 +1927,7 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
         [("message_id", 1)],
         name="room_agent_message_id_unique",
         unique=True,
+        critical=True,
     )
     await _create_index(
         mongo,
