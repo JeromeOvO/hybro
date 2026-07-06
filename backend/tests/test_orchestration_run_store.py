@@ -315,6 +315,25 @@ async def test_mongo_store_normalizes_duplicate_insert_to_conflict():
 
 
 @pytest.mark.asyncio
+async def test_mongo_store_normalizes_duplicate_event_insert_to_conflict():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+    await store.create_run(_state())
+    events = mongo.collection("orchestration_run_events")
+    events.insert_error = RuntimeError("E11000 duplicate key error")
+
+    event = OrchestrationRunEvent(
+        event_id="event-1",
+        run_id="run-1",
+        room_id="room-1",
+        type=OrchestrationEventType.RUN_RECOVERED,
+        state_version=0,
+    )
+    with pytest.raises(OrchestrationStoreConflict, match="already exists"):
+        await store.append_event(event)
+
+
+@pytest.mark.asyncio
 async def test_list_recoverable_filters_terminal_statuses_and_respects_limit():
     store = InMemoryOrchestrationRunStore()
     await store.create_run(

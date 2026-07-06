@@ -302,7 +302,15 @@ class SupervisorExecutor:
             state=state,
             trajectory=trajectory,
             agent_registry=agent_registry,
+            room_config=room_config,
             room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            conversation_context=conversation_context,
+            token=token,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            user_message=user_message,
         )
         if recovered_status is not None:
             return await self._log_and_return(
@@ -874,7 +882,15 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         trajectory: SupervisorTrajectory,
         agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
         room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        token: CancellationToken | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+        user_message,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         step_number = state.steps_used + 1
         step_id = f"{state.run_id}:step-{step_number}"
@@ -899,6 +915,7 @@ class SupervisorExecutor:
             output.agent_message_id: output for output in state.agent_outputs
         }
         results: list[StepResult] = []
+        replay_intents: list[DispatchIntent] = []
         unresolved = False
 
         for intent in current_intents:
@@ -915,11 +932,65 @@ class SupervisorExecutor:
                     step_number,
                 )
             if result is None:
-                unresolved = True
+                msg = await self.message_reader.get_room_agent_message_by_message_id(
+                    intent.planned_agent_message_id
+                )
+                result = self._v2_result_from_agent_message(
+                    intent,
+                    msg,
+                    agent_names,
+                    step_number,
+                )
+                if msg is None and intent.status == "planned":
+                    replay_intents.append(intent)
+                elif result is not None:
+                    results.append(result)
+                else:
+                    unresolved = True
             else:
                 results.append(result)
 
+        if replay_intents:
+            replay_targets = [
+                DelegateTarget(
+                    agent_id=intent.agent_id,
+                    agent_name=agent_names.get(intent.agent_id) or intent.agent_id,
+                    task=intent.task,
+                )
+                for intent in replay_intents
+            ]
+            replay_results = await self._dispatch_targets(
+                targets=replay_targets,
+                agent_registry=agent_registry,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                step_number=step_number,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                planned_message_ids=[
+                    intent.planned_agent_message_id for intent in replay_intents
+                ],
+            )
+            results.extend(replay_results)
+
         if unresolved:
+            if results:
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+                    payload={
+                        "agent_message_ids": [
+                            result.agent_message_id for result in results
+                        ]
+                    },
+                    mutate=lambda updated: self._apply_v2_results(
+                        updated,
+                        results,
+                        status=OrchestrationStatus.WAITING_AGENT,
+                        advance_step=False,
+                    ),
+                )
             if state.status != OrchestrationStatus.WAITING_AGENT:
                 state = await self._save_v2_state(
                     state,
@@ -935,6 +1006,69 @@ class SupervisorExecutor:
 
         if not results:
             return state, None
+
+        paused = [result for result in results if result.status == StepStatus.PAUSED]
+        awaiting = [
+            result for result in results if result.status == StepStatus.AWAITING_INPUT
+        ]
+        if awaiting:
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
+                state=state,
+                results=results,
+                awaiting=awaiting,
+                trajectory=trajectory,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+            )
+            return state, awaiting_status
+
+        if paused:
+            trajectory.status = TrajectoryStatus.RUNNING
+            saved = await self._save_interrupted_state(
+                kind=InterruptKind.PUSH_NOTIFICATION,
+                trajectory=trajectory,
+                paused_results=paused,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                request_user_id=request_user_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                quoted_text=quoted_text,
+            )
+            if not saved:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason="failed to save paused v2 recovery continuation",
+                )
+                return state, RunStatus.FAILED
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.STATE_REDUCED,
+                payload={"status": OrchestrationStatus.WAITING_AGENT.value},
+                mutate=lambda updated: self._apply_v2_results(
+                    updated,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                ),
+            )
+            await self._checkpoint_trajectory(
+                user_message_id,
+                trajectory,
+                cached_user_message=user_message,
+            )
+            return state, RunStatus.PAUSED
 
         entry = self._v2_recovered_trajectory_entry(
             step_number=step_number,
@@ -999,10 +1133,24 @@ class SupervisorExecutor:
         agent_names: dict[str, str],
         step_number: int,
     ) -> StepResult | None:
-        terminal_states = {"completed", "failed", "canceled", "rejected"}
         msg = await self.message_reader.get_room_agent_message_by_message_id(
             intent.planned_agent_message_id
         )
+        return self._v2_result_from_agent_message(
+            intent,
+            msg,
+            agent_names,
+            step_number,
+        )
+
+    @staticmethod
+    def _v2_result_from_agent_message(
+        intent: DispatchIntent,
+        msg,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
         if not msg or getattr(msg, "last_notified_state", None) not in terminal_states:
             return None
 

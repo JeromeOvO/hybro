@@ -1238,15 +1238,28 @@ class RoomMessageCenter:
 
     @staticmethod
     def _is_v2_supervisor_envelope(extend_info: Any) -> bool:
+        if (
+            not isinstance(extend_info, dict)
+            or extend_info.get("orchestration_schema_version") != 2
+        ):
+            return False
+        run_id = extend_info.get("orchestration_run_id")
+        candidate_agent_ids = extend_info.get("candidate_agent_ids")
         return (
-            isinstance(extend_info, dict)
-            and extend_info.get("orchestration_schema_version") == 2
+            isinstance(run_id, str)
+            and bool(run_id.strip())
+            and isinstance(candidate_agent_ids, list)
+            and any(
+                isinstance(agent_id, str) and bool(agent_id.strip())
+                for agent_id in candidate_agent_ids
+            )
         )
 
     async def _build_v2_supervisor_inputs(
         self,
         extend: dict[str, Any],
         room_id: str,
+        message_text: str,
     ) -> tuple[list[AgentProfile], RoomConfig, str | None]:
         candidate_agent_ids = extend.get("candidate_agent_ids")
         if not isinstance(candidate_agent_ids, list) or not candidate_agent_ids:
@@ -1302,7 +1315,25 @@ class RoomMessageCenter:
             },
             explicit_mentions=explicit_mentions,
         )
-        return agent_registry, room_config, None
+        conversation_context = None
+        try:
+            room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
+            if room_memory and self.context_memory_runtime is not None:
+                conversation_context, _occupancy = (
+                    await self._refresh_supervisor_conversation_context(
+                        room_id=room_id,
+                        room_memory=room_memory,
+                        room_agent_set=room_config.room_agent_set,
+                        message_text=message_text,
+                    )
+                )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: failed to build v2 supervisor context for %s: %s",
+                room_id,
+                e,
+            )
+        return agent_registry, room_config, conversation_context
 
     async def _process_supervisor(
         self,
@@ -1328,13 +1359,24 @@ class RoomMessageCenter:
         """
         extend = user_message.extend_info
         is_v2_supervisor = self._is_v2_supervisor_envelope(extend)
+        build_turn_content = self.build_turn_content or (
+            lambda text, _attachments: text
+        )
+        message_text = build_turn_content(
+            user_message.message_content.message_text or "",
+            user_message.message_content.attachments,
+        )
         try:
             if is_v2_supervisor:
                 (
                     agent_registry,
                     room_config,
                     conversation_context,
-                ) = await self._build_v2_supervisor_inputs(extend, room_id)
+                ) = await self._build_v2_supervisor_inputs(
+                    extend,
+                    room_id,
+                    message_text,
+                )
             else:
                 agent_registry = [
                     AgentProfile(**p) for p in extend["agent_registry"]
@@ -1425,13 +1467,6 @@ class RoomMessageCenter:
                     )
 
         try:
-            build_turn_content = self.build_turn_content or (
-                lambda text, _attachments: text
-            )
-            message_text = build_turn_content(
-                user_message.message_content.message_text or "",
-                user_message.message_content.attachments,
-            )
             run_supervisor = (
                 self.supervisor_executor.run_v2
                 if is_v2_supervisor

@@ -308,7 +308,14 @@ class MongoOrchestrationRunStore:
                 f"run_id {event.run_id!r}: event {event.state_version}, "
                 f"current {current_version}"
             )
-        await self._events.insert_one(_event_doc(event))
+        try:
+            await self._events.insert_one(_event_doc(event))
+        except Exception as exc:
+            if _is_duplicate_key_error(exc):
+                raise OrchestrationStoreConflict(
+                    f"event_id {event.event_id!r} already exists"
+                ) from exc
+            raise
         return _copy_event(event)
 
     async def list_recoverable(

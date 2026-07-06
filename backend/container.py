@@ -1192,6 +1192,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
                 StaleHITLDeps,
+                StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
             )
@@ -1239,6 +1240,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             stale_task_checker.set_execution_recovery_deps(
                 StaleRecoveryDeps(
                     schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
+            stale_task_checker.set_orchestration_run_recovery_deps(
+                StaleOrchestrationRunRecoveryDeps(
+                    orchestration_run_store=orchestration_run_store,
                 )
             )
             stale_task_checker.set_hitl_deps(
