@@ -670,6 +670,31 @@ class TestOrchestrationResultIngestorHook:
             error="stopped",
         )
 
+    @pytest.mark.asyncio
+    async def test_error_hook_preserves_terminal_state(self):
+        h = _make_handler()
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(
+                AgentEvent(
+                    kind="error",
+                    **_base_event(),
+                    error_text="nope",
+                    state="rejected",
+                )
+            )
+
+        result = service.ingest_agent_result.await_args.args[0]
+        assert result.status == "rejected"
+        assert result.error == "nope"
+
 
 # =============================================================================
 # Error events (terminal)

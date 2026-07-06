@@ -403,7 +403,7 @@ class AgentResponseHandler:
         )
         await self._ingest_orchestration_result(
             e,
-            status="failed",
+            status=state,
             text=e.text or None,
             artifacts=e.artifacts or [],
             error=error,
