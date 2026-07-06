@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
+from common.config.settings import settings
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.result_ingestor import AgentResultRead
@@ -573,6 +574,9 @@ class AgentResponseHandler:
         # prevents duplicate SSE on paths where agent_response was already sent.
         terminal_result_status: str | None = None
         if e.state:
+            state_value = str(getattr(e.state, "value", e.state))
+            if state_value in settings.terminal_processing_statuses:
+                terminal_result_status = state_value
             try:
                 from common.a2a_constants import TERMINAL_STATES
 
@@ -755,7 +759,7 @@ class AgentResponseHandler:
 
     @staticmethod
     def _terminal_result_error(e: AgentEvent, status: str) -> str | None:
-        if status not in {"failed", "canceled", "rejected", "error"}:
+        if status not in {"failed", "canceled", "rejected", "error", "rate_limited"}:
             return None
         if e.error_text:
             return e.error_text

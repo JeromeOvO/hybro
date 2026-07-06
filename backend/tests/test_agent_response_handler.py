@@ -1527,6 +1527,50 @@ class TestHandlerNotifyTaskUpdate:
         )
 
     @pytest.mark.asyncio
+    async def test_processing_status_terminal_non_task_state_ingests_agent_result(self):
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="processing_status",
+            **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="rate_limited",
+            details={"message": "too many requests"},
+        )
+
+        await h.handle(event)
+
+        mock_impl.assert_not_awaited()
+        service.ingest_agent_result.assert_awaited_once_with(
+            AgentResultRead(
+                agent_message_id="msg-001",
+                agent_id="agent-001",
+                status="rate_limited",
+                text=None,
+                artifacts=[],
+                error="too many requests",
+            )
+        )
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="rate_limited",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details={"message": "too many requests"},
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_notify_helper_delegates_to_method(self):
         """_notify helper calls self.notify_task_update with event fields."""
         mock_impl = AsyncMock(return_value=True)
