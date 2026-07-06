@@ -1719,6 +1719,107 @@ class RoomServices:
 
         return selected_agent_set, False, agents
 
+    async def _validate_v2_candidate_scope_metadata(
+        self,
+        request: RoomCenterUserMessageRequest,
+        selected_agent_ids: list[str],
+        sender_user_id: str | None,
+    ) -> RoomCenterUserMessageResponse | None:
+        info = self._orchestration_request_info(request)
+        candidate_scope_mode = info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
+
+        if candidate_scope_mode != "saved_group":
+            return None
+
+        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        if (
+            not isinstance(candidate_scope_group_id, str)
+            or not candidate_scope_group_id.strip()
+        ):
+            error_msg = (
+                "candidate_scope_group_id is required for saved_group candidate scope"
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        group_id = candidate_scope_group_id.strip()
+        group = await self._store.get_agent_group_by_id(group_id)
+        if not group:
+            error_msg = (
+                "The selected agent group no longer exists. "
+                "Please choose a different group."
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=404,
+            )
+
+        if group.type != "builtin" and group.owner_id != sender_user_id:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="You do not have permission to use this saved group",
+                status_code=403,
+            )
+
+        group_agent_ids = {str(agent_id) for agent_id in (group.agents or [])}
+        if not group_agent_ids:
+            error_msg = f"The selected agent group '{group.name}' has no members."
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="empty_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        out_of_group_ids = [
+            agent_id
+            for agent_id in selected_agent_ids
+            if agent_id not in group_agent_ids
+        ]
+        if out_of_group_ids:
+            error_msg = (
+                "Selected candidate agents are not members of the selected saved group: "
+                f"{', '.join(out_of_group_ids)}"
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        return None
+
     async def _prepare_v2_orchestration_envelope(
         self,
         request: RoomCenterUserMessageRequest,
@@ -1745,14 +1846,24 @@ class RoomServices:
             "client_request_id": client_request_id,
         }
         candidate_scope_group_id = info.get("candidate_scope_group_id")
-        if isinstance(candidate_scope_group_id, str) and candidate_scope_group_id:
-            envelope["candidate_scope_group_id"] = candidate_scope_group_id
+        if (
+            candidate_scope_mode == "saved_group"
+            and isinstance(candidate_scope_group_id, str)
+            and candidate_scope_group_id.strip()
+        ):
+            envelope["candidate_scope_group_id"] = candidate_scope_group_id.strip()
 
         user_message.extend_info = envelope
-        await self._store.update_room_user_message_by_message_id(
+        persisted = await self._store.update_room_user_message_by_message_id(
             user_message.message_id,
             user_message,
         )
+        if not persisted:
+            logger.warning(
+                "RoomServices: failed to persist v2 orchestration envelope for message %s",
+                user_message.message_id,
+            )
+            return ParseResult(success=False)
         logger.info(
             "RoomServices: v2 orchestration envelope prepared for message %s (%d candidates)",
             user_message.message_id,
@@ -2173,6 +2284,13 @@ class RoomServices:
         v2_orchestration_requested = self._is_v2_orchestration_request(request)
 
         if v2_orchestration_requested and selected_agent_ids is not None:
+            metadata_error = await self._validate_v2_candidate_scope_metadata(
+                request,
+                selected_agent_ids,
+                sender_user_id=request.user_id,
+            )
+            if metadata_error is not None:
+                return metadata_error, None
             scope_result = await self._resolve_selected_candidate_scope(
                 selected_agent_ids,
                 sender_user_id=request.user_id,

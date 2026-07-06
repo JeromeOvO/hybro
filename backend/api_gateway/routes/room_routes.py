@@ -106,6 +106,14 @@ async def verify_room_ownership(
     Verify that the current user owns the specified room.
     Raises HTTPException if the room doesn't exist or user is not the owner.
     """
+    await _get_verified_room(room_id, user, store)
+
+
+async def _get_verified_room(
+    room_id: str,
+    user: ClerkUser,
+    store: RoomRouteReader,
+):
     if not room_id:
         raise HTTPException(status_code=400, detail="room_id is required")
 
@@ -118,6 +126,8 @@ async def verify_room_ownership(
         raise HTTPException(
             status_code=403, detail="You do not have permission to access this room"
         )
+
+    return room
 
 
 @router.post("/roomCenter/createNewRoom")
@@ -383,10 +393,6 @@ async def send_message(
             error="orchestration_schema_version must be an integer",
             status_code=400,
         )
-    is_v2_supervisor_orchestration = (
-        mode == "supervisor" and orchestration_schema_version == 2
-    )
-
     if not isinstance(client_request_id, str) or not client_request_id.strip():
         return RoomCenterUserMessageResponse(
             message_id=None,
@@ -404,6 +410,17 @@ async def send_message(
             error="target_group is no longer supported; use message_target_mode and target_group_id",
             status_code=400,
         )
+
+    room = await _get_verified_room(room_id, user, store)
+    room_uses_supervisor = (
+        isinstance(room.extend_info, dict)
+        and room.extend_info.get("use_supervisor", False) is True
+    )
+    is_v2_supervisor_orchestration = (
+        mode == "supervisor"
+        and orchestration_schema_version == 2
+        and room_uses_supervisor
+    )
 
     message_target_mode = request_data.get("message_target_mode")
     target_group_id = request_data.get("target_group_id")
@@ -559,8 +576,6 @@ async def send_message(
             error="message_target_mode is required when mentioned_agent_ids is not provided",
             status_code=400,
         )
-
-    await verify_room_ownership(room_id, user, store)
 
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
     if err is not None:

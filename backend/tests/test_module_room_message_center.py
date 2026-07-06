@@ -20,7 +20,10 @@ from a2a.types import TaskState
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
 from common.dto import MessageCommitted
 from execution.orchestration.room_message_center import RoomMessageCenter
+from models.agent import AgentStatus
 from models.hitl import InterruptKind
+from models.response import OrchestrationResponse
+from models.room import MessageContent, Room, RoomUserMessage
 from models.supervisor import (
     ActionType,
     RunStatus,
@@ -654,6 +657,123 @@ async def test_failed_room_lock_still_emits_terminal_status_when_task_transition
     )
     emit.assert_awaited_once()
     rmc.delivery.send_processing_status.assert_not_awaited()
+
+
+def _supervisor_agent(agent_id: str, name: str):
+    return SimpleNamespace(
+        agent_id=agent_id,
+        agent_card=SimpleNamespace(name=name, description="", skills=[]),
+        call_count=0,
+        call_success_count=0,
+        agent_status=AgentStatus.active,
+    )
+
+
+@pytest.mark.asyncio
+async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "candidate_scope_snapshot_version": 1,
+            "mentioned_agent_ids": ["agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    agents = {
+        "agent-1": _supervisor_agent("agent-1", "Agent One"),
+        "agent-2": _supervisor_agent("agent-2", "Agent Two"),
+    }
+    token = SimpleNamespace(is_cancelled=False)
+    supervisor_result = SimpleNamespace(
+        status=RunStatus.COMPLETED,
+        trajectory=SimpleNamespace(clarify_original_message_id=None),
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        get_quoted_snippet_by_id=AsyncMock(return_value=None),
+    )
+    rmc.message_writer = SimpleNamespace()
+    rmc._turn_event_appender = None
+    rmc.delivery = SimpleNamespace(
+        get_token=MagicMock(return_value=token),
+        create_token=MagicMock(return_value=token),
+        remove_token=MagicMock(),
+    )
+    rmc.room_runtime = SimpleNamespace(
+        inquiry_agent_messages_by_related_message_id=AsyncMock(
+            side_effect=AssertionError("v2 supervisor envelope should not use queue path")
+        )
+    )
+    rmc.agent_lookup = SimpleNamespace(
+        get_agent_by_agent_id=AsyncMock(side_effect=lambda aid: agents.get(aid))
+    )
+    rmc.room_reader = SimpleNamespace(
+        get_room_by_room_id=AsyncMock(
+            return_value=Room(
+                room_id="room-1",
+                room_name="Room",
+                room_owner_id="user-1",
+                room_owner_name="User",
+                room_agent_set={"agent-1": "Agent One", "agent-2": "Agent Two"},
+                extend_info={"use_supervisor": True, "debateMode": False},
+            )
+        )
+    )
+    rmc.supervisor_executor = SimpleNamespace(
+        run=AsyncMock(return_value=supervisor_result)
+    )
+    rmc.supervisor_planning_error_cls = RuntimeError
+    rmc.build_turn_content = None
+    rmc._handle_supervisor_run_result = AsyncMock()
+    rmc._log_room_memory_stats = AsyncMock()
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="message-1",
+        user_id="user-1",
+        client_request_id="client-1",
+    )
+
+    response = await rmc._process_room_user_message_locked(
+        request,
+        "room-1",
+        "message-1",
+    )
+
+    assert response == OrchestrationResponse(
+        room_id="room-1",
+        success=True,
+        error=None,
+        status_code=200,
+    )
+    rmc.room_runtime.inquiry_agent_messages_by_related_message_id.assert_not_awaited()
+    run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
+    assert [agent.agent_id for agent in run_kwargs["agent_registry"]] == [
+        "agent-1",
+        "agent-2",
+    ]
+    assert run_kwargs["room_config"].room_agent_set == {
+        "agent-1": "Agent One",
+        "agent-2": "Agent Two",
+    }
+    assert run_kwargs["room_config"].explicit_mentions == [
+        {
+            "agent_id": "agent-2",
+            "agent_name": "Agent Two",
+            "mention_text": "<@agent-2|Agent Two>",
+        }
+    ]
+    assert run_kwargs["conversation_context"] is None
 
 
 def test_failed_room_lock_notifies_non_terminal_tasks_before_failed_processing_status():
