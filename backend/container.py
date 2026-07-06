@@ -422,6 +422,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.orchestration.factory import (
                 room_message_center as execution_room_message_center,
             )
+            from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+            from execution.orchestration.run_store import InMemoryOrchestrationRunStore
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
@@ -460,7 +462,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 default_model=llm_gateway_config.default_supervisor_model,
             )
             embedding_llm_service = EmbeddingLLMService(llm_provider=llm_provider)
-            discovery_llm_service = DiscoveryLLMService(
+            discovery_llm_service = DiscoveryLLMService(  # noqa: F841
                 llm_provider=llm_provider,
                 max_expansion_words=runtime.settings.discovery_query_expansion_threshold,
             )
@@ -975,6 +977,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_rate_limiter = app.state.agent_rate_limiter_factory(
                     runtime.settings, mongo_dal
                 )
+            orchestration_run_store = InMemoryOrchestrationRunStore()
+            orchestration_planner = RoomSupervisorPlannerAdapter(
+                supervisor_service=room_supervisor_service
+            )
 
             room_message_center_impl = create_room_message_center(
                 room_runtime=execution_room_runtime,
@@ -1002,6 +1008,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 debate_prompt_injector=debate_prompt_injector,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
+                orchestration_run_store=orchestration_run_store,
+                orchestration_planner=orchestration_planner,
                 hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state

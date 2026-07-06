@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     feature_run_dual_write: bool = True
     feature_run_event_sse: bool = False
     feature_run_watchdog: bool = True
-    feature_orchestration_v2: bool = False
+    execution_orchestration_v2: bool = False
 
     # Execution Tuning
     supervisor_max_steps: int = 8
@@ -312,15 +312,6 @@ class Settings(BaseSettings):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    @field_validator("feature_orchestration_v2", mode="before")
-    @classmethod
-    def normalize_feature_orchestration_v2(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
     @field_validator("feature_run_watchdog", mode="before")
     @classmethod
     def normalize_feature_run_watchdog(cls, value):
@@ -329,6 +320,15 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() not in {"0", "false", "off"}
+
+    @field_validator("execution_orchestration_v2", mode="before")
+    @classmethod
+    def normalize_execution_orchestration_v2(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
     @classmethod

@@ -42,6 +42,8 @@ def create_room_message_center(
         "debate_prompt_injector": _defaults.debate_prompt_injector,
         "rate_limit_service": _defaults.rate_limit_service,
         "room_supervisor_service": _defaults.room_supervisor_service,
+        "orchestration_run_store": _defaults.orchestration_run_store,
+        "orchestration_planner": _defaults.orchestration_planner,
         "hitl_coordinator": None,
         "task_notifications": None,
         "task_notification_impl": None,

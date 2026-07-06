@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from api.room_center import send_message
-from common.config import settings
+from common.config.settings import settings
 from common.dto import ExecutionAck, ExecutionRequest
 from execution.facade import ExecutionFacade
 from models.agent import AgentStatus
@@ -251,11 +251,9 @@ def _agent(agent_id: str, name: str, *, owner_id: str = "user-1"):
 
 @pytest.mark.asyncio
 async def test_v2_supervisor_preflight_persists_lightweight_orchestration_envelope(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(
-        settings, "feature_orchestration_v2", True, raising=False
-    )
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -340,11 +338,9 @@ async def test_v2_supervisor_preflight_persists_lightweight_orchestration_envelo
 
 @pytest.mark.asyncio
 async def test_v2_supervisor_preflight_reports_failure_when_envelope_update_fails(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(
-        settings, "feature_orchestration_v2", True, raising=False
-    )
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -438,7 +434,10 @@ async def test_v2_explicit_selection_omits_spoofed_candidate_scope_group_id():
 
 
 @pytest.mark.asyncio
-async def test_v2_saved_group_rejects_selected_agents_outside_group():
+async def test_v2_saved_group_rejects_selected_agents_outside_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -659,7 +658,7 @@ def _v2_preflight_context(*, pending_clarification: bool = False):
 @pytest.mark.asyncio
 async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
     monkeypatch.setattr(
-        settings, "feature_orchestration_v2", False, raising=False
+        settings, "execution_orchestration_v2", False
     )
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
@@ -685,7 +684,7 @@ async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_v2_pending_clarification_resumes_before_new_envelope(monkeypatch):
     monkeypatch.setattr(
-        settings, "feature_orchestration_v2", True, raising=False
+        settings, "execution_orchestration_v2", True
     )
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()

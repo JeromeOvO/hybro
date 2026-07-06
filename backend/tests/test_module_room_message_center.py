@@ -729,7 +729,8 @@ async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
         )
     )
     rmc.supervisor_executor = SimpleNamespace(
-        run=AsyncMock(return_value=supervisor_result)
+        run=AsyncMock(side_effect=AssertionError("legacy run should not be used")),
+        run_v2=AsyncMock(return_value=supervisor_result),
     )
     rmc.supervisor_planning_error_cls = RuntimeError
     rmc.build_turn_content = None
@@ -757,7 +758,8 @@ async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
         status_code=200,
     )
     rmc.room_runtime.inquiry_agent_messages_by_related_message_id.assert_not_awaited()
-    run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
+    rmc.supervisor_executor.run.assert_not_awaited()
+    run_kwargs = rmc.supervisor_executor.run_v2.await_args.kwargs
     assert [agent.agent_id for agent in run_kwargs["agent_registry"]] == [
         "agent-1",
         "agent-2",

@@ -22,7 +22,9 @@ from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.direct import DirectTransport
+from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.queue_executor import QueueExecutor, QueueResult
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.ports import (
     A2ATransportPort,
@@ -84,6 +86,8 @@ coordinator = None
 summary_service = None
 room_runtime = None
 room_supervisor_service = None
+orchestration_run_store = InMemoryOrchestrationRunStore()
+orchestration_planner = None
 delivery = None
 event_publisher = None
 remote_task_reader = None
@@ -170,6 +174,8 @@ class RoomMessageCenter:
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
         debate_rounds: int = 2,
+        orchestration_run_store=None,
+        orchestration_planner=None,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
         event_publisher: EventPublisher | None = None,
@@ -206,6 +212,18 @@ class RoomMessageCenter:
             else orphan_threshold_minutes
         )
         self.debate_rounds = debate_rounds
+        self.orchestration_run_store = (
+            orchestration_run_store
+            if orchestration_run_store is not None
+            else InMemoryOrchestrationRunStore()
+        )
+        self.orchestration_planner = (
+            orchestration_planner
+            if orchestration_planner is not None
+            else RoomSupervisorPlannerAdapter(
+                supervisor_service=room_supervisor_service
+            )
+        )
         self.tsm = TaskStateManager(self.room_runtime, task_notifier)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
@@ -303,6 +321,8 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             hitl_coordinator=hitl_coordinator,
             debate_rounds=self.debate_rounds,
+            orchestration_run_store=self.orchestration_run_store,
+            orchestration_planner=self.orchestration_planner,
         )
         self._turn_event_appender = None
 
@@ -1220,7 +1240,6 @@ class RoomMessageCenter:
     def _is_v2_supervisor_envelope(extend_info: Any) -> bool:
         return (
             isinstance(extend_info, dict)
-            and extend_info.get("orchestration") is True
             and extend_info.get("orchestration_schema_version") == 2
         )
 
@@ -1308,8 +1327,9 @@ class RoomMessageCenter:
         Handles all 5 ``RunStatus`` variants.
         """
         extend = user_message.extend_info
+        is_v2_supervisor = self._is_v2_supervisor_envelope(extend)
         try:
-            if self._is_v2_supervisor_envelope(extend):
+            if is_v2_supervisor:
                 (
                     agent_registry,
                     room_config,
@@ -1412,7 +1432,12 @@ class RoomMessageCenter:
                 user_message.message_content.message_text or "",
                 user_message.message_content.attachments,
             )
-            result = await self.supervisor_executor.run(
+            run_supervisor = (
+                self.supervisor_executor.run_v2
+                if is_v2_supervisor
+                else self.supervisor_executor.run
+            )
+            result = await run_supervisor(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
                 message_text=message_text,
@@ -1925,7 +1950,26 @@ class RoomMessageCenter:
 
         # 7. Resume the supervisor loop
         try:
-            result = await self.supervisor_executor.run(
+            is_v2_resume = continuation.get("orchestration_schema_version") == 2
+            original_user_message_for_resume = None
+            if not is_v2_resume:
+                try:
+                    original_user_message_for_resume = (
+                        await self.message_reader.get_room_user_message_by_message_id(
+                            user_message_id
+                        )
+                    )
+                    is_v2_resume = self._is_v2_supervisor_envelope(
+                        getattr(original_user_message_for_resume, "extend_info", None)
+                    )
+                except Exception:
+                    is_v2_resume = False
+            run_supervisor = (
+                self.supervisor_executor.run_v2
+                if is_v2_resume
+                else self.supervisor_executor.run
+            )
+            result = await run_supervisor(
                 room_id=room_id,
                 user_message_id=user_message_id,
                 message_text=message_text,
@@ -1936,6 +1980,7 @@ class RoomMessageCenter:
                 request_user_id=request_user_id,
                 quoted_text=quoted_text,
                 resumed_trajectory=trajectory,
+                user_message=original_user_message_for_resume,
             )
         except Exception:
             logger.exception(
