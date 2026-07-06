@@ -13,6 +13,7 @@ from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
+from execution.orchestration.result_ingestor import AgentResultRead
 
 if TYPE_CHECKING:
     from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort
@@ -70,7 +71,19 @@ class ResponseHITLReader(Protocol):
     ) -> list[dict]: ...
 
 
+class OrchestrationResultIngestorService(Protocol):
+    async def ingest_agent_result(self, result: AgentResultRead) -> Any: ...
+
+
 logger = get_logger(__name__)
+_orchestration_result_ingestor: OrchestrationResultIngestorService | None = None
+
+
+def bind_orchestration_result_ingestor(
+    service: OrchestrationResultIngestorService | None,
+) -> None:
+    global _orchestration_result_ingestor
+    _orchestration_result_ingestor = service
 
 
 class AgentResponseHandler:
@@ -357,6 +370,15 @@ class AgentResponseHandler:
         # NOTE: send_agent_response removed — _notify() above already delivers
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
+        await self._ingest_orchestration_result(
+            e,
+            status="completed",
+            text=display_text,
+            artifacts=(
+                display_artifacts if display_artifacts is not None else artifacts_for_db
+            )
+            or [],
+        )
         await self._resume_orchestration(e.message_id, display_text or "")
 
     async def _on_error(self, e: AgentEvent) -> None:
@@ -379,17 +401,32 @@ class AgentResponseHandler:
             error=error,
             has_partial_content=has_partial or None,
         )
+        await self._ingest_orchestration_result(
+            e,
+            status="failed",
+            text=e.text or None,
+            artifacts=e.artifacts or [],
+            error=error,
+        )
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_canceled(self, e: AgentEvent) -> None:
+        canceled_text = e.text or "Task was canceled"
         if not e.skip_persist:
             await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 "canceled",
-                message_text=e.text or "Task was canceled",
+                message_text=canceled_text,
             )
         await self._notify_terminal_best_effort(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
+        await self._ingest_orchestration_result(
+            e,
+            status="canceled",
+            text=e.text or None,
+            artifacts=e.artifacts or [],
+            error=e.error_text or canceled_text,
+        )
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_interactive(self, e: AgentEvent) -> None:
@@ -683,6 +720,38 @@ class AgentResponseHandler:
         except Exception:
             logger.warning(
                 "AgentResponseHandler: terminal task notification failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
+
+    async def _ingest_orchestration_result(
+        self,
+        e: AgentEvent,
+        *,
+        status: str,
+        text: str | None = None,
+        artifacts: list[dict] | None = None,
+        error: str | None = None,
+    ) -> None:
+        service = _orchestration_result_ingestor
+        if service is None:
+            return
+
+        try:
+            result = AgentResultRead(
+                agent_message_id=e.message_id,
+                agent_id=e.agent_id,
+                status=status,
+                text=text,
+                artifacts=artifacts or [],
+                error=error,
+            )
+            maybe_result = service.ingest_agent_result(result)
+            if inspect.isawaitable(maybe_result):
+                await maybe_result
+        except Exception:
+            logger.warning(
+                "AgentResponseHandler: orchestration result ingestion failed for %s",
                 e.message_id,
                 exc_info=True,
             )
