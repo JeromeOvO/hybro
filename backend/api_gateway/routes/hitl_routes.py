@@ -89,7 +89,7 @@ async def get_pending_hitl_requests(
     return {
         "requests": [
             {
-                **r.model_dump(mode="json"),
+                **r.model_dump(mode="json", exclude_none=True),
                 "message_id": r.message_id,
             }
             for r in requests

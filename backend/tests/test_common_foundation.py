@@ -691,6 +691,8 @@ def test_delivery_event_schemas_match_design_doc():
             "group_index",
             "related_message_id",
             "client_request_id",
+            "orchestration_run_id",
+            "orchestration_schema_version",
         },
         HITLResolvedEvent: {
             "room_id",
@@ -704,6 +706,8 @@ def test_delivery_event_schemas_match_design_doc():
             "error_message",
             "related_message_id",
             "client_request_id",
+            "orchestration_run_id",
+            "orchestration_schema_version",
         },
         TaskSubmittedEvent: {
             "room_id",

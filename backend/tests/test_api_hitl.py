@@ -184,6 +184,38 @@ class TestGetPendingHitlRequests:
         assert result["requests"][0]["client_request_id"] == "cr-pending-hitl"
 
     @pytest.mark.asyncio
+    async def test_pending_requests_omit_absent_v2_run_links(
+        self,
+        mock_user,
+        mock_db_service,
+        mock_hitl_service,
+        sample_room,
+        sample_hitl_request,
+    ):
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+        mock_hitl_service.get_pending_hitl.return_value = [
+            CommonHITLRequest(
+                request_id=sample_hitl_request.request_id,
+                room_id=sample_hitl_request.room_id,
+                user_message_id=sample_hitl_request.user_message_id,
+                source=sample_hitl_request.source,
+                prompt=sample_hitl_request.prompt,
+                display_message_id=sample_hitl_request.display_message_id,
+            )
+        ]
+
+        result = await get_pending_hitl_requests(
+            sample_room.room_id,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
+        pending = result["requests"][0]
+        assert "orchestration_run_id" not in pending
+        assert "orchestration_schema_version" not in pending
+
+    @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_pending(
         self, mock_user, mock_db_service, mock_hitl_service, sample_room
     ):

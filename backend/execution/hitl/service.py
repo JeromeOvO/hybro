@@ -235,7 +235,7 @@ class HITLService:
         )
 
         # 1. Persist FIRST (so it survives SSE drops)
-        doc = request.model_dump(mode="json")
+        doc = request.model_dump(mode="json", exclude_none=True)
         hitl_request_created = False
         if source == "agent":
             persisted = await self.persistence.create_or_reuse_pending_hitl_request(doc)
@@ -780,6 +780,8 @@ class HITLService:
                 a2a_context_id=request.a2a_context_id,
                 continuation_message_id=request.continuation_message_id,
                 display_message_id=request.display_message_id,
+                orchestration_run_id=request.orchestration_run_id,
+                orchestration_schema_version=request.orchestration_schema_version,
             )
             if new_request is None:
                 logger.warning(
