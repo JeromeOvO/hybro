@@ -933,6 +933,7 @@ class SupervisorExecutor:
                             a2a_context_id=ar.a2a_context_id,
                             continuation_message_id=ar.paused_message_id,
                             display_message_id=ar.paused_message_id,
+                            **self._hitl_orchestration_kwargs(user_message),
                         )
 
                         if request is None:
@@ -1242,6 +1243,7 @@ class SupervisorExecutor:
                             group_id=group_id,
                             group_total=len(questions) if group_id else None,
                             group_index=qi if group_id else None,
+                            **self._hitl_orchestration_kwargs(user_message),
                         )
 
                         if request is None:
@@ -2204,6 +2206,30 @@ class SupervisorExecutor:
 
         logger.error("SupervisorExecutor: Unknown interrupt kind %s", kind)
         return False
+
+    @staticmethod
+    def _hitl_orchestration_kwargs(user_message) -> dict[str, object]:
+        extend_info = getattr(user_message, "extend_info", None)
+        if not isinstance(extend_info, dict):
+            return {}
+
+        envelope = extend_info
+        for nested_key in ("orchestration", "orchestration_run"):
+            nested = extend_info.get(nested_key)
+            if isinstance(nested, dict):
+                envelope = nested
+                break
+
+        kwargs: dict[str, object] = {}
+        run_id = envelope.get("orchestration_run_id")
+        if isinstance(run_id, str) and run_id.strip():
+            kwargs["orchestration_run_id"] = run_id.strip()
+
+        schema_version = envelope.get("orchestration_schema_version")
+        if isinstance(schema_version, int):
+            kwargs["orchestration_schema_version"] = schema_version
+
+        return kwargs
 
     @staticmethod
     def _build_debate_task(
