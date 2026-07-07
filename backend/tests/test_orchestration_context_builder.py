@@ -17,6 +17,9 @@ from execution.orchestration.resources import ResourceProjectionRef, ResourceRef
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import (
     AgentOutputRecord,
+    AuthorizationBasis,
+    CandidateAgentSnapshot,
+    CandidateScopeSnapshot,
     DispatchIntent,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -168,6 +171,45 @@ def test_metadata_only_candidate_scope_does_not_invent_agent_ids(candidate_scope
     assert context.candidate_scope.group_id == "group-1"
     assert context.candidate_scope.agent_ids == []
     assert context.candidate_scope.agents == []
+
+
+def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=3,
+        source="saved_group",
+        room_id="room-1",
+        group_id="group-1",
+        agent_ids=["agent-2"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-2",
+                name="Insurer",
+                role="insurer",
+                capability_summary="Produces quote options.",
+                status="active",
+                source="saved_group",
+            )
+        ],
+        authorization_basis=AuthorizationBasis(
+            kind="saved_group_member",
+            room_id="room-1",
+            group_id="group-1",
+            selected_by_user_id="user-1",
+        ),
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
+        candidate_scope=[_candidate("agent-1", "Legacy Agent")],
+        message_text="Use the saved scope",
+    )
+
+    assert context.candidate_scope.mode == "saved_group"
+    assert context.candidate_scope.group_id == "group-1"
+    assert context.candidate_scope.snapshot_version == 3
+    assert context.candidate_scope.agent_ids == ["agent-2"]
+    assert [agent.agent_name for agent in context.candidate_scope.agents] == ["Insurer"]
 
 
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():

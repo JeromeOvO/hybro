@@ -173,7 +173,7 @@ def build_orchestration_planner_context(
     *,
     run_state: OrchestrationRunState,
     message_text: str,
-    candidate_scope: Sequence[Any] | Mapping[str, Any] = (),
+    candidate_scope: Sequence[Any] | Mapping[str, Any] | None = None,
     quote: Any | None = None,
     quote_required: bool = False,
     room_background: str | None = None,
@@ -190,7 +190,11 @@ def build_orchestration_planner_context(
     if room_background is not None and not isinstance(room_background, str):
         raise TypeError("room_background must be a string when supplied")
 
-    scope_context = _build_candidate_scope_context(candidate_scope)
+    scope_context = _build_candidate_scope_context(
+        run_state.candidate_scope
+        if run_state.candidate_scope is not None
+        else (candidate_scope or [])
+    )
     state_context = _build_state_context(run_state)
 
     return OrchestrationPlannerContext(
@@ -280,16 +284,16 @@ def _build_quote_context(quote: Any | None) -> OrchestrationQuoteContext | None:
     )
 
 
-def _build_candidate_scope_context(
-    candidate_scope: Sequence[Any] | Mapping[str, Any],
-) -> CandidateScopeContext:
+def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContext:
     mode = None
     group_id = None
     snapshot_version = None
 
     if isinstance(candidate_scope, Mapping):
         mode = _optional_str(
-            _first_mapping_value(candidate_scope, "mode", "candidate_scope_mode")
+            _first_mapping_value(
+                candidate_scope, "source", "mode", "candidate_scope_mode"
+            )
         )
         group_id = _optional_str(
             _first_mapping_value(
@@ -298,11 +302,27 @@ def _build_candidate_scope_context(
         )
         snapshot_value = _first_mapping_value(
             candidate_scope,
+            "revision",
             "snapshot_version",
             "candidate_scope_snapshot_version",
         )
         snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
         raw_items = _candidate_items_from_mapping(candidate_scope)
+    elif _looks_like_scope_object(candidate_scope):
+        mode = _optional_str(
+            _first_attr_value(candidate_scope, "source", "mode", "candidate_scope_mode")
+        )
+        group_id = _optional_str(
+            _first_attr_value(candidate_scope, "group_id", "candidate_scope_group_id")
+        )
+        snapshot_value = _first_attr_value(
+            candidate_scope,
+            "revision",
+            "snapshot_version",
+            "candidate_scope_snapshot_version",
+        )
+        snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
+        raw_items = _candidate_items_from_object(candidate_scope)
     else:
         raw_items = list(candidate_scope)
 
@@ -335,6 +355,18 @@ def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[An
 
     if _looks_like_agent_mapping(candidate_scope):
         return [candidate_scope]
+
+    return []
+
+
+def _candidate_items_from_object(candidate_scope: Any) -> list[Any]:
+    raw_agents = _first_attr_value(candidate_scope, "agents", "candidate_agents")
+    if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
+        return list(raw_agents)
+
+    raw_ids = _first_attr_value(candidate_scope, "agent_ids", "candidate_agent_ids")
+    if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
+        return list(raw_ids)
 
     return []
 
@@ -472,6 +504,18 @@ def _stable_data(value: Any) -> Any:
 
 def _looks_like_agent_mapping(value: Mapping[str, Any]) -> bool:
     return any(key in value for key in ("agent_id", "id"))
+
+
+def _looks_like_scope_object(value: Any) -> bool:
+    return any(
+        hasattr(value, attr)
+        for attr in (
+            "agents",
+            "agent_ids",
+            "candidate_agents",
+            "candidate_agent_ids",
+        )
+    )
 
 
 def _first_mapping_value(mapping: Mapping[str, Any], *keys: str) -> Any | None:
