@@ -77,8 +77,8 @@ class AgentResultIngestor:
         result: AgentResultRead,
     ) -> tuple[list[str], bool]:
         changed = False
-        existing_artifact_keys = {
-            artifact.get("artifact_key")
+        existing_artifacts_by_key = {
+            artifact.get("artifact_key"): artifact
             for artifact in state.artifacts
             if isinstance(artifact, dict)
         }
@@ -90,18 +90,22 @@ class AgentResultIngestor:
                 index,
                 artifact_payload,
             )
-            if artifact_key not in result_artifact_keys:
-                result_artifact_keys.append(artifact_key)
-            if artifact_key in existing_artifact_keys:
+            if artifact_key in result_artifact_keys:
+                continue
+            result_artifact_keys.append(artifact_key)
+            existing_artifact = existing_artifacts_by_key.get(artifact_key)
+            if existing_artifact is not None:
+                previous_artifact = copy.deepcopy(existing_artifact)
+                _apply_artifact_projection(existing_artifact, result, artifact_payload)
+                if existing_artifact != previous_artifact:
+                    changed = True
                 continue
 
             artifact_record = copy.deepcopy(artifact_payload)
             artifact_record["artifact_key"] = artifact_key
-            artifact_record["source_agent_message_id"] = result.agent_message_id
-            artifact_record["source_agent_id"] = result.agent_id
-            artifact_record["summary"] = _artifact_summary(artifact_record)
+            _apply_artifact_projection(artifact_record, result, artifact_payload)
             state.artifacts.append(artifact_record)
-            existing_artifact_keys.add(artifact_key)
+            existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
 
         return result_artifact_keys, changed
@@ -192,3 +196,13 @@ def _artifact_summary(artifact: dict[str, Any]) -> str:
         elif value is not None:
             return str(value)[:240]
     return ""
+
+
+def _apply_artifact_projection(
+    artifact_record: dict[str, Any],
+    result: AgentResultRead,
+    artifact_payload: dict[str, Any],
+) -> None:
+    artifact_record["source_agent_message_id"] = result.agent_message_id
+    artifact_record["source_agent_id"] = result.agent_id
+    artifact_record["summary"] = _artifact_summary(artifact_payload)

@@ -295,3 +295,40 @@ def test_reingesting_changed_text_updates_existing_fact():
         "kind": "agent_text",
         "text": "Carrier B declined the risk.",
     }
+
+
+def test_reingesting_existing_artifact_updates_projection_metadata():
+    artifact_key = "agent-msg-1:artifact_id:quote-1"
+    state = _run_state(
+        artifacts=[
+            {
+                "artifact_key": artifact_key,
+                "artifact_id": "quote-1",
+                "parts": [{"kind": "text", "text": "original"}],
+                "source_agent_message_id": "stale-message",
+                "summary": "   ",
+            }
+        ]
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="See attached quote.",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "name": "Carrier A quote",
+                "summary": " ",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(state, result)
+
+    assert len(updated.artifacts) == 1
+    assert updated.artifacts[0]["artifact_key"] == artifact_key
+    assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
+    assert updated.artifacts[0]["source_agent_id"] == "agent-1"
+    assert updated.artifacts[0]["summary"] == "Carrier A quote"
+    assert updated.artifacts[0]["parts"] == [{"kind": "text", "text": "original"}]
