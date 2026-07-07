@@ -28,6 +28,27 @@ _STABLE_ID_FIELDS = (
     ("partId", "part_id"),
 )
 
+_KNOWN_ARTIFACT_PAYLOAD_FIELDS = {
+    "artifact_id",
+    "artifactId",
+    "content",
+    "description",
+    "filename",
+    "id",
+    "mime_type",
+    "mimeType",
+    "name",
+    "part_id",
+    "partId",
+    "parts",
+    "path",
+    "summary",
+    "text",
+    "title",
+    "uri",
+    "url",
+}
+
 
 def canonical_artifact_key(
     agent_message_id: str,
@@ -95,6 +116,12 @@ class AgentResultIngestor:
             if existing_output is not None
             else set()
         )
+        artifact_keys_referenced_by_other_outputs = {
+            artifact_key
+            for output in state.agent_outputs
+            if output.agent_message_id != result.agent_message_id
+            for artifact_key in output.artifact_keys
+        }
         result_artifact_keys: list[str] = []
         for index, artifact in enumerate(result.artifacts):
             artifact_payload = copy.deepcopy(artifact)
@@ -109,6 +136,7 @@ class AgentResultIngestor:
             existing_artifact = existing_artifacts_by_key.get(artifact_key)
             if existing_artifact is not None:
                 previous_artifact = copy.deepcopy(existing_artifact)
+                _replace_artifact_payload(existing_artifact, artifact_payload)
                 _apply_artifact_projection(existing_artifact, result, artifact_payload)
                 if existing_artifact != previous_artifact:
                     changed = True
@@ -129,14 +157,22 @@ class AgentResultIngestor:
                 if not (
                     (
                         isinstance(artifact, dict)
-                        and artifact.get("source_agent_message_id")
-                        == result.agent_message_id
-                        and artifact.get("artifact_key") not in current_artifact_keys
-                    )
-                    or (
-                        isinstance(artifact, dict)
-                        and artifact.get("artifact_key") in previous_artifact_keys
-                        and artifact.get("artifact_key") not in current_artifact_keys
+                        and artifact.get("artifact_key")
+                        not in artifact_keys_referenced_by_other_outputs
+                        and (
+                            (
+                                artifact.get("source_agent_message_id")
+                                == result.agent_message_id
+                                and artifact.get("artifact_key")
+                                not in current_artifact_keys
+                            )
+                            or (
+                                artifact.get("artifact_key")
+                                in previous_artifact_keys
+                                and artifact.get("artifact_key")
+                                not in current_artifact_keys
+                            )
+                        )
                     )
                 )
             ]
@@ -255,3 +291,14 @@ def _apply_artifact_projection(
     artifact_record["source_agent_message_id"] = result.agent_message_id
     artifact_record["source_agent_id"] = result.agent_id
     artifact_record["summary"] = _artifact_summary(artifact_payload)
+
+
+def _replace_artifact_payload(
+    artifact_record: dict[str, Any],
+    artifact_payload: dict[str, Any],
+) -> None:
+    for field in _KNOWN_ARTIFACT_PAYLOAD_FIELDS:
+        if field not in artifact_payload:
+            artifact_record.pop(field, None)
+    for key, value in artifact_payload.items():
+        artifact_record[key] = copy.deepcopy(value)

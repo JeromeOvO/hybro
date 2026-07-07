@@ -304,7 +304,9 @@ def test_reingesting_existing_artifact_updates_projection_metadata():
             {
                 "artifact_key": artifact_key,
                 "artifact_id": "quote-1",
+                "name": "Stale quote",
                 "parts": [{"kind": "text", "text": "original"}],
+                "description": "Stale description",
                 "source_agent_message_id": "stale-message",
                 "summary": "   ",
             }
@@ -319,6 +321,7 @@ def test_reingesting_existing_artifact_updates_projection_metadata():
             {
                 "artifact_id": "quote-1",
                 "name": "Carrier A quote",
+                "description": "Current description",
                 "summary": " ",
             }
         ],
@@ -331,7 +334,9 @@ def test_reingesting_existing_artifact_updates_projection_metadata():
     assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
     assert updated.artifacts[0]["source_agent_id"] == "agent-1"
     assert updated.artifacts[0]["summary"] == "Carrier A quote"
-    assert updated.artifacts[0]["parts"] == [{"kind": "text", "text": "original"}]
+    assert updated.artifacts[0]["name"] == "Carrier A quote"
+    assert updated.artifacts[0]["description"] == "Current description"
+    assert "parts" not in updated.artifacts[0]
 
 
 def test_reingesting_blank_text_removes_existing_fact():
@@ -532,3 +537,58 @@ def test_reingesting_no_artifacts_removes_legacy_artifact_without_source_metadat
         artifact["artifact_key"]
         for artifact in updated.artifacts
     ] == ["agent-msg-2:artifact_id:other"]
+
+
+def test_reingesting_no_artifacts_preserves_shared_artifact_key():
+    shared_key = "shared:artifact_id:quote"
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                artifact_keys=[shared_key],
+            ),
+            AgentOutputRecord(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status="completed",
+                artifact_keys=[shared_key],
+            ),
+        ],
+        artifacts=[
+            {
+                "artifact_key": shared_key,
+                "artifact_id": "quote",
+                "name": "Shared quote",
+            }
+        ],
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[],
+    )
+
+    updated = AgentResultIngestor().ingest(state, result)
+
+    output = next(
+        output
+        for output in updated.agent_outputs
+        if output.agent_message_id == "agent-msg-1"
+    )
+    other_output = next(
+        output
+        for output in updated.agent_outputs
+        if output.agent_message_id == "agent-msg-2"
+    )
+    assert output.artifact_keys == []
+    assert other_output.artifact_keys == [shared_key]
+    assert updated.artifacts == [
+        {
+            "artifact_key": shared_key,
+            "artifact_id": "quote",
+            "name": "Shared quote",
+        }
+    ]
