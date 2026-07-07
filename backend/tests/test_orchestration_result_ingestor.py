@@ -332,3 +332,62 @@ def test_reingesting_existing_artifact_updates_projection_metadata():
     assert updated.artifacts[0]["source_agent_id"] == "agent-1"
     assert updated.artifacts[0]["summary"] == "Carrier A quote"
     assert updated.artifacts[0]["parts"] == [{"kind": "text", "text": "original"}]
+
+
+def test_reingesting_blank_text_removes_existing_fact():
+    ingestor = AgentResultIngestor()
+    first = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+    blank = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="   ",
+    )
+    missing = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text=None,
+    )
+
+    once = ingestor.ingest(_run_state(), first)
+    twice = ingestor.ingest(once, blank)
+    third = ingestor.ingest(once, missing)
+
+    assert twice.facts == []
+    assert third.facts == []
+
+
+def test_reingesting_failed_result_without_text_removes_existing_fact():
+    ingestor = AgentResultIngestor()
+    first = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+    failed = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text=None,
+        error="Carrier lookup failed.",
+    )
+    canceled = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="canceled",
+        text="",
+    )
+
+    once = ingestor.ingest(_run_state(), first)
+    failed_update = ingestor.ingest(once, failed)
+    canceled_update = ingestor.ingest(once, canceled)
+
+    assert failed_update.facts == []
+    assert canceled_update.facts == []

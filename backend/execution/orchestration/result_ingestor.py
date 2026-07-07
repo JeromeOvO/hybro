@@ -169,6 +169,7 @@ class AgentResultIngestor:
             for fact in state.facts
             if isinstance(fact, dict)
         }
+        existing_fact = existing_facts_by_id.get(fact_id)
         if text:
             fact_record = {
                 "fact_id": fact_id,
@@ -177,13 +178,22 @@ class AgentResultIngestor:
                 "kind": "agent_text",
                 "text": text,
             }
-            existing_fact = existing_facts_by_id.get(fact_id)
             if existing_fact is None:
                 state.facts.append(fact_record)
                 return True
             if any(existing_fact.get(key) != value for key, value in fact_record.items()):
                 existing_fact.update(fact_record)
                 return True
+        elif existing_fact is not None:
+            state.facts = [
+                fact
+                for fact in state.facts
+                if not (
+                    isinstance(fact, dict)
+                    and fact.get("fact_id") == fact_id
+                )
+            ]
+            return True
         return False
 
 
