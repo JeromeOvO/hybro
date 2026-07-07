@@ -209,3 +209,13 @@ def test_completion_evidence_confidence_must_be_normalized():
             final_answer_intent="answer_user",
             confidence=1.5,
         )
+
+    with pytest.raises(Exception, match="confidence"):
+        CompletionEvidence(
+            satisfied_criteria=["criterion-1"],
+            referenced_fact_ids=["fact-1"],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=float("nan"),
+        )

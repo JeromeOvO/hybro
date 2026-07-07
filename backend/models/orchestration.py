@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -126,7 +127,7 @@ class CompletionEvidence(BaseModel):
     @field_validator("confidence")
     @classmethod
     def _confidence_range(cls, value: float) -> float:
-        if value < 0.0 or value > 1.0:
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
         return value
 
