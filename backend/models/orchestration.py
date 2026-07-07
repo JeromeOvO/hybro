@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from common.utils.time import utcnow
 
@@ -68,6 +68,81 @@ class PlannerQuestion(BaseModel):
     choices: list[str] | None = None
 
 
+class AuthorizationBasis(BaseModel):
+    kind: Literal["room_member", "saved_group_member", "explicit_selection", "mention"]
+    room_id: str | None = None
+    group_id: str | None = None
+    selected_by_user_id: str | None = None
+    checked_at: datetime = Field(default_factory=utcnow)
+
+
+class CandidateAgentSnapshot(BaseModel):
+    agent_id: str
+    name: str | None = None
+    role: str | None = None
+    capability_summary: str = ""
+    status: str | None = None
+    source: str | None = None
+
+
+class CandidateScopeSnapshot(BaseModel):
+    snapshot_id: str
+    revision: int = 1
+    source: str
+    room_id: str
+    group_id: str | None = None
+    agent_ids: list[str]
+    agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
+    room_membership_version: str | None = None
+    group_version: str | None = None
+    resolved_at: datetime = Field(default_factory=utcnow)
+    authorization_basis: AuthorizationBasis | None = None
+
+    @field_validator("revision")
+    @classmethod
+    def _revision_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("revision must be at least 1")
+        return value
+
+
+class ParticipantSnapshot(BaseModel):
+    mode: Literal["direct", "sequential", "debate"]
+    ordered_agent_ids: list[str]
+    current_round: int = 0
+    max_rounds: int | None = None
+    turn_policy: Literal["all_once", "sequential_rounds", "debate_rounds"] = "all_once"
+    completed_agent_ids: list[str] = Field(default_factory=list)
+
+
+class CompletionEvidence(BaseModel):
+    satisfied_criteria: list[str] = Field(default_factory=list)
+    referenced_fact_ids: list[str] = Field(default_factory=list)
+    referenced_artifact_keys: list[str] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    final_answer_intent: str
+    confidence: float
+
+    @field_validator("confidence")
+    @classmethod
+    def _confidence_range(cls, value: float) -> float:
+        if value < 0.0 or value > 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        return value
+
+
+class ActiveDispatchRef(BaseModel):
+    agent_message_id: str
+    agent_id: str
+    status: str
+
+
+class PlannerActionRecord(BaseModel):
+    action: str
+    reasoning: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class PlannerAction(BaseModel):
     planner_action_schema_version: int = 2
     action: PlannerActionType
@@ -76,6 +151,7 @@ class PlannerAction(BaseModel):
     questions: list[PlannerQuestion] = Field(default_factory=list)
     synthesis_instruction: str | None = None
     failure_reason: str | None = None
+    completion_evidence: CompletionEvidence | None = None
 
 
 class DispatchIntent(BaseModel):
@@ -104,6 +180,7 @@ class OrchestrationRunState(BaseModel):
     user_message_id: str
     goal: str
     candidate_agent_ids: list[str]
+    candidate_scope: CandidateScopeSnapshot | None = None
     client_request_id: str | None = None
     status: OrchestrationStatus = OrchestrationStatus.CREATED
     schema_version: int = 2
@@ -120,6 +197,11 @@ class OrchestrationRunState(BaseModel):
     summary_message_id: str | None = None
     step_budget: int = 8
     steps_used: int = 0
+    participant_snapshot: ParticipantSnapshot | None = None
+    system_agent_message_id: str | None = None
+    active_dispatches: list[ActiveDispatchRef] = Field(default_factory=list)
+    last_planner_action: PlannerActionRecord | None = None
+    completion_evidence: CompletionEvidence | None = None
     terminal_reason: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
