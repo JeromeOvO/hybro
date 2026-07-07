@@ -55,6 +55,33 @@ def test_canonical_artifact_key_uses_stable_hash_without_id():
     )
 
 
+def test_canonical_artifact_key_fallback_ignores_projection_owned_fields():
+    artifact = {
+        "name": "Quote",
+        "parts": [{"kind": "text", "text": "payload"}],
+        "artifact_key": "bogus-key-1",
+        "source_agent_message_id": "bogus-message-1",
+        "source_agent_id": "bogus-agent-1",
+        "summary": "Bogus summary 1",
+    }
+    same_payload_different_projection = {
+        "name": "Quote",
+        "parts": [{"kind": "text", "text": "payload"}],
+        "artifact_key": "bogus-key-2",
+        "source_agent_message_id": "bogus-message-2",
+        "source_agent_id": "bogus-agent-2",
+        "summary": "Bogus summary 2",
+    }
+
+    assert canonical_artifact_key("agent-msg-1", 0, artifact) == (
+        canonical_artifact_key(
+            "agent-msg-1",
+            0,
+            same_payload_different_projection,
+        )
+    )
+
+
 def test_ingest_adds_output_and_artifact_records_without_mutating_input():
     state = _run_state(state_version=4)
     original_dump = state.model_dump()
@@ -426,6 +453,50 @@ def test_reingesting_existing_artifact_ignores_payload_projection_fields():
             "summary": "Payload summary",
         }
     ]
+
+
+def test_reingesting_no_id_artifact_ignores_projection_fields_for_identity():
+    ingestor = AgentResultIngestor()
+    first = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {
+                "name": "Quote",
+                "parts": [{"kind": "text", "text": "payload"}],
+                "artifact_key": "bogus-key-1",
+                "source_agent_message_id": "bogus-message-1",
+                "source_agent_id": "bogus-agent-1",
+                "summary": "Bogus summary 1",
+            }
+        ],
+    )
+    second = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {
+                "name": "Quote",
+                "parts": [{"kind": "text", "text": "payload"}],
+                "artifact_key": "bogus-key-2",
+                "source_agent_message_id": "bogus-message-2",
+                "source_agent_id": "bogus-agent-2",
+                "summary": "Bogus summary 2",
+            }
+        ],
+    )
+
+    once = ingestor.ingest(_run_state(), first)
+    twice = ingestor.ingest(once, second)
+
+    assert len(twice.artifacts) == 1
+    assert twice.agent_outputs[0].artifact_keys == once.agent_outputs[0].artifact_keys
+    assert twice.artifacts[0]["artifact_key"] == once.artifacts[0]["artifact_key"]
+    assert twice.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
+    assert twice.artifacts[0]["source_agent_id"] == "agent-1"
+    assert twice.artifacts[0]["summary"] == "Bogus summary 2"
 
 
 def test_reingesting_blank_text_removes_existing_fact():

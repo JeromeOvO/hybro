@@ -46,7 +46,16 @@ def canonical_artifact_key(
         if value is not None and str(value):
             return f"{agent_message_id}:{canonical_field}:{value}"
 
-    stable_json = json.dumps(artifact, sort_keys=True, default=str)
+    artifact_identity_payload = {
+        key: value
+        for key, value in artifact.items()
+        if key not in _PROJECTION_OWNED_ARTIFACT_FIELDS
+    }
+    stable_json = json.dumps(
+        artifact_identity_payload,
+        sort_keys=True,
+        default=str,
+    )
     digest = hashlib.sha256(stable_json.encode("utf-8")).hexdigest()[:16]
     return f"{agent_message_id}:{index}:{digest}"
 
