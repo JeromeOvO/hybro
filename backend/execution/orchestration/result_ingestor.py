@@ -82,6 +82,19 @@ class AgentResultIngestor:
             for artifact in state.artifacts
             if isinstance(artifact, dict)
         }
+        existing_output = next(
+            (
+                output
+                for output in state.agent_outputs
+                if output.agent_message_id == result.agent_message_id
+            ),
+            None,
+        )
+        previous_artifact_keys = (
+            set(existing_output.artifact_keys)
+            if existing_output is not None
+            else set()
+        )
         result_artifact_keys: list[str] = []
         for index, artifact in enumerate(result.artifacts):
             artifact_payload = copy.deepcopy(artifact)
@@ -114,10 +127,17 @@ class AgentResultIngestor:
                 artifact
                 for artifact in state.artifacts
                 if not (
-                    isinstance(artifact, dict)
-                    and artifact.get("source_agent_message_id")
-                    == result.agent_message_id
-                    and artifact.get("artifact_key") not in current_artifact_keys
+                    (
+                        isinstance(artifact, dict)
+                        and artifact.get("source_agent_message_id")
+                        == result.agent_message_id
+                        and artifact.get("artifact_key") not in current_artifact_keys
+                    )
+                    or (
+                        isinstance(artifact, dict)
+                        and artifact.get("artifact_key") in previous_artifact_keys
+                        and artifact.get("artifact_key") not in current_artifact_keys
+                    )
                 )
             ]
             if retained_artifacts != state.artifacts:

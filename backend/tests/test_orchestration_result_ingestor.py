@@ -9,7 +9,7 @@ from execution.orchestration.result_ingestor import (
     AgentResultRead,
     canonical_artifact_key,
 )
-from models.orchestration import OrchestrationRunState
+from models.orchestration import AgentOutputRecord, OrchestrationRunState
 
 
 def _run_state(**overrides):
@@ -482,3 +482,53 @@ def test_ingest_artifact_summary_falls_back_to_description():
     updated = AgentResultIngestor().ingest(_run_state(), result)
 
     assert updated.artifacts[0]["summary"] == "Detailed quote description"
+
+
+def test_reingesting_no_artifacts_removes_legacy_artifact_without_source_metadata():
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                artifact_keys=["agent-msg-1:artifact_id:old"],
+            ),
+            AgentOutputRecord(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status="completed",
+                artifact_keys=["agent-msg-2:artifact_id:other"],
+            ),
+        ],
+        artifacts=[
+            {
+                "artifact_key": "agent-msg-1:artifact_id:old",
+                "artifact_id": "old",
+                "name": "Old quote",
+            },
+            {
+                "artifact_key": "agent-msg-2:artifact_id:other",
+                "artifact_id": "other",
+                "name": "Other quote",
+            },
+        ],
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[],
+    )
+
+    updated = AgentResultIngestor().ingest(state, result)
+
+    output = next(
+        output
+        for output in updated.agent_outputs
+        if output.agent_message_id == "agent-msg-1"
+    )
+    assert output.artifact_keys == []
+    assert [
+        artifact["artifact_key"]
+        for artifact in updated.artifacts
+    ] == ["agent-msg-2:artifact_id:other"]
