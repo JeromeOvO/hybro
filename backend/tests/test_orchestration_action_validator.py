@@ -526,6 +526,25 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
         )
 
 
+def test_complete_rejects_unresolved_non_blocking_open_question():
+    action = _complete_action()
+
+    with pytest.raises(PlannerActionValidationError, match="unresolved questions"):
+        PlannerActionValidator.validate(
+            action,
+            run_state=_state_for_validation(
+                open_questions=[
+                    {
+                        "question_id": "question-1",
+                        "text": "Need more detail",
+                        "resolved": False,
+                        "blocking": False,
+                    }
+                ]
+            ),
+        )
+
+
 def test_complete_accepts_valid_evidence():
     action = _complete_action()
 

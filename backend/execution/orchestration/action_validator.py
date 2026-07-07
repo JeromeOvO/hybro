@@ -110,12 +110,12 @@ class PlannerActionValidator:
             raise PlannerActionValidationError(
                 "complete action is blocked by active dispatches"
             )
-        blocking_questions = [
+        unresolved_questions = [
             question
             for question in run_state.open_questions
-            if not question.get("resolved") and question.get("blocking", True)
+            if not question.get("resolved")
         ]
-        if blocking_questions or evidence.unresolved_questions:
+        if unresolved_questions or evidence.unresolved_questions:
             raise PlannerActionValidationError(
                 "complete action is blocked by unresolved questions"
             )
