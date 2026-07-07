@@ -4,6 +4,8 @@ from execution.orchestration.candidate_scope import (
     candidate_scope_from_legacy_envelope,
     normalize_candidate_scope,
 )
+from models.orchestration import CandidateAgentSnapshot, CandidateScopeSnapshot
+from models.supervisor import AgentProfile
 
 
 def test_normalize_candidate_scope_from_mapping_preserves_order_and_names():
@@ -54,6 +56,81 @@ def test_normalize_candidate_scope_treats_single_object_as_one_agent():
 
     assert scope.agent_ids == ["agent-1"]
     assert [agent.name for agent in scope.agents] == ["Agent One"]
+
+
+def test_normalize_candidate_scope_partial_mapping_preserves_all_agent_ids():
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="explicit_selection",
+        selected_agent_set={
+            "agent_ids": ["agent-a", "agent-b"],
+            "agents": [
+                {
+                    "agent_id": "agent-a",
+                    "name": "Broker",
+                    "capability_summary": "Collects broker requirements.",
+                    "status": "active",
+                }
+            ],
+        },
+    )
+
+    assert scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in scope.agents] == ["agent-a", "agent-b"]
+    assert scope.agents[0].name == "Broker"
+    assert scope.agents[0].capability_summary == "Collects broker requirements."
+    assert scope.agents[0].status == "active"
+    assert scope.agents[1].name is None
+
+
+def test_normalize_candidate_scope_object_snapshot_preserves_all_agent_ids():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-a", "agent-b"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-a",
+                name="Broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+            )
+        ],
+    )
+
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="explicit_selection",
+        selected_agent_set=snapshot,
+    )
+
+    assert scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in scope.agents] == ["agent-a", "agent-b"]
+    assert scope.agents[0].name == "Broker"
+    assert scope.agents[0].capability_summary == "Collects broker requirements."
+    assert scope.agents[0].status == "active"
+    assert scope.agents[1].name is None
+
+
+def test_normalize_candidate_scope_agent_profile_preserves_metadata():
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="explicit_selection",
+        selected_agent_set=AgentProfile(
+            agent_id="agent-1",
+            agent_name="Broker",
+            description="Handles broker intake.",
+            capabilities=["quotes", "risk"],
+            is_healthy=False,
+        ),
+    )
+
+    assert scope.agent_ids == ["agent-1"]
+    assert scope.agents[0].name == "Broker"
+    assert scope.agents[0].capability_summary == "Handles broker intake."
+    assert scope.agents[0].status == "inactive"
 
 
 def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():
