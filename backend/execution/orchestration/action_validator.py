@@ -40,6 +40,8 @@ class PlannerActionValidator:
             steps_used = run_state.steps_used
             step_budget = run_state.step_budget
             has_agent_output = bool(run_state.agent_outputs)
+            if action.action == PlannerActionType.COMPLETE:
+                has_agent_output = bool(run_state.agent_outputs or run_state.facts)
 
         if steps_used >= step_budget and action.action not in (
             PlannerActionType.SYNTHESIZE,

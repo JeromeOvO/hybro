@@ -532,6 +532,18 @@ def test_complete_accepts_valid_evidence():
     assert PlannerActionValidator.validate(action, run_state=_state_for_validation()) is action
 
 
+def test_complete_accepts_valid_evidence_with_facts_only():
+    action = _complete_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_state_for_validation(agent_outputs=[]),
+        )
+        is action
+    )
+
+
 @pytest.mark.parametrize(
     ("legacy_action", "planner_action"),
     [
