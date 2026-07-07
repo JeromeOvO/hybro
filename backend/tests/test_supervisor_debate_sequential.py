@@ -243,6 +243,40 @@ class PrematureCompleteDebatePlanner:
         return _debate_complete_action()
 
 
+class PrematureSynthesizeDebatePlanner:
+    """Planner fixture that synthesizes after only the first debate response."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        if "a1" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Ask Alpha first",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id="a1",
+                        agent_name="Alpha",
+                        task=context.message_text,
+                    )
+                ],
+            )
+        if "a2" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.SYNTHESIZE,
+                reasoning="Summarize before Beta responds",
+                synthesis_instruction="Summarize the debate so far",
+            )
+        return _debate_complete_action()
+
+
 def _debate_complete_action() -> PlannerAction:
     return PlannerAction(
         action=PlannerActionType.COMPLETE,
@@ -851,6 +885,50 @@ class TestSequentialDebateDispatch:
 
         assert result.status == RunStatus.COMPLETED
         assert dispatch_calls == [["a1"], ["a2"]]
+        assert result.trajectory is None
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_does_not_synthesize_before_required_turns(self, se):
+        se.orchestration_planner = PrematureSynthesizeDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+        se._run_synthesis_action = AsyncMock(
+            side_effect=AssertionError("synthesis should wait for all debate turns")
+        )
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        se._run_synthesis_action.assert_not_awaited()
         assert result.trajectory is None
 
     @pytest.mark.asyncio

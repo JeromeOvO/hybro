@@ -986,7 +986,10 @@ class SupervisorExecutor:
                 next_agent_id,
             )
 
-        if planner_action.action == PlannerActionType.COMPLETE:
+        if planner_action.action in {
+            PlannerActionType.COMPLETE,
+            PlannerActionType.SYNTHESIZE,
+        }:
             return SupervisorExecutor._delegate_action_for_next_participant(
                 state,
                 planner_action,
