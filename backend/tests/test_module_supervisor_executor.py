@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.utils.time import utcnow
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
@@ -40,6 +41,7 @@ from models.supervisor import (
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
+    TrajectoryEntry,
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -368,6 +370,89 @@ def test_compat_trajectory_projects_completed_agent_output_as_success():
     assert projected.status == StepStatus.SUCCESS
     assert projected.success is True
     assert projected.response_text == "Completed agent output is visible."
+
+
+def test_v2_result_from_output_record_projects_completed_status_as_success():
+    intent = DispatchIntent(
+        step_id="msg-1:step-1",
+        step_target_id="msg-1:step-1:target-1",
+        dispatch_intent_id="msg-1:step-1:target-1:intent",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        task="Find pricing",
+        task_hash="hash",
+    )
+    output = AgentOutputRecord(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Recovered completed output.",
+    )
+
+    result = SupervisorExecutor._v2_result_from_output_record(
+        intent,
+        output,
+        {"agent-1": "Agent One"},
+        1,
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.SUCCESS
+    assert result.success is True
+    assert result.response_text == "Recovered completed output."
+
+
+def test_resolve_pending_results_from_outputs_projects_completed_status_as_success():
+    state = OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=["agent-1"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="Pending output finished.",
+            )
+        ],
+    )
+    entry = TrajectoryEntry(
+        step_number=1,
+        action=SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="Wait for agent",
+            targets=[
+                DelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Find pricing",
+                )
+            ],
+        ),
+        results=[
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Find pricing",
+                response_text="",
+                success=False,
+                status=StepStatus.PAUSED,
+                agent_message_id="agent-msg-1",
+            )
+        ],
+        started_at=utcnow(),
+    )
+
+    SupervisorExecutor._resolve_v2_pending_results_from_outputs(state, entry)
+
+    resolved = entry.results[0]
+    assert resolved.status == StepStatus.SUCCESS
+    assert resolved.success is True
+    assert resolved.response_text == "Pending output finished."
+    assert entry.completed_at is not None
 
 
 @pytest.mark.asyncio

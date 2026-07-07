@@ -1510,7 +1510,11 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
             questions=[{"prompt": "Which account?", "prompt_type": "text"}],
         )
     )
-    first_executor = _executor(store=store, planner=first_planner, user_message=user_message)
+    first_executor = _executor(
+        store=store,
+        planner=first_planner,
+        user_message=user_message,
+    )
     first_executor.hitl_coordinator = SimpleNamespace(
         request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
     )
@@ -1539,7 +1543,11 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
             failure_reason="stop after inspecting context",
         )
     )
-    second_executor = _executor(store=store, planner=second_planner, user_message=user_message)
+    second_executor = _executor(
+        store=store,
+        planner=second_planner,
+        user_message=user_message,
+    )
 
     second_result = await second_executor.run(
         room_id="room-1",
@@ -1568,6 +1576,76 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
         and question.get("answer") == "Account A"
         for question in state.open_questions
     )
+
+
+@pytest.mark.asyncio
+async def test_run_supervisor_hitl_reply_allows_complete_after_question_resolves():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    first_executor = _executor(store=store, planner=first_planner, user_message=user_message)
+    first_executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    first_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    first_result = await first_executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+    assert first_result.status == RunStatus.AWAITING_INPUT
+
+    second_planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="user supplied enough information",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["User selected an account"],
+                final_answer_intent="Use Account A",
+                confidence=0.9,
+            ),
+        )
+    )
+    second_executor = _executor(store=store, planner=second_planner, user_message=user_message)
+
+    result = await second_executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        resumed_trajectory=SupervisorTrajectory(hitl_user_reply="Account A"),
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    state = await store.get_run("message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.COMPLETED
+    assert state.open_questions[0]["resolved"] is True
 
 
 @pytest.mark.asyncio

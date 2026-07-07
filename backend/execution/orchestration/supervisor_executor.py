@@ -1427,12 +1427,16 @@ class SupervisorExecutor:
         agent_names: dict[str, str],
         step_number: int,
     ) -> StepResult | None:
-        if output is None or output.status not in {
-            StepStatus.SUCCESS.value,
-            StepStatus.FAILED.value,
-        }:
+        if output is None:
             return None
-        status = StepStatus(output.status)
+        status = SupervisorExecutor._step_status_from_state_output_status(
+            output.status
+        )
+        if status not in {StepStatus.SUCCESS, StepStatus.FAILED}:
+            return None
+        error_message = output.error
+        if status == StepStatus.FAILED and not error_message:
+            error_message = f"Agent output status: {output.status}"
         return StepResult(
             step_number=step_number,
             agent_id=output.agent_id or intent.agent_id,
@@ -1441,7 +1445,7 @@ class SupervisorExecutor:
             response_text=output.text or "",
             success=status == StepStatus.SUCCESS,
             status=status,
-            error_message=output.error,
+            error_message=error_message,
             agent_message_id=output.agent_message_id,
             completed_at=utcnow(),
         )
@@ -1698,6 +1702,7 @@ class SupervisorExecutor:
                 if question.get("request_id") not in resolved_request_ids:
                     continue
                 question["status"] = "resolved"
+                question["resolved"] = True
                 question["answer"] = answer
                 question["resolved_at"] = resolved_at
                 prompt = question.get("prompt")
@@ -1917,12 +1922,16 @@ class SupervisorExecutor:
             output = outputs_by_message_id.get(message_id)
             if output is None:
                 continue
-            try:
-                output_status = StepStatus(output.status)
-            except ValueError:
+            output_status = SupervisorExecutor._step_status_from_state_output_status(
+                output.status
+            )
+            if output_status is None:
                 continue
             if output_status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
                 continue
+            error_message = output.error
+            if output_status == StepStatus.FAILED and not error_message:
+                error_message = f"Agent output status: {output.status}"
             entry.results[index] = StepResult(
                 step_number=entry.step_number,
                 agent_id=result.agent_id,
@@ -1931,7 +1940,7 @@ class SupervisorExecutor:
                 response_text=output.text or "",
                 success=output_status == StepStatus.SUCCESS,
                 status=output_status,
-                error_message=output.error,
+                error_message=error_message,
                 agent_message_id=message_id,
                 completed_at=utcnow(),
             )
