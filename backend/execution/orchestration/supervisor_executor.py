@@ -342,14 +342,18 @@ class SupervisorExecutor:
         step_number: int,
         agent_names: dict[str, str],
     ) -> StepResult | None:
-        try:
-            status = StepStatus(output.status)
-        except ValueError:
+        status = SupervisorExecutor._step_status_from_state_output_status(
+            output.status
+        )
+        if status is None:
             return None
         agent_id = output.agent_id or (intent.agent_id if intent else "")
         if not agent_id:
             return None
         task = intent.task if intent is not None else "Agent response"
+        error_message = output.error
+        if status == StepStatus.FAILED and not error_message:
+            error_message = f"Agent output status: {output.status}"
         return StepResult(
             step_number=step_number,
             agent_id=agent_id,
@@ -358,10 +362,39 @@ class SupervisorExecutor:
             response_text=output.text or "",
             success=status == StepStatus.SUCCESS,
             status=status,
-            error_message=output.error,
+            error_message=error_message,
             agent_message_id=output.agent_message_id,
             completed_at=utcnow(),
         )
+
+    @staticmethod
+    def _step_status_from_state_output_status(status: str) -> StepStatus | None:
+        normalized = (status or "").strip().lower()
+        if normalized in {
+            StepStatus.SUCCESS.value,
+            "completed",
+            "complete",
+            "succeeded",
+            "done",
+        }:
+            return StepStatus.SUCCESS
+        if normalized in {
+            StepStatus.FAILED.value,
+            "failure",
+            "error",
+            "errored",
+            "canceled",
+            "cancelled",
+            "rejected",
+            "timeout",
+            "timed_out",
+        }:
+            return StepStatus.FAILED
+        if normalized == StepStatus.PAUSED.value:
+            return StepStatus.PAUSED
+        if normalized == StepStatus.AWAITING_INPUT.value:
+            return StepStatus.AWAITING_INPUT
+        return None
 
     async def _log_state_and_return(
         self,

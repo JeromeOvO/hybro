@@ -332,6 +332,44 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
     assert result.run_state.status == OrchestrationStatus.COMPLETED
 
 
+def test_compat_trajectory_projects_completed_agent_output_as_success():
+    state = OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.RUNNING,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-1",
+                dispatch_intent_id="msg-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Find pricing",
+                task_hash="hash",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="Completed agent output is visible.",
+            )
+        ],
+    )
+
+    trajectory = SupervisorExecutor._compat_trajectory_from_state(state)
+
+    assert len(trajectory.entries) == 1
+    projected = trajectory.entries[0].results[0]
+    assert projected.status == StepStatus.SUCCESS
+    assert projected.success is True
+    assert projected.response_text == "Completed agent output is visible."
+
+
 @pytest.mark.asyncio
 async def test_supervisor_generic_failed_result_does_not_create_preflight_task():
     se = _make_supervisor_executor()
