@@ -202,8 +202,8 @@ class SupervisorExecutor:
             terminal_reason=state.terminal_reason,
         )
 
+    @staticmethod
     def _compat_trajectory_from_state(
-        self,
         state: OrchestrationRunState,
     ) -> SupervisorTrajectory:
         trajectory = SupervisorTrajectory()
@@ -214,7 +214,154 @@ class SupervisorExecutor:
             trajectory.debate_agent_ids = list(
                 state.participant_snapshot.ordered_agent_ids
             )
+        if state.status == OrchestrationStatus.COMPLETED:
+            trajectory.status = TrajectoryStatus.COMPLETED
+        elif state.status == OrchestrationStatus.CANCELED:
+            trajectory.status = TrajectoryStatus.CANCELED
+        elif state.status == OrchestrationStatus.AWAITING_USER:
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+        elif state.status in (
+            OrchestrationStatus.FAILED,
+            OrchestrationStatus.BUDGET_EXHAUSTED,
+        ):
+            trajectory.status = TrajectoryStatus.FAILED
+
+        agent_names = SupervisorExecutor._state_agent_names(state)
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        projected_message_ids: set[str] = set()
+        intents_by_step: dict[str, list[DispatchIntent]] = {}
+        for intent in state.dispatch_intents:
+            intents_by_step.setdefault(intent.step_id, []).append(intent)
+
+        for step_id, intents in intents_by_step.items():
+            results: list[StepResult] = []
+            for intent in intents:
+                output = outputs_by_message_id.get(intent.planned_agent_message_id)
+                if output is None:
+                    continue
+                result = SupervisorExecutor._step_result_from_state_output(
+                    output=output,
+                    intent=intent,
+                    step_number=SupervisorExecutor._step_number_from_step_id(step_id),
+                    agent_names=agent_names,
+                )
+                if result is None:
+                    continue
+                results.append(result)
+                projected_message_ids.add(output.agent_message_id)
+            if not results:
+                continue
+            trajectory.entries.append(
+                TrajectoryEntry(
+                    step_number=SupervisorExecutor._step_number_from_step_id(step_id),
+                    action=SupervisorAction(
+                        action=ActionType.DELEGATE,
+                        reasoning="Projected from orchestration run state",
+                        targets=[
+                            DelegateTarget(
+                                agent_id=intent.agent_id,
+                                agent_name=agent_names.get(intent.agent_id)
+                                or intent.agent_id,
+                                task=intent.task,
+                            )
+                            for intent in intents
+                        ],
+                    ),
+                    results=results,
+                    started_at=utcnow(),
+                    completed_at=utcnow(),
+                )
+            )
+
+        next_step_number = (
+            max((entry.step_number for entry in trajectory.entries), default=0) + 1
+        )
+        for output in state.agent_outputs:
+            if output.agent_message_id in projected_message_ids:
+                continue
+            result = SupervisorExecutor._step_result_from_state_output(
+                output=output,
+                intent=None,
+                step_number=next_step_number,
+                agent_names=agent_names,
+            )
+            if result is None:
+                continue
+            trajectory.entries.append(
+                TrajectoryEntry(
+                    step_number=next_step_number,
+                    action=SupervisorAction(
+                        action=ActionType.DELEGATE,
+                        reasoning="Projected orphan agent output from orchestration run state",
+                        targets=[
+                            DelegateTarget(
+                                agent_id=result.agent_id,
+                                agent_name=result.agent_name,
+                                task=result.task,
+                            )
+                        ],
+                    ),
+                    results=[result],
+                    started_at=utcnow(),
+                    completed_at=utcnow(),
+                )
+            )
+            next_step_number += 1
         return trajectory
+
+    @staticmethod
+    def _state_agent_names(state: OrchestrationRunState) -> dict[str, str]:
+        names: dict[str, str] = {}
+        if state.candidate_scope is not None:
+            for candidate in state.candidate_scope.agents:
+                names[candidate.agent_id] = candidate.name or candidate.agent_id
+        for output in state.agent_outputs:
+            names.setdefault(output.agent_id, output.agent_id)
+        for intent in state.dispatch_intents:
+            names.setdefault(intent.agent_id, intent.agent_id)
+        return names
+
+    @staticmethod
+    def _step_number_from_step_id(step_id: str) -> int:
+        for part in step_id.split(":"):
+            if not part.startswith("step-"):
+                continue
+            try:
+                return int(part.removeprefix("step-"))
+            except ValueError:
+                return 1
+        return 1
+
+    @staticmethod
+    def _step_result_from_state_output(
+        *,
+        output: AgentOutputRecord,
+        intent: DispatchIntent | None,
+        step_number: int,
+        agent_names: dict[str, str],
+    ) -> StepResult | None:
+        try:
+            status = StepStatus(output.status)
+        except ValueError:
+            return None
+        agent_id = output.agent_id or (intent.agent_id if intent else "")
+        if not agent_id:
+            return None
+        task = intent.task if intent is not None else "Agent response"
+        return StepResult(
+            step_number=step_number,
+            agent_id=agent_id,
+            agent_name=agent_names.get(agent_id) or agent_id,
+            task=task,
+            response_text=output.text or "",
+            success=status == StepStatus.SUCCESS,
+            status=status,
+            error_message=output.error,
+            agent_message_id=output.agent_message_id,
+            completed_at=utcnow(),
+        )
 
     async def _log_state_and_return(
         self,
@@ -1453,6 +1600,23 @@ class SupervisorExecutor:
             )
             if request.request_id not in updated.pending_hitl_request_ids:
                 updated.pending_hitl_request_ids.append(request.request_id)
+            if not any(
+                question.get("request_id") == request.request_id
+                for question in updated.open_questions
+            ):
+                updated.open_questions.append(
+                    {
+                        "request_id": request.request_id,
+                        "source": "agent",
+                        "agent_id": awaiting_result.agent_id,
+                        "prompt": (
+                            awaiting_result.status_message
+                            or "The agent needs additional information."
+                        ),
+                        "status": "open",
+                        "created_at": utcnow().isoformat(),
+                    }
+                )
 
         state = await self._save_v2_state(
             state,
@@ -1479,23 +1643,107 @@ class SupervisorExecutor:
     async def _resolve_v2_hitl_if_answered(
         self,
         state: OrchestrationRunState,
-        trajectory: SupervisorTrajectory,
+        *,
+        user_message=None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
     ) -> OrchestrationRunState:
         if not state.pending_hitl_request_ids:
             return state
-        if not (trajectory.hitl_user_reply or trajectory.clarify_user_reply):
+        answer = self._hitl_answer_from_run_request(
+            user_message=user_message,
+            resumed_trajectory=resumed_trajectory,
+        )
+        if not answer:
             return state
 
         resolved_request_ids = list(state.pending_hitl_request_ids)
+        resolved_at = utcnow().isoformat()
+
+        def resolve_hitl(updated: OrchestrationRunState) -> None:
+            prompts: list[str] = []
+            for question in updated.open_questions:
+                if question.get("request_id") not in resolved_request_ids:
+                    continue
+                question["status"] = "resolved"
+                question["answer"] = answer
+                question["resolved_at"] = resolved_at
+                prompt = question.get("prompt")
+                if isinstance(prompt, str) and prompt:
+                    prompts.append(prompt)
+            updated.facts.append(
+                {
+                    "fact_id": (
+                        f"{state.run_id}:hitl-reply:{state.state_version + 1}"
+                    ),
+                    "source": "hitl_user_reply",
+                    "text": answer,
+                    "request_ids": resolved_request_ids,
+                    "question_prompts": prompts,
+                    "created_at": resolved_at,
+                }
+            )
+            updated.pending_hitl_request_ids.clear()
+
         resolved_state = await self._save_v2_state(
             state,
             event_type=OrchestrationEventType.HITL_RESOLVED,
-            payload={"request_ids": resolved_request_ids},
-            mutate=lambda updated: updated.pending_hitl_request_ids.clear(),
+            payload={
+                "request_ids": resolved_request_ids,
+                "answer_recorded": True,
+            },
+            mutate=resolve_hitl,
         )
-        trajectory.hitl_user_reply = None
-        trajectory.clarify_user_reply = None
+        if resumed_trajectory is not None:
+            resumed_trajectory.hitl_user_reply = None
+            resumed_trajectory.clarify_user_reply = None
         return resolved_state
+
+    @classmethod
+    def _hitl_answer_from_run_request(
+        cls,
+        *,
+        user_message=None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
+    ) -> str | None:
+        if resumed_trajectory is not None:
+            for value in (
+                resumed_trajectory.hitl_user_reply,
+                resumed_trajectory.clarify_user_reply,
+            ):
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        extend_info = getattr(user_message, "extend_info", None)
+        if isinstance(extend_info, Mapping):
+            for envelope in cls._hitl_answer_envelopes(extend_info):
+                answer = cls._hitl_answer_from_mapping(envelope)
+                if answer:
+                    return answer
+        return None
+
+    @staticmethod
+    def _hitl_answer_envelopes(
+        extend_info: Mapping[str, Any],
+    ) -> list[Mapping[str, Any]]:
+        envelopes: list[Mapping[str, Any]] = [extend_info]
+        for key in ("orchestration", "orchestration_run", "resumed_trajectory"):
+            nested = extend_info.get(key)
+            if isinstance(nested, Mapping):
+                envelopes.append(nested)
+        return envelopes
+
+    @staticmethod
+    def _hitl_answer_from_mapping(envelope: Mapping[str, Any]) -> str | None:
+        for key in (
+            "hitl_user_reply",
+            "clarify_user_reply",
+            "hitl_reply",
+            "user_reply",
+            "user_input",
+        ):
+            value = envelope.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     async def _v2_terminal_result_if_done(
         self,
@@ -1864,9 +2112,26 @@ class SupervisorExecutor:
                 for request_id in updated.pending_hitl_request_ids
                 if request_id not in pending_request_ids
             ]
-            for request_id in created_request_ids:
+            for index, request_id in enumerate(created_request_ids):
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
+                if any(
+                    question.get("request_id") == request_id
+                    for question in updated.open_questions
+                ):
+                    continue
+                question = questions[min(index, len(questions) - 1)]
+                updated.open_questions.append(
+                    {
+                        "request_id": request_id,
+                        "source": "supervisor",
+                        "prompt": question.prompt,
+                        "prompt_type": question.prompt_type,
+                        "choices": question.choices,
+                        "status": "open",
+                        "created_at": utcnow().isoformat(),
+                    }
+                )
 
         state = await self._save_v2_state(
             state,
@@ -2256,7 +2521,8 @@ class SupervisorExecutor:
         if resumed_trajectory is not None:
             state = await self._resolve_v2_hitl_if_answered(
                 state,
-                resumed_trajectory,
+                user_message=user_message,
+                resumed_trajectory=resumed_trajectory,
             )
             state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
                 state,

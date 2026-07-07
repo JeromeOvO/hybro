@@ -52,6 +52,7 @@ from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId, RoomAgentMessage
 from models.supervisor import (
+    ActionType,
     AgentProfile,
     RoomConfig,
     RunStatus,
@@ -503,6 +504,36 @@ class RoomMessageCenter:
     def _assembled_context_text(assembled) -> str:
         metadata = getattr(assembled, "metadata", {}) or {}
         return metadata.get("context", "")
+
+    @staticmethod
+    def _compat_trajectory_for_supervisor_result(
+        result: SupervisorRunResult,
+    ) -> SupervisorTrajectory | None:
+        if result.trajectory is not None:
+            return result.trajectory
+        if result.run_state is None:
+            return None
+        return SupervisorExecutor._compat_trajectory_from_state(result.run_state)
+
+    @classmethod
+    def _trajectory_responses_from_supervisor_result(
+        cls,
+        result: SupervisorRunResult,
+    ) -> list[dict]:
+        trajectory = cls._compat_trajectory_for_supervisor_result(result)
+        if trajectory is None:
+            return []
+        return [
+            {
+                "agent_id": step.agent_id,
+                "agent_name": step.agent_name or step.agent_id,
+                "message": step.response_text,
+            }
+            for entry in trajectory.entries
+            if entry.action.action == ActionType.DELEGATE
+            for step in entry.results
+            if step.success and step.response_text
+        ]
 
     async def _refresh_supervisor_conversation_context(
         self,
@@ -2356,17 +2387,9 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
-                from models.supervisor import ActionType  # noqa: PLC0415
-
-                trajectory_responses = [
-                    {"agent_name": step.agent_name, "message": step.response_text}
-                    for entry in (
-                        result_trajectory.entries if result_trajectory else []
-                    )
-                    if entry.action.action == ActionType.DELEGATE
-                    for step in entry.results
-                    if step.success and step.response_text
-                ]
+                trajectory_responses = (
+                    self._trajectory_responses_from_supervisor_result(result)
+                )
                 is_debate = bool(
                     room and isinstance(room.extend_info, dict)
                     and room.extend_info.get("debateMode", False)
@@ -2565,17 +2588,18 @@ class RoomMessageCenter:
         # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
         terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
         if result.status in terminal_statuses:
+            trajectory = self._compat_trajectory_for_supervisor_result(result)
             # Add synthesis text to room memory history
             if (
                 result.status == RunStatus.COMPLETED
                 and result.synthesis_text
-                and result.trajectory is not None
+                and trajectory is not None
             ):
                 try:
                     synthesis_turn_id = await self.room_memory.add_synthesis_to_history(
                         room_id=room_id,
                         synthesis_text=result.synthesis_text,
-                        trajectory=result.trajectory,
+                        trajectory=trajectory,
                     )
                     if synthesis_turn_id:
                         # Summary update and compaction are now safe to run

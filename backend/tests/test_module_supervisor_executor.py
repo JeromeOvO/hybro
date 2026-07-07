@@ -19,7 +19,14 @@ import pytest
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
-from models.orchestration import OrchestrationRunState, OrchestrationStatus
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchIntent,
+    OrchestrationRunState,
+    OrchestrationStatus,
+    PlannerAction,
+    PlannerActionType,
+)
 from models.processing import ProcessingResult, ProcessingStatus
 from models.supervisor import (
     ActionType,
@@ -254,6 +261,75 @@ async def test_execute_orchestration_loop_returns_terminal_run_state_without_tra
     assert result.run_state is not None
     assert result.run_state.status == OrchestrationStatus.COMPLETED
     assert result.terminal_reason == "already completed"
+
+
+@pytest.mark.asyncio
+async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_trajectory():
+    executor = _make_supervisor_executor()
+    executor.run_store = InMemoryOrchestrationRunStore()
+    executor.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="cr-1"
+    )
+    captured = {}
+
+    async def stream_synthesis(**kwargs):
+        captured["trajectory"] = kwargs["trajectory"]
+        return "Final synthesis"
+
+    executor._stream_supervisor_synthesis = AsyncMock(side_effect=stream_synthesis)
+    state = OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.RUNNING,
+        client_request_id="cr-1",
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-1",
+                dispatch_intent_id="msg-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Find pricing",
+                task_hash="hash",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.SUCCESS.value,
+                text="Agent found the enterprise quote.",
+            )
+        ],
+    )
+    state = await executor.run_store.create_run(state)
+
+    result = await executor._run_synthesis_action(
+        state=state,
+        planner_action=PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="Summarize",
+            synthesis_instruction="Write the final answer",
+        ),
+        room_id="room-1",
+        user_message_id="msg-1",
+        token=None,
+    )
+
+    projected = captured["trajectory"]
+    projected_texts = [
+        step.response_text
+        for entry in projected.entries
+        for step in entry.results
+        if step.success
+    ]
+    assert "Agent found the enterprise quote." in projected_texts
+    assert result.trajectory is None
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
 
 
 @pytest.mark.asyncio

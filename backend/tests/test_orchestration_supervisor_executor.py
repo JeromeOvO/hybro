@@ -1556,6 +1556,18 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
     state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == []
+    assert any(
+        fact.get("source") == "hitl_user_reply"
+        and fact.get("text") == "Account A"
+        and fact.get("request_ids") == ["hitl-1"]
+        for fact in state.facts
+    )
+    assert any(
+        question.get("request_id") == "hitl-1"
+        and question.get("status") == "resolved"
+        and question.get("answer") == "Account A"
+        for question in state.open_questions
+    )
 
 
 @pytest.mark.asyncio

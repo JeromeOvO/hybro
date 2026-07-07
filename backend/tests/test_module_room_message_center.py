@@ -22,6 +22,12 @@ from common.dto import MessageCommitted
 from execution.orchestration.room_message_center import RoomMessageCenter
 from models.agent import AgentStatus
 from models.hitl import InterruptKind
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchIntent,
+    OrchestrationRunState,
+    OrchestrationStatus,
+)
 from models.response import OrchestrationResponse
 from models.room import MessageContent, Room, RoomUserMessage
 from models.supervisor import (
@@ -689,6 +695,51 @@ def _supervisor_agent(agent_id: str, name: str):
     )
 
 
+def _completed_state_with_agent_outputs() -> OrchestrationRunState:
+    return OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=["agent-1", "agent-2"],
+        status=OrchestrationStatus.COMPLETED,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-1",
+                dispatch_intent_id="msg-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Find pricing",
+                task_hash="hash-1",
+            ),
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-2",
+                dispatch_intent_id="msg-1:step-1:target-2:intent",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Find timing",
+                task_hash="hash-2",
+            ),
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.SUCCESS.value,
+                text="Pricing is $42.",
+            ),
+            AgentOutputRecord(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status=StepStatus.SUCCESS.value,
+                text="Delivery is Friday.",
+            ),
+        ],
+    )
+
+
 @pytest.mark.asyncio
 async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
     monkeypatch,
@@ -744,6 +795,96 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
     )
 
     assert calls == {"run": 1}
+
+
+@pytest.mark.asyncio
+async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need quote"),
+        extend_info={
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "msg-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+        },
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock()
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc._emit_unified_summary = AsyncMock(return_value=("supervisor", None))
+    rmc._persist_turn_completion_kind = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc._turn_event_appender = None
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=None,
+            run_id="msg-1",
+            run_state=_completed_state_with_agent_outputs(),
+            synthesis_text="Final synthesis",
+        ),
+        room_id="room-1",
+        user_message_id="msg-1",
+        user_message=user_message,
+    )
+
+    summary_kwargs = rmc._emit_unified_summary.await_args.kwargs
+    assert summary_kwargs["trajectory_responses"] == [
+        {
+            "agent_id": "agent-1",
+            "agent_name": "agent-1",
+            "message": "Pricing is $42.",
+        },
+        {
+            "agent_id": "agent-2",
+            "agent_name": "agent-2",
+            "message": "Delivery is Friday.",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_state_run_result_adds_synthesis_history_with_projection():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.room_memory = SimpleNamespace(
+        add_synthesis_to_history=AsyncMock(return_value="turn-1"),
+    )
+    rmc._update_room_summary_safe = AsyncMock()
+    rmc._trigger_compaction_safe = AsyncMock()
+
+    await rmc._run_supervisor_terminal_post_loop_integration(
+        SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=None,
+            run_id="msg-1",
+            run_state=_completed_state_with_agent_outputs(),
+            synthesis_text="Final synthesis",
+        ),
+        room_id="room-1",
+    )
+
+    rmc.room_memory.add_synthesis_to_history.assert_awaited_once()
+    memory_kwargs = rmc.room_memory.add_synthesis_to_history.await_args.kwargs
+    projected_texts = [
+        step.response_text
+        for entry in memory_kwargs["trajectory"].entries
+        for step in entry.results
+    ]
+    assert "Pricing is $42." in projected_texts
+    rmc._update_room_summary_safe.assert_awaited_once_with(
+        "room-1",
+        "Final synthesis",
+        "turn-1",
+    )
 
 
 @pytest.mark.asyncio
