@@ -690,6 +690,63 @@ def _supervisor_agent(agent_id: str, name: str):
 
 
 @pytest.mark.asyncio
+async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
+    monkeypatch,
+):
+    calls = {"run": 0}
+
+    class Executor:
+        async def run(self, **kwargs):
+            calls["run"] += 1
+            from models.supervisor import RunStatus, SupervisorRunResult
+
+            return SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                trajectory=None,
+                run_id="msg-1",
+            )
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.supervisor_executor = Executor()
+    center.supervisor_planning_error_cls = Exception
+    center.build_turn_content = None
+    center._build_v2_supervisor_inputs = AsyncMock(
+        return_value=(
+            [SimpleNamespace(agent_id="agent-1", agent_name="Agent One")],
+            SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
+            None,
+        )
+    )
+    center._handle_supervisor_run_result = AsyncMock()
+    center._log_room_memory_stats = AsyncMock()
+    user_message = SimpleNamespace(
+        message_id="msg-1",
+        user_id="user-1",
+        client_request_id="cr-1",
+        message_content=SimpleNamespace(message_text="Need quote", attachments=[]),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "msg-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+            "candidate_scope_snapshot_version": 1,
+        },
+    )
+
+    await center._process_supervisor(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        user_message=user_message,
+        user_id="user-1",
+        quoted_text=None,
+        token=None,
+    )
+
+    assert calls == {"run": 1}
+
+
+@pytest.mark.asyncio
 async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
@@ -749,8 +806,7 @@ async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
         )
     )
     rmc.supervisor_executor = SimpleNamespace(
-        run=AsyncMock(side_effect=AssertionError("legacy run should not be used")),
-        run_v2=AsyncMock(return_value=supervisor_result),
+        run=AsyncMock(return_value=supervisor_result),
     )
     rmc.supervisor_planning_error_cls = RuntimeError
     rmc.build_turn_content = None
@@ -778,8 +834,8 @@ async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
         status_code=200,
     )
     rmc.room_runtime.inquiry_agent_messages_by_related_message_id.assert_not_awaited()
-    rmc.supervisor_executor.run.assert_not_awaited()
-    run_kwargs = rmc.supervisor_executor.run_v2.await_args.kwargs
+    rmc.supervisor_executor.run.assert_awaited_once()
+    run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
     assert [agent.agent_id for agent in run_kwargs["agent_registry"]] == [
         "agent-1",
         "agent-2",

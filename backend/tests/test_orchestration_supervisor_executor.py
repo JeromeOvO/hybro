@@ -229,6 +229,15 @@ def _agent_message(message_id: str) -> SimpleNamespace:
     )
 
 
+def _state_unification_user_message(message_id: str, extend_info: dict | None = None):
+    return SimpleNamespace(
+        message_id=message_id,
+        user_id="user-1",
+        client_request_id="cr-1",
+        extend_info=extend_info or {},
+    )
+
+
 def _executor(
     *,
     store: InMemoryOrchestrationRunStore,
@@ -296,7 +305,7 @@ def _executor(
 
 
 @pytest.mark.asyncio
-async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids():
+async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -305,7 +314,7 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -331,7 +340,7 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="@agent-2 should not widen candidate scope",
@@ -357,13 +366,13 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
     assert state is not None
     assert state.status == OrchestrationStatus.COMPLETED
     assert state.candidate_agent_ids == ["agent-1"]
-    assert state.summary_intent_id == "run-message-1:summary"
+    assert state.summary_intent_id == "message-1:summary"
     assert state.summary_message_id == "sys-message-1"
     assert len(state.dispatch_intents) == 1
 
     intent = state.dispatch_intents[0]
     assert intent.agent_id == "agent-1"
-    assert intent.planned_agent_message_id == "run-message-1:step-1:target-1:message"
+    assert intent.planned_agent_message_id == "message-1:step-1:target-1:message"
     assert state.agent_outputs[0].agent_message_id == intent.planned_agent_message_id
 
     added_message_ids = [
@@ -375,7 +384,7 @@ async def test_run_v2_uses_sidecar_scope_planner_store_and_planned_message_ids()
 
 
 @pytest.mark.asyncio
-async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
+async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -384,7 +393,7 @@ async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -411,7 +420,7 @@ async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
     executor = _executor(store=store, planner=planner, user_message=user_message)
     executor.MAX_STEPS = 1
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -428,7 +437,7 @@ async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_validates_complete_against_run_state_after_dispatch():
+async def test_run_validates_complete_against_run_state_after_dispatch():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -437,7 +446,7 @@ async def test_run_v2_validates_complete_against_run_state_after_dispatch():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -462,7 +471,7 @@ async def test_run_v2_validates_complete_against_run_state_after_dispatch():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -480,7 +489,7 @@ async def test_run_v2_validates_complete_against_run_state_after_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_resume_ingests_paused_result_before_planning():
+async def test_run_resume_ingests_paused_result_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -489,7 +498,7 @@ async def test_run_v2_resume_ingests_paused_result_before_planning():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -516,12 +525,12 @@ async def test_run_v2_resume_ingests_paused_result_before_planning():
     first_executor.agent_message_processor.process_single_message = AsyncMock(
         return_value=ProcessingResult(
             ProcessingStatus.PAUSED,
-            message_id="run-message-1:step-1:target-1:message",
+            message_id="message-1:step-1:target-1:message",
         )
     )
     first_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    paused = await first_executor.run_v2(
+    paused = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -555,7 +564,7 @@ async def test_run_v2_resume_ingests_paused_result_before_planning():
                         response_text="Webhook result",
                         success=True,
                         status=StepStatus.SUCCESS,
-                        agent_message_id="run-message-1:step-1:target-1:message",
+                        agent_message_id="message-1:step-1:target-1:message",
                     )
                 ],
                 started_at=utcnow(),
@@ -575,7 +584,7 @@ async def test_run_v2_resume_ingests_paused_result_before_planning():
         user_message=user_message,
     )
 
-    result = await second_executor.run_v2(
+    result = await second_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -589,14 +598,14 @@ async def test_run_v2_resume_ingests_paused_result_before_planning():
     context = second_planner.contexts[0]
     assert context.state_context.current_step.steps_used == 1
     assert context.state_context.agent_outputs[0]["text"] == "Webhook result"
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.agent_outputs[0].text == "Webhook result"
     assert state.dispatch_intents[0].status == StepStatus.SUCCESS.value
 
 
 @pytest.mark.asyncio
-async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
+async def test_run_ask_user_creates_hitl_prompt_and_continuation():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -605,7 +614,7 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -624,7 +633,7 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -639,18 +648,18 @@ async def test_run_v2_ask_user_creates_hitl_prompt_and_continuation():
     hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
     assert hitl_kwargs["source"] == "supervisor"
     assert hitl_kwargs["prompt"] == "Which account?"
-    assert hitl_kwargs["orchestration_run_id"] == "run-message-1"
+    assert hitl_kwargs["orchestration_run_id"] == "message-1"
     executor._save_interrupted_state.assert_awaited_once()
     assert executor._save_interrupted_state.await_args.kwargs["kind"].value == (
         "hitl_supervisor"
     )
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.steps_used == 1
 
 
 @pytest.mark.asyncio
-async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
+async def test_run_ask_user_marks_sidecar_recoverable_before_hitl_request():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -659,7 +668,7 @@ async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -676,17 +685,17 @@ async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
     async def request_input(**_kwargs):
-        state = await store.get_run("run-message-1")
+        state = await store.get_run("message-1")
         assert state is not None
         assert state.status == OrchestrationStatus.INGESTING
         assert state.pending_hitl_request_ids == [
-            "run-message-1:step-1:supervisor-hitl-1"
+            "message-1:step-1:supervisor-hitl-1"
         ]
         return SimpleNamespace(request_id="hitl-1")
 
     executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock(side_effect=request_input))
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -697,13 +706,13 @@ async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
     )
 
     assert result.status == RunStatus.AWAITING_INPUT
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == ["hitl-1"]
 
 
 @pytest.mark.asyncio
-async def test_run_v2_resumes_ingesting_hitl_without_replanning_or_duplicates():
+async def test_run_resumes_ingesting_hitl_without_replanning_or_duplicates():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -755,7 +764,7 @@ async def test_run_v2_resumes_ingesting_hitl_without_replanning_or_duplicates():
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -783,7 +792,7 @@ async def test_run_v2_resumes_ingesting_hitl_without_replanning_or_duplicates():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_fails_corrupt_ingesting_hitl_checkpoint():
+async def test_run_fails_corrupt_ingesting_hitl_checkpoint():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -821,7 +830,7 @@ async def test_run_v2_fails_corrupt_ingesting_hitl_checkpoint():
     planner = RecordingPlanner()
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -841,44 +850,7 @@ async def test_run_v2_fails_corrupt_ingesting_hitl_checkpoint():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_returns_paused_when_sidecar_write_is_superseded():
-    user_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="message-1",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Coordinate this"),
-    )
-    store = InMemoryOrchestrationRunStore()
-    state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
-        room_id="room-1",
-        user_message_id="message-1",
-        envelope={},
-        goal="Coordinate this",
-    )
-    await store.create_run(state)
-    executor = _executor(
-        store=store,
-        planner=RecordingPlanner(),
-        user_message=user_message,
-    )
-    executor._run_v2 = AsyncMock(side_effect=OrchestrationStoreConflict("lost race"))
-
-    result = await executor.run_v2(
-        room_id="room-1",
-        user_message_id="message-1",
-        message_text="Coordinate this",
-        agent_registry=[],
-        room_config=RoomConfig(),
-        user_message=user_message,
-    )
-
-    assert result.status == RunStatus.PAUSED
-    assert result.trajectory.status == TrajectoryStatus.RUNNING
-
-
-@pytest.mark.asyncio
-async def test_run_v2_pending_hitl_without_reply_returns_awaiting_without_planning():
+async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -887,14 +859,14 @@ async def test_run_v2_pending_hitl_without_reply_returns_awaiting_without_planni
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
     )
     store = InMemoryOrchestrationRunStore()
     state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
+        run_id="message-1",
         room_id="room-1",
         user_message_id="message-1",
         envelope=user_message.extend_info,
@@ -912,7 +884,7 @@ async def test_run_v2_pending_hitl_without_reply_returns_awaiting_without_planni
     )
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -924,14 +896,14 @@ async def test_run_v2_pending_hitl_without_reply_returns_awaiting_without_planni
 
     assert result.status == RunStatus.AWAITING_INPUT
     assert planner.contexts == []
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.AWAITING_USER
     assert state.pending_hitl_request_ids == ["hitl-1"]
 
 
 @pytest.mark.asyncio
-async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation():
+async def test_run_agent_awaiting_input_creates_hitl_prompt_and_continuation():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -940,7 +912,7 @@ async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation(
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -963,7 +935,7 @@ async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation(
     executor.agent_message_processor.process_single_message = AsyncMock(
         return_value=ProcessingResult(
             ProcessingStatus.AWAITING_INPUT,
-            message_id="run-message-1:step-1:target-1:message",
+            message_id="message-1:step-1:target-1:message",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
             status_message="Please authenticate.",
@@ -974,7 +946,7 @@ async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation(
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -990,16 +962,16 @@ async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation(
     assert hitl_kwargs["source"] == "agent"
     assert hitl_kwargs["prompt"] == "Please authenticate."
     assert hitl_kwargs["continuation_message_id"] == (
-        "run-message-1:step-1:target-1:message"
+        "message-1:step-1:target-1:message"
     )
-    assert hitl_kwargs["display_message_id"] == "run-message-1:step-1:target-1:message"
-    assert hitl_kwargs["orchestration_run_id"] == "run-message-1"
+    assert hitl_kwargs["display_message_id"] == "message-1:step-1:target-1:message"
+    assert hitl_kwargs["orchestration_run_id"] == "message-1"
     executor._save_interrupted_state.assert_awaited_once()
     save_kwargs = executor._save_interrupted_state.await_args.kwargs
     assert save_kwargs["kind"].value == "hitl_agent"
-    assert save_kwargs["message_id"] == "run-message-1:step-1:target-1:message"
+    assert save_kwargs["message_id"] == "message-1:step-1:target-1:message"
 
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.AWAITING_USER
     assert state.pending_hitl_request_ids == ["hitl-agent-1"]
@@ -1007,7 +979,7 @@ async def test_run_v2_agent_awaiting_input_creates_hitl_prompt_and_continuation(
 
 
 @pytest.mark.asyncio
-async def test_run_v2_mixed_paused_and_awaiting_input_creates_hitl_prompt():
+async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1016,7 +988,7 @@ async def test_run_v2_mixed_paused_and_awaiting_input_creates_hitl_prompt():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1", "agent-2"],
             "client_request_id": "client-1",
         },
@@ -1045,11 +1017,11 @@ async def test_run_v2_mixed_paused_and_awaiting_input_creates_hitl_prompt():
         side_effect=[
             ProcessingResult(
                 ProcessingStatus.PAUSED,
-                message_id="run-message-1:step-1:target-1:message",
+                message_id="message-1:step-1:target-1:message",
             ),
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
-                message_id="run-message-1:step-1:target-2:message",
+                message_id="message-1:step-1:target-2:message",
                 status_message="Need approval.",
             ),
         ]
@@ -1059,7 +1031,7 @@ async def test_run_v2_mixed_paused_and_awaiting_input_creates_hitl_prompt():
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1077,21 +1049,21 @@ async def test_run_v2_mixed_paused_and_awaiting_input_creates_hitl_prompt():
     hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
     assert hitl_kwargs["prompt"] == "Need approval."
     assert hitl_kwargs["continuation_message_id"] == (
-        "run-message-1:step-1:target-2:message"
+        "message-1:step-1:target-2:message"
     )
     save_kinds = [
         call.kwargs["kind"].value
         for call in executor._save_interrupted_state.await_args_list
     ]
     assert save_kinds == ["push_notification", "hitl_agent"]
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.AWAITING_USER
     assert state.pending_hitl_request_ids == ["hitl-agent-1"]
 
 
 @pytest.mark.asyncio
-async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
+async def test_run_partial_paused_resume_waits_for_remaining_agents():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1100,7 +1072,7 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1", "agent-2"],
             "client_request_id": "client-1",
         },
@@ -1133,17 +1105,17 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
         side_effect=[
             ProcessingResult(
                 ProcessingStatus.PAUSED,
-                message_id="run-message-1:step-1:target-1:message",
+                message_id="message-1:step-1:target-1:message",
             ),
             ProcessingResult(
                 ProcessingStatus.PAUSED,
-                message_id="run-message-1:step-1:target-2:message",
+                message_id="message-1:step-1:target-2:message",
             ),
         ]
     )
     first_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    paused = await first_executor.run_v2(
+    paused = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1185,7 +1157,7 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
                         response_text="First webhook result",
                         success=True,
                         status=StepStatus.SUCCESS,
-                        agent_message_id="run-message-1:step-1:target-1:message",
+                        agent_message_id="message-1:step-1:target-1:message",
                     ),
                     StepResult(
                         step_number=1,
@@ -1195,8 +1167,8 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
                         response_text="",
                         success=True,
                         status=StepStatus.PAUSED,
-                        paused_message_id="run-message-1:step-1:target-2:message",
-                        agent_message_id="run-message-1:step-1:target-2:message",
+                        paused_message_id="message-1:step-1:target-2:message",
+                        agent_message_id="message-1:step-1:target-2:message",
                     ),
                 ],
                 started_at=utcnow(),
@@ -1216,7 +1188,7 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
         user_message=user_message,
     )
 
-    result = await second_executor.run_v2(
+    result = await second_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1231,23 +1203,23 @@ async def test_run_v2_partial_paused_resume_waits_for_remaining_agents():
 
     assert result.status == RunStatus.PAUSED
     assert second_planner.contexts == []
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.WAITING_AGENT
     assert state.steps_used == 0
     outputs_by_id = {output.agent_message_id: output for output in state.agent_outputs}
     assert (
-        outputs_by_id["run-message-1:step-1:target-1:message"].text
+        outputs_by_id["message-1:step-1:target-1:message"].text
         == "First webhook result"
     )
     assert (
-        outputs_by_id["run-message-1:step-1:target-2:message"].status
+        outputs_by_id["message-1:step-1:target-2:message"].status
         == StepStatus.PAUSED.value
     )
 
 
 @pytest.mark.asyncio
-async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
+async def test_run_final_paused_sibling_resume_reconciles_sidecar_outputs():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1256,7 +1228,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1", "agent-2"],
             "client_request_id": "client-1",
         },
@@ -1289,17 +1261,17 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         side_effect=[
             ProcessingResult(
                 ProcessingStatus.PAUSED,
-                message_id="run-message-1:step-1:target-1:message",
+                message_id="message-1:step-1:target-1:message",
             ),
             ProcessingResult(
                 ProcessingStatus.PAUSED,
-                message_id="run-message-1:step-1:target-2:message",
+                message_id="message-1:step-1:target-2:message",
             ),
         ]
     )
     first_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    paused = await first_executor.run_v2(
+    paused = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1312,11 +1284,27 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
     )
     assert paused.status == RunStatus.PAUSED
 
+    delegate_action = SupervisorAction(
+        action=ActionType.DELEGATE,
+        reasoning="dispatch both async agents",
+        targets=[
+            DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="First task",
+            ),
+            DelegateTarget(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                task="Second task",
+            ),
+        ],
+    )
     first_resume = SupervisorTrajectory(
         entries=[
             TrajectoryEntry(
                 step_number=1,
-                action=paused.trajectory.entries[0].action,
+                action=delegate_action,
                 results=[
                     StepResult(
                         step_number=1,
@@ -1326,7 +1314,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
                         response_text="First result",
                         success=True,
                         status=StepStatus.SUCCESS,
-                        agent_message_id="run-message-1:step-1:target-1:message",
+                        agent_message_id="message-1:step-1:target-1:message",
                     ),
                     StepResult(
                         step_number=1,
@@ -1336,8 +1324,8 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
                         response_text="",
                         success=True,
                         status=StepStatus.PAUSED,
-                        paused_message_id="run-message-1:step-1:target-2:message",
-                        agent_message_id="run-message-1:step-1:target-2:message",
+                        paused_message_id="message-1:step-1:target-2:message",
+                        agent_message_id="message-1:step-1:target-2:message",
                     ),
                 ],
                 started_at=utcnow(),
@@ -1350,7 +1338,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         user_message=user_message,
     )
 
-    still_paused = await first_resume_executor.run_v2(
+    still_paused = await first_resume_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1368,7 +1356,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         entries=[
             TrajectoryEntry(
                 step_number=1,
-                action=paused.trajectory.entries[0].action,
+                action=delegate_action,
                 results=[
                     StepResult(
                         step_number=1,
@@ -1378,8 +1366,8 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
                         response_text="",
                         success=True,
                         status=StepStatus.PAUSED,
-                        paused_message_id="run-message-1:step-1:target-1:message",
-                        agent_message_id="run-message-1:step-1:target-1:message",
+                        paused_message_id="message-1:step-1:target-1:message",
+                        agent_message_id="message-1:step-1:target-1:message",
                     ),
                     StepResult(
                         step_number=1,
@@ -1389,7 +1377,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
                         response_text="Second result",
                         success=True,
                         status=StepStatus.SUCCESS,
-                        agent_message_id="run-message-1:step-1:target-2:message",
+                        agent_message_id="message-1:step-1:target-2:message",
                     ),
                 ],
                 started_at=utcnow(),
@@ -1409,7 +1397,7 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         user_message=user_message,
     )
 
-    result = await final_executor.run_v2(
+    result = await final_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1428,12 +1416,12 @@ async def test_run_v2_final_paused_sibling_resume_reconciles_sidecar_outputs():
         output["agent_message_id"]: output["text"]
         for output in final_planner.contexts[0].state_context.agent_outputs
     }
-    assert output_texts["run-message-1:step-1:target-1:message"] == "First result"
-    assert output_texts["run-message-1:step-1:target-2:message"] == "Second result"
+    assert output_texts["message-1:step-1:target-1:message"] == "First result"
+    assert output_texts["message-1:step-1:target-2:message"] == "Second result"
 
 
 @pytest.mark.asyncio
-async def test_run_v2_paused_result_reconciles_terminal_agent_before_waiting():
+async def test_run_paused_result_reconciles_terminal_agent_before_waiting():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1442,7 +1430,7 @@ async def test_run_v2_paused_result_reconciles_terminal_agent_before_waiting():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -1470,19 +1458,19 @@ async def test_run_v2_paused_result_reconciles_terminal_agent_before_waiting():
     executor.agent_message_processor.process_single_message = AsyncMock(
         return_value=ProcessingResult(
             ProcessingStatus.PAUSED,
-            message_id="run-message-1:step-1:target-1:message",
+            message_id="message-1:step-1:target-1:message",
         )
     )
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         return_value=SimpleNamespace(
-            message_id="run-message-1:step-1:target-1:message",
+            message_id="message-1:step-1:target-1:message",
             last_notified_state="completed",
             message_content=SimpleNamespace(message_text="Fast webhook result"),
         )
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1500,7 +1488,7 @@ async def test_run_v2_paused_result_reconciles_terminal_agent_before_waiting():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
+async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1509,7 +1497,7 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -1528,7 +1516,7 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
     )
     first_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    first_result = await first_executor.run_v2(
+    first_result = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1538,12 +1526,12 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
         user_message=user_message,
     )
     assert first_result.status == RunStatus.AWAITING_INPUT
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == ["hitl-1"]
 
-    resumed_trajectory = first_result.trajectory
-    resumed_trajectory.hitl_user_reply = "Account A"
+    assert first_result.trajectory is None
+    resumed_trajectory = SupervisorTrajectory(hitl_user_reply="Account A")
     second_planner = RecordingPlanner(
         PlannerAction(
             action=PlannerActionType.FAIL,
@@ -1553,7 +1541,7 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
     )
     second_executor = _executor(store=store, planner=second_planner, user_message=user_message)
 
-    second_result = await second_executor.run_v2(
+    second_result = await second_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1565,13 +1553,13 @@ async def test_run_v2_supervisor_hitl_resume_clears_pending_request_ids():
 
     assert second_result.status == RunStatus.FAILED
     assert second_planner.contexts[0].state_context.pending_hitl_request_ids == []
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == []
 
 
 @pytest.mark.asyncio
-async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round():
+async def test_run_supervisor_hitl_reply_is_consumed_before_next_hitl_round():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1580,7 +1568,7 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -1599,7 +1587,7 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
     )
     first_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    first_result = await first_executor.run_v2(
+    first_result = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1609,8 +1597,8 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
         user_message=user_message,
     )
 
-    resumed_trajectory = first_result.trajectory
-    resumed_trajectory.hitl_user_reply = "Account A"
+    assert first_result.trajectory is None
+    resumed_trajectory = SupervisorTrajectory(hitl_user_reply="Account A")
     second_planner = RecordingPlanner(
         PlannerAction(
             action=PlannerActionType.ASK_USER,
@@ -1624,7 +1612,7 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
     )
     second_executor._save_interrupted_state = AsyncMock(return_value=True)
 
-    second_result = await second_executor.run_v2(
+    second_result = await second_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1635,8 +1623,8 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
     )
 
     assert second_result.status == RunStatus.AWAITING_INPUT
-    assert second_result.trajectory.hitl_user_reply is None
-    state = await store.get_run("run-message-1")
+    assert second_result.trajectory is None
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == ["hitl-2"]
 
@@ -1648,25 +1636,25 @@ async def test_run_v2_supervisor_hitl_reply_is_consumed_before_next_hitl_round()
     )
     third_executor = _executor(store=store, planner=third_planner, user_message=user_message)
 
-    third_result = await third_executor.run_v2(
+    third_result = await third_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
         agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
         room_config=RoomConfig(),
-        resumed_trajectory=second_result.trajectory,
+        resumed_trajectory=SupervisorTrajectory(),
         user_message=user_message,
     )
 
     assert third_result.status == RunStatus.AWAITING_INPUT
     assert third_planner.contexts == []
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == ["hitl-2"]
 
 
 @pytest.mark.asyncio
-async def test_run_v2_invalid_planner_action_marks_sidecar_failed():
+async def test_run_invalid_planner_action_marks_sidecar_failed():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1675,7 +1663,7 @@ async def test_run_v2_invalid_planner_action_marks_sidecar_failed():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -1696,7 +1684,7 @@ async def test_run_v2_invalid_planner_action_marks_sidecar_failed():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1707,14 +1695,14 @@ async def test_run_v2_invalid_planner_action_marks_sidecar_failed():
     )
 
     assert result.status == RunStatus.FAILED
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.FAILED
     assert "not in candidate_agent_ids" in (state.terminal_reason or "")
 
 
 @pytest.mark.asyncio
-async def test_run_v2_adapter_validation_error_marks_sidecar_failed():
+async def test_run_adapter_validation_error_marks_sidecar_failed():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1723,7 +1711,7 @@ async def test_run_v2_adapter_validation_error_marks_sidecar_failed():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -1749,7 +1737,7 @@ async def test_run_v2_adapter_validation_error_marks_sidecar_failed():
         user_message=user_message,
     )
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1760,14 +1748,14 @@ async def test_run_v2_adapter_validation_error_marks_sidecar_failed():
     )
 
     assert result.status == RunStatus.FAILED
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.FAILED
     assert "not in candidate_agent_ids" in (state.terminal_reason or "")
 
 
 @pytest.mark.asyncio
-async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
+async def test_run_reentry_reconciles_inflight_dispatch_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1776,14 +1764,14 @@ async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
     )
     store = InMemoryOrchestrationRunStore()
     state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
+        run_id="message-1",
         room_id="room-1",
         user_message_id="message-1",
         envelope=user_message.extend_info,
@@ -1791,14 +1779,14 @@ async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
     )
     state.status = OrchestrationStatus.DISPATCHING
     state.state_version = 0
-    state.summary_intent_id = "run-message-1:summary"
+    state.summary_intent_id = "message-1:summary"
     state.summary_message_id = "sys-message-1"
     state.dispatch_intents.append(
         DispatchIntent(
-            step_id="run-message-1:step-1",
-            step_target_id="run-message-1:step-1:target-1",
-            dispatch_intent_id="run-message-1:step-1:target-1:intent",
-            planned_agent_message_id="run-message-1:step-1:target-1:message",
+            step_id="message-1:step-1",
+            step_target_id="message-1:step-1:target-1",
+            dispatch_intent_id="message-1:step-1:target-1:intent",
+            planned_agent_message_id="message-1:step-1:target-1:message",
             agent_id="agent-1",
             task="Handle",
             task_hash="hash",
@@ -1819,11 +1807,11 @@ async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
             last_notified_state="completed",
             message_content=SimpleNamespace(message_text="Recovered output"),
         )
-        if message_id == "run-message-1:step-1:target-1:message"
+        if message_id == "message-1:step-1:target-1:message"
         else None
     )
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1842,7 +1830,7 @@ async def test_run_v2_reentry_reconciles_inflight_dispatch_before_planning():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_reentry_replays_planned_intent_without_created_message():
+async def test_run_reentry_replays_planned_intent_without_created_message():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1851,28 +1839,28 @@ async def test_run_v2_reentry_replays_planned_intent_without_created_message():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
     )
     store = InMemoryOrchestrationRunStore()
     state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
+        run_id="message-1",
         room_id="room-1",
         user_message_id="message-1",
         envelope=user_message.extend_info,
         goal="Coordinate this",
     )
     state.status = OrchestrationStatus.DISPATCHING
-    state.summary_intent_id = "run-message-1:summary"
+    state.summary_intent_id = "message-1:summary"
     state.summary_message_id = "sys-message-1"
     state.dispatch_intents.append(
         DispatchIntent(
-            step_id="run-message-1:step-1",
-            step_target_id="run-message-1:step-1:target-1",
-            dispatch_intent_id="run-message-1:step-1:target-1:intent",
-            planned_agent_message_id="run-message-1:step-1:target-1:message",
+            step_id="message-1:step-1",
+            step_target_id="message-1:step-1:target-1",
+            dispatch_intent_id="message-1:step-1:target-1:intent",
+            planned_agent_message_id="message-1:step-1:target-1:message",
             agent_id="agent-1",
             task="Handle",
             task_hash="hash",
@@ -1889,7 +1877,7 @@ async def test_run_v2_reentry_replays_planned_intent_without_created_message():
     )
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1905,12 +1893,12 @@ async def test_run_v2_reentry_replays_planned_intent_without_created_message():
         call.args[0].message_id
         for call in executor.message_writer.add_room_agent_message.await_args_list
     ]
-    assert "run-message-1:step-1:target-1:message" in added_message_ids
+    assert "message-1:step-1:target-1:message" in added_message_ids
     assert planner.contexts[0].state_context.current_step.steps_used == 1
 
 
 @pytest.mark.asyncio
-async def test_run_v2_replay_waits_when_planned_message_already_exists():
+async def test_run_replay_waits_when_planned_message_already_exists():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1919,28 +1907,28 @@ async def test_run_v2_replay_waits_when_planned_message_already_exists():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
     )
     store = InMemoryOrchestrationRunStore()
     state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
+        run_id="message-1",
         room_id="room-1",
         user_message_id="message-1",
         envelope=user_message.extend_info,
         goal="Coordinate this",
     )
     state.status = OrchestrationStatus.DISPATCHING
-    state.summary_intent_id = "run-message-1:summary"
+    state.summary_intent_id = "message-1:summary"
     state.summary_message_id = "sys-message-1"
     state.dispatch_intents.append(
         DispatchIntent(
-            step_id="run-message-1:step-1",
-            step_target_id="run-message-1:step-1:target-1",
-            dispatch_intent_id="run-message-1:step-1:target-1:intent",
-            planned_agent_message_id="run-message-1:step-1:target-1:message",
+            step_id="message-1:step-1",
+            step_target_id="message-1:step-1:target-1",
+            dispatch_intent_id="message-1:step-1:target-1:intent",
+            planned_agent_message_id="message-1:step-1:target-1:message",
             agent_id="agent-1",
             task="Handle",
             task_hash="hash",
@@ -1960,7 +1948,7 @@ async def test_run_v2_replay_waits_when_planned_message_already_exists():
         side_effect=[True, False]
     )
     existing_message = SimpleNamespace(
-        message_id="run-message-1:step-1:target-1:message",
+        message_id="message-1:step-1:target-1:message",
         last_notified_state="working",
         message_content=SimpleNamespace(message_text=""),
     )
@@ -1968,7 +1956,7 @@ async def test_run_v2_replay_waits_when_planned_message_already_exists():
         side_effect=[None, existing_message]
     )
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -1981,13 +1969,13 @@ async def test_run_v2_replay_waits_when_planned_message_already_exists():
     assert result.status == RunStatus.PAUSED
     executor.agent_message_processor.process_single_message.assert_not_awaited()
     assert planner.contexts == []
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.WAITING_AGENT
 
 
 @pytest.mark.asyncio
-async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner():
+async def test_run_dispatch_failure_without_message_id_is_visible_to_planner():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1996,7 +1984,7 @@ async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner(
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -2023,7 +2011,7 @@ async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner(
     executor = _executor(store=store, planner=planner, user_message=user_message)
     executor.agent_dispatcher.resolve_agent = AsyncMock(return_value=None)
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -2041,13 +2029,13 @@ async def test_run_v2_dispatch_failure_without_message_id_is_visible_to_planner(
     assert "Agent not found" in (
         second_context.state_context.agent_outputs[0]["error"] or ""
     )
-    state = await store.get_run("run-message-1")
+    state = await store.get_run("message-1")
     assert state is not None
     assert state.dispatch_intents[0].status == StepStatus.FAILED.value
 
 
 @pytest.mark.asyncio
-async def test_run_v2_synthesis_persists_system_message_content():
+async def test_run_synthesis_persists_system_message_content():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -2056,7 +2044,7 @@ async def test_run_v2_synthesis_persists_system_message_content():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -2086,7 +2074,7 @@ async def test_run_v2_synthesis_persists_system_message_content():
         return_value=system_db_msg
     )
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -2105,7 +2093,7 @@ async def test_run_v2_synthesis_persists_system_message_content():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_existing_terminal_state_returns_idempotently():
+async def test_run_existing_terminal_state_returns_idempotently():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -2114,7 +2102,7 @@ async def test_run_v2_existing_terminal_state_returns_idempotently():
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -2131,7 +2119,7 @@ async def test_run_v2_existing_terminal_state_returns_idempotently():
         user_message=user_message,
     )
     state = await store.reconstruct_from_envelope(
-        run_id="run-message-1",
+        run_id="message-1",
         room_id="room-1",
         user_message_id="message-1",
         envelope=user_message.extend_info,
@@ -2141,7 +2129,7 @@ async def test_run_v2_existing_terminal_state_returns_idempotently():
     state.terminal_reason = "previously completed"
     await store.create_run(state)
 
-    result = await first_executor.run_v2(
+    result = await first_executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Coordinate this",
@@ -2166,7 +2154,7 @@ def _supervisor_agent(agent_id: str, name: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_persisted_schema_version_routes_to_run_v2_without_current_flag():
+async def test_persisted_schema_version_routes_to_run_without_current_flag():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -2175,7 +2163,7 @@ async def test_persisted_schema_version_routes_to_run_v2_without_current_flag():
         message_content=MessageContent(message_text="Coordinate this"),
         extend_info={
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -2219,8 +2207,7 @@ async def test_persisted_schema_version_routes_to_run_v2_without_current_flag():
         )
     )
     rmc.supervisor_executor = SimpleNamespace(
-        run=AsyncMock(side_effect=AssertionError("legacy run should not be used")),
-        run_v2=AsyncMock(return_value=supervisor_result),
+        run=AsyncMock(return_value=supervisor_result),
     )
     rmc.supervisor_planning_error_cls = RuntimeError
     rmc.build_turn_content = None
@@ -2246,8 +2233,7 @@ async def test_persisted_schema_version_routes_to_run_v2_without_current_flag():
         error=None,
         status_code=200,
     )
-    rmc.supervisor_executor.run_v2.assert_awaited_once()
-    rmc.supervisor_executor.run.assert_not_awaited()
+    rmc.supervisor_executor.run.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2260,7 +2246,7 @@ async def test_v2_supervisor_initial_run_receives_context_memory():
         message_content=MessageContent(message_text="Coordinate this"),
         extend_info={
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "client_request_id": "client-1",
         },
@@ -2314,8 +2300,7 @@ async def test_v2_supervisor_initial_run_receives_context_memory():
         ),
     )
     rmc.supervisor_executor = SimpleNamespace(
-        run=AsyncMock(side_effect=AssertionError("legacy run should not be used")),
-        run_v2=AsyncMock(return_value=supervisor_result),
+        run=AsyncMock(return_value=supervisor_result),
     )
     rmc.supervisor_planning_error_cls = RuntimeError
     rmc.build_turn_content = None
@@ -2336,7 +2321,7 @@ async def test_v2_supervisor_initial_run_receives_context_memory():
     )
 
     assert response.success is True
-    run_kwargs = rmc.supervisor_executor.run_v2.await_args.kwargs
+    run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
     assert run_kwargs["conversation_context"] == "Context from room memory"
 
 
@@ -2354,7 +2339,7 @@ def test_v2_supervisor_envelope_requires_candidate_scope():
             {
                 "orchestration": True,
                 "orchestration_schema_version": 2,
-                "orchestration_run_id": "run-message-1",
+                "orchestration_run_id": "message-1",
                 "candidate_agent_ids": ["agent-1"],
             }
         )
@@ -2372,7 +2357,7 @@ async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight(
         message_content=MessageContent(message_text="Coordinate this"),
         extend_info={
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-1"],
             "supervisor_trajectory": {"status": "legacy-running"},
         },
@@ -2396,7 +2381,7 @@ async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight(
     )
 
     assert "supervisor_trajectory" not in user_message.extend_info
-    assert user_message.extend_info["orchestration_run_id"] == "run-message-1"
+    assert user_message.extend_info["orchestration_run_id"] == "message-1"
     assert user_message.extend_info["orchestration_status"] == "running"
 
 
@@ -2435,7 +2420,7 @@ async def test_room_message_center_v2_resume_preserves_serialized_candidate_regi
         message_content=MessageContent(message_text="Coordinate this"),
         extend_info={
             "orchestration_schema_version": 2,
-            "orchestration_run_id": "run-message-1",
+            "orchestration_run_id": "message-1",
             "candidate_agent_ids": ["agent-2"],
         },
     )
@@ -2481,8 +2466,7 @@ async def test_room_message_center_v2_resume_preserves_serialized_candidate_regi
         trajectory=trajectory,
     )
     rmc.supervisor_executor = SimpleNamespace(
-        run=AsyncMock(),
-        run_v2=AsyncMock(return_value=supervisor_result),
+        run=AsyncMock(return_value=supervisor_result),
     )
     rmc._handle_supervisor_run_result = AsyncMock()
     rmc._log_room_memory_stats = AsyncMock()
@@ -2492,12 +2476,12 @@ async def test_room_message_center_v2_resume_preserves_serialized_candidate_regi
 
     result = await rmc._resume_supervisor(
         continuation=continuation,
-        paused_message_id="run-message-1:step-1:target-1:message",
+        paused_message_id="message-1:step-1:target-1:message",
         task_result_text=None,
     )
 
     assert result == RunStatus.PAUSED
-    run_kwargs = rmc.supervisor_executor.run_v2.await_args.kwargs
+    run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
     assert [agent.agent_id for agent in run_kwargs["agent_registry"]] == ["agent-2"]
     assert run_kwargs["room_config"].room_agent_set == {
         "agent-2": "Selected External Agent"

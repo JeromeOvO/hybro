@@ -1394,7 +1394,7 @@ class RoomMessageCenter:
         Handles all 5 ``RunStatus`` variants.
         """
         extend = user_message.extend_info
-        is_v2_supervisor = self._is_v2_supervisor_envelope(extend)
+        has_orchestration_envelope = self._is_v2_supervisor_envelope(extend)
         build_turn_content = self.build_turn_content or (
             lambda text, _attachments: text
         )
@@ -1403,7 +1403,7 @@ class RoomMessageCenter:
             user_message.message_content.attachments,
         )
         try:
-            if is_v2_supervisor:
+            if has_orchestration_envelope:
                 (
                     agent_registry,
                     room_config,
@@ -1503,12 +1503,7 @@ class RoomMessageCenter:
                     )
 
         try:
-            run_supervisor = (
-                self.supervisor_executor.run_v2
-                if is_v2_supervisor
-                else self.supervisor_executor.run
-            )
-            result = await run_supervisor(
+            result = await self.supervisor_executor.run(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
                 message_text=message_text,
@@ -1657,7 +1652,11 @@ class RoomMessageCenter:
             result=result,
             room_id=room_id,
             user_message_id=room_user_message_id,
-            original_clarify_message_id=result.trajectory.clarify_original_message_id,
+            original_clarify_message_id=(
+                result.trajectory.clarify_original_message_id
+                if result.trajectory
+                else None
+            ),
             user_message=user_message,
         )
 
@@ -1784,16 +1783,16 @@ class RoomMessageCenter:
                 "interrupt_kind": interrupt_kind.value,
             },
         )
-        is_v2_resume = continuation.get("orchestration_schema_version") == 2
-        if not is_v2_resume:
-            is_v2_resume = self._is_v2_supervisor_envelope(
+        has_orchestration_resume = continuation.get("orchestration_schema_version") == 2
+        if not has_orchestration_resume:
+            has_orchestration_resume = self._is_v2_supervisor_envelope(
                 getattr(original_user_message_for_resume, "extend_info", None)
             )
 
         def context_agent_set_for_resume(
             fallback: dict[str, str] | None,
         ) -> dict[str, str]:
-            if not is_v2_resume:
+            if not has_orchestration_resume:
                 return fallback or {}
             serialized_room_config = continuation.get("room_config", {})
             if isinstance(serialized_room_config, dict):
@@ -1944,7 +1943,7 @@ class RoomMessageCenter:
 
         agent_registry: list[AgentProfile] = []
         serialized_registry = continuation.get("agent_registry", [])
-        if is_v2_resume and serialized_registry:
+        if has_orchestration_resume and serialized_registry:
             try:
                 agent_registry = [
                     AgentProfile(**profile)
@@ -2001,7 +2000,7 @@ class RoomMessageCenter:
             if isinstance(room.extend_info, dict)
             else False
         )
-        if is_v2_resume:
+        if has_orchestration_resume:
             if not room_config.room_agent_set:
                 room_config.room_agent_set = {
                     profile.agent_id: profile.agent_name
@@ -2080,12 +2079,7 @@ class RoomMessageCenter:
 
         # 7. Resume the supervisor loop
         try:
-            run_supervisor = (
-                self.supervisor_executor.run_v2
-                if is_v2_resume
-                else self.supervisor_executor.run
-            )
-            result = await run_supervisor(
+            result = await self.supervisor_executor.run(
                 room_id=room_id,
                 user_message_id=user_message_id,
                 message_text=message_text,
@@ -2120,7 +2114,11 @@ class RoomMessageCenter:
             room_id=room_id,
             user_message_id=user_message_id,
             room=room,
-            original_clarify_message_id=result.trajectory.clarify_original_message_id,
+            original_clarify_message_id=(
+                result.trajectory.clarify_original_message_id
+                if result.trajectory
+                else None
+            ),
         )
 
         await self._log_room_memory_stats(room_id)
@@ -2289,6 +2287,13 @@ class RoomMessageCenter:
         the original message's trajectory is also updated so it doesn't stay
         permanently in ``"clarifying"`` status.
         """
+        result_trajectory = result.trajectory
+        result_run_state = result.run_state
+        orchestration_status = (
+            result_run_state.status.value
+            if result_run_state is not None
+            else result.status.value
+        )
         if user_message is None:
             user_message = (
                 await self.message_reader.get_room_user_message_by_message_id(
@@ -2305,14 +2310,19 @@ class RoomMessageCenter:
         ):
             if not isinstance(user_message.extend_info, dict):
                 user_message.extend_info = {}
-            if self._is_v2_supervisor_envelope(user_message.extend_info):
+            if result_trajectory is None:
                 user_message.extend_info.pop("supervisor_trajectory", None)
                 user_message.extend_info["orchestration_status"] = (
-                    result.trajectory.status.value
+                    orchestration_status
+                )
+            elif self._is_v2_supervisor_envelope(user_message.extend_info):
+                user_message.extend_info.pop("supervisor_trajectory", None)
+                user_message.extend_info["orchestration_status"] = (
+                    result_trajectory.status.value
                 )
             else:
                 user_message.extend_info["supervisor_trajectory"] = (
-                    result.trajectory.model_dump(mode="json")
+                    result_trajectory.model_dump(mode="json")
                 )
             await self.message_writer.update_room_user_message_by_message_id(
                 user_message_id, user_message
@@ -2329,8 +2339,8 @@ class RoomMessageCenter:
                 )
                 if orig_msg and isinstance(orig_msg.extend_info, dict):
                     orig_traj = orig_msg.extend_info.get("supervisor_trajectory")
-                    if isinstance(orig_traj, dict):
-                        orig_traj["status"] = result.trajectory.status
+                    if isinstance(orig_traj, dict) and result_trajectory is not None:
+                        orig_traj["status"] = result_trajectory.status
                         await self.message_writer.update_room_user_message_by_message_id(
                             original_clarify_message_id, orig_msg
                         )
@@ -2350,7 +2360,9 @@ class RoomMessageCenter:
 
                 trajectory_responses = [
                     {"agent_name": step.agent_name, "message": step.response_text}
-                    for entry in result.trajectory.entries
+                    for entry in (
+                        result_trajectory.entries if result_trajectory else []
+                    )
                     if entry.action.action == ActionType.DELEGATE
                     for step in entry.results
                     if step.success and step.response_text
@@ -2469,7 +2481,9 @@ class RoomMessageCenter:
 
             case RunStatus.CANCELED:
                 canceled_parent_ids: list[str] = []
-                for entry in result.trajectory.entries:
+                for entry in (
+                    result_trajectory.entries if result_trajectory else []
+                ):
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             canceled_parent_ids.append(step_result.agent_message_id)
@@ -2502,7 +2516,9 @@ class RoomMessageCenter:
 
             case RunStatus.FAILED:
                 failed_parent_ids: list[str] = []
-                for entry in result.trajectory.entries:
+                for entry in (
+                    result_trajectory.entries if result_trajectory else []
+                ):
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             failed_parent_ids.append(step_result.agent_message_id)
@@ -2550,7 +2566,11 @@ class RoomMessageCenter:
         terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
         if result.status in terminal_statuses:
             # Add synthesis text to room memory history
-            if result.status == RunStatus.COMPLETED and result.synthesis_text:
+            if (
+                result.status == RunStatus.COMPLETED
+                and result.synthesis_text
+                and result.trajectory is not None
+            ):
                 try:
                     synthesis_turn_id = await self.room_memory.add_synthesis_to_history(
                         room_id=room_id,

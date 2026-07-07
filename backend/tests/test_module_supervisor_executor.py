@@ -9,12 +9,15 @@ Tests cover:
 """
 
 import ast
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.processing import ProcessingResult, ProcessingStatus
 from models.supervisor import (
@@ -49,6 +52,24 @@ def _make_supervisor_executor():
     se.room_memory = MagicMock()
     se.rate_limit_service = MagicMock()
     se.hitl_coordinator = MagicMock()
+
+    async def raw_action_provider(_context):
+        result = se.supervisor_service.decide_next()
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, SupervisorAction):
+            payload = result.model_dump(mode="json")
+            for question in payload.get("questions") or []:
+                if question.get("prompt_type") is None:
+                    question["prompt_type"] = "text"
+            if payload.get("prompt_type") is None:
+                payload.pop("prompt_type", None)
+            return payload
+        return result
+
+    se.orchestration_planner = RoomSupervisorPlannerAdapter(
+        raw_action_provider=raw_action_provider
+    )
     return se
 
 
@@ -62,6 +83,15 @@ def _make_dispatch_target() -> DelegateTarget:
 
 def _make_agent_profile() -> AgentProfile:
     return AgentProfile(agent_id="agent-1", agent_name="Test Agent")
+
+
+def _state_unification_user_message(message_id="msg-1", extend_info=None):
+    return SimpleNamespace(
+        message_id=message_id,
+        user_id="user-1",
+        extend_info=extend_info or {},
+        client_request_id="cr-1",
+    )
 
 
 def _make_resolved_agent():
@@ -145,6 +175,52 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
 
 
 @pytest.mark.asyncio
+async def test_run_creates_orchestration_state_without_legacy_or_trajectory_checkpoint(
+    monkeypatch,
+):
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    user_message = _state_unification_user_message(
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "msg-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        }
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_execute_orchestration_loop",
+        AsyncMock(
+            return_value=SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                run_id="msg-1",
+                trajectory=None,
+            )
+        ),
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
+        user_message=user_message,
+    )
+
+    state = await store.get_run("msg-1")
+    assert result.run_id == "msg-1"
+    assert result.trajectory is None
+    assert state is not None
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == ["agent-1"]
+    assert "supervisor_trajectory" not in (user_message.extend_info or {})
+
+
+@pytest.mark.asyncio
 async def test_supervisor_generic_failed_result_does_not_create_preflight_task():
     se = _make_supervisor_executor()
     message = _make_supervisor_agent_message(preflight=False)
@@ -202,11 +278,11 @@ def test_dispatch_targets_cancelled_error_handler_reraises():
         assert not any(isinstance(stmt, ast.Return) for stmt in handler.body)
 
 
-def test_supervisor_agent_hitl_request_passes_paused_message_as_display_id():
+def test_supervisor_agent_hitl_request_passes_selected_message_ids():
     source = (
         _ROOT / "execution" / "orchestration" / "supervisor_executor.py"
     ).read_text()
-    agent_hitl_anchor = "Only create HITL for the FIRST awaiting agent"
+    agent_hitl_anchor = "async def _run_agent_awaiting_input_action("
     start = source.index(
         "request = await self.hitl_coordinator.request_input(",
         source.index(agent_hitl_anchor),
@@ -214,11 +290,11 @@ def test_supervisor_agent_hitl_request_passes_paused_message_as_display_id():
     end = source.index("if request is None:", start)
     request_call = source[start:end]
 
-    assert "continuation_message_id=ar.paused_message_id" in request_call
-    assert "display_message_id=ar.paused_message_id" in request_call
+    assert "continuation_message_id=continuation_message_id" in request_call
+    assert "display_message_id=display_message_id" in request_call
     assert request_call.index(
-        "continuation_message_id=ar.paused_message_id"
-    ) < request_call.index("display_message_id=ar.paused_message_id")
+        "continuation_message_id=continuation_message_id"
+    ) < request_call.index("display_message_id=display_message_id")
 
 
 # =============================================================================
@@ -464,7 +540,7 @@ class TestProcessingStatusLifecycleOrder:
             room_config=RoomConfig(),
         )
 
-        assert result.status == RunStatus.COMPLETED
+        assert result.status == RunStatus.FAILED
         emit.assert_awaited_once()
         se.delivery.send_processing_status.assert_not_called()
         assert order == ["emit"]
@@ -489,7 +565,7 @@ class TestProcessingStatusLifecycleOrder:
             room_config=RoomConfig(),
         )
 
-        assert result.status == RunStatus.COMPLETED
+        assert result.status == RunStatus.FAILED
         emit.assert_awaited_once()
         se.delivery.send_processing_status.assert_not_called()
 
@@ -612,7 +688,7 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
-        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
+        assert call_kwargs["orchestration_run_id"] == "msg-1"
         assert call_kwargs["orchestration_schema_version"] == 2
 
     @pytest.mark.asyncio
@@ -700,5 +776,5 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
-        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
+        assert call_kwargs["orchestration_run_id"] == "msg-1"
         assert call_kwargs["orchestration_schema_version"] == 2
