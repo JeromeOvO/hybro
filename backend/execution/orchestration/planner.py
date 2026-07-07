@@ -195,18 +195,43 @@ class RoomSupervisorPlannerAdapter:
     async def plan(self, context: OrchestrationPlannerContext) -> PlannerAction:
         raw_action = await self._raw_action(context)
         action = self._parse_action(raw_action)
-        has_agent_output = bool(context.state_context.agent_outputs)
-        if action.action == PlannerActionType.COMPLETE:
-            has_agent_output = bool(
-                context.state_context.agent_outputs or context.state_context.facts
-            )
         return PlannerActionValidator.validate(
             action,
             candidate_agent_ids=context.candidate_agent_ids,
             steps_used=context.state_context.current_step.steps_used,
             step_budget=context.state_context.current_step.step_budget,
-            has_agent_output=has_agent_output,
+            has_agent_output=self._has_completion_basis(context),
         )
+
+    @staticmethod
+    def _has_completion_basis(context: OrchestrationPlannerContext) -> bool:
+        if context.state_context.agent_outputs or context.state_context.facts:
+            return True
+
+        snapshot = context.state_context.participant_snapshot
+        if not isinstance(snapshot, Mapping):
+            return False
+        ordered_agent_ids = snapshot.get("ordered_agent_ids")
+        if not isinstance(ordered_agent_ids, list) or not ordered_agent_ids:
+            return False
+
+        completed_counts: dict[str, int] = {}
+        for output in context.state_context.agent_outputs:
+            if output.get("status") not in {"success", "completed", "failed"}:
+                continue
+            agent_id = output.get("agent_id")
+            if isinstance(agent_id, str):
+                completed_counts[agent_id] = completed_counts.get(agent_id, 0) + 1
+
+        remaining_completed_counts = dict(completed_counts)
+        for raw_agent_id in ordered_agent_ids:
+            if not isinstance(raw_agent_id, str):
+                continue
+            if remaining_completed_counts.get(raw_agent_id, 0) > 0:
+                remaining_completed_counts[raw_agent_id] -= 1
+                continue
+            return True
+        return False
 
     async def _raw_action(
         self,

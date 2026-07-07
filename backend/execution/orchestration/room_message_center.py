@@ -2504,8 +2504,11 @@ class RoomMessageCenter:
 
             case RunStatus.CANCELED:
                 canceled_parent_ids: list[str] = []
+                cleanup_trajectory = self._compat_trajectory_for_supervisor_result(
+                    result
+                )
                 for entry in (
-                    result_trajectory.entries if result_trajectory else []
+                    cleanup_trajectory.entries if cleanup_trajectory else []
                 ):
                     for step_result in entry.results:
                         if step_result.agent_message_id:
@@ -2539,8 +2542,11 @@ class RoomMessageCenter:
 
             case RunStatus.FAILED:
                 failed_parent_ids: list[str] = []
+                cleanup_trajectory = self._compat_trajectory_for_supervisor_result(
+                    result
+                )
                 for entry in (
-                    result_trajectory.entries if result_trajectory else []
+                    cleanup_trajectory.entries if cleanup_trajectory else []
                 ):
                     for step_result in entry.results:
                         if step_result.agent_message_id:

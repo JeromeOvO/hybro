@@ -887,6 +887,70 @@ async def test_completed_state_run_result_adds_synthesis_history_with_projection
     )
 
 
+@pytest.mark.parametrize(
+    ("run_status", "orchestration_status"),
+    [
+        (RunStatus.FAILED, OrchestrationStatus.FAILED),
+        (RunStatus.CANCELED, OrchestrationStatus.CANCELED),
+    ],
+)
+@pytest.mark.asyncio
+async def test_terminal_state_run_result_cleans_descendants_from_run_state_outputs(
+    run_status,
+    orchestration_status,
+):
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need quote"),
+        extend_info={
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "msg-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+        },
+    )
+    state = _completed_state_with_agent_outputs()
+    state.status = orchestration_status
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock(),
+        cancel_descendants=AsyncMock(),
+        cancel_agent_messages_by_ids=AsyncMock(),
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc._turn_event_appender = None
+    rmc.delivery = SimpleNamespace(
+        clear_cancellation=MagicMock(),
+        remove_token=MagicMock(),
+    )
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=run_status,
+            trajectory=None,
+            run_id="msg-1",
+            run_state=state,
+        ),
+        room_id="room-1",
+        user_message_id="msg-1",
+        user_message=user_message,
+    )
+
+    assert [
+        call.args[0]
+        for call in rmc.message_writer.cancel_descendants.await_args_list
+    ] == ["agent-msg-1", "agent-msg-2"]
+    rmc.message_writer.cancel_agent_messages_by_ids.assert_awaited_once_with(
+        ["agent-msg-1", "agent-msg-2"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)

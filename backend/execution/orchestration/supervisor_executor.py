@@ -65,6 +65,7 @@ from models.orchestration import (
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
+    PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
 )
@@ -719,6 +720,10 @@ class SupervisorExecutor:
                     ),
                 )
 
+            planner_action = self._apply_participant_turn_policy(
+                state,
+                planner_action,
+            )
             try:
                 planner_action = PlannerActionValidator.validate(
                     planner_action,
@@ -738,10 +743,6 @@ class SupervisorExecutor:
                         state=state,
                     ),
                 )
-            planner_action = self._apply_participant_turn_policy(
-                state,
-                planner_action,
-            )
             state = await self._record_v2_planner_action(state, planner_action)
 
             match planner_action.action:
@@ -901,23 +902,97 @@ class SupervisorExecutor:
         return None
 
     @staticmethod
+    def _participant_agent_name(
+        state: OrchestrationRunState,
+        agent_id: str,
+    ) -> str:
+        if state.candidate_scope is not None:
+            for candidate in state.candidate_scope.agents:
+                if candidate.agent_id == agent_id:
+                    return candidate.name or agent_id
+        return agent_id
+
+    @staticmethod
+    def _policy_task_for_next_participant(
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+    ) -> str:
+        for target in planner_action.targets:
+            if target.task.strip():
+                return target.task
+        if state.goal.strip():
+            return state.goal
+        if planner_action.reasoning.strip():
+            return planner_action.reasoning
+        return "Respond to the user's request"
+
+    @staticmethod
+    def _delegate_action_for_next_participant(
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+        next_agent_id: str,
+    ) -> PlannerAction:
+        reasoning = planner_action.reasoning.strip()
+        if reasoning:
+            reasoning = (
+                f"{reasoning} Routed to next required participant "
+                f"{next_agent_id} by turn policy."
+            )
+        else:
+            reasoning = (
+                f"Routed to next required participant {next_agent_id} "
+                "by turn policy."
+            )
+        return planner_action.model_copy(
+            update={
+                "action": PlannerActionType.DELEGATE,
+                "reasoning": reasoning,
+                "targets": [
+                    PlannedDelegateTarget(
+                        agent_id=next_agent_id,
+                        agent_name=SupervisorExecutor._participant_agent_name(
+                            state,
+                            next_agent_id,
+                        ),
+                        task=SupervisorExecutor._policy_task_for_next_participant(
+                            state,
+                            planner_action,
+                        ),
+                    )
+                ],
+                "questions": [],
+                "synthesis_instruction": None,
+                "failure_reason": None,
+                "completion_evidence": None,
+            }
+        )
+
+    @staticmethod
     def _apply_participant_turn_policy(
         state: OrchestrationRunState,
         planner_action: PlannerAction,
     ) -> PlannerAction:
-        if (
-            planner_action.action != PlannerActionType.DELEGATE
-            or len(planner_action.targets) <= 1
-        ):
-            return planner_action
-
         next_agent_id = SupervisorExecutor._next_participant_agent_id(state)
         if next_agent_id is None:
             return planner_action
 
-        for target in planner_action.targets:
-            if target.agent_id == next_agent_id:
-                return planner_action.model_copy(update={"targets": [target]})
+        if planner_action.action == PlannerActionType.DELEGATE:
+            for target in planner_action.targets:
+                if target.agent_id == next_agent_id:
+                    return planner_action.model_copy(update={"targets": [target]})
+            return SupervisorExecutor._delegate_action_for_next_participant(
+                state,
+                planner_action,
+                next_agent_id,
+            )
+
+        if planner_action.action == PlannerActionType.COMPLETE:
+            return SupervisorExecutor._delegate_action_for_next_participant(
+                state,
+                planner_action,
+                next_agent_id,
+            )
+
         return planner_action
 
     @staticmethod

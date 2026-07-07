@@ -1906,6 +1906,67 @@ async def test_run_accepts_legacy_done_from_room_supervisor_adapter():
 
 
 @pytest.mark.asyncio
+async def test_run_accepts_legacy_done_from_adapter_with_facts_only_state():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+
+    async def raw_action_provider(_context):
+        return {
+            "action": "done",
+            "reasoning": "facts satisfy the request",
+        }
+
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.facts.append(
+        {
+            "fact_id": "fact-1",
+            "text": "The customer already selected Account A.",
+            "source": "hitl_user_reply",
+        }
+    )
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RoomSupervisorPlannerAdapter(raw_action_provider=raw_action_provider),
+        user_message=user_message,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.trajectory is None
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.run_state.facts[0]["fact_id"] == "fact-1"
+
+
+@pytest.mark.asyncio
 async def test_run_reentry_reconciles_inflight_dispatch_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
