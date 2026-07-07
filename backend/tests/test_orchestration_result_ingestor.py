@@ -391,3 +391,94 @@ def test_reingesting_failed_result_without_text_removes_existing_fact():
 
     assert failed_update.facts == []
     assert canceled_update.facts == []
+
+
+def test_reingesting_artifacts_replaces_current_keys_and_removes_stale_records():
+    ingestor = AgentResultIngestor()
+    other_agent = AgentResultRead(
+        agent_message_id="agent-msg-2",
+        agent_id="agent-2",
+        status="completed",
+        artifacts=[{"artifact_id": "other", "name": "Other quote"}],
+    )
+    two_artifacts = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {"artifact_id": "quote-1", "name": "Quote 1"},
+            {"artifact_id": "quote-2", "name": "Quote 2"},
+        ],
+    )
+    one_artifact = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[{"artifact_id": "quote-1", "name": "Quote 1 updated"}],
+    )
+    state = ingestor.ingest(_run_state(), other_agent)
+    with_two = ingestor.ingest(state, two_artifacts)
+    with_one = ingestor.ingest(with_two, one_artifact)
+
+    output_with_one = next(
+        output
+        for output in with_one.agent_outputs
+        if output.agent_message_id == "agent-msg-1"
+    )
+    assert output_with_one.artifact_keys == ["agent-msg-1:artifact_id:quote-1"]
+    assert [
+        artifact["artifact_key"]
+        for artifact in with_one.artifacts
+        if artifact.get("source_agent_message_id") == "agent-msg-1"
+    ] == ["agent-msg-1:artifact_id:quote-1"]
+    assert any(
+        artifact.get("artifact_key") == "agent-msg-2:artifact_id:other"
+        for artifact in with_one.artifacts
+    )
+
+def test_reingesting_failed_or_canceled_text_removes_existing_fact():
+    ingestor = AgentResultIngestor()
+    first = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+    failed = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text="Partial carrier response.",
+    )
+    canceled = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="canceled",
+        text="Stopped before completion.",
+    )
+
+    once = ingestor.ingest(_run_state(), first)
+    failed_update = ingestor.ingest(once, failed)
+    canceled_update = ingestor.ingest(once, canceled)
+
+    assert failed_update.facts == []
+    assert canceled_update.facts == []
+
+
+def test_ingest_artifact_summary_falls_back_to_description():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "description": "Detailed quote description",
+                "summary": " ",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.artifacts[0]["summary"] == "Detailed quote description"

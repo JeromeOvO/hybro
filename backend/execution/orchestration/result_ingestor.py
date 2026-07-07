@@ -108,6 +108,22 @@ class AgentResultIngestor:
             existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
 
+        if result.artifacts:
+            current_artifact_keys = set(result_artifact_keys)
+            retained_artifacts = [
+                artifact
+                for artifact in state.artifacts
+                if not (
+                    isinstance(artifact, dict)
+                    and artifact.get("source_agent_message_id")
+                    == result.agent_message_id
+                    and artifact.get("artifact_key") not in current_artifact_keys
+                )
+            ]
+            if retained_artifacts != state.artifacts:
+                state.artifacts = retained_artifacts
+                changed = True
+
         return result_artifact_keys, changed
 
     @staticmethod
@@ -150,10 +166,9 @@ class AgentResultIngestor:
             if result.error is not None and existing_output.error != result.error:
                 existing_output.error = result.error
                 changed = True
-            for artifact_key in result_artifact_keys:
-                if artifact_key not in existing_output.artifact_keys:
-                    existing_output.artifact_keys.append(artifact_key)
-                    changed = True
+            if result.artifacts and existing_output.artifact_keys != result_artifact_keys:
+                existing_output.artifact_keys = result_artifact_keys
+                changed = True
 
         return changed
 
@@ -170,7 +185,7 @@ class AgentResultIngestor:
             if isinstance(fact, dict)
         }
         existing_fact = existing_facts_by_id.get(fact_id)
-        if text:
+        if text and _is_fact_projectable(result):
             fact_record = {
                 "fact_id": fact_id,
                 "source_agent_message_id": result.agent_message_id,
@@ -198,7 +213,7 @@ class AgentResultIngestor:
 
 
 def _artifact_summary(artifact: dict[str, Any]) -> str:
-    for field in ("summary", "name", "title"):
+    for field in ("summary", "name", "title", "description"):
         value = artifact.get(field)
         if isinstance(value, str):
             if value.strip():
@@ -206,6 +221,10 @@ def _artifact_summary(artifact: dict[str, Any]) -> str:
         elif value is not None:
             return str(value)[:240]
     return ""
+
+
+def _is_fact_projectable(result: AgentResultRead) -> bool:
+    return result.status == "completed"
 
 
 def _apply_artifact_projection(
