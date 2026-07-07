@@ -170,6 +170,103 @@ class SupervisorExecutor:
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
 
+    @staticmethod
+    def _run_status_from_orchestration_status(
+        status: OrchestrationStatus,
+    ) -> RunStatus:
+        if status == OrchestrationStatus.COMPLETED:
+            return RunStatus.COMPLETED
+        if status == OrchestrationStatus.CANCELED:
+            return RunStatus.CANCELED
+        if status == OrchestrationStatus.AWAITING_USER:
+            return RunStatus.AWAITING_INPUT
+        if status == OrchestrationStatus.WAITING_AGENT:
+            return RunStatus.PAUSED
+        return RunStatus.FAILED
+
+    @staticmethod
+    def _state_run_result(
+        *,
+        status: RunStatus,
+        state: OrchestrationRunState,
+        synthesis_text: str | None = None,
+        clarification_question: str | None = None,
+    ) -> SupervisorRunResult:
+        return SupervisorRunResult(
+            status=status,
+            trajectory=None,
+            run_id=state.run_id,
+            run_state=state,
+            synthesis_text=synthesis_text,
+            clarification_question=clarification_question,
+            terminal_reason=state.terminal_reason,
+        )
+
+    def _compat_trajectory_from_state(
+        self,
+        state: OrchestrationRunState,
+    ) -> SupervisorTrajectory:
+        trajectory = SupervisorTrajectory()
+        trajectory.system_agent_message_id = (
+            state.system_agent_message_id or state.summary_message_id
+        )
+        if state.participant_snapshot is not None:
+            trajectory.debate_agent_ids = list(
+                state.participant_snapshot.ordered_agent_ids
+            )
+        return trajectory
+
+    async def _log_state_and_return(
+        self,
+        room_id: str,
+        state: OrchestrationRunState,
+        result: SupervisorRunResult,
+    ) -> SupervisorRunResult:
+        logger.info(
+            "supervisor_run_completed",
+            extra={
+                "room_id": room_id,
+                "run_id": state.run_id,
+                "status": result.status,
+                "steps_used": state.steps_used,
+            },
+        )
+
+        system_message_id = state.system_agent_message_id or state.summary_message_id
+        if system_message_id and result.status != RunStatus.PAUSED:
+            try:
+                task_status = (
+                    "completed"
+                    if result.status == RunStatus.COMPLETED
+                    else result.status.value
+                )
+                await self.delivery.send_task_update(
+                    room_id=room_id,
+                    message_id=system_message_id,
+                    status=task_status,
+                )
+
+                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
+                    system_message_id
+                )
+                if (
+                    db_msg
+                    and db_msg.message_content
+                    and db_msg.message_content.message_task
+                ):
+                    db_msg.message_content.message_task.status.state = (
+                        system_task_state_from_runtime_status(task_status)
+                    )
+                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id,
+                        db_msg.message_content,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to update terminal state for system:hybro", exc_info=True
+                )
+        return result
+
     @property
     def run_store(self) -> OrchestrationRunStore:
         if not hasattr(self, "orchestration_run_store"):
@@ -290,99 +387,31 @@ class SupervisorExecutor:
     ) -> SupervisorRunResult:
         """Execute the supervisor loop using persisted orchestration run state."""
 
-        trajectory = (
-            getattr(self, "_resume_trajectory_for_state_loop", None)
-            or SupervisorTrajectory()
-        )
-        if state.system_agent_message_id:
-            trajectory.system_agent_message_id = state.system_agent_message_id
-        elif state.summary_message_id:
-            trajectory.system_agent_message_id = state.summary_message_id
         terminal_result = await self._v2_terminal_result_if_done(room_id, state)
         if terminal_result is not None:
             return terminal_result
-        has_hitl_reply = bool(
-            trajectory.hitl_user_reply or trajectory.clarify_user_reply
-        )
-        if (
-            state.status == OrchestrationStatus.INGESTING
-            and state.pending_hitl_request_ids
-            and not has_hitl_reply
-        ):
-            pending_action = self._v2_pending_hitl_planner_action(state)
-            if pending_action is not None:
-                return await self._run_v2_ask_user_action(
-                    state=state,
-                    planner_action=pending_action,
-                    trajectory=trajectory,
-                    agent_registry=agent_registry,
-                    room_config=room_config,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                    message_text=message_text,
-                    conversation_context=conversation_context,
-                    request_user_id=request_user_id,
-                    quoted_text=quoted_text,
-                    resume_pending_artifacts=True,
-                )
-            reason = (
-                "INGESTING checkpoint has pending HITL requests but no valid "
-                "ASK_USER planner action"
-            )
-            trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
-                state,
-                OrchestrationStatus.FAILED,
-                reason=reason,
-            )
-            del state
-            return await self._log_and_return(
-                room_id,
-                trajectory,
-                SupervisorRunResult(
-                    status=RunStatus.FAILED,
-                    trajectory=trajectory,
-                ),
-            )
         if (
             state.status == OrchestrationStatus.AWAITING_USER
             and state.pending_hitl_request_ids
-            and not has_hitl_reply
         ):
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
-            return await self._log_and_return(
+            return await self._log_state_and_return(
                 room_id,
-                trajectory,
-                SupervisorRunResult(
+                state,
+                self._state_run_result(
                     status=RunStatus.AWAITING_INPUT,
-                    trajectory=trajectory,
+                    state=state,
                 ),
             )
+
         state = await self._ensure_v2_running_state(state)
-        state = await self._resolve_v2_hitl_if_answered(state, trajectory)
-        state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
-            state,
-            trajectory,
-        )
-        if blocking_resume_status is not None:
-            return await self._log_and_return(
-                room_id,
-                trajectory,
-                SupervisorRunResult(
-                    status=blocking_resume_status,
-                    trajectory=trajectory,
-                ),
-            )
-        await self._ensure_v2_system_task(
+        state = await self._ensure_v2_system_task(
             room_id=room_id,
             user_message_id=user_message_id,
             request_user_id=request_user_id,
-            trajectory=trajectory,
             state=state,
         )
         state, recovered_status = await self._recover_v2_inflight_dispatch(
             state=state,
-            trajectory=trajectory,
             agent_registry=agent_registry,
             room_config=room_config,
             room_id=room_id,
@@ -395,30 +424,28 @@ class SupervisorExecutor:
             user_message=user_message,
         )
         if recovered_status is not None:
-            return await self._log_and_return(
+            return await self._log_state_and_return(
                 room_id,
-                trajectory,
-                SupervisorRunResult(
+                state,
+                self._state_run_result(
                     status=recovered_status,
-                    trajectory=trajectory,
+                    state=state,
                 ),
             )
 
         while state.steps_used <= state.step_budget:
             if token and token.is_cancelled:
-                trajectory.status = TrajectoryStatus.CANCELED
                 state = await self._mark_v2_terminal(
                     state,
                     OrchestrationStatus.CANCELED,
                     reason="request canceled",
                 )
-                del state
-                return await self._log_and_return(
+                return await self._log_state_and_return(
                     room_id,
-                    trajectory,
-                    SupervisorRunResult(
+                    state,
+                    self._state_run_result(
                         status=RunStatus.CANCELED,
-                        trajectory=trajectory,
+                        state=state,
                     ),
                 )
 
@@ -483,35 +510,31 @@ class SupervisorExecutor:
                     await token.race(plan_coro) if token else await plan_coro
                 )
             except CancellationError:
-                trajectory.status = TrajectoryStatus.CANCELED
                 state = await self._mark_v2_terminal(
                     state,
                     OrchestrationStatus.CANCELED,
                     reason="request canceled",
                 )
-                del state
-                return await self._log_and_return(
+                return await self._log_state_and_return(
                     room_id,
-                    trajectory,
-                    SupervisorRunResult(
+                    state,
+                    self._state_run_result(
                         status=RunStatus.CANCELED,
-                        trajectory=trajectory,
+                        state=state,
                     ),
                 )
             except (PlannerActionValidationError, ValueError) as exc:
-                trajectory.status = TrajectoryStatus.FAILED
                 state = await self._mark_v2_terminal(
                     state,
                     OrchestrationStatus.FAILED,
                     reason=str(exc),
                 )
-                del state
-                return await self._log_and_return(
+                return await self._log_state_and_return(
                     room_id,
-                    trajectory,
-                    SupervisorRunResult(
+                    state,
+                    self._state_run_result(
                         status=RunStatus.FAILED,
-                        trajectory=trajectory,
+                        state=state,
                     ),
                 )
 
@@ -521,19 +544,17 @@ class SupervisorExecutor:
                     run_state=state,
                 )
             except PlannerActionValidationError as exc:
-                trajectory.status = TrajectoryStatus.FAILED
                 state = await self._mark_v2_terminal(
                     state,
                     OrchestrationStatus.FAILED,
                     reason=str(exc),
                 )
-                del state
-                return await self._log_and_return(
+                return await self._log_state_and_return(
                     room_id,
-                    trajectory,
-                    SupervisorRunResult(
+                    state,
+                    self._state_run_result(
                         status=RunStatus.FAILED,
-                        trajectory=trajectory,
+                        state=state,
                     ),
                 )
             state = await self._record_v2_planner_action(state, planner_action)
@@ -543,7 +564,6 @@ class SupervisorExecutor:
                     state, paused_status = await self._run_delegate_action(
                         state=state,
                         planner_action=planner_action,
-                        trajectory=trajectory,
                         agent_registry=agent_registry,
                         room_config=room_config,
                         room_id=room_id,
@@ -556,12 +576,12 @@ class SupervisorExecutor:
                         user_message=user_message,
                     )
                     if paused_status is not None:
-                        return await self._log_and_return(
+                        return await self._log_state_and_return(
                             room_id,
-                            trajectory,
-                            SupervisorRunResult(
+                            state,
+                            self._state_run_result(
                                 status=paused_status,
-                                trajectory=trajectory,
+                                state=state,
                             ),
                         )
 
@@ -569,36 +589,23 @@ class SupervisorExecutor:
                     return await self._run_synthesis_action(
                         state=state,
                         planner_action=planner_action,
-                        trajectory=trajectory,
                         room_id=room_id,
                         user_message_id=user_message_id,
                         token=token,
                     )
 
                 case PlannerActionType.COMPLETE:
-                    entry = TrajectoryEntry(
-                        step_number=state.steps_used + 1,
-                        action=self._v2_supervisor_action(
-                            planner_action,
-                            agent_registry,
-                        ),
-                        started_at=utcnow(),
-                        completed_at=utcnow(),
-                    )
-                    trajectory.entries.append(entry)
-                    trajectory.status = TrajectoryStatus.COMPLETED
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.COMPLETED,
                         reason=planner_action.reasoning,
                     )
-                    del state
-                    return await self._log_and_return(
+                    return await self._log_state_and_return(
                         room_id,
-                        trajectory,
-                        SupervisorRunResult(
+                        state,
+                        self._state_run_result(
                             status=RunStatus.COMPLETED,
-                            trajectory=trajectory,
+                            state=state,
                         ),
                     )
 
@@ -606,7 +613,6 @@ class SupervisorExecutor:
                     result = await self._run_ask_user_action(
                         state=state,
                         planner_action=planner_action,
-                        trajectory=trajectory,
                         agent_registry=agent_registry,
                         room_config=room_config,
                         room_id=room_id,
@@ -619,7 +625,6 @@ class SupervisorExecutor:
                     return result
 
                 case PlannerActionType.FAIL:
-                    trajectory.status = TrajectoryStatus.FAILED
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.FAILED,
@@ -629,27 +634,24 @@ class SupervisorExecutor:
                             or "planner failed the run"
                         ),
                     )
-                    del state
-                    return await self._log_and_return(
+                    return await self._log_state_and_return(
                         room_id,
-                        trajectory,
-                        SupervisorRunResult(
+                        state,
+                        self._state_run_result(
                             status=RunStatus.FAILED,
-                            trajectory=trajectory,
+                            state=state,
                         ),
                     )
 
-        trajectory.status = TrajectoryStatus.FAILED
         state = await self._mark_v2_terminal(
             state,
             OrchestrationStatus.BUDGET_EXHAUSTED,
             reason="step budget exhausted",
         )
-        del state
-        return await self._log_and_return(
+        return await self._log_state_and_return(
             room_id,
-            trajectory,
-            SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
+            state,
+            self._state_run_result(status=RunStatus.FAILED, state=state),
         )
 
     @staticmethod
@@ -747,14 +749,22 @@ class SupervisorExecutor:
         room_id: str,
         user_message_id: str,
         request_user_id: str | None,
-        trajectory: SupervisorTrajectory,
         state: OrchestrationRunState,
-    ) -> None:
-        if trajectory.system_agent_message_id:
-            return
+    ) -> OrchestrationRunState:
+        if state.system_agent_message_id:
+            return state
 
         sys_message_id = state.summary_message_id or f"sys-{user_message_id}"
-        trajectory.system_agent_message_id = sys_message_id
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={"system_agent_message_id": sys_message_id},
+            mutate=lambda updated: setattr(
+                updated,
+                "system_agent_message_id",
+                sys_message_id,
+            ),
+        )
         try:
             sys_msg = self.room_runtime.create_agent_message(
                 room_id=room_id,
@@ -782,6 +792,7 @@ class SupervisorExecutor:
             )
         except Exception:
             logger.warning("Failed to emit v2 system:hybro task", exc_info=True)
+        return state
 
     async def _record_v2_planner_action(
         self,
@@ -831,7 +842,6 @@ class SupervisorExecutor:
         *,
         state: OrchestrationRunState,
         planner_action: PlannerAction,
-        trajectory: SupervisorTrajectory,
         agent_registry: list[AgentProfile],
         room_config: RoomConfig,
         room_id: str,
@@ -843,6 +853,7 @@ class SupervisorExecutor:
         quoted_text: str | None,
         user_message,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
@@ -1006,7 +1017,6 @@ class SupervisorExecutor:
         self,
         *,
         state: OrchestrationRunState,
-        trajectory: SupervisorTrajectory,
         agent_registry: list[AgentProfile],
         room_config: RoomConfig,
         room_id: str,
@@ -1018,6 +1028,7 @@ class SupervisorExecutor:
         quoted_text: str | None,
         user_message,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        trajectory = self._compat_trajectory_from_state(state)
         step_number = state.steps_used + 1
         step_id = f"{state.run_id}:step-{step_number}"
         terminal_statuses = {
@@ -1494,20 +1505,14 @@ class SupervisorExecutor:
         if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
             return None
 
-        trajectory = SupervisorTrajectory()
-        status = RunStatus.FAILED
-        if state.status == OrchestrationStatus.COMPLETED:
-            trajectory.status = TrajectoryStatus.COMPLETED
-            status = RunStatus.COMPLETED
-        elif state.status == OrchestrationStatus.CANCELED:
-            trajectory.status = TrajectoryStatus.CANCELED
-            status = RunStatus.CANCELED
-        else:
-            trajectory.status = TrajectoryStatus.FAILED
-        return await self._log_and_return(
+        result = self._state_run_result(
+            status=self._run_status_from_orchestration_status(state.status),
+            state=state,
+        )
+        return await self._log_state_and_return(
             room_id,
-            trajectory,
-            SupervisorRunResult(status=status, trajectory=trajectory),
+            state,
+            result,
         )
 
     async def _sync_v2_resumed_trajectory(
@@ -1660,7 +1665,6 @@ class SupervisorExecutor:
         *,
         state: OrchestrationRunState,
         planner_action: PlannerAction,
-        trajectory: SupervisorTrajectory,
         agent_registry: list[AgentProfile],
         room_config: RoomConfig,
         room_id: str,
@@ -1674,6 +1678,7 @@ class SupervisorExecutor:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
+        trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
         step_number = (
             state.steps_used if resume_pending_artifacts else state.steps_used + 1
@@ -1810,13 +1815,12 @@ class SupervisorExecutor:
                     OrchestrationStatus.FAILED,
                     reason="failed to create v2 HITL request",
                 )
-                del state
-                return await self._log_and_return(
+                return await self._log_state_and_return(
                     room_id,
-                    trajectory,
-                    SupervisorRunResult(
+                    state,
+                    self._state_run_result(
                         status=RunStatus.FAILED,
-                        trajectory=trajectory,
+                        state=state,
                     ),
                 )
             created_request_ids.append(request.request_id)
@@ -1844,13 +1848,12 @@ class SupervisorExecutor:
                 OrchestrationStatus.FAILED,
                 reason="failed to save v2 HITL continuation",
             )
-            del state
-            return await self._log_and_return(
+            return await self._log_state_and_return(
                 room_id,
-                trajectory,
-                SupervisorRunResult(
+                state,
+                self._state_run_result(
                     status=RunStatus.FAILED,
-                    trajectory=trajectory,
+                    state=state,
                 ),
             )
 
@@ -1874,7 +1877,6 @@ class SupervisorExecutor:
             },
             mutate=mark_awaiting_user,
         )
-        del state
 
         try:
             await self._emit_processing_status(
@@ -1886,12 +1888,12 @@ class SupervisorExecutor:
         except Exception:
             logger.debug("SSE v2 awaiting input notification failed", exc_info=True)
 
-        return await self._log_and_return(
+        return await self._log_state_and_return(
             room_id,
-            trajectory,
-            SupervisorRunResult(
+            state,
+            self._state_run_result(
                 status=RunStatus.AWAITING_INPUT,
-                trajectory=trajectory,
+                state=state,
                 clarification_question=questions[0].prompt if questions else None,
             ),
         )
@@ -1901,11 +1903,11 @@ class SupervisorExecutor:
         *,
         state: OrchestrationRunState,
         planner_action: PlannerAction,
-        trajectory: SupervisorTrajectory,
         room_id: str,
         user_message_id: str,
         token: CancellationToken | None,
     ) -> SupervisorRunResult:
+        trajectory = self._compat_trajectory_from_state(state)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
             action=self._v2_supervisor_action(planner_action, []),
@@ -1934,13 +1936,12 @@ class SupervisorExecutor:
                 OrchestrationStatus.CANCELED,
                 reason="request canceled",
             )
-            del state
-            return await self._log_and_return(
+            return await self._log_state_and_return(
                 room_id,
-                trajectory,
-                SupervisorRunResult(
+                state,
+                self._state_run_result(
                     status=RunStatus.CANCELED,
-                    trajectory=trajectory,
+                    state=state,
                 ),
             )
 
@@ -1979,13 +1980,12 @@ class SupervisorExecutor:
             OrchestrationStatus.COMPLETED,
             reason=planner_action.reasoning,
         )
-        del state
-        return await self._log_and_return(
+        return await self._log_state_and_return(
             room_id,
-            trajectory,
-            SupervisorRunResult(
+            state,
+            self._state_run_result(
                 status=RunStatus.COMPLETED,
-                trajectory=trajectory,
+                state=state,
                 synthesis_text=synthesis,
             ),
         )
@@ -2253,54 +2253,33 @@ class SupervisorExecutor:
             room_config=room_config,
             user_message=user_message,
         )
-        previous_resume_trajectory = getattr(
-            self,
-            "_resume_trajectory_for_state_loop",
-            None,
-        )
         if resumed_trajectory is not None:
-            self._resume_trajectory_for_state_loop = resumed_trajectory
-        try:
-            result = await self._execute_orchestration_loop(
-                state=state,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                conversation_context=conversation_context,
-                token=token,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-                user_message=user_message,
+            state = await self._resolve_v2_hitl_if_answered(
+                state,
+                resumed_trajectory,
             )
-        finally:
-            if previous_resume_trajectory is None:
-                try:
-                    del self._resume_trajectory_for_state_loop
-                except AttributeError:
-                    pass
-            else:
-                self._resume_trajectory_for_state_loop = previous_resume_trajectory
-        latest_state = await self.run_store.get_run(state.run_id)
-        return self._run_result_from_state(
-            result,
-            run_state=latest_state or state,
-        )
+            state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
+                state,
+                resumed_trajectory,
+            )
+            if blocking_resume_status is not None:
+                return self._state_run_result(
+                    status=blocking_resume_status,
+                    state=state,
+                )
 
-    @staticmethod
-    def _run_result_from_state(
-        result: SupervisorRunResult,
-        *,
-        run_state: OrchestrationRunState,
-    ) -> SupervisorRunResult:
-        return result.model_copy(
-            update={
-                "trajectory": None,
-                "run_id": run_state.run_id,
-                "run_state": run_state,
-                "terminal_reason": run_state.terminal_reason,
-            }
+        return await self._execute_orchestration_loop(
+            state=state,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            token=token,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            user_message=user_message,
         )
 
     # ------------------------------------------------------------------

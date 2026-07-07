@@ -747,7 +747,7 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
 
 
 @pytest.mark.asyncio
-async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
+async def test_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -787,7 +787,9 @@ async def test_v2_orchestration_envelope_routes_to_supervisor_executor():
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock(
-            side_effect=AssertionError("v2 supervisor envelope should not use queue path")
+            side_effect=AssertionError(
+                "orchestration envelope should not use queue path"
+            )
         )
     )
     rmc.agent_lookup = SimpleNamespace(

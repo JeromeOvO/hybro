@@ -2186,7 +2186,9 @@ async def test_persisted_schema_version_routes_to_run_without_current_flag():
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock(
-            side_effect=AssertionError("v2 supervisor envelope should not use queue path")
+            side_effect=AssertionError(
+                "orchestration envelope should not use queue path"
+            )
         )
     )
     rmc.agent_lookup = SimpleNamespace(
@@ -2237,7 +2239,7 @@ async def test_persisted_schema_version_routes_to_run_without_current_flag():
 
 
 @pytest.mark.asyncio
-async def test_v2_supervisor_initial_run_receives_context_memory():
+async def test_orchestration_initial_run_receives_context_memory():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -2325,7 +2327,7 @@ async def test_v2_supervisor_initial_run_receives_context_memory():
     assert run_kwargs["conversation_context"] == "Context from room memory"
 
 
-def test_v2_supervisor_envelope_requires_candidate_scope():
+def test_orchestration_envelope_requires_candidate_scope():
     assert (
         RoomMessageCenter._is_v2_supervisor_envelope(
             {
@@ -2348,7 +2350,7 @@ def test_v2_supervisor_envelope_requires_candidate_scope():
 
 
 @pytest.mark.asyncio
-async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight():
+async def test_room_message_center_orchestration_result_keeps_user_extend_info_lightweight():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -2386,7 +2388,7 @@ async def test_room_message_center_v2_result_keeps_user_extend_info_lightweight(
 
 
 @pytest.mark.asyncio
-async def test_room_message_center_v2_resume_preserves_serialized_candidate_registry():
+async def test_room_message_center_orchestration_resume_preserves_serialized_candidate_registry():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     trajectory = SupervisorTrajectory()
     continuation = {

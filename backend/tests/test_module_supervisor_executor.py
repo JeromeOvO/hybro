@@ -19,6 +19,7 @@ import pytest
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
+from models.orchestration import OrchestrationRunState, OrchestrationStatus
 from models.processing import ProcessingResult, ProcessingStatus
 from models.supervisor import (
     ActionType,
@@ -218,6 +219,41 @@ async def test_run_creates_orchestration_state_without_legacy_or_trajectory_chec
     assert state.candidate_scope is not None
     assert state.candidate_scope.agent_ids == ["agent-1"]
     assert "supervisor_trajectory" not in (user_message.extend_info or {})
+
+
+@pytest.mark.asyncio
+async def test_execute_orchestration_loop_returns_terminal_run_state_without_trajectory():
+    executor = _make_supervisor_executor()
+    state = OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=[],
+        status=OrchestrationStatus.COMPLETED,
+        terminal_reason="already completed",
+    )
+
+    result = await executor._execute_orchestration_loop(
+        state=state,
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=None,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.trajectory is None
+    assert result.run_id == "msg-1"
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.terminal_reason == "already completed"
 
 
 @pytest.mark.asyncio
@@ -631,7 +667,7 @@ class TestProcessingStatusLifecycleOrder:
         se.delivery.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_agent_hitl_receives_v2_orchestration_run_link(self):
+    async def test_agent_hitl_receives_orchestration_run_link(self):
         se = _make_supervisor_executor()
         se.bind_execution_event_deps(AsyncMock())
         se.supervisor_service.decide_next = AsyncMock(
@@ -735,7 +771,7 @@ class TestProcessingStatusLifecycleOrder:
         se.delivery.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_supervisor_hitl_receives_v2_orchestration_run_link(self):
+    async def test_supervisor_hitl_receives_orchestration_run_link(self):
         se = _make_supervisor_executor()
         se.bind_execution_event_deps(AsyncMock())
         se.supervisor_service.decide_next = AsyncMock(
