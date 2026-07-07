@@ -362,7 +362,9 @@ def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[An
 def _candidate_items_from_object(candidate_scope: Any) -> list[Any]:
     raw_agents = _first_attr_value(candidate_scope, "agents", "candidate_agents")
     if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
-        return list(raw_agents)
+        items = list(raw_agents)
+        if items:
+            return items
 
     raw_ids = _first_attr_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):

@@ -212,6 +212,25 @@ def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
     assert [agent.agent_name for agent in context.candidate_scope.agents] == ["Insurer"]
 
 
+def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
+        candidate_scope=[_candidate("agent-2", "Legacy Agent")],
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():
     first = _run_state(
         facts=[{"b": 2, "a": 1}],
