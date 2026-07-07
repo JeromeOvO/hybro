@@ -97,6 +97,49 @@ class SequentialDebatePlanner:
         )
 
 
+class MultiTargetDebatePlanner:
+    """Planner fixture that over-selects remaining candidates like a raw LLM can."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        remaining = [
+            agent
+            for agent in context.candidate_scope.agents
+            if agent.is_healthy is not False and agent.agent_id not in handled_agent_ids
+        ]
+        if remaining:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Debate all remaining candidates",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id=agent.agent_id,
+                        agent_name=agent.agent_name or agent.agent_id,
+                        task=context.message_text,
+                    )
+                    for agent in remaining
+                ],
+            )
+
+        return PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="All healthy debate candidates responded",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["All healthy debate candidates responded"],
+                final_answer_intent="Debate complete",
+                confidence=1.0,
+            ),
+        )
+
+
 def _make_agent_profile(agent_id: str, name: str, healthy: bool = True) -> AgentProfile:
     return AgentProfile(
         agent_id=agent_id,
@@ -518,6 +561,55 @@ class TestSequentialDebateDispatch:
         assert [event.agent_id for event in committed_events] == ["a1", "a2"]
         assert [event.agent_name for event in committed_events] == ["Alpha", "Beta"]
         assert [event.was_successful for event in committed_events] == [True, True]
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_limits_multi_target_planner_to_next_participant(self, se):
+        """Debate room policy should narrow an over-selected planner action."""
+        se.orchestration_planner = MultiTargetDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        assert result.trajectory is None
+        assert result.run_state is not None
+        assert result.run_state.participant_snapshot is not None
+        assert result.run_state.participant_snapshot.ordered_agent_ids == ["a1", "a2"]
+        assert result.run_state.participant_snapshot.turn_policy == "debate_rounds"
+        first_context = se.orchestration_planner.contexts[0]
+        assert first_context.state_context.participant_snapshot["turn_policy"] == (
+            "debate_rounds"
+        )
 
     @pytest.mark.asyncio
     async def test_done_after_all_agents(self, se):

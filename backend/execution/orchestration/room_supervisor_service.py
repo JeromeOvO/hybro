@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
 from common.utils.logger import get_logger
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
-from models.orchestration import PlannerAction, PlannerActionType
+from models.orchestration import CompletionEvidence, PlannerAction, PlannerActionType
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -906,6 +906,27 @@ class RoomSupervisorService:
                 raise ValueError("planner action question must be an object")
             questions.append(question)
 
+        completion_evidence = response_json.get("completion_evidence")
+        if (
+            planner_action_type == PlannerActionType.COMPLETE
+            and completion_evidence is None
+        ):
+            reasoning = str(response_json.get("reasoning") or "").strip()
+            final_answer_intent = (
+                str(response_json.get("final_answer_intent") or "").strip()
+                or str(response_json.get("synthesis_instruction") or "").strip()
+                or reasoning
+                or "Complete the orchestration with available agent responses"
+            )
+            completion_evidence = CompletionEvidence(
+                satisfied_criteria=[
+                    reasoning
+                    or "Legacy supervisor marked the orchestration complete"
+                ],
+                final_answer_intent=final_answer_intent,
+                confidence=0.7,
+            )
+
         return PlannerAction(
             action=planner_action_type,
             reasoning=response_json.get("reasoning", ""),
@@ -913,6 +934,7 @@ class RoomSupervisorService:
             questions=questions,
             synthesis_instruction=response_json.get("synthesis_instruction"),
             failure_reason=response_json.get("failure_reason"),
+            completion_evidence=completion_evidence,
         )
 
     @staticmethod

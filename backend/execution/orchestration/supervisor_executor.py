@@ -64,6 +64,7 @@ from models.orchestration import (
     OrchestrationRunEvent,
     OrchestrationRunState,
     OrchestrationStatus,
+    ParticipantSnapshot,
     PlannerAction,
     PlannerActionType,
 )
@@ -737,6 +738,10 @@ class SupervisorExecutor:
                         state=state,
                     ),
                 )
+            planner_action = self._apply_participant_turn_policy(
+                state,
+                planner_action,
+            )
             state = await self._record_v2_planner_action(state, planner_action)
 
             match planner_action.action:
@@ -835,6 +840,87 @@ class SupervisorExecutor:
         )
 
     @staticmethod
+    def _debate_participant_snapshot(
+        agent_registry: list[AgentProfile],
+        *,
+        debate_rounds: int,
+    ) -> ParticipantSnapshot | None:
+        ordered_once = [
+            agent.agent_id
+            for agent in agent_registry
+            if agent.is_healthy and agent.agent_id
+        ]
+        if not ordered_once:
+            return None
+        rounds = max(debate_rounds, 1)
+        return ParticipantSnapshot(
+            mode="debate",
+            ordered_agent_ids=ordered_once * rounds,
+            max_rounds=rounds,
+            turn_policy="debate_rounds",
+        )
+
+    def _configured_debate_rounds(self) -> int:
+        value = getattr(self, "debate_rounds", None)
+        if isinstance(value, int) and value > 0:
+            return value
+        settings_value = getattr(settings, "debate_rounds", None)
+        if isinstance(settings_value, int) and settings_value > 0:
+            return settings_value
+        return 1
+
+    @staticmethod
+    def _next_participant_agent_id(state: OrchestrationRunState) -> str | None:
+        snapshot = state.participant_snapshot
+        if snapshot is None or snapshot.turn_policy not in {
+            "debate_rounds",
+            "sequential_rounds",
+        }:
+            return None
+
+        completed_counts: dict[str, int] = {}
+        if state.agent_outputs:
+            for output in state.agent_outputs:
+                status = SupervisorExecutor._step_status_from_state_output_status(
+                    output.status
+                )
+                if status in {StepStatus.SUCCESS, StepStatus.FAILED}:
+                    completed_counts[output.agent_id] = (
+                        completed_counts.get(output.agent_id, 0) + 1
+                    )
+        else:
+            for agent_id in snapshot.completed_agent_ids:
+                completed_counts[agent_id] = completed_counts.get(agent_id, 0) + 1
+
+        remaining_completed_counts = dict(completed_counts)
+        for agent_id in snapshot.ordered_agent_ids:
+            if remaining_completed_counts.get(agent_id, 0) > 0:
+                remaining_completed_counts[agent_id] -= 1
+                continue
+            return agent_id
+        return None
+
+    @staticmethod
+    def _apply_participant_turn_policy(
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+    ) -> PlannerAction:
+        if (
+            planner_action.action != PlannerActionType.DELEGATE
+            or len(planner_action.targets) <= 1
+        ):
+            return planner_action
+
+        next_agent_id = SupervisorExecutor._next_participant_agent_id(state)
+        if next_agent_id is None:
+            return planner_action
+
+        for target in planner_action.targets:
+            if target.agent_id == next_agent_id:
+                return planner_action.model_copy(update={"targets": [target]})
+        return planner_action
+
+    @staticmethod
     def _step_budget_from_request(
         user_message=None,
         room_config: RoomConfig | None = None,
@@ -891,10 +977,19 @@ class SupervisorExecutor:
             and getattr(room_config, "is_debate_mode", False)
             and agent_registry
         ):
-            healthy_debate_agents = [
-                agent for agent in agent_registry if agent.is_healthy
+            state.participant_snapshot = self._debate_participant_snapshot(
+                agent_registry,
+                debate_rounds=self._configured_debate_rounds(),
+            )
+            debate_agent_ids = [
+                agent_id
+                for agent_id in (
+                    state.participant_snapshot.ordered_agent_ids
+                    if state.participant_snapshot is not None
+                    else []
+                )
             ]
-            state.step_budget = max(state.step_budget, len(healthy_debate_agents) + 1)
+            state.step_budget = max(state.step_budget, len(debate_agent_ids) + 1)
         try:
             return await self.run_store.create_run(state)
         except OrchestrationStoreConflict:

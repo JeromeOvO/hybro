@@ -1845,6 +1845,67 @@ async def test_run_adapter_validation_error_marks_sidecar_failed():
 
 
 @pytest.mark.asyncio
+async def test_run_accepts_legacy_done_from_room_supervisor_adapter():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    legacy_actions = [
+        {
+            "action": "delegate",
+            "reasoning": "ask the selected agent",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "task": "Handle the request",
+                }
+            ],
+        },
+        {
+            "action": "done",
+            "reasoning": "legacy done after agent response",
+        },
+    ]
+
+    async def raw_action_provider(_context):
+        return legacy_actions.pop(0)
+
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RoomSupervisorPlannerAdapter(raw_action_provider=raw_action_provider),
+        user_message=user_message,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.trajectory is None
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.run_state.terminal_reason == "legacy done after agent response"
+    assert result.run_state.decision_log[-1]["action"] == "complete"
+
+
+@pytest.mark.asyncio
 async def test_run_reentry_reconciles_inflight_dispatch_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
