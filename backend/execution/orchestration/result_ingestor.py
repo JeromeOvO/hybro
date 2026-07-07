@@ -63,8 +63,9 @@ class AgentResultIngestor:
             result,
             result_artifact_keys,
         )
+        fact_changed = self._merge_fact(updated, result)
 
-        if not artifacts_changed and not output_changed:
+        if not artifacts_changed and not output_changed and not fact_changed:
             return state
         updated.state_version += 1
         updated.updated_at = utcnow()
@@ -81,7 +82,6 @@ class AgentResultIngestor:
             for artifact in state.artifacts
             if isinstance(artifact, dict)
         }
-
         result_artifact_keys: list[str] = []
         for index, artifact in enumerate(result.artifacts):
             artifact_payload = copy.deepcopy(artifact)
@@ -97,6 +97,10 @@ class AgentResultIngestor:
 
             artifact_record = copy.deepcopy(artifact_payload)
             artifact_record["artifact_key"] = artifact_key
+            artifact_record.setdefault("source_agent_message_id", result.agent_message_id)
+            artifact_record.setdefault("source_agent_id", result.agent_id)
+            if "summary" not in artifact_record:
+                artifact_record["summary"] = _artifact_summary(artifact_record)
             state.artifacts.append(artifact_record)
             existing_artifact_keys.add(artifact_key)
             changed = True
@@ -149,3 +153,33 @@ class AgentResultIngestor:
                     changed = True
 
         return changed
+
+    @staticmethod
+    def _merge_fact(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+    ) -> bool:
+        text = result.text.strip() if isinstance(result.text, str) else ""
+        fact_id = f"{result.agent_message_id}:text"
+        existing_fact_ids = {
+            fact.get("fact_id")
+            for fact in state.facts
+            if isinstance(fact, dict)
+        }
+        if text and fact_id not in existing_fact_ids:
+            state.facts.append(
+                {
+                    "fact_id": fact_id,
+                    "source_agent_message_id": result.agent_message_id,
+                    "source_agent_id": result.agent_id,
+                    "kind": "agent_text",
+                    "text": text,
+                }
+            )
+            return True
+        return False
+
+
+def _artifact_summary(artifact: dict[str, Any]) -> str:
+    value = artifact.get("summary") or artifact.get("name") or artifact.get("title")
+    return str(value)[:240] if value is not None else ""

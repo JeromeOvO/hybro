@@ -103,6 +103,9 @@ def test_ingest_adds_output_and_artifact_records_without_mutating_input():
             "artifactId": "artifact-1",
             "name": "answer",
             "parts": [{"kind": "text", "text": "payload"}],
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "summary": "answer",
         }
     ]
 
@@ -155,3 +158,64 @@ def test_sparse_terminal_replay_preserves_richer_result_without_version_bump():
     assert replayed.agent_outputs[0].artifact_keys == [
         "agent-msg-1:artifact_id:artifact-1"
     ]
+
+
+def test_ingest_projects_text_into_deduplicated_fact():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.facts == [
+        {
+            "fact_id": "agent-msg-1:text",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "kind": "agent_text",
+            "text": "Carrier A can quote the risk.",
+        }
+    ]
+
+
+def test_reingesting_same_text_does_not_duplicate_fact():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+    ingestor = AgentResultIngestor()
+
+    once = ingestor.ingest(_run_state(), result)
+    twice = ingestor.ingest(once, result)
+
+    assert len(twice.facts) == 1
+    assert twice.facts[0]["fact_id"] == "agent-msg-1:text"
+
+
+def test_ingest_artifact_records_source_and_summary():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="See attached quote.",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "name": "Quote",
+                "mime_type": "application/json",
+                "summary": "Premium quote from Carrier A",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.artifacts[0]["artifact_key"] == "agent-msg-1:artifact_id:quote-1"
+    assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
+    assert updated.artifacts[0]["source_agent_id"] == "agent-1"
+    assert updated.artifacts[0]["summary"] == "Premium quote from Carrier A"
