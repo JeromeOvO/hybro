@@ -97,10 +97,9 @@ class AgentResultIngestor:
 
             artifact_record = copy.deepcopy(artifact_payload)
             artifact_record["artifact_key"] = artifact_key
-            artifact_record.setdefault("source_agent_message_id", result.agent_message_id)
-            artifact_record.setdefault("source_agent_id", result.agent_id)
-            if "summary" not in artifact_record:
-                artifact_record["summary"] = _artifact_summary(artifact_record)
+            artifact_record["source_agent_message_id"] = result.agent_message_id
+            artifact_record["source_agent_id"] = result.agent_id
+            artifact_record["summary"] = _artifact_summary(artifact_record)
             state.artifacts.append(artifact_record)
             existing_artifact_keys.add(artifact_key)
             changed = True
@@ -161,25 +160,35 @@ class AgentResultIngestor:
     ) -> bool:
         text = result.text.strip() if isinstance(result.text, str) else ""
         fact_id = f"{result.agent_message_id}:text"
-        existing_fact_ids = {
-            fact.get("fact_id")
+        existing_facts_by_id = {
+            fact.get("fact_id"): fact
             for fact in state.facts
             if isinstance(fact, dict)
         }
-        if text and fact_id not in existing_fact_ids:
-            state.facts.append(
-                {
-                    "fact_id": fact_id,
-                    "source_agent_message_id": result.agent_message_id,
-                    "source_agent_id": result.agent_id,
-                    "kind": "agent_text",
-                    "text": text,
-                }
-            )
-            return True
+        if text:
+            fact_record = {
+                "fact_id": fact_id,
+                "source_agent_message_id": result.agent_message_id,
+                "source_agent_id": result.agent_id,
+                "kind": "agent_text",
+                "text": text,
+            }
+            existing_fact = existing_facts_by_id.get(fact_id)
+            if existing_fact is None:
+                state.facts.append(fact_record)
+                return True
+            if any(existing_fact.get(key) != value for key, value in fact_record.items()):
+                existing_fact.update(fact_record)
+                return True
         return False
 
 
 def _artifact_summary(artifact: dict[str, Any]) -> str:
-    value = artifact.get("summary") or artifact.get("name") or artifact.get("title")
-    return str(value)[:240] if value is not None else ""
+    for field in ("summary", "name", "title"):
+        value = artifact.get(field)
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()[:240]
+        elif value is not None:
+            return str(value)[:240]
+    return ""

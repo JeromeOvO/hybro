@@ -219,3 +219,79 @@ def test_ingest_artifact_records_source_and_summary():
     assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
     assert updated.artifacts[0]["source_agent_id"] == "agent-1"
     assert updated.artifacts[0]["summary"] == "Premium quote from Carrier A"
+
+
+def test_ingest_artifact_overwrites_stale_source_metadata():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="See attached quote.",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "name": "Quote",
+                "source_agent_message_id": "stale-message",
+                "source_agent_id": "stale-agent",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
+    assert updated.artifacts[0]["source_agent_id"] == "agent-1"
+
+
+def test_ingest_artifact_blank_summary_falls_back_to_name_or_title():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="See attached quote.",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "name": "Carrier A quote",
+                "summary": None,
+            },
+            {
+                "artifact_id": "quote-2",
+                "title": "Carrier B quote",
+                "summary": "   ",
+            },
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.artifacts[0]["summary"] == "Carrier A quote"
+    assert updated.artifacts[1]["summary"] == "Carrier B quote"
+
+
+def test_reingesting_changed_text_updates_existing_fact():
+    ingestor = AgentResultIngestor()
+    first = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="Carrier A can quote the risk.",
+    )
+    changed = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-2",
+        status="completed",
+        text="Carrier B declined the risk.",
+    )
+
+    once = ingestor.ingest(_run_state(), first)
+    twice = ingestor.ingest(once, changed)
+
+    assert len(twice.facts) == 1
+    assert twice.facts[0] == {
+        "fact_id": "agent-msg-1:text",
+        "source_agent_message_id": "agent-msg-1",
+        "source_agent_id": "agent-2",
+        "kind": "agent_text",
+        "text": "Carrier B declined the risk.",
+    }
