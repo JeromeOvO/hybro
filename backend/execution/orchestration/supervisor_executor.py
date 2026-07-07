@@ -886,6 +886,15 @@ class SupervisorExecutor:
             )
             state.candidate_agent_ids = []
         state.step_budget = self._step_budget_from_request(user_message, room_config)
+        if (
+            room_config
+            and getattr(room_config, "is_debate_mode", False)
+            and agent_registry
+        ):
+            healthy_debate_agents = [
+                agent for agent in agent_registry if agent.is_healthy
+            ]
+            state.step_budget = max(state.step_budget, len(healthy_debate_agents) + 1)
         try:
             return await self.run_store.create_run(state)
         except OrchestrationStoreConflict:

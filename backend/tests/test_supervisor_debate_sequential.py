@@ -14,7 +14,14 @@ import pytest
 
 from common.dto import MessageCommitted
 from common.utils.time import utcnow
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
+from models.orchestration import (
+    CompletionEvidence,
+    PlannedDelegateTarget,
+    PlannerAction,
+    PlannerActionType,
+)
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -46,6 +53,50 @@ class RecordingEventPublisher:
         self.internal_events.append(event)
 
 
+class SequentialDebatePlanner:
+    """Planner fixture that drives one healthy candidate per state-loop step."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        healthy_candidates = [
+            agent
+            for agent in context.candidate_scope.agents
+            if agent.is_healthy is not False
+        ]
+        for agent in healthy_candidates:
+            if agent.agent_id in handled_agent_ids:
+                continue
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning=f"Debate: {agent.agent_name or agent.agent_id}",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id=agent.agent_id,
+                        agent_name=agent.agent_name or agent.agent_id,
+                        task=context.message_text,
+                    )
+                ],
+            )
+
+        return PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="All healthy debate candidates responded",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["All healthy debate candidates responded"],
+                final_answer_intent="Debate complete",
+                confidence=1.0,
+            ),
+        )
+
+
 def _make_agent_profile(agent_id: str, name: str, healthy: bool = True) -> AgentProfile:
     return AgentProfile(
         agent_id=agent_id,
@@ -71,6 +122,9 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.event_publisher = RecordingEventPublisher()
     se.rate_limit_service = MagicMock()
     se.debate_rounds = 1
+    se.orchestration_run_store = InMemoryOrchestrationRunStore()
+    se.orchestration_planner = SequentialDebatePlanner()
+    se._processing_status_emitter = AsyncMock()
     return se
 
 
@@ -119,6 +173,7 @@ def _make_delegate_entry(
                 response_text=response_text,
                 success=success,
                 status=StepStatus.SUCCESS if success else StepStatus.FAILED,
+                agent_message_id=f"agent-msg-{agent_id}",
             )
         ],
     )
@@ -474,7 +529,7 @@ class TestSequentialDebateDispatch:
                 step_number=1,
                 agent_id="a1",
                 agent_name="Alpha",
-                task="task",
+                task=targets[0].task,
                 response_text="done",
                 success=True,
                 status=StepStatus.SUCCESS,
@@ -492,8 +547,10 @@ class TestSequentialDebateDispatch:
         )
 
         assert result.status == RunStatus.COMPLETED
-        # Last trajectory entry should be DONE
-        assert result.trajectory.entries[-1].action.action == ActionType.DONE
+        assert result.trajectory is None
+        assert result.run_state is not None
+        assert result.run_state.status == "completed"
+        assert result.run_state.decision_log[-1]["action"] == "complete"
 
     @pytest.mark.asyncio
     async def test_budget_accommodates_all_agents(self, se):
@@ -584,15 +641,13 @@ class TestSequentialDebateDispatch:
         assert result.status == RunStatus.COMPLETED
         # a2 should NOT be dispatched (unhealthy on resume), only a3
         assert dispatch_ids == ["a3"]
-        # There should be a FAILED entry for a2 in the trajectory
-        failed_entries = [
-            e for e in result.trajectory.entries
-            if e.action.action == ActionType.DELEGATE
-            and e.results
-            and not e.results[0].success
-        ]
-        assert len(failed_entries) == 1
-        assert failed_entries[0].results[0].agent_id == "a2"
+        assert result.trajectory is None
+        assert result.run_state is not None
+        output_agent_ids = {
+            output.agent_id for output in result.run_state.agent_outputs
+        }
+        assert output_agent_ids == {"a1", "a3"}
+        assert "a2" not in output_agent_ids
 
 
 # =========================================================================
