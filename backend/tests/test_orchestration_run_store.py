@@ -461,7 +461,50 @@ async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
 
     assert flat_state.candidate_agent_ids == ["agent-a", "agent-b"]
     assert flat_state.client_request_id == "client-flat"
+    assert flat_state.candidate_scope is not None
+    assert flat_state.candidate_scope.agent_ids == flat_state.candidate_agent_ids
+    assert [agent.name for agent in flat_state.candidate_scope.agents] == [
+        "Analyst",
+        "Researcher",
+    ]
     assert nested_state.candidate_agent_ids == ["agent-c", "agent-d"]
+    assert nested_state.candidate_scope is not None
+    assert nested_state.candidate_scope.agent_ids == nested_state.candidate_agent_ids
+    assert [agent.name for agent in nested_state.candidate_scope.agents] == [
+        "Writer",
+        "Reviewer",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mongo_reconstruct_from_envelope_parity_for_legacy_scope():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-mongo",
+        room_id="room-7",
+        user_message_id="message-9",
+        envelope={
+            "room_config": {
+                "room_agent_set": {
+                    "agent-e": "Agent Eleven",
+                    "agent-f": "Agent Twelve",
+                }
+            },
+            "client_request_id": "client-mongo",
+        },
+        goal="Summarize the latest account notes",
+    )
+
+    assert state.candidate_agent_ids == ["agent-e", "agent-f"]
+    assert state.client_request_id == "client-mongo"
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == state.candidate_agent_ids
+    assert [agent.name for agent in state.candidate_scope.agents] == [
+        "Agent Eleven",
+        "Agent Twelve",
+    ]
 
 
 @pytest.mark.asyncio

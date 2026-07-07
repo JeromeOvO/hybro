@@ -184,9 +184,10 @@ class InMemoryOrchestrationRunStore:
         candidate_agent_ids = _candidate_agent_ids_from_envelope(
             normalized_envelope
         )
-        candidate_scope = candidate_scope_from_legacy_envelope(
+        candidate_scope = _candidate_scope_from_legacy_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
+            candidate_agent_ids=candidate_agent_ids,
         )
         client_request_id = _client_request_id_from_envelope(normalized_envelope)
 
@@ -355,18 +356,20 @@ class MongoOrchestrationRunStore:
         goal: str,
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
-        candidate_scope = candidate_scope_from_legacy_envelope(
+        candidate_agent_ids = _candidate_agent_ids_from_envelope(
+            normalized_envelope
+        )
+        candidate_scope = _candidate_scope_from_legacy_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
+            candidate_agent_ids=candidate_agent_ids,
         )
         return OrchestrationRunState(
             run_id=run_id,
             room_id=room_id,
             user_message_id=user_message_id,
             goal=goal,
-            candidate_agent_ids=_candidate_agent_ids_from_envelope(
-                normalized_envelope
-            ),
+            candidate_agent_ids=candidate_agent_ids,
             candidate_scope=candidate_scope,
             client_request_id=_client_request_id_from_envelope(
                 normalized_envelope
@@ -402,6 +405,25 @@ def _state_from_doc(doc: Mapping[str, Any]) -> OrchestrationRunState:
     payload = dict(doc)
     payload.pop("_id", None)
     return OrchestrationRunState.model_validate(payload)
+
+
+def _candidate_scope_from_legacy_envelope(
+    *,
+    room_id: str,
+    envelope: Mapping[str, Any],
+    candidate_agent_ids: list[str],
+) -> CandidateScopeSnapshot:
+    scope_envelope: dict[str, Any] = dict(envelope)
+    scope_envelope["candidate_agent_ids"] = candidate_agent_ids
+    selected_agent_set = _room_agent_set_from_envelope(scope_envelope)
+    if not isinstance(selected_agent_set, Mapping):
+        selected_agent_set = None
+
+    return candidate_scope_from_legacy_envelope(
+        room_id=room_id,
+        envelope=scope_envelope,
+        selected_agent_set=selected_agent_set,
+    )
 
 
 def _candidate_agent_ids_from_envelope(envelope: Mapping[str, Any]) -> list[str]:
