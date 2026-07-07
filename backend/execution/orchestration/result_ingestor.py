@@ -28,25 +28,11 @@ _STABLE_ID_FIELDS = (
     ("partId", "part_id"),
 )
 
-_KNOWN_ARTIFACT_PAYLOAD_FIELDS = {
-    "artifact_id",
-    "artifactId",
-    "content",
-    "description",
-    "filename",
-    "id",
-    "mime_type",
-    "mimeType",
-    "name",
-    "part_id",
-    "partId",
-    "parts",
-    "path",
+_PROJECTION_OWNED_ARTIFACT_FIELDS = {
+    "artifact_key",
+    "source_agent_message_id",
+    "source_agent_id",
     "summary",
-    "text",
-    "title",
-    "uri",
-    "url",
 }
 
 
@@ -137,14 +123,24 @@ class AgentResultIngestor:
             if existing_artifact is not None:
                 previous_artifact = copy.deepcopy(existing_artifact)
                 _replace_artifact_payload(existing_artifact, artifact_payload)
-                _apply_artifact_projection(existing_artifact, result, artifact_payload)
+                _apply_artifact_projection(
+                    existing_artifact,
+                    result,
+                    artifact_payload,
+                    artifact_key,
+                )
                 if existing_artifact != previous_artifact:
                     changed = True
                 continue
 
             artifact_record = copy.deepcopy(artifact_payload)
             artifact_record["artifact_key"] = artifact_key
-            _apply_artifact_projection(artifact_record, result, artifact_payload)
+            _apply_artifact_projection(
+                artifact_record,
+                result,
+                artifact_payload,
+                artifact_key,
+            )
             state.artifacts.append(artifact_record)
             existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
@@ -287,7 +283,9 @@ def _apply_artifact_projection(
     artifact_record: dict[str, Any],
     result: AgentResultRead,
     artifact_payload: dict[str, Any],
+    artifact_key: str,
 ) -> None:
+    artifact_record["artifact_key"] = artifact_key
     artifact_record["source_agent_message_id"] = result.agent_message_id
     artifact_record["source_agent_id"] = result.agent_id
     artifact_record["summary"] = _artifact_summary(artifact_payload)
@@ -297,8 +295,14 @@ def _replace_artifact_payload(
     artifact_record: dict[str, Any],
     artifact_payload: dict[str, Any],
 ) -> None:
-    for field in _KNOWN_ARTIFACT_PAYLOAD_FIELDS:
-        if field not in artifact_payload:
-            artifact_record.pop(field, None)
+    preserved_projection_fields = {
+        key: artifact_record[key]
+        for key in _PROJECTION_OWNED_ARTIFACT_FIELDS
+        if key in artifact_record
+    }
+    artifact_record.clear()
+    artifact_record.update(preserved_projection_fields)
     for key, value in artifact_payload.items():
+        if key in _PROJECTION_OWNED_ARTIFACT_FIELDS:
+            continue
         artifact_record[key] = copy.deepcopy(value)

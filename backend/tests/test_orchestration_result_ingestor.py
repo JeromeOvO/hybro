@@ -339,6 +339,95 @@ def test_reingesting_existing_artifact_updates_projection_metadata():
     assert "parts" not in updated.artifacts[0]
 
 
+def test_reingesting_existing_artifact_removes_stale_arbitrary_payload_fields():
+    artifact_key = "agent-msg-1:artifact_id:quote-1"
+    state = _run_state(
+        artifacts=[
+            {
+                "artifact_key": artifact_key,
+                "artifact_id": "quote-1",
+                "name": "Stale quote",
+                "metadata": {"carrier": "stale"},
+                "index": 7,
+                "append": True,
+                "lastChunk": False,
+                "source_agent_message_id": "agent-msg-1",
+                "source_agent_id": "agent-1",
+                "summary": "Stale quote",
+            }
+        ]
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {
+                "artifact_id": "quote-1",
+                "name": "Current quote",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(state, result)
+
+    assert updated.artifacts == [
+        {
+            "artifact_key": artifact_key,
+            "artifact_id": "quote-1",
+            "name": "Current quote",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "summary": "Current quote",
+        }
+    ]
+
+
+def test_reingesting_existing_artifact_ignores_payload_projection_fields():
+    artifact_key = "agent-msg-1:artifact_id:quote-1"
+    state = _run_state(
+        artifacts=[
+            {
+                "artifact_key": artifact_key,
+                "artifact_id": "quote-1",
+                "name": "Stale quote",
+                "source_agent_message_id": "agent-msg-1",
+                "source_agent_id": "agent-1",
+                "summary": "Stale quote",
+            }
+        ]
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[
+            {
+                "artifact_key": "bogus-key",
+                "artifact_id": "quote-1",
+                "name": "Current quote",
+                "source_agent_message_id": "bogus-message",
+                "source_agent_id": "bogus-agent",
+                "summary": "Payload summary",
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(state, result)
+
+    assert updated.agent_outputs[0].artifact_keys == [artifact_key]
+    assert updated.artifacts == [
+        {
+            "artifact_key": artifact_key,
+            "artifact_id": "quote-1",
+            "name": "Current quote",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "summary": "Payload summary",
+        }
+    ]
+
+
 def test_reingesting_blank_text_removes_existing_fact():
     ingestor = AgentResultIngestor()
     first = AgentResultRead(
