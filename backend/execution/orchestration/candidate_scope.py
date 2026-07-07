@@ -159,6 +159,9 @@ def _raw_candidate_items(
                 items.append(value)
         return items
 
+    if not isinstance(selected_agent_set, Sequence):
+        return [selected_agent_set]
+
     return list(selected_agent_set)
 
 

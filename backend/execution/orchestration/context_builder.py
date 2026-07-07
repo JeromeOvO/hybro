@@ -327,6 +327,8 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
         )
         snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
         raw_items = _candidate_items_from_object(candidate_scope)
+    elif isinstance(candidate_scope, str):
+        raw_items = [candidate_scope]
     else:
         raw_items = list(candidate_scope)
 
@@ -350,12 +352,14 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
 
 def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[Any]:
     raw_agents = _first_mapping_value(candidate_scope, "agents", "candidate_agents")
+    raw_ids = _first_mapping_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
         items = list(raw_agents)
         if items:
+            if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
+                return _candidate_items_ordered_by_ids(items, raw_ids)
             return items
 
-    raw_ids = _first_mapping_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
         return list(raw_ids)
 
@@ -367,16 +371,47 @@ def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[An
 
 def _candidate_items_from_object(candidate_scope: Any) -> list[Any]:
     raw_agents = _first_attr_value(candidate_scope, "agents", "candidate_agents")
+    raw_ids = _first_attr_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
         items = list(raw_agents)
         if items:
+            if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
+                return _candidate_items_ordered_by_ids(items, raw_ids)
             return items
 
-    raw_ids = _first_attr_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
         return list(raw_ids)
 
     return []
+
+
+def _candidate_items_ordered_by_ids(
+    raw_items: Sequence[Any],
+    raw_ids: Sequence[Any],
+) -> list[Any]:
+    items_by_id: dict[str, Any] = {}
+    for item in raw_items:
+        agent_id = _candidate_item_id(item)
+        if agent_id is not None and agent_id not in items_by_id:
+            items_by_id[agent_id] = item
+
+    items: list[Any] = []
+    seen_ids: set[str] = set()
+    for raw_id in raw_ids:
+        agent_id = _optional_str(raw_id)
+        if agent_id is None or agent_id in seen_ids:
+            continue
+        seen_ids.add(agent_id)
+        items.append(items_by_id.get(agent_id) or agent_id)
+    return items
+
+
+def _candidate_item_id(raw_item: Any) -> str | None:
+    if isinstance(raw_item, str):
+        return _optional_str(raw_item)
+    if isinstance(raw_item, Mapping):
+        return _optional_str(_first_mapping_value(raw_item, "agent_id", "id"))
+    return _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
 
 
 def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:

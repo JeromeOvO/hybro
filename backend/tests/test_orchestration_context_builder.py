@@ -183,6 +183,17 @@ def test_candidate_scope_falls_back_to_run_state_candidate_ids_when_scope_absent
     assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
 
 
+def test_candidate_scope_legacy_string_is_single_agent_id():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope="agent-1",
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
 def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
     snapshot = CandidateScopeSnapshot(
         snapshot_id="scope-1",
@@ -241,6 +252,43 @@ def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
     assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
 
 
+def test_candidate_scope_partial_snapshot_preserves_all_agent_ids_in_order():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-a", "agent-b"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-a",
+                name="Broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(
+            candidate_agent_ids=["agent-a", "agent-b"],
+            candidate_scope=snapshot,
+        ),
+        message_text="Use the selected agents",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == [
+        "agent-a",
+        "agent-b",
+    ]
+    assert context.candidate_scope.agents[0].agent_name == "Broker"
+    assert context.candidate_scope.agents[0].description == (
+        "Collects broker requirements."
+    )
+    assert context.candidate_scope.agents[1].agent_name is None
+
+
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-1"]),
@@ -250,6 +298,36 @@ def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
 
     assert context.candidate_scope.agent_ids == ["agent-1"]
     assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_partial_mapping_preserves_all_agent_ids_in_order():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-a", "agent-b"]),
+        candidate_scope={
+            "source": "explicit_selection",
+            "agent_ids": ["agent-a", "agent-b"],
+            "agents": [
+                {
+                    "agent_id": "agent-a",
+                    "name": "Broker",
+                    "capability_summary": "Collects broker requirements.",
+                    "status": "active",
+                }
+            ],
+        },
+        message_text="Use the selected agents",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == [
+        "agent-a",
+        "agent-b",
+    ]
+    assert context.candidate_scope.agents[0].agent_name == "Broker"
+    assert context.candidate_scope.agents[0].description == (
+        "Collects broker requirements."
+    )
+    assert context.candidate_scope.agents[1].agent_name is None
 
 
 def test_candidate_scope_snapshot_agent_summary_and_status_are_visible():
