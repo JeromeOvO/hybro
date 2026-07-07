@@ -124,6 +124,9 @@ def _candidate_agents_from_selected_set(
 def _raw_candidate_items(
     selected_agent_set: Mapping[str, Any] | Sequence[Any],
 ) -> list[Any]:
+    if isinstance(selected_agent_set, str):
+        return [selected_agent_set]
+
     if isinstance(selected_agent_set, Mapping):
         raw_agents = _first_mapping_value(
             selected_agent_set, "agents", "candidate_agents"
@@ -131,7 +134,9 @@ def _raw_candidate_items(
         if isinstance(raw_agents, Sequence) and not isinstance(
             raw_agents, str | bytes
         ):
-            return list(raw_agents)
+            items = list(raw_agents)
+            if items:
+                return items
 
         raw_ids = _first_mapping_value(
             selected_agent_set, "agent_ids", "candidate_agent_ids"

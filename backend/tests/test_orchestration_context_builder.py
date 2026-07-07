@@ -280,6 +280,30 @@ def test_candidate_scope_snapshot_agent_summary_and_status_are_visible():
     assert agent.is_healthy is True
 
 
+def test_candidate_scope_dict_agent_summary_and_status_are_visible():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope={
+            "source": "saved_group",
+            "agent_ids": ["agent-1"],
+            "agents": [
+                {
+                    "agent_id": "agent-1",
+                    "name": "Broker",
+                    "capability_summary": "Collects broker requirements.",
+                    "status": "active",
+                }
+            ],
+        },
+        message_text="Use the selected agent",
+    )
+
+    agent = context.candidate_scope.agents[0]
+    assert agent.description == "Collects broker requirements."
+    assert agent.capabilities == ["Collects broker requirements."]
+    assert agent.is_healthy is True
+
+
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():
     first = _run_state(
         facts=[{"b": 2, "a": 1}],

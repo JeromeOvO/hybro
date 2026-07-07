@@ -390,16 +390,23 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
         agent_id = _optional_str(_first_mapping_value(raw_item, "agent_id", "id"))
         if agent_id is None:
             return None
+        capability_summary = _optional_str(
+            _first_mapping_value(raw_item, "capability_summary")
+        )
+        capabilities = _string_list(
+            _first_mapping_value(raw_item, "capabilities", "skills")
+        )
+        if not capabilities and capability_summary is not None:
+            capabilities = [capability_summary]
         return CandidateAgentContext(
             agent_id=agent_id,
             agent_name=_optional_str(
                 _first_mapping_value(raw_item, "agent_name", "name")
             ),
             description=_optional_str(_first_mapping_value(raw_item, "description"))
+            or capability_summary
             or "",
-            capabilities=_string_list(
-                _first_mapping_value(raw_item, "capabilities", "skills")
-            ),
+            capabilities=capabilities,
             input_modes=_string_list(
                 _first_mapping_value(raw_item, "input_modes", "default_input_modes")
             ),
@@ -412,9 +419,7 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
             success_rate=_optional_float(
                 _first_mapping_value(raw_item, "success_rate")
             ),
-            is_healthy=_optional_bool(
-                _first_mapping_value(raw_item, "is_healthy", "healthy")
-            ),
+            is_healthy=_candidate_mapping_health(raw_item),
         )
 
     agent_id = _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
@@ -594,7 +599,21 @@ def _candidate_health(raw_item: Any) -> bool | None:
     direct = _optional_bool(_first_attr_value(raw_item, "is_healthy", "healthy"))
     if direct is not None:
         return direct
-    status = _first_attr_value(raw_item, "agent_status", "status")
+    return _health_from_status_value(
+        _first_attr_value(raw_item, "agent_status", "status")
+    )
+
+
+def _candidate_mapping_health(raw_item: Mapping[str, Any]) -> bool | None:
+    direct = _optional_bool(_first_mapping_value(raw_item, "is_healthy", "healthy"))
+    if direct is not None:
+        return direct
+    return _health_from_status_value(
+        _first_mapping_value(raw_item, "agent_status", "status")
+    )
+
+
+def _health_from_status_value(status: Any) -> bool | None:
     status_value = getattr(status, "value", status)
     if isinstance(status_value, str):
         normalized_status = status_value.strip().lower()
