@@ -138,6 +138,11 @@ class OrchestrationStateContext(BaseModel):
     completion_criteria: list[dict[str, Any]] = Field(default_factory=list)
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
     pending_hitl_request_ids: list[str] = Field(default_factory=list)
+    participant_snapshot: dict[str, Any] | None = None
+    system_agent_message_id: str | None = None
+    active_dispatches: list[dict[str, Any]] = Field(default_factory=list)
+    last_planner_action: dict[str, Any] | None = None
+    completion_evidence: dict[str, Any] | None = None
     summary_intent_id: str | None = None
     summary_message_id: str | None = None
 
@@ -477,6 +482,23 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         completion_criteria=_stable_mapping_list(run_state.completion_criteria),
         decision_log=_stable_mapping_list(run_state.decision_log),
         pending_hitl_request_ids=list(run_state.pending_hitl_request_ids),
+        participant_snapshot=(
+            _stable_data(run_state.participant_snapshot)
+            if run_state.participant_snapshot is not None
+            else None
+        ),
+        system_agent_message_id=run_state.system_agent_message_id,
+        active_dispatches=_stable_model_list(run_state.active_dispatches),
+        last_planner_action=(
+            _stable_data(run_state.last_planner_action)
+            if run_state.last_planner_action is not None
+            else None
+        ),
+        completion_evidence=(
+            _stable_data(run_state.completion_evidence)
+            if run_state.completion_evidence is not None
+            else None
+        ),
         summary_intent_id=run_state.summary_intent_id,
         summary_message_id=run_state.summary_message_id,
     )
