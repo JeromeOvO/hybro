@@ -193,7 +193,11 @@ def build_orchestration_planner_context(
     scope_context = _build_candidate_scope_context(
         run_state.candidate_scope
         if run_state.candidate_scope is not None
-        else (candidate_scope or [])
+        else (
+            candidate_scope
+            if candidate_scope is not None
+            else run_state.candidate_agent_ids
+        )
     )
     state_context = _build_state_context(run_state)
 
@@ -347,7 +351,9 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
 def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[Any]:
     raw_agents = _first_mapping_value(candidate_scope, "agents", "candidate_agents")
     if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
-        return list(raw_agents)
+        items = list(raw_agents)
+        if items:
+            return items
 
     raw_ids = _first_mapping_value(candidate_scope, "agent_ids", "candidate_agent_ids")
     if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
@@ -417,8 +423,17 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
 
     agent_card = getattr(raw_item, "agent_card", None)
     agent_name = _optional_str(_first_attr_value(raw_item, "agent_name", "name"))
-    description = _optional_str(_first_attr_value(raw_item, "description")) or ""
+    capability_summary = _optional_str(
+        _first_attr_value(raw_item, "capability_summary")
+    )
+    description = (
+        _optional_str(_first_attr_value(raw_item, "description"))
+        or capability_summary
+        or ""
+    )
     capabilities = _string_list(_first_attr_value(raw_item, "capabilities", "skills"))
+    if not capabilities and capability_summary is not None:
+        capabilities = [capability_summary]
     if agent_card is not None:
         agent_name = agent_name or _optional_str(getattr(agent_card, "name", None))
         description = (
@@ -579,8 +594,18 @@ def _candidate_health(raw_item: Any) -> bool | None:
     direct = _optional_bool(_first_attr_value(raw_item, "is_healthy", "healthy"))
     if direct is not None:
         return direct
-    status = getattr(raw_item, "agent_status", None)
+    status = _first_attr_value(raw_item, "agent_status", "status")
     status_value = getattr(status, "value", status)
     if isinstance(status_value, str):
-        return status_value == "active"
+        normalized_status = status_value.strip().lower()
+        if normalized_status in {"active", "available", "healthy", "online"}:
+            return True
+        if normalized_status in {
+            "inactive",
+            "unavailable",
+            "unhealthy",
+            "offline",
+            "disabled",
+        }:
+            return False
     return None

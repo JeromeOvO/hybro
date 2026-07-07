@@ -173,6 +173,16 @@ def test_metadata_only_candidate_scope_does_not_invent_agent_ids(candidate_scope
     assert context.candidate_scope.agents == []
 
 
+def test_candidate_scope_falls_back_to_run_state_candidate_ids_when_scope_absent():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
 def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
     snapshot = CandidateScopeSnapshot(
         snapshot_id="scope-1",
@@ -229,6 +239,45 @@ def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
 
     assert context.candidate_scope.agent_ids == ["agent-1"]
     assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope={"agents": [], "agent_ids": ["agent-1"]},
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_snapshot_agent_summary_and_status_are_visible():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="saved_group",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
+        message_text="Use the selected agent",
+    )
+
+    agent = context.candidate_scope.agents[0]
+    assert agent.description == "Collects broker requirements."
+    assert agent.capabilities == ["Collects broker requirements."]
+    assert agent.is_healthy is True
 
 
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():
