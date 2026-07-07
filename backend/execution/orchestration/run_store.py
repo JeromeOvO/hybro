@@ -8,6 +8,7 @@ from execution.orchestration.candidate_scope import (
 )
 from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
+    CandidateScopeSnapshot,
     OrchestrationRunEvent,
     OrchestrationRunState,
 )
