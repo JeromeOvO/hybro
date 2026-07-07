@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from execution.orchestration.candidate_scope import (
+    candidate_scope_from_legacy_envelope,
+)
 from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
     OrchestrationRunEvent,
@@ -181,6 +184,10 @@ class InMemoryOrchestrationRunStore:
         candidate_agent_ids = _candidate_agent_ids_from_envelope(
             normalized_envelope
         )
+        candidate_scope = candidate_scope_from_legacy_envelope(
+            room_id=room_id,
+            envelope=normalized_envelope,
+        )
         client_request_id = _client_request_id_from_envelope(normalized_envelope)
 
         return OrchestrationRunState(
@@ -189,6 +196,7 @@ class InMemoryOrchestrationRunStore:
             user_message_id=user_message_id,
             goal=goal,
             candidate_agent_ids=candidate_agent_ids,
+            candidate_scope=candidate_scope,
             client_request_id=client_request_id,
             schema_version=2,
         )
@@ -347,6 +355,10 @@ class MongoOrchestrationRunStore:
         goal: str,
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
+        candidate_scope = candidate_scope_from_legacy_envelope(
+            room_id=room_id,
+            envelope=normalized_envelope,
+        )
         return OrchestrationRunState(
             run_id=run_id,
             room_id=room_id,
@@ -355,6 +367,7 @@ class MongoOrchestrationRunStore:
             candidate_agent_ids=_candidate_agent_ids_from_envelope(
                 normalized_envelope
             ),
+            candidate_scope=candidate_scope,
             client_request_id=_client_request_id_from_envelope(
                 normalized_envelope
             ),

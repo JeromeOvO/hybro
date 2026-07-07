@@ -221,6 +221,27 @@ async def test_append_event_stores_event_copy():
 
 
 @pytest.mark.asyncio
+async def test_append_event_does_not_mutate_state_snapshot():
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(_state())
+
+    await store.append_event(
+        OrchestrationRunEvent(
+            run_id=state.run_id,
+            room_id=state.room_id,
+            type=OrchestrationEventType.STATE_REDUCED,
+            state_version=0,
+            payload={"status": "should-not-mutate"},
+        )
+    )
+
+    loaded = await store.get_run(state.run_id)
+    assert loaded is not None
+    assert loaded.state_version == 0
+    assert loaded.status == state.status
+
+
+@pytest.mark.asyncio
 async def test_append_event_rejects_missing_run_duplicate_id_and_future_version():
     store = InMemoryOrchestrationRunStore()
     missing_run_event = OrchestrationRunEvent(
@@ -441,3 +462,24 @@ async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
     assert flat_state.candidate_agent_ids == ["agent-a", "agent-b"]
     assert flat_state.client_request_id == "client-flat"
     assert nested_state.candidate_agent_ids == ["agent-c", "agent-d"]
+
+
+@pytest.mark.asyncio
+async def test_reconstruct_from_envelope_populates_candidate_scope():
+    store = InMemoryOrchestrationRunStore()
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        envelope={
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+            "candidate_scope_snapshot_version": 1,
+        },
+        goal="Need a quote",
+    )
+
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == ["agent-1"]
+    assert state.candidate_scope.source == "explicit_selection"
