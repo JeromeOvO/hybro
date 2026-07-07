@@ -547,10 +547,6 @@ class SupervisorExecutor:
             try:
                 planner_action = PlannerActionValidator.validate(
                     planner_action,
-                    candidate_agent_ids=context.candidate_agent_ids,
-                    steps_used=state.steps_used,
-                    step_budget=state.step_budget,
-                    has_agent_output=bool(state.agent_outputs),
                     run_state=state,
                 )
             except PlannerActionValidationError as exc:

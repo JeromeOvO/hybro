@@ -104,7 +104,7 @@ class PlannerActionValidator:
         active = [
             item
             for item in run_state.active_dispatches
-            if item.status not in {"completed", "failed", "canceled"}
+            if item.status not in {"completed", "failed", "canceled", "rejected"}
         ]
         if active:
             raise PlannerActionValidationError(
@@ -145,7 +145,9 @@ class PlannerActionValidator:
                 raise PlannerActionValidationError(
                     f"complete action references unknown artifact {artifact_key!r}"
                 )
-        if not evidence.satisfied_criteria:
+        if not evidence.satisfied_criteria or any(
+            not criterion.strip() for criterion in evidence.satisfied_criteria
+        ):
             raise PlannerActionValidationError(
                 "complete action requires satisfied criteria"
             )

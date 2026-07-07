@@ -526,6 +526,26 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
         )
 
 
+def test_complete_accepts_rejected_active_dispatch_reference():
+    action = _complete_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_state_for_validation(
+                active_dispatches=[
+                    ActiveDispatchRef(
+                        agent_message_id="agent-msg-2",
+                        agent_id="agent-1",
+                        status="rejected",
+                    )
+                ]
+            ),
+        )
+        is action
+    )
+
+
 def test_complete_rejects_unresolved_non_blocking_open_question():
     action = _complete_action()
 
@@ -543,6 +563,13 @@ def test_complete_rejects_unresolved_non_blocking_open_question():
                 ]
             ),
         )
+
+
+def test_complete_rejects_blank_satisfied_criteria():
+    action = _complete_action(satisfied_criteria=["  "])
+
+    with pytest.raises(PlannerActionValidationError, match="satisfied criteria"):
+        PlannerActionValidator.validate(action, run_state=_state_for_validation())
 
 
 def test_complete_accepts_valid_evidence():

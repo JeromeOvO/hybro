@@ -422,6 +422,58 @@ async def test_run_v2_allows_final_synthesis_after_step_budget_is_consumed():
 
 
 @pytest.mark.asyncio
+async def test_run_v2_validates_complete_against_run_state_after_dispatch():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Collect evidence",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Handle the request",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="Done without structured evidence",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    state = await store.get_latest_by_user_message_id("message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.FAILED
+    assert state.terminal_reason == "complete action requires completion evidence"
+
+
+@pytest.mark.asyncio
 async def test_run_v2_resume_ingests_paused_result_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
