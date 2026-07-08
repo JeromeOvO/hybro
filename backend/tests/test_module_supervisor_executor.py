@@ -279,6 +279,7 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
         extend_info={
             "orchestration": True,
             "orchestration_run_id": "run-1",
+            "candidate_scope_snapshot_id": "scope-snapshot-1",
             "candidate_scope_mode": "explicit_selection",
             "candidate_agent_ids": ["agent-1"],
         },
@@ -298,6 +299,7 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
     assert await store.get_run("run-1") is not None
     assert await store.get_run("msg-1") is None
     assert state.candidate_scope is not None
+    assert state.candidate_scope.snapshot_id == "scope-snapshot-1"
     assert state.candidate_scope.agent_ids == ["agent-1"]
 
 

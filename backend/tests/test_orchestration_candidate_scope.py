@@ -154,12 +154,14 @@ def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():
     scope = candidate_scope_from_legacy_envelope(
         room_id="room-1",
         envelope={
+            "candidate_scope_snapshot_id": "scope-snapshot-1",
             "candidate_scope_mode": "explicit_selection",
             "candidate_agent_ids": ["agent-2", "agent-1"],
             "candidate_scope_snapshot_version": 1,
         },
     )
 
+    assert scope.snapshot_id == "scope-snapshot-1"
     assert scope.source == "explicit_selection"
     assert scope.agent_ids == ["agent-2", "agent-1"]
     assert scope.revision == 1
