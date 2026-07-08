@@ -1748,6 +1748,9 @@ async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info
     assert message.extend_info is not None
     assert "supervisor_trajectory" not in message.extend_info
     assert message.extend_info["orchestration_run_id"] == response.message_id
+    assert message.extend_info["candidate_scope_snapshot_id"] is not None
+    assert message.extend_info["candidate_scope_source"] == "explicit_selection"
+    assert message.extend_info["client_request_id"] == "client-1"
     assert message.extend_info["orchestration_status"] in {
         "running",
         "completed",

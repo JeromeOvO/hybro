@@ -2321,9 +2321,13 @@ class RoomMessageCenter:
         result_trajectory = result.trajectory
         result_run_state = result.run_state
         orchestration_status = (
-            result_run_state.status.value
+            getattr(result_run_state.status, "value", result_run_state.status)
             if result_run_state is not None
-            else result.status.value
+            else (
+                getattr(result_trajectory.status, "value", result_trajectory.status)
+                if result_trajectory is not None
+                else getattr(result.status, "value", result.status)
+            )
         )
         if user_message is None:
             user_message = (
@@ -2371,6 +2375,9 @@ class RoomMessageCenter:
                             "client_request_id"
                         ] = result_run_state.client_request_id
             elif result_trajectory is None:
+                legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
+                if isinstance(legacy_trajectory, dict):
+                    legacy_trajectory["status"] = orchestration_status
                 user_message.extend_info["orchestration_status"] = (
                     orchestration_status
                 )
