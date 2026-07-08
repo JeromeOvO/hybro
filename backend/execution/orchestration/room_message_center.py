@@ -2331,6 +2331,15 @@ class RoomMessageCenter:
                     user_message_id
                 )
             )
+        is_orchestration_message = False
+        if user_message:
+            is_orchestration_message = isinstance(
+                user_message.extend_info, dict
+            ) and (
+                bool(user_message.extend_info.get("orchestration"))
+                or "orchestration_run_id" in user_message.extend_info
+                or "orchestration_run" in user_message.extend_info
+            )
         if user_message and result.status in (
             RunStatus.COMPLETED,
             RunStatus.CLARIFYING,
@@ -2341,15 +2350,29 @@ class RoomMessageCenter:
         ):
             if not isinstance(user_message.extend_info, dict):
                 user_message.extend_info = {}
-            if result_trajectory is None:
+            if is_orchestration_message:
                 user_message.extend_info.pop("supervisor_trajectory", None)
                 user_message.extend_info["orchestration_status"] = (
                     orchestration_status
                 )
-            elif self._is_v2_supervisor_envelope(user_message.extend_info):
-                user_message.extend_info.pop("supervisor_trajectory", None)
+                if result_run_state is not None:
+                    user_message.extend_info["orchestration_run_id"] = (
+                        result_run_state.run_id
+                    )
+                    if result_run_state.candidate_scope is not None:
+                        user_message.extend_info[
+                            "candidate_scope_snapshot_id"
+                        ] = result_run_state.candidate_scope.snapshot_id
+                        user_message.extend_info[
+                            "candidate_scope_source"
+                        ] = result_run_state.candidate_scope.source
+                    if result_run_state.client_request_id:
+                        user_message.extend_info[
+                            "client_request_id"
+                        ] = result_run_state.client_request_id
+            elif result_trajectory is None:
                 user_message.extend_info["orchestration_status"] = (
-                    result_trajectory.status.value
+                    orchestration_status
                 )
             else:
                 user_message.extend_info["supervisor_trajectory"] = (
