@@ -17,6 +17,7 @@ from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
 )
+from execution.orchestration.result_ingestor import AgentResultRead
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.orchestration import (
@@ -385,6 +386,19 @@ def _state_unification_user_message(message_id: str, extend_info: dict | None = 
     )
 
 
+def _run_state(**overrides):
+    values = {
+        "run_id": "run-1",
+        "room_id": "room-1",
+        "user_message_id": "msg-1",
+        "goal": "Collect agent results",
+        "candidate_agent_ids": ["agent-1", "agent-2"],
+        "client_request_id": "cr-1",
+    }
+    values.update(overrides)
+    return OrchestrationRunState(**values)
+
+
 def _executor(
     *,
     store: InMemoryOrchestrationRunStore,
@@ -749,6 +763,61 @@ async def test_run_resume_ingests_paused_result_before_planning():
     assert state is not None
     assert state.agent_outputs[0].text == "Webhook result"
     assert state.dispatch_intents[0].status == StepStatus.SUCCESS.value
+
+
+@pytest.mark.asyncio
+async def test_agent_outputs_are_ingested_with_single_state_writer(monkeypatch):
+    writes: list[int] = []
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = await store.create_run(
+        _run_state(
+            run_id="run-1",
+            user_message_id="msg-1",
+            candidate_agent_ids=["agent-1", "agent-2"],
+        )
+    )
+
+    original_save = store.save_state
+
+    async def save_state_spy(
+        next_state: OrchestrationRunState,
+        *,
+        expected_version: int,
+    ) -> OrchestrationRunState:
+        writes.append(expected_version)
+        return await original_save(next_state, expected_version=expected_version)
+
+    monkeypatch.setattr(store, "save_state", save_state_spy)
+
+    updated = await executor._ingest_agent_results_serially(
+        state,
+        [
+            AgentResultRead(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="one",
+            ),
+            AgentResultRead(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status="completed",
+                text="two",
+            ),
+        ],
+    )
+
+    assert writes == [0, 1]
+    assert updated.state_version == 2
+    assert [output.agent_message_id for output in updated.agent_outputs] == [
+        "agent-msg-1",
+        "agent-msg-2",
+    ]
 
 
 @pytest.mark.asyncio
