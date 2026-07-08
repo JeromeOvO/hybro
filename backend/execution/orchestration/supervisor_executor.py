@@ -2164,9 +2164,8 @@ class SupervisorExecutor:
                     terminal_results,
                     status=next_status,
                     advance_step=should_advance,
+                    clear_pending_hitl_request_ids=should_advance,
                 )
-                if should_advance:
-                    synced.pending_hitl_request_ids.clear()
 
             if pending:
                 pending_status = (
@@ -2648,6 +2647,68 @@ class SupervisorExecutor:
         return current
 
     @staticmethod
+    def _normalize_awaiting_input_results(results: list[StepResult]) -> None:
+        awaiting = [result for result in results if result.status == StepStatus.AWAITING_INPUT]
+        for extra in awaiting[1:]:
+            extra.status = StepStatus.FAILED
+            extra.success = False
+            extra.error_message = (
+                "Deferred: another agent is awaiting human input first. "
+                "Will be re-evaluated on resume."
+            )
+
+    @staticmethod
+    def _v2_output_message_id_for_result(
+        result: StepResult,
+        fallback_intents: list[DispatchIntent],
+    ) -> str | None:
+        if result.agent_message_id:
+            return result.agent_message_id
+
+        fallback = next(
+            (
+                intent
+                for intent in fallback_intents
+                if intent.agent_id == result.agent_id
+                and intent.task == result.task
+                and intent.status == "planned"
+            ),
+            None,
+        )
+        return fallback.planned_agent_message_id if fallback else None
+
+    @staticmethod
+    def _apply_v2_result_metadata(
+        state: OrchestrationRunState,
+        result: StepResult,
+        *,
+        status: OrchestrationStatus,
+        advance_step: bool,
+        fallback_intents: list[DispatchIntent],
+    ) -> None:
+        state.status = status
+        fallback_intent_ids = {
+            intent.dispatch_intent_id: intent.status for intent in fallback_intents
+        }
+        for intent in state.dispatch_intents:
+            if intent.dispatch_intent_id not in fallback_intent_ids:
+                continue
+
+            if result.agent_message_id:
+                matches_result = intent.planned_agent_message_id == result.agent_message_id
+            else:
+                matches_result = (
+                    intent.agent_id == result.agent_id
+                    and intent.task == result.task
+                    and fallback_intent_ids[intent.dispatch_intent_id] == "planned"
+                )
+
+            if matches_result:
+                intent.status = result.status.value
+        if advance_step:
+            state.steps_used += 1
+
+    @staticmethod
     def _v2_result_status_to_agent_result_status(
         result: StepResult,
     ) -> str:
@@ -2662,55 +2723,69 @@ class SupervisorExecutor:
         *,
         status: OrchestrationStatus,
         advance_step: bool,
+        clear_pending_hitl_request_ids: bool = False,
     ) -> OrchestrationRunState:
         if not results:
             return state
 
-        intents = list(state.dispatch_intents)
-        current = state.model_copy(deep=True)
-        self._apply_v2_results(
-            current,
-            results,
-            status=status,
-            advance_step=advance_step,
-        )
+        self._normalize_awaiting_input_results(results)
+        fallback_intents = list(state.dispatch_intents)
 
-        agent_result_reads: list[AgentResultRead] = []
-        for result in results:
-            output_message_id = result.agent_message_id
-            if not output_message_id:
-                matched_intent = next(
-                    (
-                        intent
-                        for intent in intents
-                        if intent.agent_id == result.agent_id
-                        and intent.task == result.task
-                        and intent.status == "planned"
-                    ),
-                    None,
-                )
-                if matched_intent:
-                    output_message_id = matched_intent.planned_agent_message_id
-            if not output_message_id:
-                continue
-
-            agent_result_reads.append(
-                AgentResultRead(
-                    agent_message_id=output_message_id,
-                    agent_id=result.agent_id,
-                    status=self._v2_result_status_to_agent_result_status(result),
-                    text=result.response_text,
-                    error=result.error_message,
-                )
+        current = state
+        for index, result in enumerate(results):
+            expected_version = current.state_version
+            next_state = current.model_copy(deep=True)
+            self._apply_v2_result_metadata(
+                next_state,
+                result,
+                status=status,
+                advance_step=advance_step and index == len(results) - 1,
+                fallback_intents=fallback_intents,
             )
+            if clear_pending_hitl_request_ids and index == len(results) - 1:
+                next_state.pending_hitl_request_ids.clear()
 
-        if not agent_result_reads:
-            return current
+            output_message_id = self._v2_output_message_id_for_result(
+                result,
+                fallback_intents=fallback_intents,
+            )
+            if output_message_id:
+                next_state = self.result_ingestor.ingest(
+                    next_state,
+                    AgentResultRead(
+                        agent_message_id=output_message_id,
+                        agent_id=result.agent_id,
+                        status=self._v2_result_status_to_agent_result_status(result),
+                        text=result.response_text,
+                        error=result.error_message,
+                    ),
+                )
+            else:
+                next_state.state_version += 1
+                next_state.updated_at = utcnow()
 
-        return await self._ingest_agent_results_serially(
-            current,
-            results=agent_result_reads,
-        )
+            current = await self.run_store.save_state(
+                next_state,
+                expected_version=expected_version,
+            )
+            if output_message_id:
+                await self.run_store.append_event(
+                    OrchestrationRunEvent(
+                        run_id=current.run_id,
+                        room_id=current.room_id,
+                        type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+                        state_version=current.state_version,
+                        payload={
+                            "agent_message_id": output_message_id,
+                            "agent_id": result.agent_id,
+                            "status": self._v2_result_status_to_agent_result_status(
+                                result
+                            ),
+                        },
+                    )
+                )
+
+        return current
 
     async def _mark_v2_terminal(
         self,
