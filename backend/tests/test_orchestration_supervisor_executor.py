@@ -1448,6 +1448,69 @@ async def test_run_fails_corrupt_ingesting_hitl_checkpoint():
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_hitl_if_answered_clears_pending_without_leaving_awaiting_user():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.AWAITING_USER,
+        candidate_agent_ids=["agent-1"],
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Auth required",
+            ),
+        )
+    ]
+    state.pending_hitl_request_ids = ["open-hitl-1"]
+    state.open_questions = [
+        {
+            "request_id": "open-hitl-1",
+            "status": "open",
+            "prompt": "Authenticate?",
+            "source": "agent",
+        }
+    ]
+    await store.create_run(state)
+
+    resolved = await executor._resolve_v2_hitl_if_answered(
+        state,
+        resumed_trajectory=SupervisorTrajectory(hitl_user_reply="approved"),
+    )
+
+    assert resolved.status != OrchestrationStatus.AWAITING_USER
+    assert resolved.pending_hitl_request_ids == []
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status != OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == []
+    assert persisted.open_questions
+    assert persisted.open_questions[0]["status"] == "resolved"
+
+
+@pytest.mark.asyncio
 async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -1570,6 +1633,58 @@ async def test_run_ask_user_request_input_exception_triggers_cleanup_and_failure
 
 
 @pytest.mark.asyncio
+async def test_run_ask_user_message_creation_failure_clears_synthetic_pending_state():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor.message_writer.add_room_agent_message = AsyncMock(
+        side_effect=RuntimeError("failed to persist clarifier message")
+    )
+    executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+    assert persisted.pending_hitl_request_ids == []
+    assert persisted.open_questions == []
+
+
+@pytest.mark.asyncio
 async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -1614,12 +1729,62 @@ async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning(
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.AWAITING_INPUT
+    assert result.status == RunStatus.FAILED
     assert planner.contexts == []
     state = await store.get_run("message-1")
     assert state is not None
-    assert state.status == OrchestrationStatus.AWAITING_USER
+    assert state.status == OrchestrationStatus.FAILED
+    assert state.terminal_reason == "awaiting_user_without_open_hitl"
     assert state.pending_hitl_request_ids == ["hitl-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_stale_awaiting_user_without_open_hitl_fails():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner()
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.AWAITING_USER,
+        candidate_agent_ids=["agent-1"],
+    )
+    state.pending_hitl_request_ids = ["stale-hitl-1"]
+    state.open_questions = [
+        {"request_id": "stale-hitl-1", "status": "resolved", "prompt": "old question"}
+    ]
+    await store.create_run(state)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+    assert persisted.terminal_reason == "awaiting_user_without_open_hitl"
 
 
 @pytest.mark.asyncio

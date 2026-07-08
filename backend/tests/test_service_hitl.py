@@ -276,6 +276,30 @@ class TestRequestInput:
         assert event.message_id == "agent-msg-789"
 
     @pytest.mark.asyncio
+    async def test_returns_request_when_sse_emit_fails(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        mock_hitl_delivery.emit = AsyncMock(
+            side_effect=RuntimeError("temporary transport failure")
+        )
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Please clarify your request",
+            prompt_type=HITLPromptType.TEXT,
+        )
+
+        assert result is not None
+        assert result.request_id
+        assert result.status == HITLStatus.PENDING
+        mock_hitl_delivery.emit.assert_awaited_once()
+        assert mock_hitl_db_service.create_hitl_request.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_returns_none_when_max_rounds_exceeded(
         self, hitl_service, mock_hitl_db_service
     ):

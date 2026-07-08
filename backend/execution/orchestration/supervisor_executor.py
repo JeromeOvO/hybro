@@ -630,11 +630,16 @@ class SupervisorExecutor:
             and not self._has_open_pending_hitl(state)
             and not allow_awaiting_user_recovery
         ):
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="awaiting_user_without_open_hitl",
+            )
             return await self._log_state_and_return(
                 room_id,
                 state,
                 self._state_run_result(
-                    status=RunStatus.AWAITING_INPUT,
+                    status=RunStatus.FAILED,
                     state=state,
                 ),
             )
@@ -2091,6 +2096,11 @@ class SupervisorExecutor:
 
         resolved_request_ids = list(state.pending_hitl_request_ids)
         resolved_at = utcnow().isoformat()
+        resolved_recoverable_status = (
+            OrchestrationStatus.WAITING_AGENT
+            if self._has_current_step_recoverable_intents(state)
+            else OrchestrationStatus.RUNNING
+        )
 
         def resolve_hitl(updated: OrchestrationRunState) -> None:
             prompts: list[str] = []
@@ -2116,6 +2126,11 @@ class SupervisorExecutor:
                 }
             )
             updated.pending_hitl_request_ids.clear()
+            self._clear_stale_pending_hitl_request_ids(updated)
+            if self._has_open_pending_hitl(updated):
+                updated.status = OrchestrationStatus.AWAITING_USER
+            else:
+                updated.status = resolved_recoverable_status
 
         resolved_state = await self._save_v2_state(
             state,
@@ -2448,22 +2463,24 @@ class SupervisorExecutor:
                 except ValueError:
                     pass
 
-            hitl_agent_message = self.room_runtime.create_agent_message(
-                room_id=room_id,
-                related_message_id=user_message_id,
-                agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
-                content=question.prompt,
-                user_id=request_user_id,
-                step_number=step_number,
-                task_content=question.prompt,
-                client_request_id=client_req_id,
-            )
-            hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
-            await self.message_writer.upsert_room_agent_message(hitl_agent_message)
-            created_messages.append(hitl_agent_message.message_id)
-
             request = None
             try:
+                hitl_agent_message = self.room_runtime.create_agent_message(
+                    room_id=room_id,
+                    related_message_id=user_message_id,
+                    agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
+                    content=question.prompt,
+                    user_id=request_user_id,
+                    step_number=step_number,
+                    task_content=question.prompt,
+                    client_request_id=client_req_id,
+                )
+                hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
+                await self.message_writer.upsert_room_agent_message(
+                    hitl_agent_message
+                )
+                created_messages.append(hitl_agent_message.message_id)
+
                 request = await self.hitl_coordinator.request_input(
                     room_id=room_id,
                     user_message_id=user_message_id,
@@ -2483,6 +2500,8 @@ class SupervisorExecutor:
                     orchestration_run_id=state.run_id,
                     orchestration_schema_version=state.schema_version,
                 )
+                if request is None:
+                    raise RuntimeError("failed to create v2 HITL request")
             except Exception as exc:
                 request_id = getattr(exc, "request_id", None)
                 if isinstance(request_id, str):
@@ -2506,27 +2525,8 @@ class SupervisorExecutor:
                         state=state,
                     ),
                 )
-            if request is None:
-                await cleanup_created_artifacts()
-                trajectory.status = TrajectoryStatus.FAILED
-                state = await self._mark_v2_terminal(
-                    state,
-                    OrchestrationStatus.FAILED,
-                    reason="failed to create v2 HITL request",
-                    mutate=lambda updated: (
-                        setattr(updated, "pending_hitl_request_ids", []),
-                        setattr(updated, "open_questions", []),
-                    ),
-                )
-                return await self._log_state_and_return(
-                    room_id,
-                    state,
-                    self._state_run_result(
-                        status=RunStatus.FAILED,
-                        state=state,
-                    ),
-                )
-            created_request_ids.append(request.request_id)
+            if request is not None:
+                created_request_ids.append(request.request_id)
             last_request = request
 
         saved = await self._save_interrupted_state(
@@ -3315,10 +3315,7 @@ class SupervisorExecutor:
             )
             should_return_waiting_input = (
                 state.status == OrchestrationStatus.AWAITING_USER
-                and (
-                    self._has_open_pending_hitl(state)
-                    or not self._has_current_step_recoverable_intents(state)
-                )
+                and self._has_open_pending_hitl(state)
             )
             if blocking_resume_status is not None and (
                 blocking_resume_status != RunStatus.AWAITING_INPUT

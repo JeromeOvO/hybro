@@ -386,11 +386,21 @@ class HITLService:
         # when reused. Agent requests keep their existing projection event
         # semantics, including reuse.
         if source == "agent" or hitl_request_created:
-            await self._emit_hitl_event(
-                room_id=room_id,
-                event_type=HITLEventType.INPUT_REQUESTED,
-                request=request,
-            )
+            # Persistence must survive transient SSE failures, so return the
+            # persisted request even if projection fails.
+            try:
+                await self._emit_hitl_event(
+                    room_id=room_id,
+                    event_type=HITLEventType.INPUT_REQUESTED,
+                    request=request,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to emit HITL request event after persisting request %s",
+                    request.request_id,
+                    extra={"room_id": room_id, "request_id": request.request_id},
+                    exc_info=True,
+                )
 
             logger.info(
                 "hitl_request_created",
