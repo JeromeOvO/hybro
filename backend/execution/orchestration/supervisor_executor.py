@@ -2518,15 +2518,66 @@ class SupervisorExecutor:
                     }
                 )
 
-        state = await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_REQUESTED,
-            payload={
-                "status": OrchestrationStatus.AWAITING_USER.value,
-                "request_ids": created_request_ids,
-            },
-            mutate=mark_awaiting_user,
-        )
+        try:
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.HITL_REQUESTED,
+                payload={
+                    "status": OrchestrationStatus.AWAITING_USER.value,
+                    "request_ids": created_request_ids,
+                },
+                mutate=mark_awaiting_user,
+            )
+        except Exception:
+            await cleanup_created_artifacts()
+            trajectory.status = TrajectoryStatus.FAILED
+            failed_reason = "failed to persist v2 supervisor HITL state"
+            skip_request_ids = set(pending_request_ids) | set(created_request_ids)
+            created_request_ids_set = set(created_request_ids)
+
+            def mark_failed(updated: OrchestrationRunState) -> None:
+                updated.status = OrchestrationStatus.FAILED
+                updated.terminal_reason = failed_reason
+                updated.pending_hitl_request_ids = [
+                    request_id
+                    for request_id in updated.pending_hitl_request_ids
+                    if request_id not in skip_request_ids
+                ]
+                updated.open_questions = [
+                    question
+                    for question in updated.open_questions
+                    if not (
+                        isinstance(question, Mapping)
+                        and question.get("request_id") in created_request_ids_set
+                    )
+                ]
+
+            try:
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.RUN_TERMINAL,
+                    payload={
+                        "status": OrchestrationStatus.FAILED.value,
+                        "reason": failed_reason,
+                    },
+                    mutate=mark_failed,
+                )
+            except Exception:
+                fallback_state = state.model_copy(deep=True)
+                mark_failed(fallback_state)
+                state = fallback_state
+                logger.warning(
+                    "Failed to persist failed v2 supervisor HITL state",
+                    exc_info=True,
+                )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(
+                    status=RunStatus.FAILED,
+                    state=state,
+                ),
+            )
 
         try:
             await self._emit_processing_status(
@@ -3129,10 +3180,20 @@ class SupervisorExecutor:
                 state,
                 resumed_trajectory,
             )
+            open_pending_ids = {
+                question.get("request_id")
+                for question in state.open_questions
+                if isinstance(question, Mapping)
+                and question.get("status") == "open"
+                and isinstance(question.get("request_id"), str)
+            }
+            has_open_pending_hitl = bool(
+                open_pending_ids.intersection(set(state.pending_hitl_request_ids))
+            )
             if blocking_resume_status is not None and (
                 blocking_resume_status != RunStatus.AWAITING_INPUT
                 or state.status == OrchestrationStatus.AWAITING_USER
-                and state.pending_hitl_request_ids
+                and has_open_pending_hitl
             ):
                 return await self._log_state_and_return(
                     room_id,
