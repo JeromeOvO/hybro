@@ -304,6 +304,46 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
 
 
 @pytest.mark.asyncio
+async def test_run_copies_step_budget_from_extend_info(monkeypatch):
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "msg-1",
+            "candidate_agent_ids": ["agent-1"],
+            "orchestration_step_budget": 12,
+        },
+    )
+    monkeypatch.setattr(
+        executor,
+        "_execute_orchestration_loop",
+        AsyncMock(
+            return_value=SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                run_id="msg-1",
+                trajectory=None,
+            )
+        ),
+    )
+
+    await executor.run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
+        user_message=user_message,
+    )
+
+    state = await store.get_run("msg-1")
+    assert state is not None
+    assert state.step_budget == 12
+
+
+@pytest.mark.asyncio
 async def test_run_state_loader_falls_back_to_latest_by_user_message_id():
     store = InMemoryOrchestrationRunStore()
     executor = _make_supervisor_executor()
