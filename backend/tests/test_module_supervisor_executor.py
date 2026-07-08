@@ -231,6 +231,116 @@ async def test_run_creates_orchestration_state_without_legacy_or_trajectory_chec
 
 
 @pytest.mark.asyncio
+async def test_run_state_loader_uses_orchestration_run_id_for_existing_state():
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "run-1",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+    existing = await store.reconstruct_from_envelope(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        envelope=user_message.extend_info,
+        goal="Need quote",
+    )
+    existing.status = OrchestrationStatus.COMPLETED
+    existing.terminal_reason = "already completed"
+    await store.create_run(existing)
+
+    state = await executor._load_or_create_run_state_for_run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert state.run_id == "run-1"
+    assert state.user_message_id == "msg-1"
+    assert state.status == OrchestrationStatus.COMPLETED
+    assert state.terminal_reason == "already completed"
+    assert await store.get_run("msg-1") is None
+
+
+@pytest.mark.asyncio
+async def test_run_state_loader_creates_state_with_orchestration_run_id():
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "run-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+
+    state = await executor._load_or_create_run_state_for_run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert state.run_id == "run-1"
+    assert state.user_message_id == "msg-1"
+    assert await store.get_run("run-1") is not None
+    assert await store.get_run("msg-1") is None
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_state_loader_falls_back_to_latest_by_user_message_id():
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+    existing = await store.reconstruct_from_envelope(
+        run_id="run-latest",
+        room_id="room-1",
+        user_message_id="msg-1",
+        envelope=user_message.extend_info,
+        goal="Need quote",
+    )
+    existing.status = OrchestrationStatus.AWAITING_USER
+    existing.pending_hitl_request_ids = ["hitl-1"]
+    await store.create_run(existing)
+
+    state = await executor._load_or_create_run_state_for_run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert state.run_id == "run-latest"
+    assert state.status == OrchestrationStatus.AWAITING_USER
+    assert state.pending_hitl_request_ids == ["hitl-1"]
+    assert await store.get_run("msg-1") is None
+
+
+@pytest.mark.asyncio
 async def test_execute_orchestration_loop_returns_terminal_run_state_without_trajectory():
     executor = _make_supervisor_executor()
     state = OrchestrationRunState(
@@ -923,7 +1033,7 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
-        assert call_kwargs["orchestration_run_id"] == "msg-1"
+        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
         assert call_kwargs["orchestration_schema_version"] == 2
 
     @pytest.mark.asyncio
@@ -1011,5 +1121,5 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
-        assert call_kwargs["orchestration_run_id"] == "msg-1"
+        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
         assert call_kwargs["orchestration_schema_version"] == 2

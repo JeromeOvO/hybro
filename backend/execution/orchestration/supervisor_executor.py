@@ -1023,13 +1023,22 @@ class SupervisorExecutor:
         room_config: RoomConfig | None = None,
         user_message=None,
     ) -> OrchestrationRunState:
-        existing = await self.run_store.get_run(user_message_id)
+        envelope = self._orchestration_envelope_from_user_message(user_message)
+        effective_run_id = (
+            self._orchestration_envelope_str(envelope, "orchestration_run_id")
+            or user_message_id
+        )
+        existing = await self.run_store.get_run(effective_run_id)
+        if existing is not None:
+            return existing
+        existing = await self.run_store.get_latest_by_user_message_id(
+            user_message_id
+        )
         if existing is not None:
             return existing
 
-        envelope = self._orchestration_envelope_from_user_message(user_message)
         state = await self.run_store.reconstruct_from_envelope(
-            run_id=user_message_id,
+            run_id=effective_run_id,
             room_id=room_id,
             user_message_id=user_message_id,
             envelope=envelope,
@@ -1071,7 +1080,12 @@ class SupervisorExecutor:
         try:
             return await self.run_store.create_run(state)
         except OrchestrationStoreConflict:
-            existing = await self.run_store.get_run(user_message_id)
+            existing = await self.run_store.get_run(effective_run_id)
+            if existing is not None:
+                return existing
+            existing = await self.run_store.get_latest_by_user_message_id(
+                user_message_id
+            )
             if existing is not None:
                 return existing
             raise
