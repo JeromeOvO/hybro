@@ -304,6 +304,43 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
 
 
 @pytest.mark.asyncio
+async def test_run_terminalizes_state_when_planner_raises_unhandled_error():
+    class ExplodingPlanner:
+        async def plan(self, _context):
+            raise RuntimeError("planner unavailable")
+
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    executor.orchestration_planner = ExplodingPlanner()
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "msg-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="planner unavailable"):
+        await executor.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="Need quote",
+            agent_registry=[_make_agent_profile()],
+            room_config=SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
+            user_message=user_message,
+        )
+
+    state = await store.get_run("msg-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.FAILED
+    assert state.terminal_reason == "supervisor execution failed unexpectedly"
+    assert await store.list_recoverable() == []
+
+
+@pytest.mark.asyncio
 async def test_run_copies_step_budget_from_extend_info(monkeypatch):
     store = InMemoryOrchestrationRunStore()
     executor = _make_supervisor_executor()

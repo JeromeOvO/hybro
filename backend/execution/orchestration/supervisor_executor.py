@@ -110,6 +110,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+DEFAULT_DEBATE_ROUNDS = 2
+
+
 class SupervisorExecutor:
     """Executes the Supervisor's adaptive loop for a single user message."""
 
@@ -388,6 +391,7 @@ class SupervisorExecutor:
             "canceled",
             "cancelled",
             "rejected",
+            "expired",
             "timeout",
             "timed_out",
         }:
@@ -529,6 +533,29 @@ class SupervisorExecutor:
             ),
             agents=agents,
         )
+
+    async def _emit_supervisor_stage(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        details: str,
+        stage: str,
+        client_request_id: str | None = None,
+        agents: list[dict] | None = None,
+    ) -> None:
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                client_request_id=client_request_id,
+                details=details,
+                agents=agents,
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (%s)", stage, exc_info=True)
 
     async def _stream_supervisor_synthesis(
         self,
@@ -698,18 +725,13 @@ class SupervisorExecutor:
                 )
 
             if not (token and token.is_cancelled):
-                try:
-                    await self._emit_processing_status(
-                        room_id=room_id,
-                        status=SSEProcessingStatus.PROCESSING,
-                        message_id=user_message_id,
-                        lifecycle_message_id=user_message_id,
-                        details="Planning next action...",
-                    )
-                except Exception:
-                    logger.debug(
-                        "SSE stage notification failed (planning)", exc_info=True
-                    )
+                await self._emit_supervisor_stage(
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    client_request_id=state.client_request_id,
+                    details="Planning next action...",
+                    stage="planning",
+                )
 
             original_attachments = self._user_attachments_from_message(user_message)
             available_resources = (
@@ -938,7 +960,7 @@ class SupervisorExecutor:
         value = getattr(self, "debate_rounds", None)
         if isinstance(value, int) and value > 0:
             return value
-        return 2
+        return DEFAULT_DEBATE_ROUNDS
 
     @staticmethod
     def _next_participant_agent_id(state: OrchestrationRunState) -> str | None:
@@ -1418,6 +1440,21 @@ class SupervisorExecutor:
             for index, target in enumerate(action.targets, start=1)
         ]
 
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=state.client_request_id,
+            details=f"Delegating to {len(action.targets)} agent(s)...",
+            stage="delegating",
+            agents=[
+                {
+                    "agent_id": target.agent_id,
+                    "agent_name": target.agent_name,
+                }
+                for target in action.targets
+            ],
+        )
+
         state = await self._save_v2_state(
             state,
             event_type=OrchestrationEventType.DISPATCH_INTENT_RECORDED,
@@ -1439,6 +1476,13 @@ class SupervisorExecutor:
             ],
             run_state=state,
             original_attachments=self._user_attachments_from_message(user_message),
+        )
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=state.client_request_id,
+            details="Evaluating agent results...",
+            stage="evaluating",
         )
         entry.results = results
         entry.completed_at = utcnow()
@@ -1589,6 +1633,7 @@ class SupervisorExecutor:
             "failed",
             "canceled",
             "rejected",
+            "expired",
         }
         current_intents = [
             intent
@@ -1881,7 +1926,7 @@ class SupervisorExecutor:
                     value = getattr(value, key, None)
             return value
 
-        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        terminal_states = {"completed", "failed", "canceled", "rejected", "expired"}
         interactive_states = {
             "input-required",
             "auth-required",
@@ -3436,6 +3481,13 @@ class SupervisorExecutor:
                 user_message_id
             )
         )
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=client_req_id,
+            details="Synthesizing responses...",
+            stage="synthesizing",
+        )
         synth_coro = self._stream_supervisor_synthesis(
             room_id=room_id,
             user_message_id=user_message_id,
@@ -4315,20 +4367,51 @@ class SupervisorExecutor:
                     ),
                 )
 
-        return await self._execute_orchestration_loop(
-            state=state,
-            room_id=room_id,
-            user_message_id=user_message_id,
-            message_text=message_text,
-            agent_registry=agent_registry,
-            room_config=room_config,
-            conversation_context=conversation_context,
-            token=token,
-            request_user_id=request_user_id,
-            quoted_text=quoted_text,
-            allow_awaiting_user_recovery=resolved_hitl_reply,
-            user_message=user_message,
-        )
+        try:
+            return await self._execute_orchestration_loop(
+                state=state,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                allow_awaiting_user_recovery=resolved_hitl_reply,
+                user_message=user_message,
+            )
+        except CancellationError:
+            raise
+        except Exception:
+            await self._mark_current_run_failed_after_unhandled_exception(
+                state.run_id,
+                reason="supervisor execution failed unexpectedly",
+            )
+            raise
+
+    async def _mark_current_run_failed_after_unhandled_exception(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+    ) -> None:
+        try:
+            current = await self.run_store.get_run(run_id)
+            if current is None or current.status in TERMINAL_ORCHESTRATION_STATUSES:
+                return
+            await self._mark_v2_terminal(
+                current,
+                OrchestrationStatus.FAILED,
+                reason=reason,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to terminalize orchestration run after supervisor error",
+                extra={"run_id": run_id},
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Concurrent agent dispatch

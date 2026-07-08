@@ -648,6 +648,7 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
+@patch("execution.orchestration.supervisor_executor.DEFAULT_DEBATE_ROUNDS", 1)
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -1066,6 +1067,7 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
+@patch("execution.orchestration.supervisor_executor.DEFAULT_DEBATE_ROUNDS", 1)
 class TestDebateResume:
     @pytest.fixture
     def se(self):
