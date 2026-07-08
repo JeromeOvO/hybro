@@ -1848,16 +1848,62 @@ class SupervisorExecutor:
         agent_names: dict[str, str],
         step_number: int,
     ) -> StepResult | None:
-        terminal_states = {"completed", "failed", "canceled", "rejected"}
-        if not msg or getattr(msg, "last_notified_state", None) not in terminal_states:
+        if not msg:
             return None
 
-        last_state = msg.last_notified_state
+        task = getattr(msg.message_content, "message_task", None) if msg else None
+
+        def _field_from_task(
+            payload: object,
+            *keys: str,
+        ) -> object | None:
+            value = payload
+            for key in keys:
+                if value is None:
+                    return None
+                if isinstance(value, Mapping):
+                    value = value.get(key)
+                else:
+                    value = getattr(value, key, None)
+            return value
+
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        interactive_states = {
+            "input-required",
+            "auth-required",
+        }
+
+        last_state = getattr(msg, "last_notified_state", None)
+        if last_state is None:
+            last_state = _field_from_task(task, "status", "state")
+        if not isinstance(last_state, str):
+            return None
+        normalized_state = last_state.strip().lower()
+        if normalized_state not in terminal_states | interactive_states:
+            return None
+
+        last_state = normalized_state
+        is_input_required = last_state in interactive_states
         is_success = last_state == "completed"
         response_text = ""
         message_content = getattr(msg, "message_content", None)
         if message_content and getattr(message_content, "message_text", None):
             response_text = message_content.message_text
+
+        task_metadata = (
+            _field_from_task(task, "metadata")
+            if task is not None
+            else None
+        )
+        task_metadata_dict = task_metadata if isinstance(task_metadata, Mapping) else {}
+        status_message = _field_from_task(task, "status", "message", "message_text")
+        if not isinstance(status_message, str):
+            status_message = _field_from_task(task, "metadata", "hitl_prompt")
+        if not isinstance(status_message, str):
+            status_message = None
+        response_status_message = (
+            status_message.strip() if isinstance(status_message, str) else None
+        )
 
         return StepResult(
             step_number=step_number,
@@ -1866,8 +1912,17 @@ class SupervisorExecutor:
             task=intent.task,
             response_text=response_text,
             success=is_success,
-            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
-            error_message=None if is_success else "Agent task failed",
+            status=(
+                StepStatus.AWAITING_INPUT
+                if is_input_required
+                else StepStatus.SUCCESS if is_success else StepStatus.FAILED
+            ),
+            error_message=None
+            if is_success or is_input_required
+            else "Agent task failed",
+            status_message=response_status_message,
+            a2a_task_id=_field_from_task(task_metadata_dict, "hitl_a2a_task_id"),
+            a2a_context_id=_field_from_task(task_metadata_dict, "hitl_a2a_context_id"),
             agent_message_id=intent.planned_agent_message_id,
             completed_at=utcnow(),
         )
@@ -1915,7 +1970,7 @@ class SupervisorExecutor:
         conversation_context: str | None,
         request_user_id: str | None,
         quoted_text: str | None,
-    ) -> tuple[OrchestrationRunState, RunStatus]:
+        ) -> tuple[OrchestrationRunState, RunStatus]:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
@@ -2016,6 +2071,9 @@ class SupervisorExecutor:
             )
         except Exception:
             if request is not None:
+                await self._clear_continuation_state(
+                    message_id=continuation_message_id,
+                )
                 await cleanup_hitl_request(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
@@ -2027,6 +2085,9 @@ class SupervisorExecutor:
 
         if not saved:
             if request is not None:
+                await self._clear_continuation_state(
+                    message_id=continuation_message_id,
+                )
                 await cleanup_hitl_request(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
@@ -2079,6 +2140,9 @@ class SupervisorExecutor:
                         "Failed to cancel orphaned v2 agent HITL request %s",
                         request.request_id,
                     )
+            await self._clear_continuation_state(
+                message_id=continuation_message_id,
+            )
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
                 state,
@@ -2098,6 +2162,34 @@ class SupervisorExecutor:
             logger.debug("SSE v2 agent HITL notification failed", exc_info=True)
 
         return state, RunStatus.AWAITING_INPUT
+
+    async def _clear_continuation_state(
+        self,
+        *,
+        message_id: str,
+        to_user_message: bool = False,
+    ) -> None:
+        """Best-effort clear a continuation record saved for HITL rollback."""
+        if not message_id:
+            return
+        try:
+            clear_callback = (
+                getattr(self.continuation_store, "get_and_clear_continuation_on_user_message", None)
+                if to_user_message
+                else getattr(self.continuation_store, "get_and_clear_continuation_on_message", None)
+            )
+            if clear_callback is None:
+                return
+            await clear_callback(message_id)
+        except Exception:
+            logger.warning(
+                "Failed to clear continuation state",
+                extra={
+                    "message_id": message_id,
+                    "to_user_message": to_user_message,
+                },
+                exc_info=True,
+            )
 
     async def _resolve_v2_hitl_if_answered(
         self,
@@ -2565,6 +2657,10 @@ class SupervisorExecutor:
                 message_id=user_message_id,
             )
         except Exception:
+            await self._clear_continuation_state(
+                message_id=user_message_id,
+                to_user_message=True,
+            )
             await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
@@ -2641,6 +2737,10 @@ class SupervisorExecutor:
                 mutate=mark_awaiting_user,
             )
         except Exception:
+            await self._clear_continuation_state(
+                message_id=user_message_id,
+                to_user_message=True,
+            )
             await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
             failed_reason = "failed to persist v2 supervisor HITL state"

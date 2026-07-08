@@ -1539,6 +1539,7 @@ async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
     executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
+    executor.continuation_store.get_and_clear_continuation_on_user_message = AsyncMock()
 
     original_save = store.save_state
 
@@ -1567,6 +1568,9 @@ async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
     request_input.assert_awaited_once()
     cancel_request.assert_awaited_once_with("hitl-1", "room-1")
     executor.message_writer.delete_room_agent_message_by_message_id.assert_awaited_once()
+    executor.continuation_store.get_and_clear_continuation_on_user_message.assert_awaited_once_with(
+        "message-1"
+    )
     persisted = await store.get_run("message-1")
     assert persisted is not None
     assert persisted.status == OrchestrationStatus.FAILED
@@ -3540,6 +3544,104 @@ async def test_recover_v2_inflight_dispatch_rehydrates_awaiting_input_output_to_
 
 
 @pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_rehydrates_interactive_message_without_output_record():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    message_task_status = SimpleNamespace(
+        state="input-required",
+        message=SimpleNamespace(message_text="Please provide missing details."),
+    )
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id="message-1:step-1:target-1:message",
+            message_content=SimpleNamespace(
+                message_text="",
+                message_task=SimpleNamespace(
+                    status=message_task_status,
+                    metadata={
+                        "hitl_a2a_task_id": "task-1",
+                        "hitl_a2a_context_id": "ctx-1",
+                    },
+                ),
+            ),
+        )
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
+    assert recovered_state.pending_hitl_request_ids == ["hitl-agent-1"]
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    request_input_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert request_input_kwargs["a2a_task_id"] == "task-1"
+    assert request_input_kwargs["a2a_context_id"] == "ctx-1"
+    assert (
+        request_input_kwargs["prompt"]
+        == "Please provide missing details."
+    )
+    assert recovered_state.agent_outputs
+    recovered_output = recovered_state.agent_outputs[0]
+    assert recovered_output.a2a_task_id == "task-1"
+    assert recovered_output.a2a_context_id == "ctx-1"
+    assert recovered_output.status == StepStatus.AWAITING_INPUT.value
+
+
+@pytest.mark.asyncio
 async def test_recover_v2_inflight_dispatch_paused_and_awaiting_saves_paused_before_hitl():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -3782,6 +3884,7 @@ async def test_run_agent_awaiting_input_cancels_hitl_request_if_v2_state_save_fa
         planner=RecordingPlanner(),
         user_message=user_message,
     )
+    executor.continuation_store.get_and_clear_continuation_on_message = AsyncMock()
     request_input = AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
     cancel_request = AsyncMock()
     executor.hitl_coordinator = SimpleNamespace(
@@ -3874,6 +3977,9 @@ async def test_run_agent_awaiting_input_cancels_hitl_request_if_v2_state_save_fa
     assert result.status == RunStatus.FAILED
     request_input.assert_awaited_once()
     cancel_request.assert_awaited_once_with("hitl-agent-1", "room-1")
+    executor.continuation_store.get_and_clear_continuation_on_message.assert_awaited_once_with(
+        "message-1:step-1:target-1:message"
+    )
     persisted = await store.get_run("message-1")
     assert persisted is not None
     assert persisted.status == OrchestrationStatus.FAILED

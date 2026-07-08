@@ -35,6 +35,21 @@ class HITLContinuationLostError(HITLError):
 ContinuationLostError = HITLContinuationLostError
 
 
+class HITLRequestProjectionError(HITLError):
+    """Projection/update compensation failed while creating a HITL request."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        request_id: str | None = None,
+        code: str = "HITL_REQUEST_PROJECTION_ERROR",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, code=code, details=details)
+        self.request_id = request_id
+
+
 class HITLRoutingFailedError(HITLError):
     pass
 
@@ -46,5 +61,6 @@ __all__ = [
     "HITLError",
     "HITLNotFoundError",
     "HITLRoomMismatchError",
+    "HITLRequestProjectionError",
     "HITLRoutingFailedError",
 ]

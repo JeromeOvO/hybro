@@ -26,6 +26,7 @@ from execution.hitl.exceptions import (
     HITLError,
     HITLNotFoundError,
     HITLRoomMismatchError,
+    HITLRequestProjectionError,
     HITLRoutingFailedError,
 )
 from models.hitl import (
@@ -351,7 +352,7 @@ class HITLService:
                 except Exception:
                     projected = None
                     logger.warning(
-                        "Failed to project persistent HITL onto agent display message %s",
+                        "Failed to project pending HITL onto agent display message %s",
                         display_projection_message_id,
                         extra={
                             "hitl_request_id": request.request_id,
@@ -363,8 +364,7 @@ class HITLService:
                         },
                         exc_info=True,
                     )
-
-                if not projected:
+                if projected is not True:
                     logger.error(
                         "Failed to project pending HITL onto agent display message",
                         extra={
@@ -378,35 +378,51 @@ class HITLService:
                     )
                     if hitl_request_created:
                         try:
-                            await self.persistence.update_hitl_request(
+                            canceled = await self.persistence.update_hitl_request(
                                 request.request_id,
                                 status=HITLStatus.CANCELED.value,
                                 error_message="failed_to_project_agent_message",
                             )
-                        except Exception:
+                        except Exception as exc:
                             logger.warning(
                                 "Failed to mark HITL request %s canceled after projection failure",
                                 request.request_id,
                                 exc_info=True,
                             )
+                            raise HITLRequestProjectionError(
+                                "failed to compensate agent HITL projection failure",
+                                request_id=request.request_id,
+                            ) from exc
+                        if not canceled:
+                            raise HITLRequestProjectionError(
+                                "failed to compensate agent HITL projection failure",
+                                request_id=request.request_id,
+                            )
                     return None
             else:
+                projection_ok = False
                 try:
-                    await self.persistence.update_agent_message_task_state(
-                        display_projection_message_id, "input-required"
+                    update_state = await self.persistence.update_agent_message_task_state(
+                        display_projection_message_id,
+                        "input-required",
                     )
-                    await self.persistence.persist_hitl_user_answer(
+                    update_answer = await self.persistence.persist_hitl_user_answer(
                         display_projection_message_id,
                         None,
                     )
+                    projection_ok = bool(update_state and update_answer)
                     if group_id is not None:
-                        await self.persistence.persist_hitl_group_metadata(
-                            display_projection_message_id,
-                            group_id=group_id,
-                            group_total=group_total,
-                            group_index=group_index,
+                        group_written = (
+                            await self.persistence.persist_hitl_group_metadata(
+                                display_projection_message_id,
+                                group_id=group_id,
+                                group_total=group_total,
+                                group_index=group_index,
+                            )
                         )
+                        projection_ok = projection_ok and bool(group_written)
                 except Exception:
+                    projection_ok = False
                     logger.error(
                         "Failed to project pending supervisor HITL onto display message",
                         extra={
@@ -416,17 +432,35 @@ class HITLService:
                         },
                         exc_info=True,
                     )
+                if not projection_ok:
+                    logger.error(
+                        "Failed to project pending supervisor HITL onto display message",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": display_projection_message_id,
+                        },
+                    )
                     try:
-                        await self.persistence.update_hitl_request(
+                        canceled = await self.persistence.update_hitl_request(
                             request.request_id,
                             status=HITLStatus.CANCELED.value,
                             error_message="failed_to_project_supervisor_message",
                         )
-                    except Exception:
+                    except Exception as exc:
                         logger.warning(
                             "Failed to mark HITL request %s canceled after projection failure",
                             request.request_id,
                             exc_info=True,
+                        )
+                        raise HITLRequestProjectionError(
+                            "failed to compensate supervisor HITL projection failure",
+                            request_id=request.request_id,
+                        ) from exc
+                    if not canceled:
+                        raise HITLRequestProjectionError(
+                            "failed to compensate supervisor HITL projection failure",
+                            request_id=request.request_id,
                         )
                     return None
 
