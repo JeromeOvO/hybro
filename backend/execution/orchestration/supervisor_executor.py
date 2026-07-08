@@ -1448,7 +1448,7 @@ class SupervisorExecutor:
             state = await self._ingest_v2_results(
                 state,
                 results,
-                status=OrchestrationStatus.AWAITING_USER,
+                status=OrchestrationStatus.WAITING_AGENT,
                 advance_step=False,
             )
             if paused:
@@ -1666,7 +1666,7 @@ class SupervisorExecutor:
             state = await self._ingest_v2_results(
                 state,
                 results,
-                status=OrchestrationStatus.AWAITING_USER,
+                status=OrchestrationStatus.WAITING_AGENT,
                 advance_step=False,
             )
             state, awaiting_status = await self._run_agent_awaiting_input_action(
@@ -1951,6 +1951,7 @@ class SupervisorExecutor:
             return state, RunStatus.FAILED
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.AWAITING_USER
             if request.request_id not in updated.pending_hitl_request_ids:
                 updated.pending_hitl_request_ids.append(request.request_id)
             if not any(
@@ -2659,14 +2660,20 @@ class SupervisorExecutor:
             )
 
     @staticmethod
-    def _v2_output_message_id_for_result(
+    def _v2_fallback_intent_for_result(
         result: StepResult,
         fallback_intents: list[DispatchIntent],
-    ) -> str | None:
+    ) -> DispatchIntent | None:
         if result.agent_message_id:
-            return result.agent_message_id
-
-        fallback = next(
+            return next(
+                (
+                    intent
+                    for intent in fallback_intents
+                    if intent.planned_agent_message_id == result.agent_message_id
+                ),
+                None,
+            )
+        return next(
             (
                 intent
                 for intent in fallback_intents
@@ -2675,6 +2682,19 @@ class SupervisorExecutor:
                 and intent.status == "planned"
             ),
             None,
+        )
+
+    @staticmethod
+    def _v2_output_message_id_for_result(
+        result: StepResult,
+        fallback_intents: list[DispatchIntent],
+    ) -> str | None:
+        if result.agent_message_id:
+            return result.agent_message_id
+
+        fallback = SupervisorExecutor._v2_fallback_intent_for_result(
+            result,
+            fallback_intents,
         )
         return fallback.planned_agent_message_id if fallback else None
 
@@ -2705,26 +2725,11 @@ class SupervisorExecutor:
         *,
         status: OrchestrationStatus,
         advance_step: bool,
-        fallback_intents: list[DispatchIntent],
+        matched_intent_id: str | None,
     ) -> None:
         state.status = status
-        fallback_intent_ids = {
-            intent.dispatch_intent_id: intent.status for intent in fallback_intents
-        }
         for intent in state.dispatch_intents:
-            if intent.dispatch_intent_id not in fallback_intent_ids:
-                continue
-
-            if result.agent_message_id:
-                matches_result = intent.planned_agent_message_id == result.agent_message_id
-            else:
-                matches_result = (
-                    intent.agent_id == result.agent_id
-                    and intent.task == result.task
-                    and fallback_intent_ids[intent.dispatch_intent_id] == "planned"
-                )
-
-            if matches_result:
+            if intent.dispatch_intent_id == matched_intent_id:
                 intent.status = result.status.value
         if advance_step:
             state.steps_used += 1
@@ -2756,12 +2761,18 @@ class SupervisorExecutor:
         for index, result in enumerate(results):
             expected_version = current.state_version
             next_state = current.model_copy(deep=True)
+            matched_intent = self._v2_fallback_intent_for_result(
+                result,
+                fallback_intents,
+            )
             self._apply_v2_result_metadata(
                 next_state,
                 result,
                 status=status,
                 advance_step=advance_step and index == len(results) - 1,
-                fallback_intents=fallback_intents,
+                matched_intent_id=(
+                    matched_intent.dispatch_intent_id if matched_intent else None
+                ),
             )
             if clear_pending_hitl_request_ids and index == len(results) - 1:
                 next_state.pending_hitl_request_ids.clear()

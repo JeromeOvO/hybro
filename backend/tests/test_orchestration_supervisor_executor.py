@@ -931,6 +931,162 @@ async def test_v2_results_are_ingested_with_state_writes_per_result(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_v2_result_without_message_id_updates_only_one_fallback_intent():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        run_id="run-1",
+        user_message_id="msg-1",
+        candidate_agent_ids=["agent-1"],
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+            ),
+        ),
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=2,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+            ),
+        ),
+    ]
+    await store.create_run(state)
+
+    updated = await executor._ingest_v2_results(
+        await store.get_run("run-1"),
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+                response_text="",
+                success=False,
+                status=StepStatus.FAILED,
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert updated.state_version == 1
+    assert updated.dispatch_intents[0].status == StepStatus.FAILED.value
+    assert updated.dispatch_intents[1].status == "planned"
+
+
+@pytest.mark.asyncio
+async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_ids(monkeypatch):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="both need user input",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Auth required",
+                ),
+                PlannedDelegateTarget(
+                    agent_id="agent-2",
+                    agent_name="Agent Two",
+                    task="More context",
+                ),
+            ],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=[
+            ProcessingResult(
+                ProcessingStatus.AWAITING_INPUT,
+                message_id="message-1:step-1:target-1:message",
+                status_message="Authenticate account.",
+            ),
+            ProcessingResult(
+                ProcessingStatus.AWAITING_INPUT,
+                message_id="message-1:step-1:target-2:message",
+                status_message="Need approval.",
+            ),
+        ]
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    saved_states = []
+    original_save = store.save_state
+
+    async def save_state_spy(
+        next_state: OrchestrationRunState,
+        *,
+        expected_version: int,
+    ) -> OrchestrationRunState:
+        saved_states.append(
+            (
+                next_state.status,
+                list(next_state.pending_hitl_request_ids),
+                next_state.state_version,
+            )
+        )
+        return await original_save(next_state, expected_version=expected_version)
+
+    monkeypatch.setattr(store, "save_state", save_state_spy)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    assert not any(
+        status == OrchestrationStatus.AWAITING_USER and not pending
+        for status, pending, _version in saved_states
+    )
+    state = await store.get_run("message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.AWAITING_USER
+    assert state.pending_hitl_request_ids == ["hitl-agent-1"]
+
+
+@pytest.mark.asyncio
 async def test_run_ask_user_creates_hitl_prompt_and_continuation():
     user_message = RoomUserMessage(
         room_id="room-1",
