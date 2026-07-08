@@ -137,6 +137,52 @@ def test_ingest_adds_output_and_artifact_records_without_mutating_input():
     ]
 
 
+def test_ingest_preserves_a2a_routing_metadata():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="The agent finished.",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
+        status_message="Awaiting confirmation",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert updated.agent_outputs[0].a2a_task_id == "task-1"
+    assert updated.agent_outputs[0].a2a_context_id == "context-1"
+    assert updated.agent_outputs[0].status_message == "Awaiting confirmation"
+
+
+def test_reingesting_updates_a2a_routing_metadata():
+    initial = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="The agent finished.",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
+        status_message="Initial",
+    )
+    updated_once = AgentResultIngestor().ingest(_run_state(), initial)
+    reingested = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="The agent finished.",
+        a2a_task_id="task-2",
+        a2a_context_id="context-2",
+        status_message="Replayed",
+    )
+
+    updated_twice = AgentResultIngestor().ingest(updated_once, reingested)
+
+    assert updated_twice.agent_outputs[0].a2a_task_id == "task-2"
+    assert updated_twice.agent_outputs[0].a2a_context_id == "context-2"
+    assert updated_twice.agent_outputs[0].status_message == "Replayed"
+
+
 def test_reingesting_same_result_is_idempotent_for_outputs_and_artifacts():
     result = AgentResultRead(
         agent_message_id="agent-msg-1",

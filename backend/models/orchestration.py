@@ -212,6 +212,9 @@ class AgentOutputRecord(BaseModel):
     text: str | None = None
     artifact_keys: list[str] = Field(default_factory=list)
     error: str | None = None
+    a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
+    status_message: str | None = None
 
 
 class OrchestrationRunState(BaseModel):

@@ -18,6 +18,9 @@ class AgentResultRead(BaseModel):
     text: str | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+    a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
+    status_message: str | None = None
 
 
 _STABLE_ID_FIELDS = (
@@ -209,6 +212,9 @@ class AgentResultIngestor:
                     text=result.text,
                     artifact_keys=result_artifact_keys,
                     error=result.error,
+                    a2a_task_id=result.a2a_task_id,
+                    a2a_context_id=result.a2a_context_id,
+                    status_message=result.status_message,
                 )
             )
             changed = True
@@ -234,6 +240,15 @@ class AgentResultIngestor:
                 and existing_output.artifact_keys != result_artifact_keys
             ):
                 existing_output.artifact_keys = result_artifact_keys
+                changed = True
+            if existing_output.a2a_task_id != result.a2a_task_id:
+                existing_output.a2a_task_id = result.a2a_task_id
+                changed = True
+            if existing_output.a2a_context_id != result.a2a_context_id:
+                existing_output.a2a_context_id = result.a2a_context_id
+                changed = True
+            if existing_output.status_message != result.status_message:
+                existing_output.status_message = result.status_message
                 changed = True
 
         return changed

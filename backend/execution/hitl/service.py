@@ -333,20 +333,37 @@ class HITLService:
 
         if display_projection_message_id:
             if source == "agent":
-                projected = (
-                    await self.persistence.persist_pending_hitl_on_agent_message(
-                        display_projection_message_id,
-                        request_id=request.request_id,
-                        prompt=request.prompt,
-                        prompt_type=request.prompt_type,
-                        choices=request.choices,
-                        a2a_task_id=request.a2a_task_id,
-                        a2a_context_id=request.a2a_context_id,
-                        group_id=request.group_id,
-                        group_total=request.group_total,
-                        group_index=request.group_index,
+                try:
+                    projected = (
+                        await self.persistence.persist_pending_hitl_on_agent_message(
+                            display_projection_message_id,
+                            request_id=request.request_id,
+                            prompt=request.prompt,
+                            prompt_type=request.prompt_type,
+                            choices=request.choices,
+                            a2a_task_id=request.a2a_task_id,
+                            a2a_context_id=request.a2a_context_id,
+                            group_id=request.group_id,
+                            group_total=request.group_total,
+                            group_index=request.group_index,
+                        )
                     )
-                )
+                except Exception:
+                    projected = None
+                    logger.warning(
+                        "Failed to project persistent HITL onto agent display message %s",
+                        display_projection_message_id,
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": display_projection_message_id,
+                            "continuation_message_id": request.continuation_message_id,
+                            "a2a_task_id": request.a2a_task_id,
+                            "a2a_context_id": request.a2a_context_id,
+                        },
+                        exc_info=True,
+                    )
+
                 if not projected:
                     logger.error(
                         "Failed to project pending HITL onto agent display message",
@@ -360,27 +377,58 @@ class HITLService:
                         },
                     )
                     if hitl_request_created:
+                        try:
+                            await self.persistence.update_hitl_request(
+                                request.request_id,
+                                status=HITLStatus.CANCELED.value,
+                                error_message="failed_to_project_agent_message",
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to mark HITL request %s canceled after projection failure",
+                                request.request_id,
+                                exc_info=True,
+                            )
+                    return None
+            else:
+                try:
+                    await self.persistence.update_agent_message_task_state(
+                        display_projection_message_id, "input-required"
+                    )
+                    await self.persistence.persist_hitl_user_answer(
+                        display_projection_message_id,
+                        None,
+                    )
+                    if group_id is not None:
+                        await self.persistence.persist_hitl_group_metadata(
+                            display_projection_message_id,
+                            group_id=group_id,
+                            group_total=group_total,
+                            group_index=group_index,
+                        )
+                except Exception:
+                    logger.error(
+                        "Failed to project pending supervisor HITL onto display message",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": display_projection_message_id,
+                        },
+                        exc_info=True,
+                    )
+                    try:
                         await self.persistence.update_hitl_request(
                             request.request_id,
                             status=HITLStatus.CANCELED.value,
-                            error_message="failed_to_project_agent_message",
+                            error_message="failed_to_project_supervisor_message",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to mark HITL request %s canceled after projection failure",
+                            request.request_id,
+                            exc_info=True,
                         )
                     return None
-            else:
-                await self.persistence.update_agent_message_task_state(
-                    display_projection_message_id, "input-required"
-                )
-                await self.persistence.persist_hitl_user_answer(
-                    display_projection_message_id,
-                    None,
-                )
-                if group_id is not None:
-                    await self.persistence.persist_hitl_group_metadata(
-                        display_projection_message_id,
-                        group_id=group_id,
-                        group_total=group_total,
-                        group_index=group_index,
-                    )
 
         # 2. Deterministic supervisor requests are already visible to clients
         # when reused. Agent requests keep their existing projection event
