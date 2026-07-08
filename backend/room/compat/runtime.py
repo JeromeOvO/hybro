@@ -38,6 +38,7 @@ from common.utils.context_utils import (
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from context_memory.projection import _human_size, build_turn_content
+from execution.orchestration.candidate_scope import normalize_candidate_scope
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
@@ -1632,7 +1633,7 @@ class RoomServices:
         return dict(info)
 
     @classmethod
-    def _is_v2_orchestration_request(
+    def _is_orchestration_request(
         cls,
         request: RoomCenterUserMessageRequest,
     ) -> bool:
@@ -1720,7 +1721,7 @@ class RoomServices:
 
         return selected_agent_set, False, agents
 
-    async def _validate_v2_candidate_scope_metadata(
+    async def _validate_candidate_scope_metadata(
         self,
         request: RoomCenterUserMessageRequest,
         selected_agent_ids: list[str],
@@ -1821,7 +1822,7 @@ class RoomServices:
 
         return None
 
-    async def _prepare_v2_orchestration_envelope(
+    async def _prepare_orchestration_envelope(
         self,
         request: RoomCenterUserMessageRequest,
         user_message: RoomUserMessage,
@@ -1833,26 +1834,43 @@ class RoomServices:
         candidate_scope_mode = info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
             candidate_scope_mode = "explicit_selection"
+        candidate_scope_mode = candidate_scope_mode.strip() or "explicit_selection"
+
+        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        sanitized_group_id = (
+            candidate_scope_group_id.strip()
+            if (
+                candidate_scope_mode == "saved_group"
+                and isinstance(candidate_scope_group_id, str)
+                and candidate_scope_group_id.strip()
+            )
+            else None
+        )
+        candidate_scope = normalize_candidate_scope(
+            room_id=request.room_id,
+            source=candidate_scope_mode,
+            group_id=sanitized_group_id,
+            selected_agent_set=selected_agent_set,
+            selected_by_user_id=request.user_id,
+        )
 
         envelope = {
             "orchestration": True,
             "orchestration_schema_version": 2,
             "orchestration_run_id": user_message.message_id,
-            "candidate_scope_mode": candidate_scope_mode,
-            "candidate_agent_ids": list(selected_agent_set.keys()),
-            "candidate_scope_snapshot_version": 1,
+            "orchestration_status": "created",
+            "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
+            "candidate_scope_source": candidate_scope.source,
+            "candidate_scope_mode": candidate_scope.source,
+            "candidate_agent_ids": list(candidate_scope.agent_ids),
+            "candidate_scope_snapshot_version": candidate_scope.revision,
             "mentioned_agent_ids": [
                 mention["agent_id"] for mention in (explicit_mentions or [])
             ],
             "client_request_id": client_request_id,
         }
-        candidate_scope_group_id = info.get("candidate_scope_group_id")
-        if (
-            candidate_scope_mode == "saved_group"
-            and isinstance(candidate_scope_group_id, str)
-            and candidate_scope_group_id.strip()
-        ):
-            envelope["candidate_scope_group_id"] = candidate_scope_group_id.strip()
+        if candidate_scope.group_id:
+            envelope["candidate_scope_group_id"] = candidate_scope.group_id
 
         user_message.extend_info = envelope
         persisted = await self._store.update_room_user_message_by_message_id(
@@ -1861,12 +1879,12 @@ class RoomServices:
         )
         if not persisted:
             logger.warning(
-                "RoomServices: failed to persist v2 orchestration envelope for message %s",
+                "RoomServices: failed to persist orchestration envelope for message %s",
                 user_message.message_id,
             )
             return ParseResult(success=False)
         logger.info(
-            "RoomServices: v2 orchestration envelope prepared for message %s (%d candidates)",
+            "RoomServices: orchestration envelope prepared for message %s (%d candidates)",
             user_message.message_id,
             len(selected_agent_set),
         )
@@ -2282,14 +2300,14 @@ class RoomServices:
         pre_resolved_scope: tuple[dict, bool, list] | None = None
         pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
         selected_agent_ids = self._selected_agent_ids_from_request(request)
-        v2_orchestration_requested = self._is_v2_orchestration_request(request)
+        orchestration_requested = self._is_orchestration_request(request)
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
             candidate_scope_mode = "explicit_selection"
 
         if (
-            v2_orchestration_requested
+            orchestration_requested
             and candidate_scope_mode == "saved_group"
             and not selected_agent_ids
         ):
@@ -2311,8 +2329,8 @@ class RoomServices:
                 None,
             )
 
-        if v2_orchestration_requested and selected_agent_ids is not None:
-            metadata_error = await self._validate_v2_candidate_scope_metadata(
+        if orchestration_requested and selected_agent_ids is not None:
+            metadata_error = await self._validate_candidate_scope_metadata(
                 request,
                 selected_agent_ids,
                 sender_user_id=request.user_id,
@@ -2456,7 +2474,7 @@ class RoomServices:
         pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
         v2_orchestration_requested = (
-            use_supervisor and self._is_v2_orchestration_request(request)
+            use_supervisor and self._is_orchestration_request(request)
         )
         v2_orchestration_active = (
             v2_orchestration_requested and settings.execution_orchestration_v2
@@ -2580,7 +2598,7 @@ class RoomServices:
             "dispatch_strategy": dispatch_strategy.value,
         }
 
-        # Fetch room memory for legacy context assembly. V2 supervisor requests
+        # Fetch room memory for legacy context assembly. Orchestration requests
         # persist only the lightweight orchestration envelope here.
         room_memory = None
         if (
@@ -2633,7 +2651,7 @@ class RoomServices:
             if clarify_resume_prepared:
                 parse_result = ParseResult(success=True)
             elif v2_orchestration_active:
-                parse_result = await self._prepare_v2_orchestration_envelope(
+                parse_result = await self._prepare_orchestration_envelope(
                     request=request,
                     user_message=user_message,
                     selected_agent_set=selected_agent_set,
