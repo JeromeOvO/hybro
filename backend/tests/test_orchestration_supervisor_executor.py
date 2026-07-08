@@ -22,6 +22,7 @@ from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.orchestration import (
     CompletionEvidence,
+    AgentOutputRecord,
     DispatchIntent,
     OrchestrationEventType,
     OrchestrationRunState,
@@ -1912,6 +1913,94 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
     ]
     assert events[0].state_version == 1
     assert events[0].type == OrchestrationEventType.AGENT_RESULT_INGESTED
+
+
+@pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_preserves_artifacts_for_replayed_output():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    artifact_key = "message-1:step-1:target-1:artifact"
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered output",
+            artifact_keys=[artifact_key],
+        )
+    ]
+    state.artifacts = [
+        {
+            "artifact_key": artifact_key,
+            "artifact_id": "artifact-1",
+            "source_agent_message_id": "message-1:step-1:target-1:message",
+            "source_agent_id": "agent-1",
+            "kind": "agent_file",
+            "summary": "existing artifact",
+        }
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status is None
+    assert recovered_state.state_version == 1
+    persisted_state = await store.get_run("message-1")
+    assert persisted_state is not None
+    persisted_artifact = persisted_state.artifacts[0]
+    assert persisted_state.agent_outputs[0].artifact_keys == [
+        persisted_artifact["artifact_key"]
+    ]
+    assert persisted_artifact["artifact_id"] == "artifact-1"
+    assert persisted_artifact["summary"] == "existing artifact"
 
 
 @pytest.mark.asyncio

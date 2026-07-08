@@ -17,6 +17,7 @@ See docs/System-Architecture.md for design details.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -2678,6 +2679,26 @@ class SupervisorExecutor:
         return fallback.planned_agent_message_id if fallback else None
 
     @staticmethod
+    def _v2_artifacts_for_result(
+        state: OrchestrationRunState,
+        output_message_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if not output_message_id:
+            return []
+        output_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        output = output_by_message_id.get(output_message_id)
+        if output is None or not output.artifact_keys:
+            return []
+        artifact_keys = set(output.artifact_keys)
+        return [
+            copy.deepcopy(artifact)
+            for artifact in state.artifacts
+            if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
+        ]
+
+    @staticmethod
     def _apply_v2_result_metadata(
         state: OrchestrationRunState,
         result: StepResult,
@@ -2750,6 +2771,10 @@ class SupervisorExecutor:
                 fallback_intents=fallback_intents,
             )
             if output_message_id:
+                artifacts = self._v2_artifacts_for_result(
+                    current,
+                    output_message_id,
+                )
                 next_state = self.result_ingestor.ingest(
                     next_state,
                     AgentResultRead(
@@ -2758,6 +2783,7 @@ class SupervisorExecutor:
                         status=self._v2_result_status_to_agent_result_status(result),
                         text=result.response_text,
                         error=result.error_message,
+                        artifacts=artifacts,
                     ),
                 )
             else:
