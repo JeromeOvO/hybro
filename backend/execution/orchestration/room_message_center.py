@@ -1590,19 +1590,23 @@ class RoomMessageCenter:
                         await self.room_writer.update_room_by_room_id(
                             room_id, room
                         )
-                    # Persist the restored trajectory on the original message
-                    # so the DB status is consistent with the room state.
+                    # Refresh only existing legacy trajectory state so old
+                    # clarify resumes stay consistent with the room flag.
                     try:
                         orig_msg = await self.message_reader.get_room_user_message_by_message_id(
                             original_msg_id
                         )
                         if orig_msg and isinstance(orig_msg.extend_info, dict):
-                            orig_msg.extend_info["supervisor_trajectory"] = (
-                                resumed_trajectory.model_dump(mode="json")
+                            legacy_trajectory = orig_msg.extend_info.get(
+                                "supervisor_trajectory"
                             )
-                            await self.message_writer.update_room_user_message_by_message_id(
-                                original_msg_id, orig_msg
-                            )
+                            if isinstance(legacy_trajectory, dict):
+                                legacy_trajectory.update(
+                                    resumed_trajectory.model_dump(mode="json")
+                                )
+                                await self.message_writer.update_room_user_message_by_message_id(
+                                    original_msg_id, orig_msg
+                                )
                     except Exception as persist_err:
                         logger.warning(
                             "RoomMessageCenter: failed to persist restored clarify "
@@ -1630,7 +1634,7 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Supervisor first decide_next failed for %s",
                 room_user_message_id,
             )
-            # Persist a failed trajectory so the recovery job doesn't retry.
+            # Refresh legacy failure state if this was resuming an old trajectory.
             await self._persist_failed_trajectory(
                 user_message, room_user_message_id, resumed_trajectory,
             )
@@ -1675,9 +1679,7 @@ class RoomMessageCenter:
             )
             if resumed_trajectory and resumed_trajectory.status == TrajectoryStatus.RUNNING:
                 resumed_trajectory.status = TrajectoryStatus.FAILED
-            # Persist the failed trajectory so the recovery job
-            # (_recover_stuck_supervisor_trajectories) doesn't endlessly
-            # retry a permanently-broken execution.
+            # Refresh legacy failure state if this was resuming an old trajectory.
             await self._persist_failed_trajectory(
                 user_message, room_user_message_id, resumed_trajectory,
             )
@@ -2295,8 +2297,7 @@ class RoomMessageCenter:
         user_message_id: str,
         trajectory: SupervisorTrajectory | None,
     ) -> None:
-        """Best-effort: mark a trajectory as failed in the DB so the recovery
-        job (``_recover_stuck_supervisor_trajectories``) does not retry it."""
+        """Best-effort: mark existing legacy trajectory state as failed."""
         try:
             msg = user_message
             if msg is None:
@@ -2305,13 +2306,14 @@ class RoomMessageCenter:
                 )
             if msg and isinstance(msg.extend_info, dict):
                 traj_data = msg.extend_info.get("supervisor_trajectory")
-                if isinstance(traj_data, dict) and traj_data.get("status") == TrajectoryStatus.RUNNING:
-                    traj_data["status"] = TrajectoryStatus.FAILED
-                elif trajectory is not None:
-                    trajectory.status = TrajectoryStatus.FAILED
-                    msg.extend_info["supervisor_trajectory"] = (
-                        trajectory.model_dump(mode="json")
-                    )
+                if isinstance(traj_data, dict):
+                    if trajectory is not None:
+                        trajectory.status = TrajectoryStatus.FAILED
+                        traj_data.update(trajectory.model_dump(mode="json"))
+                    elif traj_data.get("status") == TrajectoryStatus.RUNNING:
+                        traj_data["status"] = TrajectoryStatus.FAILED
+                else:
+                    msg.extend_info["orchestration_status"] = RunStatus.FAILED.value
                 await self.message_writer.update_room_user_message_by_message_id(
                     user_message_id, msg
                 )
@@ -2404,8 +2406,13 @@ class RoomMessageCenter:
                     orchestration_status
                 )
             else:
-                user_message.extend_info["supervisor_trajectory"] = (
-                    result_trajectory.model_dump(mode="json")
+                legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
+                if isinstance(legacy_trajectory, dict):
+                    legacy_trajectory.update(
+                        result_trajectory.model_dump(mode="json")
+                    )
+                user_message.extend_info["orchestration_status"] = (
+                    legacy_trajectory_status
                 )
             await self.message_writer.update_room_user_message_by_message_id(
                 user_message_id, user_message

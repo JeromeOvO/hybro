@@ -801,7 +801,6 @@ class TestClarifyCleanupCompensation:
 
         se.supervisor_service.decide_next = AsyncMock(return_value=action)
         se._save_interrupted_state = AsyncMock(return_value=False)
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
         se.hitl_coordinator = hitl_mock
         result = await se.run(
@@ -850,7 +849,6 @@ class TestClarifyCleanupCompensation:
         )
 
         se.supervisor_service.decide_next = AsyncMock(return_value=action)
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
         se.hitl_coordinator = hitl_mock
         result = await se.run(
@@ -957,7 +955,6 @@ class TestProcessingStatusLifecycleOrder:
                 )
             ]
         )
-        se._checkpoint_trajectory = AsyncMock(return_value=None)
         se._save_interrupted_state = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(
@@ -1012,7 +1009,6 @@ class TestProcessingStatusLifecycleOrder:
                 )
             ]
         )
-        se._checkpoint_trajectory = AsyncMock(return_value=None)
         se._save_interrupted_state = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(

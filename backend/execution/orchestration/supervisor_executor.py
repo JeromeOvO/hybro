@@ -5014,6 +5014,41 @@ class SupervisorExecutor:
         return result
 
     # ------------------------------------------------------------------
+    # Per-step trajectory checkpoint (crash recovery)
+    # ------------------------------------------------------------------
+
+    async def _checkpoint_run_reference(
+        self,
+        user_message,
+        state: OrchestrationRunState,
+    ) -> None:
+        if user_message is None:
+            return
+        if not isinstance(user_message.extend_info, dict):
+            user_message.extend_info = {}
+        user_message.extend_info["orchestration_run_id"] = state.run_id
+        user_message.extend_info["orchestration_status"] = state.status.value
+        user_message.extend_info.pop("supervisor_trajectory", None)
+        if state.client_request_id:
+            user_message.extend_info["client_request_id"] = state.client_request_id
+        if state.candidate_scope is not None:
+            user_message.extend_info["candidate_scope_snapshot_id"] = (
+                state.candidate_scope.snapshot_id
+            )
+            user_message.extend_info["candidate_scope_source"] = (
+                state.candidate_scope.source
+            )
+
+        message_id = getattr(user_message, "message_id", None) or state.user_message_id
+        if not isinstance(message_id, str):
+            return
+        await self.message_writer.update_room_user_message_by_message_id(
+            message_id,
+            user_message,
+        )
+
+
+    # ------------------------------------------------------------------
     # Reconcile PAUSED results against actual DB state
     # ------------------------------------------------------------------
 
