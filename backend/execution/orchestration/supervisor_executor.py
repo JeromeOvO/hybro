@@ -1754,7 +1754,12 @@ class SupervisorExecutor:
         status = SupervisorExecutor._step_status_from_state_output_status(
             output.status
         )
-        if status not in {StepStatus.SUCCESS, StepStatus.FAILED}:
+        if status not in {
+            StepStatus.SUCCESS,
+            StepStatus.FAILED,
+            StepStatus.PAUSED,
+            StepStatus.AWAITING_INPUT,
+        }:
             return None
         error_message = output.error
         if status == StepStatus.FAILED and not error_message:
@@ -2141,6 +2146,9 @@ class SupervisorExecutor:
                 for result in entry.results
                 if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
+            has_awaiting_input = any(
+                result.status == StepStatus.AWAITING_INPUT for result in pending
+            )
             terminal_results = [
                 result
                 for result in entry.results
@@ -2149,10 +2157,8 @@ class SupervisorExecutor:
             if terminal_results:
                 next_status = (
                     OrchestrationStatus.AWAITING_USER
-                    if any(
-                        result.status == StepStatus.AWAITING_INPUT
-                        for result in pending
-                    )
+                    if has_awaiting_input
+                    and synced.pending_hitl_request_ids
                     else (
                         OrchestrationStatus.WAITING_AGENT
                         if pending
@@ -2170,17 +2176,15 @@ class SupervisorExecutor:
                 )
 
             if pending:
+                has_pending_hitl_request_ids = bool(synced.pending_hitl_request_ids)
                 pending_status = (
                     OrchestrationStatus.AWAITING_USER
-                    if any(
-                        result.status == StepStatus.AWAITING_INPUT
-                        for result in pending
-                    )
+                    if has_awaiting_input and has_pending_hitl_request_ids
                     else OrchestrationStatus.WAITING_AGENT
                 )
                 blocking_run_status = (
                     RunStatus.AWAITING_INPUT
-                    if pending_status == OrchestrationStatus.AWAITING_USER
+                    if has_awaiting_input
                     else RunStatus.PAUSED
                 )
                 if synced.status != pending_status:
@@ -2755,7 +2759,8 @@ class SupervisorExecutor:
             return state
 
         self._normalize_awaiting_input_results(results)
-        fallback_intents = list(state.dispatch_intents)
+        # Use the latest in-memory intent state for each loop iteration so no-message-id
+        # results consume exactly one matching planned intent in order.
 
         current = state
         for index, result in enumerate(results):
@@ -2763,7 +2768,7 @@ class SupervisorExecutor:
             next_state = current.model_copy(deep=True)
             matched_intent = self._v2_fallback_intent_for_result(
                 result,
-                fallback_intents,
+                next_state.dispatch_intents,
             )
             self._apply_v2_result_metadata(
                 next_state,
@@ -2777,9 +2782,17 @@ class SupervisorExecutor:
             if clear_pending_hitl_request_ids and index == len(results) - 1:
                 next_state.pending_hitl_request_ids.clear()
 
-            output_message_id = self._v2_output_message_id_for_result(
-                result,
-                fallback_intents=fallback_intents,
+            output_message_id = (
+                result.agent_message_id
+                or (
+                    matched_intent.planned_agent_message_id
+                    if matched_intent is not None
+                    else None
+                )
+                or self._v2_output_message_id_for_result(
+                    result,
+                    fallback_intents=next_state.dispatch_intents,
+                )
             )
             if output_message_id:
                 artifacts = self._v2_artifacts_for_result(

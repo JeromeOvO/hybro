@@ -990,6 +990,82 @@ async def test_v2_result_without_message_id_updates_only_one_fallback_intent():
 
 
 @pytest.mark.asyncio
+async def test_v2_result_without_message_id_updates_fallback_intents_in_order():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        run_id="run-1",
+        user_message_id="msg-1",
+        candidate_agent_ids=["agent-1"],
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+            ),
+        ),
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=2,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+            ),
+        ),
+    ]
+    await store.create_run(state)
+
+    updated = await executor._ingest_v2_results(
+        await store.get_run("run-1"),
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+                response_text="first result",
+                success=True,
+                status=StepStatus.SUCCESS,
+            ),
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="same",
+                response_text="second result",
+                success=False,
+                status=StepStatus.FAILED,
+                error_message="second failure",
+            ),
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert updated.dispatch_intents[0].status == StepStatus.SUCCESS.value
+    assert updated.dispatch_intents[1].status == StepStatus.FAILED.value
+    assert updated.state_version == 2
+    output_messages = [
+        output.agent_message_id for output in updated.agent_outputs
+    ]
+    assert output_messages == [
+        "run-1:step-1:target-1:message",
+        "run-1:step-1:target-2:message",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_ids(monkeypatch):
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -2069,6 +2145,157 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
     ]
     assert events[0].state_version == 1
     assert events[0].type == OrchestrationEventType.AGENT_RESULT_INGESTED
+
+
+@pytest.mark.asyncio
+async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_no_awaiting_user():
+    user_message = _state_unification_user_message(message_id="message-1")
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.RUNNING,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    synced_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume with awaiting input",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Handle the request",
+                        )
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Handle the request",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    )
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ]
+    )
+
+    restored_state, blocking_status = await executor._sync_v2_resumed_trajectory(
+        state,
+        synced_trajectory,
+    )
+
+    assert blocking_status == RunStatus.AWAITING_INPUT
+    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
+    assert restored_state.pending_hitl_request_ids == []
+    persisted_state = await store.get_run("message-1")
+    assert persisted_state is not None
+    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
+
+
+@pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_rehydrates_awaiting_input_output_to_hitl():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            text="Needs human input",
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
+    assert recovered_state.pending_hitl_request_ids == ["hitl-agent-1"]
+    executor.hitl_coordinator.request_input.assert_awaited_once()
 
 
 @pytest.mark.asyncio
