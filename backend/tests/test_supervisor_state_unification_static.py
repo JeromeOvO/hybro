@@ -35,3 +35,19 @@ def test_room_message_center_does_not_route_to_run_v2():
     assert "self.supervisor_executor.run_v2" not in source
     assert "if is_v2_supervisor" not in source
     assert "if is_v2_resume" not in source
+
+
+def test_frontend_does_not_read_supervisor_trajectory_directly():
+    frontend_root = Path("../frontend")
+    ignored_parts = {"node_modules", ".next", "dist", "build", "coverage"}
+    matches: list[str] = []
+    for path in frontend_root.rglob("*"):
+        if not path.is_file() or ignored_parts.intersection(path.parts):
+            continue
+        if path.suffix not in {".ts", ".tsx", ".js", ".jsx"}:
+            continue
+        text = path.read_text(errors="ignore")
+        if "supervisor_trajectory" in text or "SupervisorTrajectory" in text:
+            matches.append(str(path))
+
+    assert matches == []
