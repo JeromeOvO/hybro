@@ -1992,15 +1992,33 @@ class SupervisorExecutor:
                     }
                 )
 
-        state = await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_REQUESTED,
-            payload={
-                "status": OrchestrationStatus.AWAITING_USER.value,
-                "request_ids": [request.request_id],
-            },
-            mutate=mark_awaiting_user,
-        )
+        try:
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.HITL_REQUESTED,
+                payload={
+                    "status": OrchestrationStatus.AWAITING_USER.value,
+                    "request_ids": [request.request_id],
+                },
+                mutate=mark_awaiting_user,
+            )
+        except Exception:
+            cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
+            if cancel_request is not None:
+                try:
+                    await cancel_request(request.request_id, room_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to cancel orphaned v2 agent HITL request %s",
+                        request.request_id,
+                    )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to persist v2 agent HITL state",
+            )
+            return state, RunStatus.FAILED
 
         try:
             await self._emit_processing_status(
@@ -3111,7 +3129,11 @@ class SupervisorExecutor:
                 state,
                 resumed_trajectory,
             )
-            if blocking_resume_status is not None:
+            if blocking_resume_status is not None and (
+                blocking_resume_status != RunStatus.AWAITING_INPUT
+                or state.status == OrchestrationStatus.AWAITING_USER
+                and state.pending_hitl_request_ids
+            ):
                 return await self._log_state_and_return(
                     room_id,
                     state,
