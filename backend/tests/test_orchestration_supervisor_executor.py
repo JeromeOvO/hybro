@@ -824,6 +824,43 @@ async def test_agent_outputs_are_ingested_with_single_state_writer(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ingest_agent_results_serially_ignores_event_append_failures(monkeypatch):
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = await store.create_run(
+        _run_state(
+            run_id="run-1",
+            user_message_id="msg-1",
+            candidate_agent_ids=["agent-1"],
+        )
+    )
+
+    monkeypatch.setattr(store, "append_event", AsyncMock(side_effect=RuntimeError("oops")))
+
+    updated = await executor._ingest_agent_results_serially(
+        state,
+        [
+            AgentResultRead(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="result one",
+            )
+        ],
+    )
+
+    assert updated.state_version == 1
+    persisted = await store.get_run("run-1")
+    assert persisted is not None
+    assert persisted.state_version == 1
+    assert persisted.agent_outputs[0].status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_v2_results_are_ingested_with_state_writes_per_result(monkeypatch):
     writes: list[int] = []
     event_versions: list[int] = []
@@ -1624,7 +1661,7 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
 
 
 @pytest.mark.asyncio
-async def test_run_multiple_awaiting_input_results_degrade_secondary_before_save():
+async def test_run_multiple_awaiting_input_results_keep_secondary_awaiting_input_recoverable():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1701,12 +1738,47 @@ async def test_run_multiple_awaiting_input_results_degrade_secondary_before_save
         outputs_by_id["message-1:step-1:target-1:message"].status
         == StepStatus.AWAITING_INPUT.value
     )
-    assert outputs_by_id["message-1:step-1:target-2:message"].status == StepStatus.FAILED.value
-    assert outputs_by_id["message-1:step-1:target-2:message"].error == (
-        "Deferred: another agent is awaiting human input first. "
-        "Will be re-evaluated on resume."
+    assert outputs_by_id["message-1:step-1:target-2:message"].status == (
+        StepStatus.AWAITING_INPUT.value
     )
     assert state.pending_hitl_request_ids == ["hitl-agent-1"]
+
+    recover_executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    recover_executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-2"))
+    )
+    recover_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    recovered_state, recover_status = await recover_executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert recover_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
+    assert recover_executor.hitl_coordinator.request_input.await_count == 1
+    recovered_outputs_by_id = {
+        output.agent_message_id: output for output in recovered_state.agent_outputs
+    }
+    assert recovered_outputs_by_id["message-1:step-1:target-2:message"].status == (
+        StepStatus.AWAITING_INPUT.value
+    )
 
 
 @pytest.mark.asyncio
@@ -2146,6 +2218,119 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
     ]
     assert events[0].state_version == 1
     assert events[0].type == OrchestrationEventType.AGENT_RESULT_INGESTED
+
+
+@pytest.mark.asyncio
+async def test_sync_v2_resumed_trajectory_mixed_terminal_and_awaiting_input_persists_both():
+    user_message = _state_unification_user_message(message_id="message-1")
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        candidate_agent_ids=["agent-1", "agent-2"],
+        status=OrchestrationStatus.RUNNING,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Auth required",
+            ),
+        ),
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=2,
+            target=DelegateTarget(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                task="Need approval",
+            ),
+        ),
+    ]
+    await store.create_run(state)
+
+    synced_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume mixed outcomes",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Auth required",
+                        ),
+                        DelegateTarget(
+                            agent_id="agent-2",
+                            agent_name="Agent Two",
+                            task="Need approval",
+                        ),
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Auth required",
+                        response_text="done",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-2",
+                        agent_name="Agent Two",
+                        task="Need approval",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-2:message",
+                    ),
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ]
+    )
+
+    restored_state, blocking_status = await executor._sync_v2_resumed_trajectory(
+        state,
+        synced_trajectory,
+    )
+
+    assert blocking_status == RunStatus.AWAITING_INPUT
+    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
+    assert restored_state.pending_hitl_request_ids == []
+    persisted_state = await store.get_run("message-1")
+    assert persisted_state is not None
+    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
+    assert len(persisted_state.agent_outputs) == 2
+    assert [
+        output.status
+        for output in persisted_state.agent_outputs
+    ] == ["completed", StepStatus.AWAITING_INPUT.value]
+    assert {
+        output.agent_message_id: output.status
+        for output in persisted_state.agent_outputs
+    } == {
+        "message-1:step-1:target-1:message": "completed",
+        "message-1:step-1:target-2:message": StepStatus.AWAITING_INPUT.value,
+    }
 
 
 @pytest.mark.asyncio

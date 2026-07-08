@@ -1894,14 +1894,6 @@ class SupervisorExecutor:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
-        for extra in awaiting[1:]:
-            extra.status = StepStatus.FAILED
-            extra.success = False
-            extra.error_message = (
-                "Deferred: another agent is awaiting human input first. "
-                "Will be re-evaluated on resume."
-            )
-
         awaiting_result = awaiting[0]
         continuation_message_id = (
             awaiting_result.paused_message_id
@@ -2199,15 +2191,22 @@ class SupervisorExecutor:
                 )
 
             if pending:
+                synced_output_ids = {output.agent_message_id for output in synced.agent_outputs}
+                pending_to_ingest: list[StepResult] = []
+                for result in pending:
+                    result_message_id = result.agent_message_id or result.paused_message_id
+                    if result_message_id and result_message_id in synced_output_ids:
+                        continue
+                    pending_to_ingest.append(result)
                 pending_status = (
                     OrchestrationStatus.AWAITING_USER
                     if has_awaiting_input and bool(synced.pending_hitl_request_ids)
                     else OrchestrationStatus.WAITING_AGENT
                 )
-                if not terminal_results:
+                if pending_to_ingest:
                     synced = await self._ingest_v2_results(
                         synced,
-                        pending,
+                        pending_to_ingest,
                         status=pending_status,
                         advance_step=False,
                     )
@@ -2666,18 +2665,14 @@ class SupervisorExecutor:
                 next_state,
                 expected_version=expected_version,
             )
-            await self.run_store.append_event(
-                OrchestrationRunEvent(
-                    run_id=current.run_id,
-                    room_id=current.room_id,
-                    type=OrchestrationEventType.AGENT_RESULT_INGESTED,
-                    state_version=current.state_version,
-                    payload={
-                        "agent_message_id": result.agent_message_id,
-                        "agent_id": result.agent_id,
-                        "status": result.status,
-                    },
-                )
+            await self._append_v2_event(
+                current,
+                OrchestrationEventType.AGENT_RESULT_INGESTED,
+                payload={
+                    "agent_message_id": result.agent_message_id,
+                    "agent_id": result.agent_id,
+                    "status": result.status,
+                },
             )
         return current
 
@@ -2685,7 +2680,6 @@ class SupervisorExecutor:
     def _normalize_awaiting_input_results(results: list[StepResult]) -> None:
         awaiting = [result for result in results if result.status == StepStatus.AWAITING_INPUT]
         for extra in awaiting[1:]:
-            extra.status = StepStatus.FAILED
             extra.success = False
             extra.error_message = (
                 "Deferred: another agent is awaiting human input first. "
