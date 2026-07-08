@@ -13,10 +13,11 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 """
 
 import asyncio
+import json
 from datetime import datetime
-from uuid import uuid4
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -1497,6 +1498,7 @@ class _FakePhase5App:
         user_id: str,
         message: str,
         dispatch: dict,
+        legacy_supervisor_trajectory: dict | None = None,
     ):
         room_message_id = f"msg-{uuid4().hex}"
         user_message = RoomUserMessage(
@@ -1517,6 +1519,10 @@ class _FakePhase5App:
                 "target_group_id": (dispatch or {}).get("target_group_id"),
             },
         )
+        if legacy_supervisor_trajectory is not None:
+            user_message.extend_info["supervisor_trajectory"] = (
+                legacy_supervisor_trajectory
+            )
 
         self.room_store._set_user_message(user_message)
 
@@ -1636,10 +1642,21 @@ async def test_state_driven_supervisor_builds_planner_context_without_trajectory
         ]
     )
 
+    legacy_sentinel = f"legacy-sentinel-{uuid4().hex}"
+    legacy_payload = {
+        "trajectory": {
+            "trajectory_text": f"{legacy_sentinel}: stale trajectory text",
+            "trajectory_summary": f"{legacy_sentinel}: stale trajectory summary",
+        },
+        "trajectory_summary": f"{legacy_sentinel}: fallback trajectory summary",
+        "trajectory_text": f"{legacy_sentinel}: question history",
+    }
+
     result = await app.send_supervisor_message(
         room_id="room-1",
         user_id="user-1",
         message="Get a quote.",
+        legacy_supervisor_trajectory=legacy_payload,
         dispatch={
             "message_target_mode": "saved_group",
             "target_group_id": "group-1",
@@ -1654,10 +1671,14 @@ async def test_state_driven_supervisor_builds_planner_context_without_trajectory
     captured_payload = app.planner.last_context_payload
     assert captured_payload is not None
     assert isinstance(captured_payload, dict)
+    assert "state_context" in captured_payload
+    assert isinstance(captured_payload["state_context"], dict)
     assert captured_payload.get("message") == {"text": "Get a quote."}
-    assert "trajectory" not in captured_payload
-    assert "trajectory_summary" not in captured_payload
-    assert "trajectory_text" not in captured_payload
+    payload_text = json.dumps(captured_payload, ensure_ascii=False, sort_keys=True)
+    assert legacy_sentinel not in payload_text
+    assert '"trajectory"' not in payload_text
+    assert '"trajectory_summary"' not in payload_text
+    assert '"trajectory_text"' not in payload_text
 
     message_record = await app.room_store.get_room_user_message_by_message_id(
         result.message_id
