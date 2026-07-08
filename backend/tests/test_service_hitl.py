@@ -22,12 +22,14 @@ from execution.hitl.exceptions import (
     HITLRoutingFailedError,
 )
 from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.hitl import (
     HITLEventType,
     HITLPromptType,
     HITLRequest,
     HITLStatus,
 )
+from models.orchestration import OrchestrationRunState, OrchestrationStatus
 
 
 async def _iter_docs(docs):
@@ -569,7 +571,7 @@ class TestRequestInput:
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
         mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
-            return_value=False
+            side_effect=[False, True]
         )
         mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(return_value=True)
 
@@ -604,7 +606,9 @@ class TestRequestInput:
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
         mock_hitl_db_service.update_agent_message_task_state = AsyncMock(return_value=True)
-        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(return_value=False)
+        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(
+            side_effect=[False, True]
+        )
 
         result = await hitl_service.request_input(
             room_id="room-123",
@@ -639,7 +643,7 @@ class TestRequestInput:
             return_value=True
         )
         mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(
-            side_effect=RuntimeError("answer projection failed")
+            side_effect=[RuntimeError("answer projection failed"), True]
         )
 
         result = await hitl_service.request_input(
@@ -737,6 +741,39 @@ class TestRequestInput:
         assert exc_info.value.request_id == request_doc["request_id"]
 
     @pytest.mark.asyncio
+    async def test_supervisor_hitl_rollback_failure_raises_request_id_error(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
+            side_effect=[True, False]
+        )
+        mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(return_value=False)
+
+        with pytest.raises(HITLRequestProjectionError) as exc_info:
+            await hitl_service.request_input(
+                room_id="room-123",
+                user_message_id="msg-456",
+                source="supervisor",
+                prompt="Need confirmation",
+                prompt_type=HITLPromptType.CHOICE,
+                choices=["yes", "no"],
+                continuation_message_id="user-msg-456",
+                display_message_id="supervisor-msg-456",
+            )
+
+        request_doc = mock_hitl_db_service.create_hitl_request.await_args.args[0]
+        assert exc_info.value.request_id == request_doc["request_id"]
+        mock_hitl_db_service.update_agent_message_task_state.assert_any_await(
+            "supervisor-msg-456",
+            "canceled",
+        )
+
+    @pytest.mark.asyncio
     async def test_supervisor_hitl_emit_failure_does_not_fail_request_input(
         self,
         hitl_service,
@@ -800,13 +837,13 @@ class TestRequestInput:
         assert exc_info.value.request_id == request_doc["request_id"]
 
     @pytest.mark.asyncio
-    async def test_reused_agent_hitl_projection_exception_does_not_cancel_request(
+    async def test_reused_agent_hitl_projection_exception_raises_request_id_error(
         self,
         hitl_service,
         mock_hitl_db_service,
         mock_hitl_delivery,
     ):
-        """Projection exceptions on reused agent HITL must not cancel an existing request."""
+        """Projection exceptions on reused agent HITL must surface the active request."""
 
         async def create_or_reuse_pending_hitl_request(request_data):
             existing = dict(request_data)
@@ -822,32 +859,33 @@ class TestRequestInput:
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
 
-        result = await hitl_service.request_input(
-            room_id="room-123",
-            user_message_id="user-msg-456",
-            source="agent",
-            prompt="Need policy effective date",
-            prompt_type=HITLPromptType.TEXT,
-            agent_id="agent-broker",
-            a2a_task_id="a2a-task-1",
-            a2a_context_id="a2a-context-1",
-            continuation_message_id="agent-continuation-msg",
-            display_message_id="agent-display-msg",
-        )
+        with pytest.raises(HITLRequestProjectionError) as exc_info:
+            await hitl_service.request_input(
+                room_id="room-123",
+                user_message_id="user-msg-456",
+                source="agent",
+                prompt="Need policy effective date",
+                prompt_type=HITLPromptType.TEXT,
+                agent_id="agent-broker",
+                a2a_task_id="a2a-task-1",
+                a2a_context_id="a2a-context-1",
+                continuation_message_id="agent-continuation-msg",
+                display_message_id="agent-display-msg",
+            )
 
-        assert result is None
+        assert exc_info.value.request_id == "existing-request"
         mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
         mock_hitl_db_service.update_hitl_request.assert_not_awaited()
         mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_reused_agent_hitl_projection_failure_does_not_cancel_request(
+    async def test_reused_agent_hitl_projection_failure_raises_request_id_error(
         self,
         hitl_service,
         mock_hitl_db_service,
         mock_hitl_delivery,
     ):
-        """Projection failure for reused HITL must not cancel an existing request."""
+        """Projection failure for reused HITL must surface the active request."""
 
         async def create_or_reuse_pending_hitl_request(request_data):
             existing = dict(request_data)
@@ -863,20 +901,21 @@ class TestRequestInput:
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
 
-        result = await hitl_service.request_input(
-            room_id="room-123",
-            user_message_id="user-msg-456",
-            source="agent",
-            prompt="Need policy effective date",
-            prompt_type=HITLPromptType.TEXT,
-            agent_id="agent-broker",
-            a2a_task_id="a2a-task-1",
-            a2a_context_id="a2a-context-1",
-            continuation_message_id="agent-continuation-msg",
-            display_message_id="agent-display-msg",
-        )
+        with pytest.raises(HITLRequestProjectionError) as exc_info:
+            await hitl_service.request_input(
+                room_id="room-123",
+                user_message_id="user-msg-456",
+                source="agent",
+                prompt="Need policy effective date",
+                prompt_type=HITLPromptType.TEXT,
+                agent_id="agent-broker",
+                a2a_task_id="a2a-task-1",
+                a2a_context_id="a2a-context-1",
+                continuation_message_id="agent-continuation-msg",
+                display_message_id="agent-display-msg",
+            )
 
-        assert result is None
+        assert exc_info.value.request_id == "existing-request"
         mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
         mock_hitl_db_service.update_hitl_request.assert_not_awaited()
         mock_hitl_delivery.emit.assert_not_awaited()
@@ -1879,6 +1918,69 @@ class TestHandleResponseErrors:
         )
         mock_hitl_db_service.update_agent_message_task_state.assert_awaited_once_with(
             "display-msg-1", "completed"
+        )
+
+    @pytest.mark.asyncio
+    async def test_supervisor_response_missing_continuation_resolves_orchestration_state(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        run_store = InMemoryOrchestrationRunStore()
+        state = OrchestrationRunState(
+            run_id="run-msg-1",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            goal="Coordinate this",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.AWAITING_USER,
+            pending_hitl_request_ids=["hitl-supervisor-1"],
+            open_questions=[
+                {
+                    "request_id": "hitl-supervisor-1",
+                    "source": "supervisor",
+                    "status": "open",
+                    "prompt": "Which account?",
+                    "display_message_id": "clarifier-msg-1",
+                }
+            ],
+        )
+        await run_store.create_run(state)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._orchestration_run_store = run_store
+        hitl_service._continuation = MagicMock()
+        hitl_service._continuation.resume_queue_from_continuation = AsyncMock(
+            return_value=False
+        )
+        mock_hitl_db_service.get_pending_continuation_on_message.return_value = None
+        request = HITLRequest(
+            request_id="hitl-supervisor-1",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="supervisor",
+            prompt="Which account?",
+            continuation_message_id="user-msg-456",
+            display_message_id="clarifier-msg-1",
+            orchestration_run_id="run-msg-1",
+            orchestration_schema_version=2,
+            status=HITLStatus.PENDING,
+        )
+
+        await hitl_service._handle_supervisor_response(
+            request,
+            "Use the enterprise account",
+        )
+
+        persisted = await run_store.get_run("run-msg-1")
+        assert persisted is not None
+        assert persisted.status == OrchestrationStatus.RUNNING
+        assert persisted.pending_hitl_request_ids == []
+        assert persisted.open_questions[0]["status"] == "resolved"
+        assert persisted.open_questions[0]["answer"] == "Use the enterprise account"
+        assert persisted.facts[0]["source"] == "hitl_user_reply"
+        hitl_service._continuation.resume_queue_from_continuation.assert_awaited_once_with(
+            "user-msg-456",
+            task_result_text=None,
         )
 
 

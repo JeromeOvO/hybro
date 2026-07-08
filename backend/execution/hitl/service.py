@@ -103,12 +103,14 @@ class HITLService:
         *,
         continuation=None,
         task_notifications=None,
+        orchestration_run_store=None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
         self._agent_reply: HITLAgentReplyPort | None = None
         self._continuation: HITLContinuationPort | None = continuation
         self._task_notifications: HITLTaskNotificationPort | None = task_notifications
+        self._orchestration_run_store = orchestration_run_store
 
     @property
     def persistence(self):
@@ -329,7 +331,24 @@ class HITLService:
                         request.request_id,
                         display_projection_message_id,
                     )
-                    return None
+                    if hitl_request_created:
+                        try:
+                            canceled = await self.persistence.update_hitl_request(
+                                request.request_id,
+                                status=HITLStatus.CANCELED.value,
+                                error_message="failed_to_backfill_agent_display_message",
+                            )
+                        except Exception as exc:
+                            raise HITLRequestProjectionError(
+                                "failed to compensate agent HITL display backfill failure",
+                                request_id=request.request_id,
+                            ) from exc
+                        if canceled:
+                            return None
+                    raise HITLRequestProjectionError(
+                        "failed to backfill agent HITL display message",
+                        request_id=request.request_id,
+                    )
                 request.display_message_id = display_projection_message_id
 
         if display_projection_message_id:
@@ -398,7 +417,11 @@ class HITLService:
                                 "failed to compensate agent HITL projection failure",
                                 request_id=request.request_id,
                             )
-                    return None
+                        return None
+                    raise HITLRequestProjectionError(
+                        "failed to project pending agent HITL onto display message",
+                        request_id=request.request_id,
+                    )
             else:
                 projection_ok = False
                 supervisor_task_state_projected = False
@@ -446,13 +469,15 @@ class HITLService:
                         },
                     )
                     if supervisor_task_state_projected or supervisor_answer_cleared:
-                        await self._revert_supervisor_hitl_projection(
+                        rollback_ok = await self._revert_supervisor_hitl_projection(
                             display_message_id=display_projection_message_id,
                             request_id=request.request_id,
                             room_id=request.room_id,
                             clear_answer=True,
                             clear_group=group_id is not None,
                         )
+                    else:
+                        rollback_ok = True
                     try:
                         canceled = await self.persistence.update_hitl_request(
                             request.request_id,
@@ -472,6 +497,11 @@ class HITLService:
                     if not canceled:
                         raise HITLRequestProjectionError(
                             "failed to compensate supervisor HITL projection failure",
+                            request_id=request.request_id,
+                        )
+                    if not rollback_ok:
+                        raise HITLRequestProjectionError(
+                            "failed to roll back supervisor HITL projection",
                             request_id=request.request_id,
                         )
                     return None
@@ -524,13 +554,15 @@ class HITLService:
         room_id: str,
         clear_answer: bool = True,
         clear_group: bool = False,
-    ) -> None:
+    ) -> bool:
+        rollback_ok = True
         try:
             reverted_state = await self.persistence.update_agent_message_task_state(
                 display_message_id,
                 "canceled",
             )
             if not reverted_state:
+                rollback_ok = False
                 logger.warning(
                     "Failed to revert supervisor HITL display task state",
                     extra={
@@ -549,6 +581,7 @@ class HITLService:
                 },
                 exc_info=True,
             )
+            rollback_ok = False
 
         if clear_group:
             try:
@@ -559,6 +592,7 @@ class HITLService:
                     group_index=None,
                 )
                 if not cleared_group:
+                    rollback_ok = False
                     logger.warning(
                         "Failed to clear supervisor HITL group metadata during rollback",
                         extra={
@@ -568,6 +602,7 @@ class HITLService:
                         },
                     )
             except Exception:
+                rollback_ok = False
                 logger.warning(
                     "Failed to clear supervisor HITL group metadata during rollback",
                     extra={
@@ -579,13 +614,14 @@ class HITLService:
                 )
 
         if not clear_answer:
-            return
+            return rollback_ok
         try:
             cleared_answer = await self.persistence.persist_hitl_user_answer(
                 display_message_id,
                 None,
             )
             if not cleared_answer:
+                rollback_ok = False
                 logger.warning(
                     "Failed to clear supervisor HITL display answer during rollback",
                     extra={
@@ -604,6 +640,8 @@ class HITLService:
                 },
                 exc_info=True,
             )
+            rollback_ok = False
+        return rollback_ok
 
     # ------------------------------------------------------------------
     # Handle user response
@@ -1083,6 +1121,200 @@ class HITLService:
     # Supervisor response routing
     # ------------------------------------------------------------------
 
+    async def _record_orchestration_supervisor_response(
+        self,
+        request: HITLRequest,
+        user_input: str,
+    ) -> bool:
+        run_id = request.orchestration_run_id
+        run_store = getattr(self, "_orchestration_run_store", None)
+        if not run_id or run_store is None:
+            return False
+
+        from execution.orchestration.run_store import OrchestrationStoreConflict
+        from models.orchestration import (
+            TERMINAL_ORCHESTRATION_STATUSES,
+            OrchestrationEventType,
+            OrchestrationRunEvent,
+            OrchestrationStatus,
+        )
+
+        terminal_intent_statuses = {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "success",
+        }
+        for _attempt in range(2):
+            try:
+                state = await run_store.get_run(run_id)
+            except Exception:
+                logger.warning(
+                    "Failed to load orchestration run for supervisor HITL reply",
+                    extra={
+                        "hitl_request_id": request.request_id,
+                        "orchestration_run_id": run_id,
+                    },
+                    exc_info=True,
+                )
+                return False
+            if state is None or state.status in TERMINAL_ORCHESTRATION_STATUSES:
+                return False
+
+            updated = state.model_copy(deep=True)
+            resolved_at = utcnow().isoformat()
+            request_ids = [request.request_id] if request.request_id else []
+            prompts: list[str] = []
+            matched = False
+            for question in updated.open_questions:
+                if not isinstance(question, dict):
+                    continue
+                if question.get("source") != "supervisor":
+                    continue
+                if question.get("status") not in {"open", "creating"}:
+                    continue
+
+                question_request_id = question.get("request_id")
+                display_message_id = question.get("display_message_id")
+                matches = question_request_id == request.request_id
+                if not matches and not question_request_id:
+                    matches = (
+                        isinstance(display_message_id, str)
+                        and display_message_id == request.display_message_id
+                    )
+                if not matches:
+                    continue
+
+                question["request_id"] = request.request_id
+                question["status"] = "resolved"
+                question["resolved"] = True
+                question["answer"] = user_input
+                question["resolved_at"] = resolved_at
+                matched = True
+                prompt = question.get("prompt")
+                if isinstance(prompt, str) and prompt:
+                    prompts.append(prompt)
+
+            if not matched:
+                updated.open_questions.append(
+                    {
+                        "request_id": request.request_id,
+                        "source": "supervisor",
+                        "prompt": request.prompt,
+                        "prompt_type": getattr(
+                            request.prompt_type,
+                            "value",
+                            request.prompt_type,
+                        ),
+                        "choices": request.choices,
+                        "display_message_id": request.display_message_id,
+                        "status": "resolved",
+                        "resolved": True,
+                        "answer": user_input,
+                        "resolved_at": resolved_at,
+                        "created_at": resolved_at,
+                    }
+                )
+                if request.prompt:
+                    prompts.append(request.prompt)
+
+            updated.pending_hitl_request_ids = [
+                pending_request_id
+                for pending_request_id in updated.pending_hitl_request_ids
+                if pending_request_id != request.request_id
+            ]
+            updated.facts.append(
+                {
+                    "fact_id": (
+                        f"{updated.run_id}:hitl-reply:{updated.state_version + 1}"
+                    ),
+                    "source": "hitl_user_reply",
+                    "text": user_input,
+                    "request_ids": request_ids,
+                    "question_prompts": prompts,
+                    "created_at": resolved_at,
+                }
+            )
+            open_pending_request_ids = {
+                question.get("request_id")
+                for question in updated.open_questions
+                if isinstance(question, dict)
+                and question.get("status") == "open"
+                and isinstance(question.get("request_id"), str)
+            }
+            updated.pending_hitl_request_ids = [
+                pending_request_id
+                for pending_request_id in updated.pending_hitl_request_ids
+                if pending_request_id in open_pending_request_ids
+            ]
+
+            step_id = f"{updated.run_id}:step-{updated.steps_used + 1}"
+            has_recoverable_intent = any(
+                intent.step_id == step_id
+                and intent.status not in terminal_intent_statuses
+                for intent in updated.dispatch_intents
+            )
+            if updated.pending_hitl_request_ids:
+                updated.status = OrchestrationStatus.AWAITING_USER
+            else:
+                updated.status = (
+                    OrchestrationStatus.WAITING_AGENT
+                    if has_recoverable_intent
+                    else OrchestrationStatus.RUNNING
+                )
+            expected_version = state.state_version
+            updated.state_version = expected_version + 1
+            updated.updated_at = utcnow()
+
+            try:
+                saved = await run_store.save_state(
+                    updated,
+                    expected_version=expected_version,
+                )
+            except OrchestrationStoreConflict:
+                continue
+            except Exception:
+                logger.warning(
+                    "Failed to persist orchestration HITL supervisor reply",
+                    extra={
+                        "hitl_request_id": request.request_id,
+                        "orchestration_run_id": run_id,
+                    },
+                    exc_info=True,
+                )
+                return False
+
+            try:
+                await run_store.append_event(
+                    OrchestrationRunEvent(
+                        run_id=saved.run_id,
+                        room_id=saved.room_id,
+                        type=OrchestrationEventType.HITL_RESOLVED,
+                        state_version=saved.state_version,
+                        payload={
+                            "request_ids": request_ids,
+                            "answer_recorded": True,
+                            "source": "supervisor_recovery",
+                        },
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to append orchestration HITL resolution event",
+                    exc_info=True,
+                )
+            return True
+
+        logger.warning(
+            "Failed to persist orchestration HITL reply due to repeated conflicts",
+            extra={
+                "hitl_request_id": request.request_id,
+                "orchestration_run_id": run_id,
+            },
+        )
+        return False
+
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
@@ -1091,6 +1323,26 @@ class HITLService:
             request.continuation_message_id
         )
         if not continuation:
+            recorded = await self._record_orchestration_supervisor_response(
+                request,
+                user_input,
+            )
+            if recorded:
+                resumed = await self.continuation.resume_queue_from_continuation(
+                    request.continuation_message_id,
+                    task_result_text=None,
+                )
+                if not resumed:
+                    logger.warning(
+                        "Supervisor HITL reply recorded in orchestration state but "
+                        "continuation resume was unavailable",
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "orchestration_run_id": request.orchestration_run_id,
+                            "continuation_message_id": request.continuation_message_id,
+                        },
+                    )
+                return
             raise ContinuationLostError(
                 f"No continuation found for message {request.continuation_message_id} — "
                 "the supervisor loop may have already been cleaned up or recovered"
