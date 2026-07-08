@@ -515,6 +515,27 @@ class RoomMessageCenter:
             return None
         return SupervisorExecutor._compat_trajectory_from_state(result.run_state)
 
+    @staticmethod
+    def _legacy_trajectory_status_for_result(
+        result: SupervisorRunResult,
+    ) -> str:
+        compatibility_trajectory = RoomMessageCenter._compat_trajectory_for_supervisor_result(
+            result
+        )
+        if compatibility_trajectory is not None:
+            return compatibility_trajectory.status.value
+        if result.status == RunStatus.COMPLETED:
+            return TrajectoryStatus.COMPLETED.value
+        if result.status == RunStatus.CANCELED:
+            return TrajectoryStatus.CANCELED.value
+        if result.status == RunStatus.AWAITING_INPUT:
+            return TrajectoryStatus.AWAITING_INPUT.value
+        if result.status == RunStatus.CLARIFYING:
+            return TrajectoryStatus.CLARIFYING.value
+        if result.status == RunStatus.PAUSED:
+            return TrajectoryStatus.RUNNING.value
+        return TrajectoryStatus.FAILED.value
+
     @classmethod
     def _trajectory_responses_from_supervisor_result(
         cls,
@@ -2320,6 +2341,7 @@ class RoomMessageCenter:
         """
         result_trajectory = result.trajectory
         result_run_state = result.run_state
+        legacy_trajectory_status = self._legacy_trajectory_status_for_result(result)
         orchestration_status = (
             getattr(result_run_state.status, "value", result_run_state.status)
             if result_run_state is not None
@@ -2377,9 +2399,9 @@ class RoomMessageCenter:
             elif result_trajectory is None:
                 legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
                 if isinstance(legacy_trajectory, dict):
-                    legacy_trajectory["status"] = orchestration_status
+                    legacy_trajectory["status"] = legacy_trajectory_status
                 user_message.extend_info["orchestration_status"] = (
-                    orchestration_status
+                    legacy_trajectory_status
                 )
             else:
                 user_message.extend_info["supervisor_trajectory"] = (
