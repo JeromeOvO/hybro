@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
 from common.message_commit_events import publish_message_committed
+from common.utils.a2a_helpers import artifacts_to_dicts
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -846,10 +847,17 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
+                    def record_completion_evidence(
+                        updated: OrchestrationRunState,
+                        evidence=planner_action.completion_evidence,
+                    ) -> None:
+                        updated.completion_evidence = evidence
+
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.COMPLETED,
                         reason=planner_action.reasoning,
+                        mutate=record_completion_evidence,
                     )
                     return await self._log_state_and_return(
                         room_id,
@@ -3611,6 +3619,49 @@ class SupervisorExecutor:
             if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
         ]
 
+    async def _v2_artifacts_for_output_message(
+        self,
+        state: OrchestrationRunState,
+        output_message_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if not output_message_id:
+            return []
+        persisted_artifacts = await self._v2_persisted_artifacts_for_agent_message(
+            output_message_id
+        )
+        if persisted_artifacts:
+            return persisted_artifacts
+        return self._v2_artifacts_for_result(state, output_message_id)
+
+    async def _v2_persisted_artifacts_for_agent_message(
+        self,
+        output_message_id: str,
+    ) -> list[dict[str, Any]]:
+        get_message = getattr(
+            self.message_reader,
+            "get_room_agent_message_by_message_id",
+            None,
+        )
+        if get_message is None:
+            return []
+        message = await get_message(output_message_id)
+        if message is None:
+            return []
+        return self._v2_artifacts_from_agent_message(message)
+
+    @staticmethod
+    def _v2_artifacts_from_agent_message(message) -> list[dict[str, Any]]:
+        message_content = getattr(message, "message_content", None)
+        task = getattr(message_content, "message_task", None)
+        if task is None:
+            return []
+        artifacts = (
+            task.get("artifacts")
+            if isinstance(task, Mapping)
+            else getattr(task, "artifacts", None)
+        )
+        return artifacts_to_dicts(artifacts if isinstance(artifacts, list) else None)
+
     @staticmethod
     def _apply_v2_result_metadata(
         state: OrchestrationRunState,
@@ -3684,7 +3735,7 @@ class SupervisorExecutor:
                 )
             )
             if output_message_id:
-                artifacts = self._v2_artifacts_for_result(
+                artifacts = await self._v2_artifacts_for_output_message(
                     current,
                     output_message_id,
                 )
