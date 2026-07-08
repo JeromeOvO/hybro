@@ -481,6 +481,46 @@ def test_compat_trajectory_projects_completed_agent_output_as_success():
     assert projected.response_text == "Completed agent output is visible."
 
 
+def test_compat_trajectory_preserves_a2a_metadata_from_agent_output():
+    state = OrchestrationRunState(
+        run_id="msg-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Need quote",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.RUNNING,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-1",
+                dispatch_intent_id="msg-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Find pricing",
+                task_hash="hash",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="awaiting_input",
+                text="Need the effective date.",
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+                status_message="Provide the effective date.",
+            )
+        ],
+    )
+
+    trajectory = SupervisorExecutor._compat_trajectory_from_state(state)
+
+    projected = trajectory.entries[0].results[0]
+    assert projected.a2a_task_id == "task-1"
+    assert projected.a2a_context_id == "ctx-1"
+    assert projected.status_message == "Provide the effective date."
+
+
 def test_v2_result_from_output_record_projects_completed_status_as_success():
     intent = DispatchIntent(
         step_id="msg-1:step-1",
