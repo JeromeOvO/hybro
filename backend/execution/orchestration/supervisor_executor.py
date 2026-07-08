@@ -1669,6 +1669,29 @@ class SupervisorExecutor:
                 status=OrchestrationStatus.WAITING_AGENT,
                 advance_step=False,
             )
+            if paused:
+                trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                saved = await self._save_interrupted_state(
+                    kind=InterruptKind.PUSH_NOTIFICATION,
+                    trajectory=trajectory,
+                    paused_results=paused,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    request_user_id=request_user_id,
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    conversation_context=conversation_context,
+                    quoted_text=quoted_text,
+                )
+                if not saved:
+                    trajectory.status = TrajectoryStatus.FAILED
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason="failed to save paused v2 recovery continuation",
+                    )
+                    return state, RunStatus.FAILED
             state, awaiting_status = await self._run_agent_awaiting_input_action(
                 state=state,
                 results=results,
@@ -2176,12 +2199,18 @@ class SupervisorExecutor:
                 )
 
             if pending:
-                has_pending_hitl_request_ids = bool(synced.pending_hitl_request_ids)
                 pending_status = (
                     OrchestrationStatus.AWAITING_USER
-                    if has_awaiting_input and has_pending_hitl_request_ids
+                    if has_awaiting_input and bool(synced.pending_hitl_request_ids)
                     else OrchestrationStatus.WAITING_AGENT
                 )
+                if not terminal_results:
+                    synced = await self._ingest_v2_results(
+                        synced,
+                        pending,
+                        status=pending_status,
+                        advance_step=False,
+                    )
                 blocking_run_status = (
                     RunStatus.AWAITING_INPUT
                     if has_awaiting_input
@@ -2819,20 +2848,16 @@ class SupervisorExecutor:
                 expected_version=expected_version,
             )
             if output_message_id:
-                await self.run_store.append_event(
-                    OrchestrationRunEvent(
-                        run_id=current.run_id,
-                        room_id=current.room_id,
-                        type=OrchestrationEventType.AGENT_RESULT_INGESTED,
-                        state_version=current.state_version,
-                        payload={
-                            "agent_message_id": output_message_id,
-                            "agent_id": result.agent_id,
-                            "status": self._v2_result_status_to_agent_result_status(
-                                result
-                            ),
-                        },
-                    )
+                await self._append_v2_event(
+                    current,
+                    OrchestrationEventType.AGENT_RESULT_INGESTED,
+                    payload={
+                        "agent_message_id": output_message_id,
+                        "agent_id": result.agent_id,
+                        "status": self._v2_result_status_to_agent_result_status(
+                            result
+                        ),
+                    },
                 )
 
         return current
