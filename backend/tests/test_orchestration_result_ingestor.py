@@ -977,3 +977,184 @@ def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failur
         "intent-2",
     ]
     assert twice.open_failures[0].fingerprint != twice.open_failures[1].fingerprint
+
+
+def test_ingest_attachment_free_retry_resolves_only_related_open_failure():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-a"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Underwrite submission B",
+                task_hash="hash-b",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-b"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-3",
+                step_target_id="step-3:target-1",
+                dispatch_intent_id="intent-3",
+                planned_agent_message_id="agent-msg-3",
+                agent_id="agent-1",
+                task="Underwrite submission A from broker artifact only",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[],
+            ),
+        ]
+    )
+
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: a.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: b.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-3",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered answer for submission A.",
+        ),
+    )
+
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"
+    assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_ingest_replan_success_resolves_related_timeout_without_broad_same_agent_fallback():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Summarize claim packet",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-claim"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Summarize unrelated packet",
+                task_hash="hash-other",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-other"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-3",
+                step_target_id="step-3:target-1",
+                dispatch_intent_id="intent-3",
+                planned_agent_message_id="agent-msg-3",
+                agent_id="agent-1",
+                task="Retry claim packet with tighter prompt",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-claim"},
+                ],
+            ),
+        ]
+    )
+
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the request.",
+            status_message="timeout",
+        ),
+    )
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the unrelated request.",
+            status_message="timeout",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-3",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered timeout response.",
+        ),
+    )
+
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"

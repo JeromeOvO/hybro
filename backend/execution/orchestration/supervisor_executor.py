@@ -50,7 +50,11 @@ from execution.orchestration.planner import (
     RoomSupervisorPlannerAdapter,
 )
 from execution.orchestration.resources import OrchestrationResourceProvider
-from execution.orchestration.result_ingestor import AgentResultIngestor, AgentResultRead
+from execution.orchestration.result_ingestor import (
+    AgentResultIngestor,
+    AgentResultRead,
+    related_open_failure_for_dispatch_intent,
+)
 from execution.orchestration.run_reducer import mark_running, mark_terminal
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
@@ -1457,6 +1461,28 @@ class SupervisorExecutor:
             )
             for index, target in enumerate(action.targets, start=1)
         ]
+        exhausted_failure = self._exhausted_recoverable_failure_for_intents(
+            state,
+            intents,
+        )
+        if exhausted_failure is not None:
+            logger.info(
+                "orchestration_recovery_retry_blocked",
+                extra={
+                    "run_id": state.run_id,
+                    "failure_id": exhausted_failure.failure_id,
+                    "dispatch_intent_id": exhausted_failure.dispatch_intent_id,
+                    "retry_count": exhausted_failure.retry_count,
+                    "max_retries": exhausted_failure.max_retries,
+                    "error_code": exhausted_failure.error_code,
+                },
+            )
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="recoverable failure retry budget exhausted",
+            )
+            return state, RunStatus.FAILED
 
         await self._emit_supervisor_stage(
             room_id=room_id,
@@ -4096,6 +4122,24 @@ class SupervisorExecutor:
             intent.status not in terminal_statuses and intent.step_id == step_id
             for intent in state.dispatch_intents
         )
+
+    @staticmethod
+    def _exhausted_recoverable_failure_for_intents(
+        state: OrchestrationRunState,
+        intents: list[DispatchIntent],
+    ):
+        for intent in intents:
+            matched_failure = related_open_failure_for_dispatch_intent(
+                state.open_failures,
+                retry_intent=intent,
+                dispatch_intents=state.dispatch_intents,
+                statuses={"open", "abandoned"},
+            )
+            if matched_failure is None:
+                continue
+            if matched_failure.retry_count >= matched_failure.max_retries:
+                return matched_failure
+        return None
 
     @staticmethod
     def _remove_hitl_request_refs(

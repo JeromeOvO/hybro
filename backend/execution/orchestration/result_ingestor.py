@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.orchestration.failure_classifier import classify_agent_failure
 from models.orchestration import (
@@ -15,6 +16,8 @@ from models.orchestration import (
     OpenFailureRecord,
     OrchestrationRunState,
 )
+
+logger = get_logger(__name__)
 
 
 class AgentResultRead(BaseModel):
@@ -286,6 +289,7 @@ class AgentResultIngestor:
                 ),
             )
             if failure is not None:
+                retried_failure: OpenFailureRecord | None = None
                 existing_failure = next(
                     (
                         item
@@ -295,21 +299,82 @@ class AgentResultIngestor:
                     ),
                     None,
                 )
-                if existing_failure is None:
-                    state.open_failures.append(failure)
+                if existing_failure is not None:
+                    existing_failure.updated_at = utcnow()
                     return True
+                else:
+                    retried_failure = (
+                        _matching_open_failure_for_retry_attempt(
+                            state.open_failures,
+                            failure=failure,
+                            retry_intent=matched_intent,
+                            dispatch_intents=state.dispatch_intents,
+                        )
+                        if matched_intent is not None
+                        else None
+                    )
+                    if retried_failure is not None:
+                        retried_failure.retry_count = min(
+                            retried_failure.retry_count + 1,
+                            retried_failure.max_retries,
+                        )
+                        retried_failure.updated_at = utcnow()
+                        logger.info(
+                            "orchestration_recovery_retried",
+                            extra={
+                                "run_id": state.run_id,
+                                "failure_id": retried_failure.failure_id,
+                                "dispatch_intent_id": retried_failure.dispatch_intent_id,
+                                "retry_dispatch_intent_id": (
+                                    matched_intent.dispatch_intent_id
+                                    if matched_intent is not None
+                                    else None
+                                ),
+                                "retry_count": retried_failure.retry_count,
+                                "max_retries": retried_failure.max_retries,
+                                "error_code": retried_failure.error_code,
+                            },
+                        )
+                        if retried_failure.retry_count >= retried_failure.max_retries:
+                            retried_failure.status = "abandoned"
+                            retried_failure.updated_at = utcnow()
+                            logger.info(
+                                "orchestration_recovery_abandoned",
+                                extra={
+                                    "run_id": state.run_id,
+                                    "failure_id": retried_failure.failure_id,
+                                    "dispatch_intent_id": retried_failure.dispatch_intent_id,
+                                    "retry_count": retried_failure.retry_count,
+                                    "max_retries": retried_failure.max_retries,
+                                    "error_code": retried_failure.error_code,
+                                },
+                            )
+                        return True
+                    else:
+                        state.open_failures.append(failure)
+                        return True
         elif result.status == "completed":
             changed = False
             for failure in _matching_open_failures_for_completed_result(
                 state.open_failures,
                 result,
                 matched_intent,
-                updated.dispatch_intents,
+                state.dispatch_intents,
             ):
                 failure.status = "resolved"
                 failure.resolved_by_agent_message_id = result.agent_message_id
                 failure.updated_at = utcnow()
                 changed = True
+                logger.info(
+                    "orchestration_recovery_resolved",
+                    extra={
+                        "run_id": state.run_id,
+                        "failure_id": failure.failure_id,
+                        "dispatch_intent_id": failure.dispatch_intent_id,
+                        "resolved_by_agent_message_id": result.agent_message_id,
+                        "error_code": failure.error_code,
+                    },
+                )
             return changed
         return False
 
@@ -383,7 +448,7 @@ def _matching_open_failures_for_completed_result(
     open_failures_for_agent = [
         failure
         for failure in open_failures
-        if failure.status == "open" and failure.agent_id == result.agent_id
+        if failure.status in {"open", "abandoned"} and failure.agent_id == result.agent_id
     ]
     if matched_intent is not None:
         same_intent_failures = [
@@ -393,18 +458,13 @@ def _matching_open_failures_for_completed_result(
         ]
         if same_intent_failures:
             return same_intent_failures
-        if not matched_intent.attachment_refs:
-            intents_by_id = {
-                intent.dispatch_intent_id: intent for intent in dispatch_intents
-            }
-            return [
-                failure
-                for failure in open_failures_for_agent
-                if _is_attachment_retry_recovery(
-                    failure,
-                    failed_intent=intents_by_id.get(failure.dispatch_intent_id),
-                )
-            ]
+        retried_failure = _related_open_failure_for_dispatch_intent(
+            open_failures_for_agent,
+            retry_intent=matched_intent,
+            dispatch_intents=dispatch_intents,
+        )
+        if retried_failure is not None:
+            return [retried_failure]
     return [
         failure
         for failure in open_failures_for_agent
@@ -412,17 +472,204 @@ def _matching_open_failures_for_completed_result(
     ]
 
 
-def _is_attachment_retry_recovery(
-    failure: OpenFailureRecord,
+def _matching_open_failure_for_retry_attempt(
+    open_failures: list[OpenFailureRecord],
     *,
-    failed_intent: DispatchIntent | None,
-) -> bool:
-    return (
-        failure.recoverable
-        and failure.error_code == "agent_does_not_accept_file_type"
-        and failed_intent is not None
-        and bool(failed_intent.attachment_refs)
+    failure: OpenFailureRecord,
+    retry_intent: DispatchIntent,
+    dispatch_intents: list[DispatchIntent],
+) -> OpenFailureRecord | None:
+    return _related_open_failure_for_dispatch_intent(
+        open_failures,
+        retry_intent=retry_intent,
+        dispatch_intents=dispatch_intents,
+        error_code=failure.error_code,
     )
+
+
+def related_open_failure_for_dispatch_intent(
+    open_failures: list[OpenFailureRecord],
+    *,
+    retry_intent: DispatchIntent,
+    dispatch_intents: list[DispatchIntent],
+    statuses: set[str] | None = None,
+) -> OpenFailureRecord | None:
+    return _related_open_failure_for_dispatch_intent(
+        open_failures,
+        retry_intent=retry_intent,
+        dispatch_intents=dispatch_intents,
+        statuses=statuses,
+    )
+
+
+def _related_open_failure_for_dispatch_intent(
+    open_failures: list[OpenFailureRecord],
+    *,
+    retry_intent: DispatchIntent,
+    dispatch_intents: list[DispatchIntent],
+    statuses: set[str] | None = None,
+    error_code: str | None = None,
+) -> OpenFailureRecord | None:
+    allowed_statuses = statuses or {"open"}
+    intents_by_id = {intent.dispatch_intent_id: intent for intent in dispatch_intents}
+    scored: list[tuple[tuple[int, int, int, int, int], OpenFailureRecord]] = []
+    for open_failure in open_failures:
+        if open_failure.status not in allowed_statuses:
+            continue
+        if not open_failure.recoverable:
+            continue
+        if open_failure.agent_id != retry_intent.agent_id:
+            continue
+        if error_code is not None and open_failure.error_code != error_code:
+            continue
+        failed_intent = intents_by_id.get(open_failure.dispatch_intent_id)
+        score = _retry_lineage_score(
+            retry_intent=retry_intent,
+            failed_intent=failed_intent,
+            failure=open_failure,
+        )
+        if score is not None:
+            scored.append((score, open_failure))
+    if not scored:
+        fallback = _unique_attachment_drop_failure(
+            open_failures,
+            retry_intent=retry_intent,
+            dispatch_intents=dispatch_intents,
+            statuses=allowed_statuses,
+            error_code=error_code,
+        )
+        if fallback is not None:
+            return fallback
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
+def _retry_lineage_score(
+    *,
+    retry_intent: DispatchIntent,
+    failed_intent: DispatchIntent | None,
+    failure: OpenFailureRecord,
+) -> tuple[int, int, int, int, int] | None:
+    if failed_intent is None:
+        return None
+    if failed_intent.dispatch_intent_id == retry_intent.dispatch_intent_id:
+        return None
+
+    same_task_hash = bool(
+        retry_intent.task_hash
+        and failed_intent.task_hash
+        and retry_intent.task_hash == failed_intent.task_hash
+    )
+    same_task = _normalized_task(retry_intent.task) == _normalized_task(failed_intent.task)
+    shared_non_attachment_refs = (
+        _intent_ref_keys(retry_intent, include_attachments=False)
+        & _intent_ref_keys(failed_intent, include_attachments=False)
+    )
+    shared_attachment_refs = (
+        _intent_ref_keys(retry_intent, include_attachments=True)
+        - _intent_ref_keys(retry_intent, include_attachments=False)
+    ) & (
+        _intent_ref_keys(failed_intent, include_attachments=True)
+        - _intent_ref_keys(failed_intent, include_attachments=False)
+    )
+    anchors = {
+        value
+        for value in (failure.agent_message_id, failed_intent.planned_agent_message_id)
+        if isinstance(value, str) and value
+    }
+    mentions_failed_message = _intent_mentions_any_message(retry_intent, anchors)
+    attachment_drop = bool(failed_intent.attachment_refs) and not bool(
+        retry_intent.attachment_refs
+    )
+    if not (
+        mentions_failed_message
+        or same_task_hash
+        or (shared_non_attachment_refs and (same_task or attachment_drop))
+        or (shared_attachment_refs and same_task)
+    ):
+        return None
+    return (
+        1 if mentions_failed_message else 0,
+        1 if same_task_hash else 0,
+        len(shared_non_attachment_refs),
+        len(shared_attachment_refs),
+        1 if same_task else 0,
+        1 if attachment_drop else 0,
+    )
+
+
+def _unique_attachment_drop_failure(
+    open_failures: list[OpenFailureRecord],
+    *,
+    retry_intent: DispatchIntent,
+    dispatch_intents: list[DispatchIntent],
+    statuses: set[str],
+    error_code: str | None,
+) -> OpenFailureRecord | None:
+    if retry_intent.attachment_refs:
+        return None
+    if not (retry_intent.artifact_refs or retry_intent.context_refs):
+        return None
+
+    intents_by_id = {intent.dispatch_intent_id: intent for intent in dispatch_intents}
+    candidates: list[OpenFailureRecord] = []
+    for open_failure in open_failures:
+        if open_failure.status not in statuses:
+            continue
+        if not open_failure.recoverable:
+            continue
+        if open_failure.agent_id != retry_intent.agent_id:
+            continue
+        if error_code is not None and open_failure.error_code != error_code:
+            continue
+        failed_intent = intents_by_id.get(open_failure.dispatch_intent_id)
+        if failed_intent is None or not failed_intent.attachment_refs:
+            continue
+        candidates.append(open_failure)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _normalized_task(task: str) -> str:
+    return " ".join(task.lower().split())
+
+
+def _intent_ref_keys(
+    intent: DispatchIntent,
+    *,
+    include_attachments: bool,
+) -> set[tuple[str, str]]:
+    refs = list(intent.context_refs) + list(intent.artifact_refs)
+    if include_attachments:
+        refs.extend(intent.attachment_refs)
+    return {
+        (getattr(ref, "kind").value, getattr(ref, "ref_id"))
+        for ref in refs
+    }
+
+
+def _intent_mentions_any_message(
+    intent: DispatchIntent,
+    message_ids: set[str],
+) -> bool:
+    if not message_ids:
+        return False
+    for ref in (
+        list(intent.context_refs)
+        + list(intent.artifact_refs)
+        + list(intent.attachment_refs)
+    ):
+        ref_id = getattr(ref, "ref_id", "")
+        source_agent_message_id = getattr(ref, "source_agent_message_id", None)
+        if isinstance(source_agent_message_id, str) and source_agent_message_id in message_ids:
+            return True
+        if isinstance(ref_id, str) and any(ref_id.startswith(f"{message_id}:") for message_id in message_ids):
+            return True
+    return False
 
 
 def _is_fact_projectable(result: AgentResultRead) -> bool:

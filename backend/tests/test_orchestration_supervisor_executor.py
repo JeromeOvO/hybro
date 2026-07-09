@@ -1038,6 +1038,82 @@ async def test_run_stops_when_repeated_recoverable_failure_exhausts_step_budget(
 
 
 @pytest.mark.asyncio
+async def test_run_stops_when_recoverable_failure_retry_budget_is_exhausted():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Underwrite this submission"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "user-msg-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+            "orchestration_step_budget": 6,
+        },
+    )
+    delegate_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Retry the same recoverable dispatch.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Underwrite the submission.",
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            )
+        ],
+    )
+    planner = SimpleNamespace(plan=AsyncMock(return_value=delegate_action))
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor._v2_dispatch_intent = MagicMock(side_effect=_explicit_dispatch_intent)
+    executor._dispatch_targets = AsyncMock(
+        return_value=[
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Insurer",
+                task="Underwrite the submission.",
+                response_text="",
+                success=False,
+                status=StepStatus.FAILED,
+                error_message=(
+                    "Agent does not accept the uploaded file type for: "
+                    "report.pdf (application/pdf)."
+                ),
+                agent_message_id=None,
+                status_message="agent_does_not_accept_file_type",
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        message_text="Underwrite this submission",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Insurer")],
+        room_config=RoomConfig(),
+        conversation_context=None,
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert executor._dispatch_targets.await_count == 3
+    state = await store.get_latest_by_user_message_id("user-msg-1")
+    assert state is not None
+    assert len(state.open_failures) == 1
+    assert state.open_failures[0].retry_count == state.open_failures[0].max_retries
+    assert state.open_failures[0].status == "abandoned"
+
+
+@pytest.mark.asyncio
 async def test_run_resume_ingests_paused_result_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
