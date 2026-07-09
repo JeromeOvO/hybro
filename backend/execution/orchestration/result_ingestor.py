@@ -543,7 +543,7 @@ def _retry_lineage_score(
     retry_intent: DispatchIntent,
     failed_intent: DispatchIntent | None,
     failure: OpenFailureRecord,
-) -> tuple[int, int, int, int, int] | None:
+) -> tuple[int, int, int, int, int, int] | None:
     if failed_intent is None:
         return None
     if failed_intent.dispatch_intent_id == retry_intent.dispatch_intent_id:
@@ -575,18 +575,17 @@ def _retry_lineage_score(
     attachment_drop = bool(failed_intent.attachment_refs) and not bool(
         retry_intent.attachment_refs
     )
-    if not (
-        mentions_failed_message
-        or same_task_hash
-        or (shared_non_attachment_refs and (same_task or attachment_drop))
-        or (shared_attachment_refs and same_task)
-    ):
+    has_shared_ref_lineage = bool(
+        (shared_non_attachment_refs and (same_task or same_task_hash or attachment_drop))
+        or (shared_attachment_refs and (same_task or same_task_hash))
+    )
+    if not (mentions_failed_message or has_shared_ref_lineage):
         return None
     return (
         1 if mentions_failed_message else 0,
-        1 if same_task_hash else 0,
         len(shared_non_attachment_refs),
         len(shared_attachment_refs),
+        1 if same_task_hash else 0,
         1 if same_task else 0,
         1 if attachment_drop else 0,
     )
