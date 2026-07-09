@@ -20,7 +20,12 @@ def classify_agent_failure(
     message = error or status_message or code
     return OpenFailureRecord(
         failure_id=uuid4().hex,
-        fingerprint=f"{agent_id}:{code}:{_fingerprint_message(message)}",
+        fingerprint=_failure_fingerprint(
+            agent_id=agent_id,
+            dispatch_intent_id=dispatch_intent_id,
+            code=code,
+            message=message,
+        ),
         source="a2a_adapter",
         agent_id=agent_id,
         agent_message_id=agent_message_id,
@@ -78,3 +83,17 @@ def _recovery_hints(code: str) -> list[str]:
 
 def _fingerprint_message(message: str) -> str:
     return " ".join(message.lower().split())[:160]
+
+
+def _failure_fingerprint(
+    *,
+    agent_id: str,
+    dispatch_intent_id: str | None,
+    code: str,
+    message: str,
+) -> str:
+    parts = [agent_id]
+    if dispatch_intent_id:
+        parts.append(f"dispatch:{dispatch_intent_id}")
+    parts.extend((code, _fingerprint_message(message)))
+    return ":".join(parts)

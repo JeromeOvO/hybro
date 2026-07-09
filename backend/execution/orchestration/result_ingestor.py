@@ -9,7 +9,12 @@ from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
 from execution.orchestration.failure_classifier import classify_agent_failure
-from models.orchestration import AgentOutputRecord, OrchestrationRunState
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchIntent,
+    OpenFailureRecord,
+    OrchestrationRunState,
+)
 
 
 class AgentResultRead(BaseModel):
@@ -295,11 +300,11 @@ class AgentResultIngestor:
                     return True
         elif result.status == "completed":
             changed = False
-            for failure in state.open_failures:
-                if failure.status != "open":
-                    continue
-                if failure.agent_id != result.agent_id:
-                    continue
+            for failure in _matching_open_failures_for_completed_result(
+                state.open_failures,
+                result,
+                matched_intent,
+            ):
                 failure.status = "resolved"
                 failure.resolved_by_agent_message_id = result.agent_message_id
                 failure.updated_at = utcnow()
@@ -366,6 +371,29 @@ def _artifact_summary(artifact: dict[str, Any]) -> str:
         elif value is not None:
             return str(value)[:240]
     return ""
+
+
+def _matching_open_failures_for_completed_result(
+    open_failures: list[OpenFailureRecord],
+    result: AgentResultRead,
+    matched_intent: DispatchIntent | None,
+) -> list[OpenFailureRecord]:
+    open_failures_for_agent = [
+        failure
+        for failure in open_failures
+        if failure.status == "open" and failure.agent_id == result.agent_id
+    ]
+    if matched_intent is not None:
+        return [
+            failure
+            for failure in open_failures_for_agent
+            if failure.dispatch_intent_id == matched_intent.dispatch_intent_id
+        ]
+    return [
+        failure
+        for failure in open_failures_for_agent
+        if failure.agent_message_id == result.agent_message_id
+    ]
 
 
 def _is_fact_projectable(result: AgentResultRead) -> bool:

@@ -9,7 +9,7 @@ from execution.orchestration.result_ingestor import (
     AgentResultRead,
     canonical_artifact_key,
 )
-from models.orchestration import AgentOutputRecord, OrchestrationRunState
+from models.orchestration import AgentOutputRecord, DispatchIntent, OrchestrationRunState
 
 
 def _run_state(**overrides):
@@ -862,10 +862,31 @@ def test_ingest_failed_attachment_preflight_opens_recoverable_failure():
     assert failure.recovery_hints == ["retry_without_unsupported_attachments"]
 
 
-def test_ingest_later_success_resolves_open_failure_for_same_agent():
+def test_ingest_later_success_resolves_only_matching_open_failure():
     ingestor = AgentResultIngestor()
     failed = ingestor.ingest(
-        _run_state(),
+        _run_state(
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="step-1",
+                    step_target_id="step-1:target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Task 1",
+                    task_hash="hash-1",
+                ),
+                DispatchIntent(
+                    step_id="step-2",
+                    step_target_id="step-2:target-1",
+                    dispatch_intent_id="intent-2",
+                    planned_agent_message_id="agent-msg-2",
+                    agent_id="agent-1",
+                    task="Task 2",
+                    task_hash="hash-2",
+                ),
+            ]
+        ),
         AgentResultRead(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -874,16 +895,85 @@ def test_ingest_later_success_resolves_open_failure_for_same_agent():
             status_message="agent_does_not_accept_file_type",
         ),
     )
+    failed = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the request.",
+            status_message="timeout",
+        ),
+    )
 
     recovered = ingestor.ingest(
         failed,
         AgentResultRead(
-            agent_message_id="agent-msg-2",
+            agent_message_id="agent-msg-1",
             agent_id="agent-1",
             status="completed",
             text="Recovered answer.",
         ),
     )
 
-    assert recovered.open_failures[0].status == "resolved"
-    assert recovered.open_failures[0].resolved_by_agent_message_id == "agent-msg-2"
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-1"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"
+    assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failures():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Task 1",
+                task_hash="hash-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Task 2",
+                task_hash="hash-2",
+            ),
+        ]
+    )
+
+    once = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+    twice = ingestor.ingest(
+        once,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    assert len(twice.open_failures) == 2
+    assert [failure.dispatch_intent_id for failure in twice.open_failures] == [
+        "intent-1",
+        "intent-2",
+    ]
+    assert twice.open_failures[0].fingerprint != twice.open_failures[1].fingerprint
