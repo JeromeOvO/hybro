@@ -19,6 +19,7 @@ from models.orchestration import (
     DispatchContentRef,
     DispatchExpectedOutput,
     DispatchRefKind,
+    OpenFailureRecord,
     OrchestrationRunState,
     ParticipantSnapshot,
     PlannedDelegateTarget,
@@ -525,6 +526,28 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
                 ]
             ),
         )
+
+
+def test_complete_rejected_when_recoverable_failure_is_open():
+    state = _state_for_validation(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="fp",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="timeout",
+                error_message="Timed out",
+                recoverable=True,
+                status="open",
+                recovery_hints=["retry_same_agent_with_smaller_context"],
+            )
+        ]
+    )
+
+    with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
+        PlannerActionValidator.validate(_complete_action(), run_state=state)
 
 
 def test_complete_accepts_rejected_active_dispatch_reference():

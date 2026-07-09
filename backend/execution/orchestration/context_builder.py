@@ -138,6 +138,7 @@ class OrchestrationStateContext(BaseModel):
     completion_criteria: list[dict[str, Any]] = Field(default_factory=list)
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
     pending_hitl_request_ids: list[str] = Field(default_factory=list)
+    open_failures: list[dict[str, Any]] = Field(default_factory=list)
     participant_snapshot: dict[str, Any] | None = None
     system_agent_message_id: str | None = None
     active_dispatches: list[dict[str, Any]] = Field(default_factory=list)
@@ -488,6 +489,9 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         completion_criteria=_stable_mapping_list(run_state.completion_criteria),
         decision_log=_stable_mapping_list(run_state.decision_log),
         pending_hitl_request_ids=list(run_state.pending_hitl_request_ids),
+        open_failures=[
+            failure.model_dump(mode="json") for failure in run_state.open_failures
+        ],
         participant_snapshot=(
             _stable_data(run_state.participant_snapshot)
             if run_state.participant_snapshot is not None

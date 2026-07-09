@@ -23,6 +23,7 @@ from models.orchestration import (
     CandidateScopeSnapshot,
     CompletionEvidence,
     DispatchIntent,
+    OpenFailureRecord,
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
@@ -392,6 +393,33 @@ def test_context_builder_exposes_run_state_extensions():
     assert state_context["active_dispatches"][0]["agent_message_id"] == "agent-msg-1"
     assert state_context["last_planner_action"]["action"] == "delegate"
     assert state_context["completion_evidence"]["confidence"] == 0.9
+
+
+def test_context_builder_exposes_open_failures_to_planner():
+    state = _run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="fp",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="timeout",
+                error_message="Timed out",
+                recoverable=True,
+                status="open",
+                recovery_hints=["retry_same_agent_with_smaller_context"],
+            )
+        ]
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Finish the workflow",
+    )
+
+    assert context.state_context.open_failures[0]["failure_id"] == "failure-1"
+    assert context.state_context.open_failures[0]["recoverable"] is True
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
