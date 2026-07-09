@@ -1354,6 +1354,36 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         planner_action: PlannerAction,
     ) -> OrchestrationRunState:
+        logger.info(
+            "supervisor_planner_decision",
+            extra={
+                "run_id": state.run_id,
+                "room_id": state.room_id,
+                "user_message_id": state.user_message_id,
+                "action": planner_action.action.value,
+                "target_agent_ids": [
+                    target.agent_id for target in planner_action.targets
+                ],
+                "artifact_refs": [
+                    ref.ref_id
+                    for target in planner_action.targets
+                    for ref in target.artifact_refs
+                ],
+                "attachment_refs": [
+                    ref.ref_id
+                    for target in planner_action.targets
+                    for ref in target.attachment_refs
+                ],
+                "open_failure_count": len(
+                    [
+                        failure
+                        for failure in state.open_failures
+                        if failure.status == "open"
+                    ]
+                ),
+            },
+        )
+
         def mutate(updated: OrchestrationRunState) -> None:
             updated.decision_log.append(
                 {

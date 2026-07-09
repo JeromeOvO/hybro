@@ -783,6 +783,43 @@ async def test_planner_adapter_supervisor_prompt_requires_delegate_target_task()
 
 
 @pytest.mark.asyncio
+async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection():
+    supervisor_service = type(
+        "SupervisorServiceStub",
+        (),
+        {
+            "_call_supervisor_llm": AsyncMock(
+                return_value={
+                    "action": "delegate",
+                    "reasoning": "route to scoped specialist",
+                    "targets": [
+                        {
+                            "agent_id": "agent-1",
+                            "agent_name": "Agent One",
+                            "task": "Handle the request",
+                        }
+                    ],
+                }
+            )
+        },
+    )()
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[_candidate("agent-1", "Agent One")],
+        message_text="Handle this workflow",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = (
+        supervisor_service._call_supervisor_llm.await_args.kwargs["system_prompt"]
+    )
+    assert "Only include attachment_refs when the target agent's candidate_scope input_modes support that attachment MIME." in system_prompt
+    assert "Prefer artifact_refs over raw attachment_refs when an upstream agent has produced a structured artifact." in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_planner_adapter_keeps_v2_validation_outside_prompt_text():
     seen_prompt_values: list[str] = []
 
