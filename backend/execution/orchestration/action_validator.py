@@ -52,6 +52,19 @@ class PlannerActionValidator:
                         f"delegate target {target.agent_id!r} requires a "
                         "non-empty task"
                     )
+                if run_state is not None:
+                    artifact_keys = {
+                        str(artifact.get("artifact_key"))
+                        for artifact in run_state.artifacts
+                        if isinstance(artifact, dict)
+                        and artifact.get("artifact_key") is not None
+                    }
+                    for ref in target.artifact_refs:
+                        if ref.required and ref.ref_id not in artifact_keys:
+                            raise PlannerActionValidationError(
+                                f"delegate target {target.agent_id!r} references "
+                                f"unknown artifact {ref.ref_id!r}"
+                            )
 
         if (
             action.action

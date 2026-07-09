@@ -383,6 +383,29 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     assert "kind" in expected_outputs_schema["items"]["required"]
 
 
+def test_delegate_rejects_unknown_required_artifact_ref():
+    state = _state_for_validation()
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Use missing artifact",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Use the missing artifact.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="missing",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError, match="unknown artifact"):
+        PlannerActionValidator.validate(action, run_state=state)
+
+
 @pytest.mark.parametrize(
     "action_type",
     [PlannerActionType.COMPLETE, PlannerActionType.SYNTHESIZE],
