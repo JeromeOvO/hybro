@@ -28,6 +28,7 @@ from common.types import (
 from common.types import (
     MessageRole as Role,
 )
+from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
 from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
@@ -3672,6 +3673,31 @@ class RoomServices:
                     error=failure.message,
                     status_code=422,
                 )
+
+            if forwarding_policy == "compatible_only":
+                accepted_modes = agent_input_modes(agent_card_obj)
+                supported_attachments: list[UserAttachment] = []
+                skipped_attachments: list[dict[str, str]] = []
+                for attachment in user_attachments:
+                    if mime_type_is_accepted(attachment.mime_type, accepted_modes):
+                        supported_attachments.append(attachment)
+                    else:
+                        skipped_attachments.append(
+                            {
+                                "file_name": attachment.file_name,
+                                "mime_type": attachment.mime_type,
+                                "reason": "unsupported_by_agent",
+                            }
+                        )
+                if skipped_attachments:
+                    if message.extend_info is None or not isinstance(
+                        message.extend_info, dict
+                    ):
+                        message.extend_info = {}
+                    message.extend_info["skipped_user_attachments"] = (
+                        skipped_attachments
+                    )
+                user_attachments = supported_attachments
 
             file_parts = await self._build_message_parts(
                 "",

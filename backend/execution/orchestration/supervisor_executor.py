@@ -4597,6 +4597,31 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
+                if not isinstance(message.extend_info, dict):
+                    message.extend_info = {}
+                message.extend_info["attachment_forwarding_policy"] = (
+                    target.attachment_policy
+                    if getattr(target, "attachment_policy", None)
+                    else "explicit_refs_only"
+                )
+                message.extend_info["dispatch_payload_refs"] = {
+                    "context_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "context_refs", [])
+                    ],
+                    "artifact_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "artifact_refs", [])
+                    ],
+                    "attachment_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "attachment_refs", [])
+                    ],
+                    "expected_outputs": [
+                        output.model_dump(mode="json")
+                        for output in getattr(target, "expected_outputs", [])
+                    ],
+                }
                 if planned_message_id:
                     message.message_id = planned_message_id
                 if resolved_payload is not None:

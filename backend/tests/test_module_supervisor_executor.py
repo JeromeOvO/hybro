@@ -26,6 +26,7 @@ from models.orchestration import (
     OrchestrationStatus,
     PlannerAction,
     PlannerActionType,
+    PlannedDelegateTarget,
 )
 from models.processing import ProcessingResult, ProcessingStatus
 from models.supervisor import (
@@ -82,8 +83,8 @@ def _make_supervisor_executor():
     return se
 
 
-def _make_dispatch_target() -> DelegateTarget:
-    return DelegateTarget(
+def _make_dispatch_target() -> PlannedDelegateTarget:
+    return PlannedDelegateTarget(
         agent_id="agent-1",
         agent_name="Test Agent",
         task="Read the attachment.",
@@ -180,6 +181,51 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
         "total_steps": None,
         "task_content": "Read the attachment.",
         "client_request_id": "client-req-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_records_refs():
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    target = _make_dispatch_target()
+    target.attachment_refs = []
+    target.artifact_refs = []
+    target.context_refs = []
+    target.expected_outputs = []
+    target.attachment_policy = "explicit_refs_only"
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.rate_limit_service = None
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Agent completed.",
+        )
+    )
+
+    result = await se._dispatch_targets(
+        [target],
+        [_make_agent_profile()],
+        "room-1",
+        "user-msg-1",
+        1,
+        None,
+        "user-1",
+        None,
+    )
+
+    assert result[0].success is True
+    assert message.extend_info["attachment_forwarding_policy"] == "explicit_refs_only"
+    assert message.extend_info["dispatch_payload_refs"] == {
+        "context_refs": [],
+        "artifact_refs": [],
+        "attachment_refs": [],
+        "expected_outputs": [],
     }
 
 
