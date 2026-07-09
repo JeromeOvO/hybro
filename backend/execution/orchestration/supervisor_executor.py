@@ -262,11 +262,9 @@ class SupervisorExecutor:
                         action=ActionType.DELEGATE,
                         reasoning="Projected from orchestration run state",
                         targets=[
-                            DelegateTarget(
-                                agent_id=intent.agent_id,
-                                agent_name=agent_names.get(intent.agent_id)
-                                or intent.agent_id,
-                                task=intent.task,
+                            SupervisorExecutor._delegate_target_from_intent(
+                                intent,
+                                agent_names.get(intent.agent_id) or intent.agent_id,
                             )
                             for intent in intents
                         ],
@@ -1665,15 +1663,9 @@ class SupervisorExecutor:
 
         if replay_intents:
             replay_targets = [
-                DelegateTarget(
-                    agent_id=intent.agent_id,
-                    agent_name=agent_names.get(intent.agent_id) or intent.agent_id,
-                    task=intent.task,
-                    context_refs=list(intent.context_refs),
-                    artifact_refs=list(intent.artifact_refs),
-                    attachment_refs=list(intent.attachment_refs),
-                    expected_outputs=list(intent.expected_outputs),
-                    attachment_policy=intent.attachment_policy,
+                self._delegate_target_from_intent(
+                    intent,
+                    agent_names.get(intent.agent_id) or intent.agent_id,
                 )
                 for intent in replay_intents
             ]
@@ -1980,11 +1972,9 @@ class SupervisorExecutor:
                 action=ActionType.DELEGATE,
                 reasoning="Recovered in-flight v2 dispatch from committed agent messages",
                 targets=[
-                    DelegateTarget(
-                        agent_id=intent.agent_id,
-                        agent_name=agent_names.get(intent.agent_id)
-                        or intent.agent_id,
-                        task=intent.task,
+                    SupervisorExecutor._delegate_target_from_intent(
+                        intent,
+                        agent_names.get(intent.agent_id) or intent.agent_id,
                     )
                     for intent in intents
                 ],
@@ -3983,6 +3973,22 @@ class SupervisorExecutor:
         return SupervisorAction(
             action=ActionType.DONE,
             reasoning=planner_action.reasoning,
+        )
+
+    @staticmethod
+    def _delegate_target_from_intent(
+        intent: DispatchIntent,
+        agent_name: str,
+    ) -> DelegateTarget:
+        return DelegateTarget(
+            agent_id=intent.agent_id,
+            agent_name=agent_name,
+            task=intent.task,
+            context_refs=list(intent.context_refs),
+            artifact_refs=list(intent.artifact_refs),
+            attachment_refs=list(intent.attachment_refs),
+            expected_outputs=list(intent.expected_outputs),
+            attachment_policy=intent.attachment_policy,
         )
 
     @staticmethod
