@@ -1,8 +1,12 @@
+from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from pypdf import PdfWriter
 
 from execution.orchestration.resources import (
+    AttachmentProjectionService,
     OrchestrationResourceProvider,
     ResourcePayload,
     ResourceProjectionRef,
@@ -20,6 +24,15 @@ def _pdf_attachment(file_id: str = "file-1") -> UserAttachment:
         file_name="submission.pdf",
         size_bytes=128,
     )
+
+
+def _minimal_pdf_bytes() -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_metadata({"/Title": "Blank"})
+    writer.write(buffer)
+    return buffer.getvalue()
 
 
 @pytest.mark.asyncio
@@ -96,3 +109,80 @@ async def test_resource_provider_returns_none_for_unknown_ref():
 def test_resource_ref_helpers_are_deterministic():
     assert attachment_resource_ref_id("file-1") == "file:file-1"
     assert text_projection_ref_id("file-1") == "ctx:file-file-1:text"
+
+
+@pytest.mark.asyncio
+async def test_pdf_projection_failure_for_empty_text_pdf():
+    content_reader = AsyncMock()
+    content_reader.get_bytes = AsyncMock(return_value=_minimal_pdf_bytes())
+    service = AttachmentProjectionService(content_reader=content_reader)
+
+    projection, payload = await service.ensure_projection(_pdf_attachment())
+
+    assert payload is None
+    assert projection.ref_id == "ctx:file-file-1:text"
+    assert projection.status == "failed"
+    assert projection.failure_reason == "pdf_text_empty"
+    content_reader.get_bytes.assert_awaited_once_with(
+        "uploads/room-1/file-1/submission.pdf",
+        max_bytes=10485760,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pdf_projection_failure_for_oversized_pdf_without_reading_bytes():
+    content_reader = AsyncMock()
+    content_reader.get_bytes = AsyncMock(return_value=b"")
+    service = AttachmentProjectionService(content_reader=content_reader, max_pdf_bytes=10)
+    attachment = _pdf_attachment()
+    attachment.size_bytes = 11
+
+    projection, payload = await service.ensure_projection(attachment)
+
+    assert payload is None
+    assert projection.status == "failed"
+    assert projection.failure_reason == "pdf_projection_too_large"
+    content_reader.get_bytes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_caches_successful_projection_payload(monkeypatch):
+    async def fake_projection(attachment, *, target_mime="text/plain"):
+        projection = ResourceProjectionRef(
+            ref_id="ctx:file-file-1:text",
+            kind="context",
+            source_ref_id="file:file-1",
+            mime_type=target_mime,
+            status="ready",
+            recommended_for_input_modes=["text"],
+            summary="Extracted 12 characters from 1 page.",
+        )
+        payload = ResourcePayload(
+            ref_id="ctx:file-file-1:text",
+            kind="context",
+            mime_type="text/plain",
+            text="hello world!",
+            summary="Extracted 12 characters from 1 page.",
+            metadata={
+                "source_ref_id": "file:file-1",
+                "char_count": 12,
+                "is_truncated": False,
+            },
+        )
+        return projection, payload
+
+    projection_service = SimpleNamespace(ensure_projection=fake_projection)
+    provider = OrchestrationResourceProvider(projection_service=projection_service)
+
+    projection = await provider.ensure_projection(
+        "file:file-1",
+        attachments=[_pdf_attachment()],
+    )
+    payload = await provider.resolve_ref(
+        "ctx:file-file-1:text",
+        attachments=[_pdf_attachment()],
+    )
+
+    assert projection.status == "ready"
+    assert payload.text == "hello world!"
+    assert payload.metadata["is_truncated"] is False

@@ -45,6 +45,7 @@ dependencies = [
     "cachetools>=5.5.2",
     "loguru>=0.7.3",
     "python-dateutil>=2.9.0.post0",
+    "pypdf>=5.0.0,<7",
     "gunicorn>=25.3.0",
 ]
 

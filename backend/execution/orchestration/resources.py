@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from io import BytesIO
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 
 from common.utils.a2a_file_modes import mime_type_is_accepted
 from models.room import UserAttachment
@@ -57,6 +59,141 @@ class AttachmentProjectionServicePort(Protocol):
         target_mime: str = "text/plain",
     ) -> tuple[ResourceProjectionRef, ResourcePayload | None]:
         raise NotImplementedError
+
+
+class AttachmentProjectionService:
+    def __init__(
+        self,
+        *,
+        content_reader: Any,
+        max_pdf_bytes: int = 10 * 1024 * 1024,
+        max_text_chars: int = 80_000,
+    ) -> None:
+        self._content_reader = content_reader
+        self._max_pdf_bytes = max_pdf_bytes
+        self._max_text_chars = max_text_chars
+
+    async def ensure_projection(
+        self,
+        attachment: UserAttachment,
+        *,
+        target_mime: str = "text/plain",
+    ) -> tuple[ResourceProjectionRef, ResourcePayload | None]:
+        source_ref_id = attachment_resource_ref_id(attachment.file_id)
+        projection_ref_id = text_projection_ref_id(attachment.file_id)
+        if target_mime != "text/plain":
+            return self._failed_projection(
+                projection_ref_id,
+                source_ref_id,
+                target_mime,
+                "unsupported_projection_mime",
+            ), None
+        if attachment.mime_type != "application/pdf":
+            return self._failed_projection(
+                projection_ref_id,
+                source_ref_id,
+                target_mime,
+                "unsupported_projection_source_mime",
+            ), None
+        if attachment.size_bytes > self._max_pdf_bytes:
+            return self._failed_projection(
+                projection_ref_id,
+                source_ref_id,
+                target_mime,
+                "pdf_projection_too_large",
+            ), None
+
+        try:
+            data = await self._content_reader.get_bytes(
+                attachment.s3_key,
+                max_bytes=self._max_pdf_bytes,
+            )
+            if not data:
+                return self._failed_projection(
+                    projection_ref_id,
+                    source_ref_id,
+                    target_mime,
+                    "pdf_extract_failed",
+                ), None
+            reader = PdfReader(BytesIO(data))
+            if reader.is_encrypted:
+                return self._failed_projection(
+                    projection_ref_id,
+                    source_ref_id,
+                    target_mime,
+                    "pdf_encrypted",
+                ), None
+            page_text: list[str] = []
+            for page in reader.pages:
+                extracted = page.extract_text() or ""
+                if extracted.strip():
+                    page_text.append(extracted.strip())
+            text = "\n\n".join(page_text).strip()
+        except Exception:
+            return self._failed_projection(
+                projection_ref_id,
+                source_ref_id,
+                target_mime,
+                "pdf_extract_failed",
+            ), None
+
+        if not text:
+            return self._failed_projection(
+                projection_ref_id,
+                source_ref_id,
+                target_mime,
+                "pdf_text_empty",
+            ), None
+
+        is_truncated = len(text) > self._max_text_chars
+        bounded_text = text[: self._max_text_chars] if is_truncated else text
+        summary = (
+            f"Extracted {len(bounded_text)} characters from "
+            f"{len(reader.pages)} PDF page(s)."
+        )
+        projection = ResourceProjectionRef(
+            ref_id=projection_ref_id,
+            kind="context",
+            source_ref_id=source_ref_id,
+            mime_type="text/plain",
+            status="ready",
+            recommended_for_input_modes=["text"],
+            summary=summary,
+        )
+        payload = ResourcePayload(
+            ref_id=projection_ref_id,
+            kind="context",
+            mime_type="text/plain",
+            text=bounded_text,
+            summary=summary,
+            metadata={
+                "source_ref_id": source_ref_id,
+                "file_id": attachment.file_id,
+                "file_name": attachment.file_name,
+                "char_count": len(text),
+                "page_count": len(reader.pages),
+                "is_truncated": is_truncated,
+            },
+        )
+        return projection, payload
+
+    @staticmethod
+    def _failed_projection(
+        ref_id: str,
+        source_ref_id: str,
+        target_mime: str,
+        reason: str,
+    ) -> ResourceProjectionRef:
+        return ResourceProjectionRef(
+            ref_id=ref_id,
+            kind="context",
+            source_ref_id=source_ref_id,
+            mime_type=target_mime,
+            status="failed",
+            recommended_for_input_modes=["text"],
+            summary=f"Projection failed: {reason}",
+            failure_reason=reason,
+        )
 
 
 def attachment_resource_ref_id(file_id: str) -> str:
