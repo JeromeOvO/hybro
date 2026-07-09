@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from execution.orchestration.resources import ResourceRef
 from models.orchestration import OrchestrationRunState
 
 
@@ -37,6 +38,36 @@ class CandidateScopeContext(BaseModel):
     snapshot_version: int | None = None
     agent_ids: list[str] = Field(default_factory=list)
     agents: list[CandidateAgentContext] = Field(default_factory=list)
+
+
+class ResourceProjectionContext(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ref_id: str
+    kind: str
+    source_ref_id: str
+    mime_type: str
+    status: str
+    recommended_for_input_modes: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    failure_reason: str | None = None
+
+
+class ResourceRefContext(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ref_id: str
+    kind: str
+    origin: str
+    source_message_id: str | None = None
+    source_agent_id: str | None = None
+    file_name: str | None = None
+    mime_type: str | None = None
+    status: str
+    summary: str | None = None
+    token_estimate: int | None = None
+    supported_by_agent_ids: list[str] = Field(default_factory=list)
+    projections: list[ResourceProjectionContext] = Field(default_factory=list)
 
 
 class OrchestrationQuoteContext(BaseModel):
@@ -109,6 +140,7 @@ class OrchestrationPlannerContext(BaseModel):
     room_background: str | None = None
     candidate_scope: CandidateScopeContext
     state_context: OrchestrationStateContext
+    available_resources: list[ResourceRefContext] = Field(default_factory=list)
 
     @property
     def candidate_agent_ids(self) -> list[str]:
@@ -127,6 +159,10 @@ class OrchestrationPlannerContext(BaseModel):
             "room_background": self.room_background,
             "candidate_scope": self.candidate_scope.model_dump(mode="json"),
             "state_context": self.state_context.model_dump(mode="json"),
+            "available_resources": [
+                resource.model_dump(mode="json")
+                for resource in self.available_resources
+            ],
         }
 
 
@@ -138,6 +174,7 @@ def build_orchestration_planner_context(
     quote: Any | None = None,
     quote_required: bool = False,
     room_background: str | None = None,
+    available_resources: Sequence[Any] | None = None,
 ) -> OrchestrationPlannerContext:
     """Build a deterministic planner context from sidecar state and turn data."""
 
@@ -159,7 +196,23 @@ def build_orchestration_planner_context(
         room_background=room_background,
         candidate_scope=scope_context,
         state_context=state_context,
+        available_resources=_build_resource_contexts(available_resources or []),
     )
+
+
+def _build_resource_contexts(resources: Sequence[Any]) -> list[ResourceRefContext]:
+    contexts: list[ResourceRefContext] = []
+    for resource in resources:
+        if isinstance(resource, ResourceRef):
+            raw = resource.model_dump(mode="json")
+        elif isinstance(resource, Mapping):
+            raw = dict(resource)
+        elif hasattr(resource, "model_dump"):
+            raw = resource.model_dump(mode="json")
+        else:
+            continue
+        contexts.append(ResourceRefContext.model_validate(raw))
+    return contexts
 
 
 def _build_quote_context(quote: Any | None) -> OrchestrationQuoteContext | None:

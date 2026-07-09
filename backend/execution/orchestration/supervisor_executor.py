@@ -38,6 +38,7 @@ from execution.orchestration.planner import (
     OrchestrationPlanner,
     RoomSupervisorPlannerAdapter,
 )
+from execution.orchestration.resources import OrchestrationResourceProvider
 from execution.orchestration.run_reducer import mark_running, mark_terminal
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
@@ -127,6 +128,7 @@ class SupervisorExecutor:
         debate_rounds: int = 2,
         orchestration_run_store: OrchestrationRunStore | None = None,
         orchestration_planner: OrchestrationPlanner | None = None,
+        orchestration_resource_provider: OrchestrationResourceProvider | None = None,
     ) -> None:
         if event_publisher is None:
             raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
@@ -150,6 +152,9 @@ class SupervisorExecutor:
         )
         self.orchestration_planner = orchestration_planner or RoomSupervisorPlannerAdapter(
             supervisor_service=supervisor_service
+        )
+        self.orchestration_resource_provider = (
+            orchestration_resource_provider or OrchestrationResourceProvider()
         )
         self._processing_status_emitter = None
 
@@ -461,12 +466,31 @@ class SupervisorExecutor:
                     ),
                 )
 
+            original_attachments = self._user_attachments_from_message(user_message)
+            available_resources = (
+                await self.orchestration_resource_provider.list_resources(
+                    run_id=state.run_id,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    attachments=original_attachments,
+                    candidate_agents=self._v2_candidate_scope(state, agent_registry),
+                )
+            )
+            logger.info(
+                "orchestration_resource_catalog_built room_id=%s run_id=%s "
+                "user_message_id=%s resource_count=%d",
+                room_id,
+                state.run_id,
+                user_message_id,
+                len(available_resources),
+            )
             context = build_orchestration_planner_context(
                 run_state=state,
                 candidate_scope=self._v2_candidate_scope(state, agent_registry),
                 message_text=message_text,
                 quote=quoted_text,
                 room_background=conversation_context,
+                available_resources=available_resources,
             )
             await self._append_v2_event(
                 state,

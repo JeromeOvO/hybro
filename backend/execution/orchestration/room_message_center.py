@@ -176,6 +176,7 @@ class RoomMessageCenter:
         debate_rounds: int = 2,
         orchestration_run_store=None,
         orchestration_planner=None,
+        orchestration_resource_provider=None,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
         event_publisher: EventPublisher | None = None,
@@ -323,6 +324,7 @@ class RoomMessageCenter:
             debate_rounds=self.debate_rounds,
             orchestration_run_store=self.orchestration_run_store,
             orchestration_planner=self.orchestration_planner,
+            orchestration_resource_provider=orchestration_resource_provider,
         )
         self._turn_event_appender = None
 

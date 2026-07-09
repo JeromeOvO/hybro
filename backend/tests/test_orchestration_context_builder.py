@@ -14,6 +14,7 @@ from execution.orchestration.context_builder import (
 )
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
+from execution.orchestration.resources import ResourceProjectionRef, ResourceRef
 from models.orchestration import (
     AgentOutputRecord,
     DispatchIntent,
@@ -54,6 +55,42 @@ def _candidate(agent_id: str, name: str) -> AgentProfile:
         success_rate=0.75,
         is_healthy=True,
     )
+
+
+def test_context_builder_exposes_available_resources():
+    resource = ResourceRef(
+        ref_id="file:file-1",
+        kind="attachment",
+        origin="user_message",
+        source_message_id="message-1",
+        file_name="submission.pdf",
+        mime_type="application/pdf",
+        status="ready",
+        summary="submission.pdf (application/pdf, 128 bytes)",
+        supported_by_agent_ids=[],
+        projections=[
+            ResourceProjectionRef(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                source_ref_id="file:file-1",
+                mime_type="text/plain",
+                status="ready",
+                recommended_for_input_modes=["text"],
+                summary="Extracted 500 characters from 2 PDF page(s).",
+            )
+        ],
+    )
+
+    payload = build_orchestration_planner_context(
+        run_state=_run_state(),
+        message_text="Use the attachment",
+        available_resources=[resource],
+    ).prompt_payload()
+
+    available = payload["available_resources"]
+    assert available[0]["ref_id"] == "file:file-1"
+    assert available[0]["projections"][0]["ref_id"] == "ctx:file-file-1:text"
+    assert available[0]["projections"][0]["status"] == "ready"
 
 
 def test_quote_text_is_preserved_verbatim():

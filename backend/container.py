@@ -423,6 +423,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_message_center as execution_room_message_center,
             )
             from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+            from execution.orchestration.resources import (
+                AttachmentProjectionService,
+                OrchestrationResourceProvider,
+            )
             from execution.orchestration.run_store import MongoOrchestrationRunStore
             from execution.run_command_handler import (
                 RunCommandHandler,
@@ -984,6 +988,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             orchestration_planner = RoomSupervisorPlannerAdapter(
                 supervisor_service=room_supervisor_service
             )
+            orchestration_resource_provider = OrchestrationResourceProvider(
+                projection_service=AttachmentProjectionService(
+                    content_reader=file_storage,
+                )
+            )
 
             room_message_center_impl = create_room_message_center(
                 room_runtime=execution_room_runtime,
@@ -1013,6 +1022,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_supervisor_service=room_supervisor_service,
                 orchestration_run_store=orchestration_run_store,
                 orchestration_planner=orchestration_planner,
+                orchestration_resource_provider=orchestration_resource_provider,
                 hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state

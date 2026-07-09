@@ -24,7 +24,7 @@ from models.orchestration import (
 )
 from models.processing import ProcessingResult, ProcessingStatus
 from models.response import OrchestrationResponse
-from models.room import MessageContent, Room, RoomUserMessage
+from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -51,6 +51,62 @@ class RecordingPlanner:
         if not self._actions:
             raise AssertionError("planner called more times than expected")
         return self._actions.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_run_v2_builds_resource_catalog_before_planning():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use attachment",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=128,
+                )
+            ],
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    provider = SimpleNamespace(list_resources=AsyncMock(return_value=[]))
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="cannot proceed",
+            failure_reason="test stop",
+        )
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = provider
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use attachment",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    provider.list_resources.assert_awaited_once()
+    assert planner.contexts[0].available_resources == []
 
 
 def _agent_message(message_id: str) -> SimpleNamespace:
