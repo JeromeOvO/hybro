@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from common.utils.time import utcnow
 
@@ -75,6 +75,31 @@ class DispatchExpectedOutput(BaseModel):
     kind: str
     required: bool = True
     description: str | None = None
+
+
+class OpenFailureRecord(BaseModel):
+    failure_id: str
+    fingerprint: str
+    source: Literal["a2a_adapter", "runtime", "executor", "planner_validator"]
+    agent_id: str | None = None
+    agent_message_id: str | None = None
+    dispatch_intent_id: str | None = None
+    error_code: str
+    error_message: str
+    recoverable: bool
+    retry_count: int = 0
+    max_retries: int = 2
+    status: Literal["open", "resolved", "abandoned"] = "open"
+    recovery_hints: list[str] = Field(default_factory=list)
+    resolved_by_agent_message_id: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @model_validator(mode="after")
+    def _retry_count_within_budget(self) -> "OpenFailureRecord":
+        if self.retry_count < 0 or self.retry_count > self.max_retries:
+            raise ValueError("retry_count must be between 0 and max_retries")
+        return self
 
 
 class PlannedDelegateTarget(BaseModel):
@@ -251,6 +276,7 @@ class OrchestrationRunState(BaseModel):
     last_planner_action: PlannerActionRecord | None = None
     completion_evidence: CompletionEvidence | None = None
     terminal_reason: str | None = None
+    open_failures: list[OpenFailureRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

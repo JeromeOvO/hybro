@@ -13,11 +13,13 @@ from models.orchestration import (
     DispatchContentRef,
     DispatchExpectedOutput,
     DispatchRefKind,
+    OpenFailureRecord,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
     PlannedDelegateTarget,
+    PlannerActionType,
     PlannerAction,
 )
 
@@ -259,4 +261,121 @@ def test_completion_evidence_confidence_must_be_normalized():
             unresolved_questions=[],
             final_answer_intent="answer_user",
             confidence=float("nan"),
+        )
+
+
+def test_delegate_target_carries_explicit_refs_and_expected_outputs():
+    target = PlannedDelegateTarget(
+        agent_id="insurer-1",
+        agent_name="Insurer",
+        task="Underwrite the broker-extracted submission.",
+        context_refs=[
+            DispatchContentRef(kind=DispatchRefKind.CONTEXT, ref_id="room-background")
+        ],
+        artifact_refs=[
+            DispatchContentRef(kind=DispatchRefKind.ARTIFACT, ref_id="broker-msg:artifact_id:submission")
+        ],
+        attachment_refs=[
+            DispatchContentRef(kind=DispatchRefKind.ATTACHMENT, ref_id="file-1")
+        ],
+        expected_outputs=[
+            DispatchExpectedOutput(kind="underwriting_decision", required=True),
+            DispatchExpectedOutput(kind="pricing_guidance", required=True),
+        ],
+        attachment_policy="explicit_refs_only",
+    )
+
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Broker artifact is ready; insurer needs structured facts only.",
+        targets=[target],
+    )
+
+    assert action.targets[0].artifact_refs[0].ref_id == "broker-msg:artifact_id:submission"
+    assert action.targets[0].attachment_policy == "explicit_refs_only"
+    assert action.targets[0].expected_outputs[1].kind == "pricing_guidance"
+
+
+def test_candidate_agent_snapshot_exposes_a2a_input_modes():
+    snapshot = CandidateAgentSnapshot(
+        agent_id="agent-1",
+        name="Text Agent",
+        capability_summary="Summarizes structured text.",
+        input_modes=["text"],
+        output_modes=["text"],
+        supports_file_upload=False,
+    )
+
+    assert snapshot.input_modes == ["text"]
+    assert snapshot.output_modes == ["text"]
+    assert snapshot.supports_file_upload is False
+
+
+def test_open_failure_record_has_stable_fingerprint_and_retry_budget():
+    failure = OpenFailureRecord(
+        failure_id="failure-1",
+        fingerprint="agent-msg-1:agent_does_not_accept_file_type:report.pdf",
+        source="a2a_adapter",
+        agent_id="agent-1",
+        agent_message_id="agent-msg-1",
+        dispatch_intent_id="intent-1",
+        error_code="agent_does_not_accept_file_type",
+        error_message="Agent does not accept PDF",
+        recoverable=True,
+        retry_count=1,
+        max_retries=2,
+        status="open",
+        recovery_hints=["retry_without_unsupported_attachments"],
+    )
+
+    assert failure.recoverable is True
+    assert failure.status == "open"
+    assert failure.retry_count == 1
+    assert failure.max_retries == 2
+
+
+def test_open_failure_retry_count_cannot_exceed_budget():
+    with pytest.raises(Exception, match="retry_count"):
+        OpenFailureRecord(
+            failure_id="failure-1",
+            fingerprint="fp",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            error_code="timeout",
+            error_message="Timed out",
+            recoverable=True,
+            retry_count=3,
+            max_retries=2,
+            status="open",
+        )
+
+
+def test_open_failure_retry_count_uses_configured_budget():
+    allowed = OpenFailureRecord(
+        failure_id="f-2",
+        fingerprint="agent-1:temporary_timeout",
+        source="a2a_adapter",
+        agent_id="agent-1",
+        error_code="temporary_timeout",
+        error_message="Temporary timeout.",
+        recoverable=True,
+        retry_count=4,
+        max_retries=5,
+        status="open",
+    )
+
+    assert allowed.retry_count == 4
+
+    with pytest.raises(Exception, match="retry_count"):
+        OpenFailureRecord(
+            failure_id="f-3",
+            fingerprint="agent-1:temporary_timeout",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            error_code="temporary_timeout",
+            error_message="Temporary timeout.",
+            recoverable=True,
+            retry_count=2,
+            max_retries=1,
+            status="open",
         )
