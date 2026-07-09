@@ -304,6 +304,7 @@ class AgentResultIngestor:
                 state.open_failures,
                 result,
                 matched_intent,
+                updated.dispatch_intents,
             ):
                 failure.status = "resolved"
                 failure.resolved_by_agent_message_id = result.agent_message_id
@@ -377,6 +378,7 @@ def _matching_open_failures_for_completed_result(
     open_failures: list[OpenFailureRecord],
     result: AgentResultRead,
     matched_intent: DispatchIntent | None,
+    dispatch_intents: list[DispatchIntent],
 ) -> list[OpenFailureRecord]:
     open_failures_for_agent = [
         failure
@@ -384,16 +386,43 @@ def _matching_open_failures_for_completed_result(
         if failure.status == "open" and failure.agent_id == result.agent_id
     ]
     if matched_intent is not None:
-        return [
+        same_intent_failures = [
             failure
             for failure in open_failures_for_agent
             if failure.dispatch_intent_id == matched_intent.dispatch_intent_id
         ]
+        if same_intent_failures:
+            return same_intent_failures
+        if not matched_intent.attachment_refs:
+            intents_by_id = {
+                intent.dispatch_intent_id: intent for intent in dispatch_intents
+            }
+            return [
+                failure
+                for failure in open_failures_for_agent
+                if _is_attachment_retry_recovery(
+                    failure,
+                    failed_intent=intents_by_id.get(failure.dispatch_intent_id),
+                )
+            ]
     return [
         failure
         for failure in open_failures_for_agent
         if failure.agent_message_id == result.agent_message_id
     ]
+
+
+def _is_attachment_retry_recovery(
+    failure: OpenFailureRecord,
+    *,
+    failed_intent: DispatchIntent | None,
+) -> bool:
+    return (
+        failure.recoverable
+        and failure.error_code == "agent_does_not_accept_file_type"
+        and failed_intent is not None
+        and bool(failed_intent.attachment_refs)
+    )
 
 
 def _is_fact_projectable(result: AgentResultRead) -> bool:
