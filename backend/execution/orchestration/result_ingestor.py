@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
+from execution.orchestration.failure_classifier import classify_agent_failure
 from models.orchestration import AgentOutputRecord, OrchestrationRunState
 
 
@@ -83,8 +84,11 @@ class AgentResultIngestor:
             result_artifact_keys,
         )
         fact_changed = self._merge_fact(updated, result)
+        failure_changed = self._merge_failures(updated, result)
 
-        if not artifacts_changed and not output_changed and not fact_changed:
+        if not any(
+            (artifacts_changed, output_changed, fact_changed, failure_changed)
+        ):
             return state
         updated.state_version += 1
         updated.updated_at = utcnow()
@@ -252,6 +256,56 @@ class AgentResultIngestor:
                 changed = True
 
         return changed
+
+    @staticmethod
+    def _merge_failures(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+    ) -> bool:
+        matched_intent = next(
+            (
+                intent
+                for intent in state.dispatch_intents
+                if intent.planned_agent_message_id == result.agent_message_id
+            ),
+            None,
+        )
+        if result.status in {"failed", "error", "canceled", "rejected"}:
+            failure = classify_agent_failure(
+                agent_id=result.agent_id,
+                agent_message_id=result.agent_message_id,
+                error=result.error,
+                status_message=result.status_message,
+                dispatch_intent_id=(
+                    matched_intent.dispatch_intent_id if matched_intent else None
+                ),
+            )
+            if failure is not None:
+                existing_failure = next(
+                    (
+                        item
+                        for item in state.open_failures
+                        if item.fingerprint == failure.fingerprint
+                        and item.status == "open"
+                    ),
+                    None,
+                )
+                if existing_failure is None:
+                    state.open_failures.append(failure)
+                    return True
+        elif result.status == "completed":
+            changed = False
+            for failure in state.open_failures:
+                if failure.status != "open":
+                    continue
+                if failure.agent_id != result.agent_id:
+                    continue
+                failure.status = "resolved"
+                failure.resolved_by_agent_message_id = result.agent_message_id
+                failure.updated_at = utcnow()
+                changed = True
+            return changed
+        return False
 
     @staticmethod
     def _merge_fact(

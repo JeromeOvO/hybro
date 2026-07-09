@@ -838,3 +838,52 @@ def test_sparse_replay_preserves_shared_artifact_key():
             "name": "Shared quote",
         }
     ]
+
+
+def test_ingest_failed_attachment_preflight_opens_recoverable_failure():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text="",
+        error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+        status_message="agent_does_not_accept_file_type",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert len(updated.open_failures) == 1
+    failure = updated.open_failures[0]
+    assert failure.source == "a2a_adapter"
+    assert failure.agent_id == "agent-1"
+    assert failure.agent_message_id == "agent-msg-1"
+    assert failure.error_code == "agent_does_not_accept_file_type"
+    assert failure.recoverable is True
+    assert failure.recovery_hints == ["retry_without_unsupported_attachments"]
+
+
+def test_ingest_later_success_resolves_open_failure_for_same_agent():
+    ingestor = AgentResultIngestor()
+    failed = ingestor.ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered answer.",
+        ),
+    )
+
+    assert recovered.open_failures[0].status == "resolved"
+    assert recovered.open_failures[0].resolved_by_agent_message_id == "agent-msg-2"
