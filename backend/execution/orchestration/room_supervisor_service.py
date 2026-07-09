@@ -867,13 +867,28 @@ class RoomSupervisorService:
                 not isinstance(task, str) or not task.strip()
             ):
                 raise ValueError("delegate planner action target requires task")
-            targets.append(
-                {
-                    "agent_id": agent_id,
-                    "agent_name": target.get("agent_name"),
-                    "task": task,
-                }
-            )
+            parsed_target = {
+                "agent_id": agent_id,
+                "agent_name": target.get("agent_name"),
+                "task": task,
+            }
+            target_payload = dict(target)
+            target_payload.setdefault("attachment_policy", "explicit_refs_only")
+            for field_name in (
+                "context_refs",
+                "artifact_refs",
+                "attachment_refs",
+                "attachment_policy",
+            ):
+                if field_name in target_payload:
+                    parsed_target[field_name] = target_payload[field_name]
+            if "expected_outputs" in target_payload:
+                parsed_target["expected_outputs"] = (
+                    RoomSupervisorService._normalize_expected_outputs(
+                        target_payload["expected_outputs"]
+                    )
+                )
+            targets.append(parsed_target)
 
         raw_questions = response_json.get("questions")
         if raw_questions is None and isinstance(
@@ -904,6 +919,41 @@ class RoomSupervisorService:
             synthesis_instruction=response_json.get("synthesis_instruction"),
             failure_reason=response_json.get("failure_reason"),
         )
+
+    @staticmethod
+    def _normalize_expected_outputs(raw_expected_outputs):
+        if not isinstance(raw_expected_outputs, list):
+            return raw_expected_outputs
+
+        normalized = []
+        for output in raw_expected_outputs:
+            if isinstance(output, str):
+                description = output.strip()
+                if not description:
+                    continue
+                normalized.append(
+                    {
+                        "kind": RoomSupervisorService._expected_output_kind(
+                            description
+                        ),
+                        "required": True,
+                        "description": description,
+                    }
+                )
+                continue
+            normalized.append(output)
+        return normalized
+
+    @staticmethod
+    def _expected_output_kind(description: str) -> str:
+        kind = description
+        for separator in ("(", ":", "-", "—"):
+            before_separator = description.split(separator, 1)[0].strip()
+            if before_separator:
+                kind = before_separator
+                break
+        kind = "_".join(kind.lower().split())
+        return kind or description
 
     @staticmethod
     def _fallback_synthesis(trajectory: SupervisorTrajectory) -> str:
@@ -944,6 +994,8 @@ class RoomSupervisorService:
         self,
         system_prompt: str,
         user_prompt: str,
+        *,
+        schema: dict | None = None,
     ) -> dict:
         """Call the Supervisor LLM and return JSON response.
 
@@ -952,10 +1004,13 @@ class RoomSupervisorService:
         """
         if self._supervisor_service is None:
             raise LLMServiceNotBoundError("SupervisorLLMService is not bound")
-        return await self._supervisor_service.call_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        kwargs = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        }
+        if schema is not None:
+            kwargs["schema"] = schema
+        return await self._supervisor_service.call_json(**kwargs)
 
     async def _call_supervisor_llm_text(
         self,

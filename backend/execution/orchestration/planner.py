@@ -17,6 +17,162 @@ RawPlannerActionProvider = Callable[
     Mapping[str, Any] | PlannerAction | Awaitable[Mapping[str, Any] | PlannerAction],
 ]
 
+PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "delegate",
+                "synthesize",
+                "complete",
+                "ask_user",
+                "fail",
+                "done",
+                "clarify",
+            ],
+        },
+        "reasoning": {"type": "string"},
+        "targets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "agent_name": {"type": ["string", "null"]},
+                    "task": {"type": "string"},
+                    "context_refs": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/dispatch_ref"},
+                    },
+                    "artifact_refs": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/dispatch_ref"},
+                    },
+                    "attachment_refs": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/dispatch_ref"},
+                    },
+                    "expected_outputs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "kind": {"type": "string"},
+                                "required": {"type": "boolean"},
+                                "description": {"type": ["string", "null"]},
+                            },
+                            "required": ["kind", "required", "description"],
+                        },
+                    },
+                },
+                "required": [
+                    "agent_id",
+                    "agent_name",
+                    "task",
+                    "context_refs",
+                    "artifact_refs",
+                    "attachment_refs",
+                    "expected_outputs",
+                ],
+            },
+        },
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "prompt_type": {
+                        "type": "string",
+                        "enum": ["text", "choice", "confirmation"],
+                    },
+                    "choices": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["prompt", "prompt_type", "choices"],
+            },
+        },
+        "synthesis_instruction": {"type": ["string", "null"]},
+        "failure_reason": {"type": ["string", "null"]},
+        "completion_evidence": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "satisfied_criteria": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "referenced_fact_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "referenced_artifact_keys": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "unresolved_questions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "final_answer_intent": {"type": "string"},
+                        "confidence": {"type": "number"},
+                    },
+                    "required": [
+                        "satisfied_criteria",
+                        "referenced_fact_ids",
+                        "referenced_artifact_keys",
+                        "unresolved_questions",
+                        "final_answer_intent",
+                        "confidence",
+                    ],
+                },
+                {"type": "null"},
+            ]
+        },
+    },
+    "required": [
+        "action",
+        "reasoning",
+        "targets",
+        "questions",
+        "synthesis_instruction",
+        "failure_reason",
+        "completion_evidence",
+    ],
+    "$defs": {
+        "dispatch_ref": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["context", "artifact", "attachment"],
+                },
+                "ref_id": {"type": "string"},
+                "source_agent_message_id": {"type": ["string", "null"]},
+                "mime_type": {"type": ["string", "null"]},
+                "required": {"type": "boolean"},
+            },
+            "required": [
+                "kind",
+                "ref_id",
+                "source_agent_message_id",
+                "mime_type",
+                "required",
+            ],
+        },
+    },
+}
+
 
 class OrchestrationPlanner(Protocol):
     """Planner adapter interface for dynamic orchestration run state."""
@@ -67,7 +223,24 @@ class RoomSupervisorPlannerAdapter:
 
         system_prompt = (
             "You are a Supervisor coordinating specialist agents in a chat room. "
-            "Choose the next action using only the structured context provided."
+            "Choose the next action using only the structured context provided.\n\n"
+            "Return valid JSON only. The JSON object must include \"action\" and "
+            "\"reasoning\".\n\n"
+            "For a delegate action, \"targets\" is required and each target object "
+            "must include \"agent_id\" and a non-empty \"task\" string. The task "
+            "must be the exact instruction the target agent should execute, with "
+            "enough context to act without reading hidden planner state.\n\n"
+            "For a delegate action, each target may include context_refs, "
+            "artifact_refs, attachment_refs, and expected_outputs. Select "
+            "context_refs for ready text projections and facts, artifact_refs "
+            "for upstream agent artifacts, and attachment_refs only when the "
+            "target agent supports the raw attachment MIME. Do not include "
+            "attachment_policy; supervisor dispatch always uses "
+            "explicit_refs_only. expected_outputs must be an array of objects "
+            "with kind, required, and description; do not use plain strings.\n\n"
+            "Valid action values are delegate, synthesize, complete, ask_user, "
+            "fail, plus legacy aliases done and clarify. Include unused arrays "
+            "as [] and unused nullable fields as null."
         )
         user_prompt = json.dumps(
             context.prompt_payload(),
@@ -77,6 +250,7 @@ class RoomSupervisorPlannerAdapter:
         return await self._supervisor_service.call_planner_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            schema=PLANNER_ACTION_RESPONSE_SCHEMA,
         )
 
     def _parse_action(
