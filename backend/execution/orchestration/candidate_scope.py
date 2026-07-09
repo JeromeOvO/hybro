@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from uuid import uuid4
 
+from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
 from models.orchestration import (
     AuthorizationBasis,
     CandidateAgentSnapshot,
@@ -321,33 +322,23 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
     if agent_card is not None:
         name = name or _optional_str(getattr(agent_card, "name", None))
         role = role or _optional_str(getattr(agent_card, "role", None))
-        capability_summary = capability_summary or _optional_str(
-            getattr(agent_card, "capability_summary", None)
+        if not capability_summary:
+            card_capabilities = _skill_list(_first_attr_value(agent_card, "skills"))
+            if card_capabilities:
+                capability_summary = ", ".join(card_capabilities)
+            else:
+                capability_summary = _optional_str(
+                    getattr(agent_card, "capability_summary", None)
+                ) or _optional_str(getattr(agent_card, "description", None))
+        input_modes = sorted(agent_input_modes(agent_card))
+        output_modes = _string_list(
+            _first_attr_value(agent_card, "default_output_modes", "defaultOutputModes")
         )
-
-    input_modes = _candidate_modes_from_object(
-        raw_item,
-        agent_card,
-        "input_modes",
-        "default_input_modes",
-        "defaultInputModes",
-        default=["text"],
-    )
-    output_modes = _candidate_modes_from_object(
-        raw_item,
-        agent_card,
-        "output_modes",
-        "default_output_modes",
-        "defaultOutputModes",
-        default=[],
-    )
-    supports_file_upload = _first_attr_value(
-        raw_item, "supports_file_upload", "supportsFileUpload"
-    )
-    if supports_file_upload is None and agent_card is not None:
-        supports_file_upload = _first_attr_value(
-            agent_card, "supports_file_upload", "supportsFileUpload"
-        )
+        supports_file_upload = agent_supports_any_file(agent_card)
+    else:
+        input_modes = ["text"]
+        output_modes = []
+        supports_file_upload = False
 
     return CandidateAgentSnapshot(
         agent_id=agent_id,
@@ -397,12 +388,9 @@ def _capability_summary_from_mapping(raw_item: Mapping[str, Any]) -> str:
         return description
 
     capabilities = _first_mapping_value(raw_item, "capabilities", "skills")
-    if isinstance(capabilities, Sequence) and not isinstance(capabilities, str | bytes):
-        return ", ".join(
-            capability
-            for capability in (_optional_str(value) for value in capabilities)
-            if capability is not None
-        )
+    capability_list = _skill_list(capabilities)
+    if capability_list:
+        return ", ".join(capability_list)
     return ""
 
 
@@ -416,14 +404,9 @@ def _capability_summary_from_object(raw_item: Any) -> str:
         return description
 
     capabilities = _first_attr_value(raw_item, "capabilities", "skills")
-    if isinstance(capabilities, Sequence) and not isinstance(
-        capabilities, str | bytes
-    ):
-        return ", ".join(
-            capability
-            for capability in (_optional_str(value) for value in capabilities)
-            if capability is not None
-        )
+    capability_list = _skill_list(capabilities)
+    if capability_list:
+        return ", ".join(capability_list)
     return ""
 
 
@@ -468,6 +451,22 @@ def _string_list(value: Any) -> list[str]:
         for item in (_optional_str(item) for item in value)
         if item is not None
     ]
+
+
+def _skill_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            skill = _optional_str(item)
+        else:
+            skill = _optional_str(_first_attr_value(item, "id", "name"))
+            if skill is None and isinstance(item, Mapping):
+                skill = _optional_str(_first_mapping_value(item, "id", "name"))
+        if skill is not None:
+            result.append(skill)
+    return result
 
 
 def _positive_int(value: Any) -> int | None:
