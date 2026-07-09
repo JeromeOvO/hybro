@@ -4129,16 +4129,40 @@ class SupervisorExecutor:
         intents: list[DispatchIntent],
     ):
         for intent in intents:
-            matched_failure = related_open_failure_for_dispatch_intent(
-                state.open_failures,
-                retry_intent=intent,
-                dispatch_intents=state.dispatch_intents,
-                statuses={"open", "abandoned"},
+            related_failures = [
+                failure
+                for failure in state.open_failures
+                if failure.recoverable
+                and failure.status in {"open", "abandoned"}
+                if related_open_failure_for_dispatch_intent(
+                    [failure],
+                    retry_intent=intent,
+                    dispatch_intents=state.dispatch_intents,
+                    statuses={failure.status},
+                )
+                is not None
+            ]
+            blocking_failure = SupervisorExecutor._find_blocking_recoverable_failure(
+                related_failures
             )
-            if matched_failure is None:
-                continue
-            if matched_failure.retry_count >= matched_failure.max_retries:
-                return matched_failure
+            if blocking_failure is not None:
+                return blocking_failure
+        return None
+
+    @staticmethod
+    def _find_blocking_recoverable_failure(
+        related_failures,
+    ):
+        retryable_error_codes = {
+            failure.error_code
+            for failure in related_failures
+            if failure.status == "open" and failure.retry_count < failure.max_retries
+        }
+        if retryable_error_codes:
+            return None
+        for failure in related_failures:
+            if failure.retry_count >= failure.max_retries:
+                return failure
         return None
 
     @staticmethod

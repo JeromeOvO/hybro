@@ -26,6 +26,7 @@ from models.orchestration import (
     DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
+    OpenFailureRecord,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -856,6 +857,12 @@ async def test_run_replans_after_recoverable_agent_failure_before_complete():
             PlannedDelegateTarget(
                 agent_id="agent-1",
                 task="Underwrite the submission.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="broker-msg:artifact_id:submission",
+                    )
+                ],
                 attachment_refs=[
                     DispatchContentRef(
                         kind=DispatchRefKind.ATTACHMENT,
@@ -1111,6 +1118,101 @@ async def test_run_stops_when_recoverable_failure_retry_budget_is_exhausted():
     assert len(state.open_failures) == 1
     assert state.open_failures[0].retry_count == state.open_failures[0].max_retries
     assert state.open_failures[0].status == "abandoned"
+
+
+def test_exhausted_recoverable_failure_for_intents_does_not_block_different_error_class():
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="artifact-1",
+                    )
+                ],
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Retry underwrite with broker artifact only",
+                task_hash="hash-retry",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="artifact-1",
+                    )
+                ],
+            ),
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-a",
+                fingerprint="failure-a",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                dispatch_intent_id="intent-1",
+                error_code="agent_does_not_accept_file_type",
+                error_message="file type rejected",
+                recoverable=True,
+                retry_count=2,
+                max_retries=2,
+                status="abandoned",
+            ),
+            OpenFailureRecord(
+                failure_id="failure-b",
+                fingerprint="failure-b",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-2",
+                dispatch_intent_id="intent-2",
+                error_code="timeout",
+                error_message="agent timed out",
+                recoverable=True,
+                retry_count=0,
+                max_retries=2,
+                status="open",
+            ),
+        ],
+    )
+    retry_intent = DispatchIntent(
+        step_id="step-3",
+        step_target_id="step-3:target-1",
+        dispatch_intent_id="intent-3",
+        planned_agent_message_id="agent-msg-3",
+        agent_id="agent-1",
+        task="Retry underwrite with broker artifact only",
+        task_hash="hash-shared",
+        artifact_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ARTIFACT,
+                ref_id="artifact-1",
+            )
+        ],
+    )
+
+    blocking_failure = SupervisorExecutor._exhausted_recoverable_failure_for_intents(
+        state,
+        [retry_intent],
+    )
+
+    assert blocking_failure is None
 
 
 @pytest.mark.asyncio

@@ -531,15 +531,6 @@ def _related_open_failure_for_dispatch_intent(
         if score is not None:
             scored.append((score, open_failure))
     if not scored:
-        fallback = _unique_attachment_drop_failure(
-            open_failures,
-            retry_intent=retry_intent,
-            dispatch_intents=dispatch_intents,
-            statuses=allowed_statuses,
-            error_code=error_code,
-        )
-        if fallback is not None:
-            return fallback
         return None
     scored.sort(key=lambda item: item[0], reverse=True)
     if len(scored) > 1 and scored[0][0] == scored[1][0]:
@@ -599,41 +590,6 @@ def _retry_lineage_score(
         1 if same_task else 0,
         1 if attachment_drop else 0,
     )
-
-
-def _unique_attachment_drop_failure(
-    open_failures: list[OpenFailureRecord],
-    *,
-    retry_intent: DispatchIntent,
-    dispatch_intents: list[DispatchIntent],
-    statuses: set[str],
-    error_code: str | None,
-) -> OpenFailureRecord | None:
-    if retry_intent.attachment_refs:
-        return None
-    if not (retry_intent.artifact_refs or retry_intent.context_refs):
-        return None
-
-    intents_by_id = {intent.dispatch_intent_id: intent for intent in dispatch_intents}
-    candidates: list[OpenFailureRecord] = []
-    for open_failure in open_failures:
-        if open_failure.status not in statuses:
-            continue
-        if not open_failure.recoverable:
-            continue
-        if open_failure.agent_id != retry_intent.agent_id:
-            continue
-        if error_code is not None and open_failure.error_code != error_code:
-            continue
-        failed_intent = intents_by_id.get(open_failure.dispatch_intent_id)
-        if failed_intent is None or not failed_intent.attachment_refs:
-            continue
-        candidates.append(open_failure)
-    if len(candidates) == 1:
-        return candidates[0]
-    return None
-
-
 def _normalized_task(task: str) -> str:
     return " ".join(task.lower().split())
 
