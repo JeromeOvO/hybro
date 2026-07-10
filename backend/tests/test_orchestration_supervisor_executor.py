@@ -5625,6 +5625,75 @@ async def test_ingest_v2_results_surfaces_outcome_event_append_failures(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_ingest_v2_results_retries_missing_persisted_outcome_event(monkeypatch):
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(candidate_agent_ids=["agent-1"])
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="produce quote",
+            ),
+        )
+    ]
+    await store.create_run(state)
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="produce quote",
+        response_text="quote ready",
+        success=True,
+        status=StepStatus.SUCCESS,
+        agent_message_id="run-1:step-1:target-1:message",
+    )
+    original_append_event = store.append_event
+    append_attempts = 0
+
+    async def fail_first_outcome_event(event):
+        nonlocal append_attempts
+        if event.type == OrchestrationEventType.OUTCOME_EVALUATED:
+            append_attempts += 1
+            if append_attempts == 1:
+                raise RuntimeError("outcome event unavailable")
+        return await original_append_event(event)
+
+    monkeypatch.setattr(store, "append_event", fail_first_outcome_event)
+
+    with pytest.raises(RuntimeError, match="outcome event unavailable"):
+        await executor._ingest_v2_results(
+            await store.get_run("run-1"),
+            [result],
+            status=OrchestrationStatus.RUNNING,
+            advance_step=True,
+        )
+
+    await executor._ingest_v2_results(
+        await store.get_run("run-1"),
+        [result],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=False,
+    )
+
+    persisted = await store.get_run("run-1")
+    assert persisted is not None
+    assert len(persisted.delegation_outcomes) == 1
+    events = store._events_by_run["run-1"]
+    assert [event.type for event in events].count(
+        OrchestrationEventType.OUTCOME_EVALUATED
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_ingest_v2_results_persists_one_idempotent_outcome():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(

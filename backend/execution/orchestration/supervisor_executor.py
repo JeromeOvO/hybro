@@ -4017,14 +4017,19 @@ class SupervisorExecutor:
                             "result_fingerprint": result_fingerprint,
                         }
                     )
-                    if any(
-                        existing.outcome_id == outcome.outcome_id
-                        for existing in history.outcomes
-                    ):
-                        outcome = None
-                    else:
+                    existing_outcome = next(
+                        (
+                            existing
+                            for existing in history.outcomes
+                            if existing.outcome_id == outcome.outcome_id
+                        ),
+                        None,
+                    )
+                    if existing_outcome is None:
                         next_state.delegation_outcomes.append(outcome)
-                    raw_result_already_ingested = outcome is None
+                    else:
+                        outcome = existing_outcome
+                    raw_result_already_ingested = existing_outcome is not None
 
             current = await self.run_store.save_state(
                 next_state,
@@ -4047,6 +4052,8 @@ class SupervisorExecutor:
                     current,
                     OrchestrationEventType.OUTCOME_EVALUATED,
                     required=True,
+                    event_id=f"outcome-evaluated:{outcome.outcome_id}",
+                    ignore_duplicate_event=True,
                     payload={
                         "outcome_id": outcome.outcome_id,
                         "dispatch_intent_id": outcome.dispatch_intent_id,
@@ -4117,9 +4124,14 @@ class SupervisorExecutor:
         event_type: OrchestrationEventType,
         *,
         required: bool = False,
+        event_id: str | None = None,
+        ignore_duplicate_event: bool = False,
         payload: dict[str, Any],
     ) -> None:
         try:
+            event_kwargs: dict[str, Any] = {}
+            if event_id is not None:
+                event_kwargs["event_id"] = event_id
             await self.orchestration_run_store.append_event(
                 OrchestrationRunEvent(
                     run_id=state.run_id,
@@ -4127,8 +4139,17 @@ class SupervisorExecutor:
                     type=event_type,
                     state_version=state.state_version,
                     payload=payload,
+                    **event_kwargs,
                 )
             )
+        except OrchestrationStoreConflict as exc:
+            if (
+                ignore_duplicate_event
+                and event_id is not None
+                and str(exc) == f"event_id {event_id!r} already exists"
+            ):
+                return
+            raise
         except Exception:
             if required:
                 raise
