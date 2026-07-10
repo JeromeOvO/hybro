@@ -93,6 +93,30 @@ def test_history_derives_epoch_and_repair_usage_without_persisted_counters():
     assert chain.no_progress_repair_used_in_epoch is True
 
 
+def test_strict_obligation_reduction_advances_epoch_without_newly_satisfied_keys():
+    state = _state(
+        [
+            _outcome("o1", "i1", "partial", ["quote:limit", "quote:retention"], []),
+            _outcome("o2", "i2", "partial", ["quote:retention"], []),
+        ],
+        [_intent("i1", "completed"), _intent("i2", "completed", repair_of="i1")],
+    )
+
+    chain = OutcomeHistoryView.from_state(state).chain("agent-1", "revision-1")
+    decision = evaluate_retry(
+        state,
+        _target(repair_of="i2"),
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert chain.required_progress_epoch == 1
+    assert chain.no_progress_repair_used_in_epoch is False
+    assert decision.allowed is True
+    assert decision.code is None
+    assert decision.kind == "semantic_repair"
+
+
 def test_partial_without_obligation_reduction_consumes_epoch_repair_slot():
     state = _state(
         [
@@ -416,3 +440,38 @@ def test_validated_user_only_blocker_requires_conditional_result_attempt():
     )
 
     assert decision.code == "blocker_conditional_result_resolution_required"
+
+
+def test_validated_blocker_rejects_unrelated_conditional_result_evidence():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource", reference_id="resource-1", outcome="unavailable"
+            ),
+            BlockerResolutionAttempt(
+                kind="agent", reference_id="agent-2", outcome="failed"
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="optional-comment",
+                outcome="insufficient",
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+        eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_conditional_result_output_required"

@@ -72,8 +72,10 @@ class OutcomeHistoryView:
         previous_remaining: set[str] | None = None
         for outcome in chain_outcomes:
             remaining = set(outcome.remaining_required_obligations)
-            reduced = bool(outcome.newly_satisfied_required_obligations) and (
-                previous_remaining is None or remaining < previous_remaining
+            reduced = (
+                bool(outcome.newly_satisfied_required_obligations)
+                if previous_remaining is None
+                else remaining < previous_remaining
             )
             if reduced:
                 epoch += 1
@@ -136,10 +138,11 @@ class BlockerPolicyValidator:
             return BlockerValidationDecision(False, "blocker_alternate_agent_available")
         if conditional_result_viable:
             return BlockerValidationDecision(False, "blocker_conditional_result_viable")
-        if not attempts_by_kind["conditional_result"]:
-            return BlockerValidationDecision(
-                False, "blocker_conditional_result_resolution_required"
-            )
+        conditional_result_code = _conditional_result_validation_code(
+            blocker, required_output_keys, attempts_by_kind["conditional_result"]
+        )
+        if conditional_result_code:
+            return BlockerValidationDecision(False, conditional_result_code)
         return BlockerValidationDecision(True, "blocker_user_only_validated")
 
 
@@ -264,6 +267,19 @@ def _revision_index(
         if outcomes[index].goal_revision_fingerprint == revision:
             return index
     return -1
+
+
+def _conditional_result_validation_code(
+    blocker: BlockerRecord,
+    required_output_keys: set[str],
+    attempted_output_keys: set[str],
+) -> str | None:
+    if not attempted_output_keys:
+        return "blocker_conditional_result_resolution_required"
+    blocked_required_output_keys = set(blocker.blocked_output_keys) & required_output_keys
+    if blocked_required_output_keys - attempted_output_keys:
+        return "blocker_conditional_result_output_required"
+    return None
 
 
 def _rejected(code: str) -> RetryDecision:
