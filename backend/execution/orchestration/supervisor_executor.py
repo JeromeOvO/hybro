@@ -45,6 +45,12 @@ from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     resolve_dispatch_payload_refs,
 )
+from execution.orchestration.outcome_evaluator import (
+    DelegationOutcomeEvaluator,
+    canonical_content_fingerprint,
+    invalidate_required_evidence,
+)
+from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
     OrchestrationPlanner,
     RoomSupervisorPlannerAdapter,
@@ -148,6 +154,7 @@ class SupervisorExecutor:
         orchestration_run_store: OrchestrationRunStore | None = None,
         orchestration_planner: OrchestrationPlanner | None = None,
         orchestration_resource_provider: OrchestrationResourceProvider | None = None,
+        delegation_outcome_evaluator: DelegationOutcomeEvaluator | None = None,
     ) -> None:
         if event_publisher is None:
             raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
@@ -174,6 +181,9 @@ class SupervisorExecutor:
         )
         self.orchestration_resource_provider = (
             orchestration_resource_provider or OrchestrationResourceProvider()
+        )
+        self.delegation_outcome_evaluator = (
+            delegation_outcome_evaluator or DelegationOutcomeEvaluator()
         )
         self.result_ingestor = AgentResultIngestor()
         self._processing_status_emitter = None
@@ -3937,6 +3947,51 @@ class SupervisorExecutor:
             next_state.state_version = expected_version + 1
             next_state.updated_at = utcnow()
 
+            outcome = None
+            if matched_intent is not None and output_message_id:
+                output = next(
+                    (
+                        candidate
+                        for candidate in next_state.agent_outputs
+                        if candidate.agent_message_id == output_message_id
+                    ),
+                    None,
+                )
+                if output is not None:
+                    history = OutcomeHistoryView.from_state(current)
+                    evaluated = self.delegation_outcome_evaluator.evaluate(
+                        current,
+                        next_state,
+                        matched_intent,
+                        output,
+                        selected_resource_fingerprints=[],
+                    )
+                    outcome = evaluated.model_copy(
+                        update={
+                            "outcome_id": "outcome:"
+                            + canonical_content_fingerprint(
+                                {
+                                    "run_id": current.run_id,
+                                    "dispatch_intent_id": (
+                                        matched_intent.dispatch_intent_id
+                                    ),
+                                    "output_message_id": output_message_id,
+                                    "result_status": result.status.value,
+                                    "result_fingerprint": (
+                                        evaluated.result_fingerprint
+                                    ),
+                                }
+                            )[:20]
+                        }
+                    )
+                    if any(
+                        existing.outcome_id == outcome.outcome_id
+                        for existing in history.outcomes
+                    ):
+                        outcome = None
+                    else:
+                        next_state.delegation_outcomes.append(outcome)
+
             current = await self.run_store.save_state(
                 next_state,
                 expected_version=expected_version,
@@ -3953,8 +4008,47 @@ class SupervisorExecutor:
                         ),
                     },
                 )
+            if outcome is not None:
+                await self._append_v2_event(
+                    current,
+                    OrchestrationEventType.OUTCOME_EVALUATED,
+                    payload={
+                        "outcome_id": outcome.outcome_id,
+                        "dispatch_intent_id": outcome.dispatch_intent_id,
+                        "agent_message_id": output_message_id,
+                        "status": outcome.status,
+                    },
+                )
 
         return current
+
+    async def _invalidate_v2_required_evidence(
+        self,
+        state: OrchestrationRunState,
+        *,
+        evidence_key: str,
+        obligation_keys: list[str],
+        reason: str,
+        source_event_id: str,
+    ) -> OrchestrationRunState:
+        expected_version = state.state_version
+        updated, payload = invalidate_required_evidence(
+            state,
+            evidence_key=evidence_key,
+            obligation_keys=obligation_keys,
+            reason=reason,
+            source_event_id=source_event_id,
+        )
+        saved = await self.run_store.save_state(
+            updated,
+            expected_version=expected_version,
+        )
+        await self._append_v2_event(
+            saved,
+            OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED,
+            payload=payload,
+        )
+        return saved
 
     async def _mark_v2_terminal(
         self,
