@@ -113,33 +113,34 @@ class BlockerPolicyValidator:
             return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
         if not blocker.validated_user_only:
             return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
-        attempts_by_kind = {
-            kind: {
-                attempt.reference_id
-                for attempt in blocker.resolution_attempts
-                if attempt.kind == kind
-                and attempt.outcome in {"unavailable", "insufficient", "failed"}
-            }
-            for kind in ("resource", "agent", "conditional_result")
-        }
+        blocked_required_output_keys = (
+            set(blocker.blocked_output_keys) & required_output_keys
+        )
+        attempts_by_kind = _terminal_attempt_coverage(
+            blocker, blocked_required_output_keys
+        )
         if available_resource_refs is None:
             return BlockerValidationDecision(
                 False, "blocker_resource_resolution_context_required"
             )
         resources = available_resource_refs
-        if resources - attempts_by_kind["resource"]:
+        if _uncovered_references(
+            resources, attempts_by_kind["resource"], blocked_required_output_keys
+        ):
             return BlockerValidationDecision(False, "blocker_resource_resolution_required")
         if eligible_alternate_agent_ids is None:
             return BlockerValidationDecision(
                 False, "blocker_alternate_agent_context_required"
             )
         agents = eligible_alternate_agent_ids
-        if agents - attempts_by_kind["agent"]:
+        if _uncovered_references(
+            agents, attempts_by_kind["agent"], blocked_required_output_keys
+        ):
             return BlockerValidationDecision(False, "blocker_alternate_agent_available")
         if conditional_result_viable:
             return BlockerValidationDecision(False, "blocker_conditional_result_viable")
         conditional_result_code = _conditional_result_validation_code(
-            blocker, required_output_keys, attempts_by_kind["conditional_result"]
+            blocked_required_output_keys, attempts_by_kind["conditional_result"]
         )
         if conditional_result_code:
             return BlockerValidationDecision(False, conditional_result_code)
@@ -269,14 +270,44 @@ def _revision_index(
     return -1
 
 
-def _conditional_result_validation_code(
+def _terminal_attempt_coverage(
     blocker: BlockerRecord,
+    blocked_required_output_keys: set[str],
+) -> dict[str, dict[str, set[str]]]:
+    coverage: dict[str, dict[str, set[str]]] = {
+        kind: {} for kind in ("resource", "agent", "conditional_result")
+    }
+    for attempt in blocker.resolution_attempts:
+        if attempt.outcome not in {"unavailable", "insufficient", "failed"}:
+            continue
+        keys = set(attempt.applies_to_output_keys) & blocked_required_output_keys
+        coverage[attempt.kind].setdefault(attempt.reference_id, set()).update(keys)
+    return coverage
+
+
+def _uncovered_references(
+    references: set[str],
+    coverage_by_reference: dict[str, set[str]],
     required_output_keys: set[str],
-    attempted_output_keys: set[str],
+) -> set[str]:
+    return {
+        reference_id
+        for reference_id in references
+        if not required_output_keys <= coverage_by_reference.get(reference_id, set())
+    }
+
+
+def _conditional_result_validation_code(
+    blocked_required_output_keys: set[str],
+    coverage_by_reference: dict[str, set[str]],
 ) -> str | None:
-    if not attempted_output_keys:
+    attempted_output_keys = (
+        set().union(*coverage_by_reference.values())
+        if coverage_by_reference
+        else set()
+    )
+    if not coverage_by_reference:
         return "blocker_conditional_result_resolution_required"
-    blocked_required_output_keys = set(blocker.blocked_output_keys) & required_output_keys
     if blocked_required_output_keys - attempted_output_keys:
         return "blocker_conditional_result_output_required"
     return None

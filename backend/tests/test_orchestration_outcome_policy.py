@@ -307,13 +307,22 @@ def test_user_only_blocker_requires_exhausted_resolution_paths():
         validation_status="validated",
         resolution_attempts=[
             BlockerResolutionAttempt(
-                kind="resource", reference_id="resource-1", outcome="unavailable"
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="agent", reference_id="agent-2", outcome="failed"
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="conditional_result", reference_id="quote", outcome="insufficient"
+                kind="conditional_result",
+                reference_id="quote",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
             ),
         ],
     )
@@ -340,10 +349,16 @@ def test_validated_user_only_blocker_requires_resolver_context():
         validation_status="validated",
         resolution_attempts=[
             BlockerResolutionAttempt(
-                kind="resource", reference_id="resource-1", outcome="unavailable"
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="agent", reference_id="agent-2", outcome="failed"
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
                 kind="conditional_result", reference_id="quote", outcome="insufficient"
@@ -370,10 +385,16 @@ def test_validated_user_only_blocker_requires_alternate_agent_context():
         validation_status="validated",
         resolution_attempts=[
             BlockerResolutionAttempt(
-                kind="resource", reference_id="resource-1", outcome="unavailable"
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="agent", reference_id="agent-2", outcome="failed"
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
                 kind="conditional_result", reference_id="quote", outcome="insufficient"
@@ -423,10 +444,16 @@ def test_validated_user_only_blocker_requires_conditional_result_attempt():
         validation_status="validated",
         resolution_attempts=[
             BlockerResolutionAttempt(
-                kind="resource", reference_id="resource-1", outcome="unavailable"
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="agent", reference_id="agent-2", outcome="failed"
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
             ),
         ],
     )
@@ -453,10 +480,16 @@ def test_validated_blocker_rejects_unrelated_conditional_result_evidence():
         validation_status="validated",
         resolution_attempts=[
             BlockerResolutionAttempt(
-                kind="resource", reference_id="resource-1", outcome="unavailable"
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
-                kind="agent", reference_id="agent-2", outcome="failed"
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
             ),
             BlockerResolutionAttempt(
                 kind="conditional_result",
@@ -475,3 +508,87 @@ def test_validated_blocker_rejects_unrelated_conditional_result_evidence():
     )
 
     assert decision.code == "blocker_conditional_result_output_required"
+
+
+def test_validated_blocker_rejects_resource_attempt_for_unrelated_output():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["optional-comment"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="quote",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+        eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_resource_resolution_required"
+
+
+def test_validated_blocker_rejects_alternate_agent_attempt_for_unrelated_output():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="resource-1",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id="agent-2",
+                outcome="failed",
+                applies_to_output_keys=["optional-comment"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="quote",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+        eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_alternate_agent_available"
