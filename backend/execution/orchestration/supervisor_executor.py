@@ -3924,6 +3924,28 @@ class SupervisorExecutor:
                     fallback_intents=next_state.dispatch_intents,
                 )
             )
+            existing_output = next(
+                (
+                    output
+                    for output in current.agent_outputs
+                    if output.agent_message_id == output_message_id
+                ),
+                None,
+            )
+            raw_result_already_ingested = bool(
+                existing_output
+                and existing_output.agent_id == result.agent_id
+                and existing_output.status
+                == self._v2_result_status_to_agent_result_status(result)
+                and existing_output.text == result.response_text
+                and existing_output.error == result.error_message
+                and existing_output.a2a_task_id == result.a2a_task_id
+                and existing_output.a2a_context_id == result.a2a_context_id
+                and existing_output.status_message == result.status_message
+                and existing_output.interactive_state == result.interactive_state
+                and existing_output.requires_auth == result.requires_auth
+                and existing_output.requires_policy == result.requires_policy
+            )
             if output_message_id:
                 artifacts = await self._v2_artifacts_for_output_message(
                     current,
@@ -3996,7 +4018,7 @@ class SupervisorExecutor:
                 next_state,
                 expected_version=expected_version,
             )
-            if output_message_id:
+            if output_message_id and not raw_result_already_ingested:
                 await self._append_v2_event(
                     current,
                     OrchestrationEventType.AGENT_RESULT_INGESTED,

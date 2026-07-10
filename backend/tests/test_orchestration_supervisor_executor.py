@@ -1255,7 +1255,7 @@ def test_exhausted_recoverable_failure_for_intents_does_not_block_different_erro
 
 
 @pytest.mark.asyncio
-async def test_run_resume_ingests_paused_result_before_planning():
+async def test_push_resume_ingests_paused_result_and_persists_outcome_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1368,6 +1368,10 @@ async def test_run_resume_ingests_paused_result_before_planning():
     assert state is not None
     assert state.agent_outputs[0].text == "Webhook result"
     assert state.dispatch_intents[0].status == StepStatus.SUCCESS.value
+    assert len(state.delegation_outcomes) == 2
+    assert [event.type for event in store._events_by_run["message-1"]].count(
+        OrchestrationEventType.OUTCOME_EVALUATED
+    ) == 2
 
 
 @pytest.mark.asyncio
@@ -4520,7 +4524,7 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
 
 
 @pytest.mark.asyncio
-async def test_sync_v2_resumed_trajectory_mixed_terminal_and_awaiting_input_persists_both():
+async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_results():
     user_message = _state_unification_user_message(message_id="message-1")
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
@@ -4630,6 +4634,10 @@ async def test_sync_v2_resumed_trajectory_mixed_terminal_and_awaiting_input_pers
         "message-1:step-1:target-1:message": "completed",
         "message-1:step-1:target-2:message": StepStatus.AWAITING_INPUT.value,
     }
+    assert len(persisted_state.delegation_outcomes) == 2
+    assert [event.type for event in store._events_by_run["message-1"]].count(
+        OrchestrationEventType.OUTCOME_EVALUATED
+    ) == 2
 
 
 @pytest.mark.asyncio
@@ -4979,7 +4987,7 @@ async def test_recover_v2_inflight_dispatch_rehydrates_awaiting_input_output_to_
 
 
 @pytest.mark.asyncio
-async def test_recover_v2_inflight_dispatch_rehydrates_interactive_message_without_output_record():
+async def test_inflight_recovery_persists_outcome_for_interactive_message_without_output_record():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -5074,6 +5082,10 @@ async def test_recover_v2_inflight_dispatch_rehydrates_interactive_message_witho
     assert recovered_output.a2a_task_id == "task-1"
     assert recovered_output.a2a_context_id == "ctx-1"
     assert recovered_output.status == StepStatus.AWAITING_INPUT.value
+    assert len(recovered_state.delegation_outcomes) == 1
+    assert [event.type for event in store._events_by_run["message-1"]].count(
+        OrchestrationEventType.OUTCOME_EVALUATED
+    ) == 1
 
 
 @pytest.mark.asyncio
@@ -5657,77 +5669,11 @@ async def test_ingest_v2_results_persists_one_idempotent_outcome():
     assert saved.delegation_outcomes[0].dispatch_intent_id.endswith(":intent")
     events = store._events_by_run["run-1"]
     assert [event.type for event in events].count(
+        OrchestrationEventType.AGENT_RESULT_INGESTED
+    ) == 1
+    assert [event.type for event in events].count(
         OrchestrationEventType.OUTCOME_EVALUATED
     ) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path_label, statuses",
-    [
-        ("normal_dispatch", [StepStatus.SUCCESS]),
-        ("inflight_recovery", [StepStatus.FAILED]),
-        ("push_resume", [StepStatus.SUCCESS]),
-        ("agent_hitl_resume", [StepStatus.AWAITING_INPUT]),
-        ("planner_continuation", [StepStatus.SUCCESS]),
-        ("process_recovery", [StepStatus.FAILED, StepStatus.SUCCESS]),
-    ],
-)
-async def test_ingest_v2_results_persists_outcomes_for_recovery_paths(
-    path_label, statuses
-):
-    store = InMemoryOrchestrationRunStore()
-    executor = _executor(
-        store=store,
-        planner=RecordingPlanner(),
-        user_message=_state_unification_user_message(message_id="msg-1"),
-    )
-    state = _run_state(candidate_agent_ids=["agent-1"])
-    state.dispatch_intents = [
-        executor._v2_dispatch_intent(
-            run_id="run-1",
-            step_number=index,
-            target_index=1,
-            target=DelegateTarget(
-                agent_id="agent-1",
-                agent_name="Agent One",
-                task=f"{path_label} result {index}",
-            ),
-        )
-        for index in range(1, len(statuses) + 1)
-    ]
-    await store.create_run(state)
-    ingested = [
-        StepResult(
-            step_number=index,
-            agent_id="agent-1",
-            agent_name="Agent One",
-            task=f"{path_label} result {index}",
-            response_text=f"{path_label} response {index}",
-            success=status == StepStatus.SUCCESS,
-            status=status,
-            agent_message_id=f"run-1:step-{index}:target-1:message",
-        )
-        for index, status in enumerate(statuses, start=1)
-    ]
-
-    await executor._ingest_v2_results(
-        await store.get_run("run-1"),
-        ingested,
-        status=OrchestrationStatus.RUNNING,
-        advance_step=True,
-    )
-
-    saved = await store.get_run("run-1")
-    assert saved is not None
-    ingested_message_ids = [result.agent_message_id for result in ingested]
-    assert len(saved.delegation_outcomes) == len(set(ingested_message_ids))
-    events = [
-        event
-        for event in store._events_by_run["run-1"]
-        if event.type == OrchestrationEventType.OUTCOME_EVALUATED
-    ]
-    assert len(events) == len({outcome.outcome_id for outcome in saved.delegation_outcomes})
 
 
 @pytest.mark.asyncio
