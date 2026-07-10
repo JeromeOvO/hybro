@@ -120,14 +120,26 @@ class BlockerPolicyValidator:
             }
             for kind in ("resource", "agent", "conditional_result")
         }
-        resources = available_resource_refs or set()
+        if available_resource_refs is None:
+            return BlockerValidationDecision(
+                False, "blocker_resource_resolution_context_required"
+            )
+        resources = available_resource_refs
         if resources - attempts_by_kind["resource"]:
             return BlockerValidationDecision(False, "blocker_resource_resolution_required")
-        agents = eligible_alternate_agent_ids or set()
+        if eligible_alternate_agent_ids is None:
+            return BlockerValidationDecision(
+                False, "blocker_alternate_agent_context_required"
+            )
+        agents = eligible_alternate_agent_ids
         if agents - attempts_by_kind["agent"]:
             return BlockerValidationDecision(False, "blocker_alternate_agent_available")
         if conditional_result_viable:
             return BlockerValidationDecision(False, "blocker_conditional_result_viable")
+        if not attempts_by_kind["conditional_result"]:
+            return BlockerValidationDecision(
+                False, "blocker_conditional_result_resolution_required"
+            )
         return BlockerValidationDecision(True, "blocker_user_only_validated")
 
 

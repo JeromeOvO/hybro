@@ -297,8 +297,122 @@ def test_user_only_blocker_requires_exhausted_resolution_paths():
     decision = BlockerPolicyValidator().validate(
         blocker,
         required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
         eligible_alternate_agent_ids={"agent-2"},
         conditional_result_viable=False,
     )
 
     assert decision.code == "blocker_user_only_validated"
+
+
+def test_validated_user_only_blocker_requires_resolver_context():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource", reference_id="resource-1", outcome="unavailable"
+            ),
+            BlockerResolutionAttempt(
+                kind="agent", reference_id="agent-2", outcome="failed"
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result", reference_id="quote", outcome="insufficient"
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+    )
+
+    assert decision.code == "blocker_resource_resolution_context_required"
+
+
+def test_validated_user_only_blocker_requires_alternate_agent_context():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource", reference_id="resource-1", outcome="unavailable"
+            ),
+            BlockerResolutionAttempt(
+                kind="agent", reference_id="agent-2", outcome="failed"
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result", reference_id="quote", outcome="insufficient"
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+    )
+
+    assert decision.code == "blocker_alternate_agent_context_required"
+
+
+def test_validated_user_only_blocker_requires_terminal_resolution_attempts():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+        eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_resource_resolution_required"
+
+
+def test_validated_user_only_blocker_requires_conditional_result_attempt():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource", reference_id="resource-1", outcome="unavailable"
+            ),
+            BlockerResolutionAttempt(
+                kind="agent", reference_id="agent-2", outcome="failed"
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"resource-1"},
+        eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_conditional_result_resolution_required"
