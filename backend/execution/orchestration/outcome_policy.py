@@ -232,7 +232,7 @@ def _evaluate_operational_retry(
 ) -> RetryDecision:
     failed_intent = history.intents_by_id.get(latest.dispatch_intent_id)
     if failed_intent is None:
-        return _rejected("recovery_retry_unavailable")
+        return _rejected_operational("recovery_retry_unavailable")
     retry_intent = DispatchIntent(
         step_id="outcome-policy-retry",
         step_target_id="outcome-policy-retry:target",
@@ -255,9 +255,9 @@ def _evaluate_operational_retry(
         dispatch_intents=[*run_state.dispatch_intents, retry_intent],
     )
     if failure is None:
-        return _rejected("recovery_retry_unavailable")
+        return _rejected_operational("recovery_retry_unavailable")
     if failure.retry_count >= failure.max_retries:
-        return _rejected("recovery_retry_exhausted")
+        return _rejected_operational("recovery_retry_exhausted")
     return RetryDecision(True, "operational_retry")
 
 
@@ -315,3 +315,7 @@ def _conditional_result_validation_code(
 
 def _rejected(code: str) -> RetryDecision:
     return RetryDecision(False, "semantic_repair", code)
+
+
+def _rejected_operational(code: str) -> RetryDecision:
+    return RetryDecision(False, "operational_retry", code)

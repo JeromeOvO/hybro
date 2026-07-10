@@ -195,7 +195,9 @@ def test_failed_retry_is_blocked_when_budget_exhausted():
         goal_revision_fingerprint="revision-1",
     )
 
+    assert decision.allowed is False
     assert decision.code == "recovery_retry_exhausted"
+    assert decision.kind == "operational_retry"
 
 
 def test_duplicate_target_pair_is_rejected_inside_one_action():
