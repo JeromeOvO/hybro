@@ -5564,7 +5564,7 @@ async def test_run_agent_awaiting_input_preserves_request_reference_when_cleanup
 
 
 @pytest.mark.asyncio
-async def test_ingest_v2_results_ignores_event_append_failures(monkeypatch):
+async def test_ingest_v2_results_surfaces_outcome_event_append_failures(monkeypatch):
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
         store=store,
@@ -5590,27 +5590,34 @@ async def test_ingest_v2_results_ignores_event_append_failures(monkeypatch):
     ]
     await store.create_run(state)
 
-    monkeypatch.setattr(store, "append_event", AsyncMock(side_effect=RuntimeError("oops")))
+    original_append_event = store.append_event
 
-    updated = await executor._ingest_v2_results(
-        await store.get_run("run-1"),
-        [
-            StepResult(
-                step_number=1,
-                agent_id="agent-1",
-                agent_name="Agent One",
-                task="one",
-                response_text="done",
-                success=True,
-                status=StepStatus.SUCCESS,
-                agent_message_id="run-1:step-1:target-1:message",
-            )
-        ],
-        status=OrchestrationStatus.RUNNING,
-        advance_step=True,
-    )
+    async def fail_outcome_event(event):
+        if event.type == OrchestrationEventType.OUTCOME_EVALUATED:
+            raise RuntimeError("oops")
+        return await original_append_event(event)
 
-    assert updated.state_version == 1
+    monkeypatch.setattr(store, "append_event", fail_outcome_event)
+
+    with pytest.raises(RuntimeError, match="oops"):
+        await executor._ingest_v2_results(
+            await store.get_run("run-1"),
+            [
+                StepResult(
+                    step_number=1,
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="one",
+                    response_text="done",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id="run-1:step-1:target-1:message",
+                )
+            ],
+            status=OrchestrationStatus.RUNNING,
+            advance_step=True,
+        )
+
     persisted = await store.get_run("run-1")
     assert persisted is not None
     assert persisted.state_version == 1
@@ -5704,6 +5711,137 @@ async def test_invalidate_v2_required_evidence_persists_exact_event_payload():
         "source_event_id": "event-1",
     }
     assert saved.decision_log[-1] == event.payload
+
+
+@pytest.mark.asyncio
+async def test_invalidate_v2_required_evidence_surfaces_event_append_failures(monkeypatch):
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    await store.create_run(_run_state())
+    monkeypatch.setattr(store, "append_event", AsyncMock(side_effect=RuntimeError("oops")))
+
+    with pytest.raises(RuntimeError, match="oops"):
+        await executor._invalidate_v2_required_evidence(
+            await store.get_run("run-1"),
+            evidence_key="evidence-1",
+            obligation_keys=["quote:$present"],
+            reason="source_retracted",
+            source_event_id="event-1",
+        )
+
+    persisted = await store.get_run("run-1")
+    assert persisted is not None
+    assert persisted.decision_log[-1]["code"] == "required_evidence_invalidated"
+
+
+@pytest.mark.asyncio
+async def test_ingest_v2_results_distinguishes_changed_error_code():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(candidate_agent_ids=["agent-1"])
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="one"),
+        )
+    ]
+    await store.create_run(state)
+    base = dict(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="one",
+        response_text="failed",
+        success=False,
+        status=StepStatus.FAILED,
+        error_message="Agent failed",
+        agent_message_id="run-1:step-1:target-1:message",
+    )
+
+    await executor._ingest_v2_results(
+        await store.get_run("run-1"),
+        [StepResult(**base, error_code="upstream_timeout")],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+    await executor._ingest_v2_results(
+        await store.get_run("run-1"),
+        [StepResult(**base, error_code="invalid_request")],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=False,
+    )
+
+    saved = await store.get_run("run-1")
+    assert saved is not None
+    assert len(saved.delegation_outcomes) == 2
+    assert len({outcome.outcome_id for outcome in saved.delegation_outcomes}) == 2
+    events = store._events_by_run["run-1"]
+    assert [event.type for event in events].count(
+        OrchestrationEventType.AGENT_RESULT_INGESTED
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_v2_results_distinguishes_changed_artifact_content():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(candidate_agent_ids=["agent-1"])
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="one"),
+        )
+    ]
+    await store.create_run(state)
+    artifacts = iter(
+        [
+            [{"artifact_id": "quote", "content": {"premium": 100}}],
+            [{"artifact_id": "quote", "content": {"premium": 125}}],
+        ]
+    )
+    executor._v2_artifacts_for_output_message = AsyncMock(side_effect=artifacts)
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="one",
+        response_text="quote ready",
+        success=True,
+        status=StepStatus.SUCCESS,
+        agent_message_id="run-1:step-1:target-1:message",
+    )
+
+    await executor._ingest_v2_results(
+        await store.get_run("run-1"), [result], status=OrchestrationStatus.RUNNING, advance_step=True
+    )
+    await executor._ingest_v2_results(
+        await store.get_run("run-1"), [result], status=OrchestrationStatus.RUNNING, advance_step=False
+    )
+
+    saved = await store.get_run("run-1")
+    assert saved is not None
+    assert len(saved.delegation_outcomes) == 2
+    assert len({outcome.outcome_id for outcome in saved.delegation_outcomes}) == 2
+    events = store._events_by_run["run-1"]
+    assert [event.type for event in events].count(
+        OrchestrationEventType.AGENT_RESULT_INGESTED
+    ) == 2
 
 
 @pytest.mark.asyncio

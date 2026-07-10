@@ -3876,6 +3876,32 @@ class SupervisorExecutor:
             return "completed"
         return result.status.value
 
+    @classmethod
+    def _v2_result_fingerprint(
+        cls,
+        result: StepResult,
+        *,
+        output_message_id: str,
+        artifacts: list[dict[str, Any]],
+    ) -> str:
+        return canonical_content_fingerprint(
+            {
+                "agent_message_id": output_message_id,
+                "agent_id": result.agent_id,
+                "status": cls._v2_result_status_to_agent_result_status(result),
+                "text": result.response_text,
+                "error": result.error_message,
+                "error_code": result.error_code,
+                "artifacts": artifacts,
+                "a2a_task_id": result.a2a_task_id,
+                "a2a_context_id": result.a2a_context_id,
+                "status_message": result.status_message,
+                "interactive_state": result.interactive_state,
+                "requires_auth": result.requires_auth,
+                "requires_policy": result.requires_policy,
+            }
+        )
+
     async def _ingest_v2_results(
         self,
         state: OrchestrationRunState,
@@ -3924,32 +3950,17 @@ class SupervisorExecutor:
                     fallback_intents=next_state.dispatch_intents,
                 )
             )
-            existing_output = next(
-                (
-                    output
-                    for output in current.agent_outputs
-                    if output.agent_message_id == output_message_id
-                ),
-                None,
-            )
-            raw_result_already_ingested = bool(
-                existing_output
-                and existing_output.agent_id == result.agent_id
-                and existing_output.status
-                == self._v2_result_status_to_agent_result_status(result)
-                and existing_output.text == result.response_text
-                and existing_output.error == result.error_message
-                and existing_output.a2a_task_id == result.a2a_task_id
-                and existing_output.a2a_context_id == result.a2a_context_id
-                and existing_output.status_message == result.status_message
-                and existing_output.interactive_state == result.interactive_state
-                and existing_output.requires_auth == result.requires_auth
-                and existing_output.requires_policy == result.requires_policy
-            )
+            artifacts: list[dict[str, Any]] = []
+            result_fingerprint: str | None = None
             if output_message_id:
                 artifacts = await self._v2_artifacts_for_output_message(
                     current,
                     output_message_id,
+                )
+                result_fingerprint = self._v2_result_fingerprint(
+                    result,
+                    output_message_id=output_message_id,
+                    artifacts=artifacts,
                 )
                 next_state = self.result_ingestor.ingest(
                     next_state,
@@ -3970,6 +3981,7 @@ class SupervisorExecutor:
             next_state.updated_at = utcnow()
 
             outcome = None
+            raw_result_already_ingested = False
             if matched_intent is not None and output_message_id:
                 output = next(
                     (
@@ -3999,11 +4011,10 @@ class SupervisorExecutor:
                                     ),
                                     "output_message_id": output_message_id,
                                     "result_status": result.status.value,
-                                    "result_fingerprint": (
-                                        evaluated.result_fingerprint
-                                    ),
+                                    "result_fingerprint": result_fingerprint,
                                 }
-                            )[:20]
+                            )[:20],
+                            "result_fingerprint": result_fingerprint,
                         }
                     )
                     if any(
@@ -4013,6 +4024,7 @@ class SupervisorExecutor:
                         outcome = None
                     else:
                         next_state.delegation_outcomes.append(outcome)
+                    raw_result_already_ingested = outcome is None
 
             current = await self.run_store.save_state(
                 next_state,
@@ -4034,6 +4046,7 @@ class SupervisorExecutor:
                 await self._append_v2_event(
                     current,
                     OrchestrationEventType.OUTCOME_EVALUATED,
+                    required=True,
                     payload={
                         "outcome_id": outcome.outcome_id,
                         "dispatch_intent_id": outcome.dispatch_intent_id,
@@ -4061,6 +4074,8 @@ class SupervisorExecutor:
             reason=reason,
             source_event_id=source_event_id,
         )
+        updated.state_version = expected_version + 1
+        updated.updated_at = utcnow()
         saved = await self.run_store.save_state(
             updated,
             expected_version=expected_version,
@@ -4068,6 +4083,7 @@ class SupervisorExecutor:
         await self._append_v2_event(
             saved,
             OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED,
+            required=True,
             payload=payload,
         )
         return saved
@@ -4100,6 +4116,7 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         event_type: OrchestrationEventType,
         *,
+        required: bool = False,
         payload: dict[str, Any],
     ) -> None:
         try:
@@ -4113,6 +4130,8 @@ class SupervisorExecutor:
                 )
             )
         except Exception:
+            if required:
+                raise
             logger.debug("Failed to append v2 orchestration event", exc_info=True)
 
     @staticmethod
