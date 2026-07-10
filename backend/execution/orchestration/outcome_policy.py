@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Literal
+
+from execution.orchestration.result_ingestor import (
+    related_open_failure_for_dispatch_intent,
+)
+from models.orchestration import (
+    BlockerRecord,
+    DelegationOutcomeRecord,
+    DispatchIntent,
+    OrchestrationRunState,
+    PlannedDelegateTarget,
+)
+
+
+@dataclass(frozen=True)
+class AttemptChainView:
+    agent_id: str
+    goal_revision_fingerprint: str
+    same_agent_attempt_number: int
+    required_progress_epoch: int
+    no_progress_repair_used_in_epoch: bool
+    latest_outcome: DelegationOutcomeRecord | None
+
+
+@dataclass(frozen=True)
+class RetryDecision:
+    allowed: bool
+    kind: Literal["initial", "semantic_repair", "operational_retry", "alternate_agent"]
+    code: str | None = None
+
+
+@dataclass(frozen=True)
+class BlockerValidationDecision:
+    valid: bool
+    code: str
+
+
+@dataclass(frozen=True)
+class OutcomeHistoryView:
+    outcomes: tuple[DelegationOutcomeRecord, ...]
+    intents_by_id: MappingProxyType
+
+    @classmethod
+    def from_state(cls, state: OrchestrationRunState) -> OutcomeHistoryView:
+        return cls(
+            outcomes=tuple(
+                outcome.model_copy(deep=True) for outcome in state.delegation_outcomes
+            ),
+            intents_by_id=MappingProxyType(
+                {
+                    intent.dispatch_intent_id: intent.model_copy(deep=True)
+                    for intent in state.dispatch_intents
+                }
+            ),
+        )
+
+    def chain(
+        self, agent_id: str, goal_revision_fingerprint: str
+    ) -> AttemptChainView:
+        chain_outcomes = [
+            outcome
+            for outcome in self.outcomes
+            if outcome.agent_id == agent_id
+            and outcome.goal_revision_fingerprint == goal_revision_fingerprint
+        ]
+        epoch = 0
+        repair_used = False
+        previous_remaining: set[str] | None = None
+        for outcome in chain_outcomes:
+            remaining = set(outcome.remaining_required_obligations)
+            reduced = bool(outcome.newly_satisfied_required_obligations) and (
+                previous_remaining is None or remaining < previous_remaining
+            )
+            if reduced:
+                epoch += 1
+                repair_used = False
+            elif self._is_repair(outcome.dispatch_intent_id):
+                repair_used = True
+            previous_remaining = remaining
+        return AttemptChainView(
+            agent_id=agent_id,
+            goal_revision_fingerprint=goal_revision_fingerprint,
+            same_agent_attempt_number=len(chain_outcomes),
+            required_progress_epoch=epoch,
+            no_progress_repair_used_in_epoch=repair_used,
+            latest_outcome=chain_outcomes[-1] if chain_outcomes else None,
+        )
+
+    def _is_repair(self, dispatch_intent_id: str) -> bool:
+        intent = self.intents_by_id.get(dispatch_intent_id)
+        return bool(intent and intent.repair_of_intent_id)
+
+
+class BlockerPolicyValidator:
+    def validate(
+        self,
+        blocker: BlockerRecord,
+        *,
+        required_output_keys: set[str],
+        available_resource_refs: set[str] | None = None,
+        eligible_alternate_agent_ids: set[str] | None = None,
+        conditional_result_viable: bool = False,
+    ) -> BlockerValidationDecision:
+        if not set(blocker.blocked_output_keys) & required_output_keys:
+            return BlockerValidationDecision(False, "blocker_not_required_output")
+        if not blocker.claimed_user_only or blocker.validation_status != "validated":
+            return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
+        if not blocker.validated_user_only:
+            return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
+        attempts_by_kind = {
+            kind: {
+                attempt.reference_id
+                for attempt in blocker.resolution_attempts
+                if attempt.kind == kind
+                and attempt.outcome in {"unavailable", "insufficient", "failed"}
+            }
+            for kind in ("resource", "agent", "conditional_result")
+        }
+        resources = available_resource_refs or set()
+        if resources - attempts_by_kind["resource"]:
+            return BlockerValidationDecision(False, "blocker_resource_resolution_required")
+        agents = eligible_alternate_agent_ids or set()
+        if agents - attempts_by_kind["agent"]:
+            return BlockerValidationDecision(False, "blocker_alternate_agent_available")
+        if conditional_result_viable:
+            return BlockerValidationDecision(False, "blocker_conditional_result_viable")
+        return BlockerValidationDecision(True, "blocker_user_only_validated")
+
+
+def duplicate_delegate_target_code(
+    targets: list[PlannedDelegateTarget], goal_family_fingerprints: list[str]
+) -> str | None:
+    pairs = zip(targets, goal_family_fingerprints, strict=True)
+    seen: set[tuple[str, str]] = set()
+    for target, goal_family_fingerprint in pairs:
+        pair = (target.agent_id, goal_family_fingerprint)
+        if pair in seen:
+            return "duplicate_delegate_goal_target"
+        seen.add(pair)
+    return None
+
+
+def evaluate_retry(
+    run_state: OrchestrationRunState,
+    target: PlannedDelegateTarget,
+    goal_family_fingerprint: str,
+    goal_revision_fingerprint: str,
+) -> RetryDecision:
+    history = OutcomeHistoryView.from_state(run_state)
+    revision_outcomes = [
+        outcome
+        for outcome in history.outcomes
+        if outcome.goal_family_fingerprint == goal_family_fingerprint
+        and outcome.goal_revision_fingerprint == goal_revision_fingerprint
+    ]
+    if any(outcome.status == "fulfilled" for outcome in revision_outcomes):
+        return _rejected("delegate_goal_already_fulfilled")
+    chain = history.chain(target.agent_id, goal_revision_fingerprint)
+    latest = chain.latest_outcome
+    if latest is None:
+        kind: Literal["initial", "alternate_agent"] = (
+            "alternate_agent" if revision_outcomes else "initial"
+        )
+        return RetryDecision(True, kind)
+    if latest.status == "failed":
+        return _evaluate_operational_retry(run_state, target, latest, history)
+    if target.repair_of_intent_id != latest.dispatch_intent_id:
+        return _rejected("delegate_repair_lineage_required")
+    if chain.no_progress_repair_used_in_epoch:
+        return _rejected("delegate_no_progress_repeat")
+    return RetryDecision(True, "semantic_repair")
+
+
+def active_completion_scope(
+    run_state: OrchestrationRunState,
+    referenced_disposition_event_ids: set[str],
+) -> set[tuple[str, str]]:
+    dispositions_by_id = {
+        disposition.event_id: disposition
+        for disposition in run_state.goal_family_dispositions
+    }
+    unknown_event_ids = referenced_disposition_event_ids - dispositions_by_id.keys()
+    if unknown_event_ids:
+        raise ValueError(
+            "Unknown goal family disposition event IDs: "
+            + ", ".join(sorted(unknown_event_ids))
+        )
+    family_outcomes: dict[str, list[DelegationOutcomeRecord]] = {}
+    for outcome in run_state.delegation_outcomes:
+        family_outcomes.setdefault(outcome.goal_family_fingerprint, []).append(outcome)
+    active: set[tuple[str, str]] = set()
+    for family, outcomes in family_outcomes.items():
+        latest = outcomes[-1]
+        latest_index = len(outcomes) - 1
+        disposed_through_latest = any(
+            disposition.goal_family_fingerprint == family
+            and _revision_index(outcomes, disposition.through_goal_revision_fingerprint)
+            >= latest_index
+            for event_id, disposition in dispositions_by_id.items()
+            if event_id in referenced_disposition_event_ids
+        )
+        if not disposed_through_latest:
+            active.add((family, latest.goal_revision_fingerprint))
+    return active
+
+
+def _evaluate_operational_retry(
+    run_state: OrchestrationRunState,
+    target: PlannedDelegateTarget,
+    latest: DelegationOutcomeRecord,
+    history: OutcomeHistoryView,
+) -> RetryDecision:
+    failed_intent = history.intents_by_id.get(latest.dispatch_intent_id)
+    if failed_intent is None:
+        return _rejected("recovery_retry_unavailable")
+    retry_intent = DispatchIntent(
+        step_id="outcome-policy-retry",
+        step_target_id="outcome-policy-retry:target",
+        dispatch_intent_id="outcome-policy-retry",
+        planned_agent_message_id="outcome-policy-retry:message",
+        agent_id=target.agent_id,
+        task=target.task,
+        task_hash=failed_intent.task_hash,
+        context_refs=[
+            {
+                "kind": "context",
+                "ref_id": failed_intent.planned_agent_message_id,
+                "source_agent_message_id": failed_intent.planned_agent_message_id,
+            }
+        ],
+    )
+    failure = related_open_failure_for_dispatch_intent(
+        run_state.open_failures,
+        retry_intent=retry_intent,
+        dispatch_intents=[*run_state.dispatch_intents, retry_intent],
+    )
+    if failure is None:
+        return _rejected("recovery_retry_unavailable")
+    if failure.retry_count >= failure.max_retries:
+        return _rejected("recovery_retry_exhausted")
+    return RetryDecision(True, "operational_retry")
+
+
+def _revision_index(
+    outcomes: list[DelegationOutcomeRecord], revision: str
+) -> int:
+    for index in range(len(outcomes) - 1, -1, -1):
+        if outcomes[index].goal_revision_fingerprint == revision:
+            return index
+    return -1
+
+
+def _rejected(code: str) -> RetryDecision:
+    return RetryDecision(False, "semantic_repair", code)
