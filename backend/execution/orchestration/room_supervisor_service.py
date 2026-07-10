@@ -871,9 +871,26 @@ class RoomSupervisorService:
                 "agent_id": agent_id,
                 "agent_name": target.get("agent_name"),
                 "task": task,
+                "repair_of_intent_id": target.get("repair_of_intent_id"),
             }
             target_payload = dict(target)
             target_payload.setdefault("attachment_policy", "explicit_refs_only")
+            raw_expected_outputs = target_payload.get("expected_outputs")
+            if isinstance(raw_expected_outputs, list):
+                target_payload["expected_outputs"] = [
+                    {
+                        "output_key": output.get("output_key"),
+                        "kind": output.get("kind"),
+                        "required": output.get("required", True),
+                        "description": output.get("description"),
+                        "artifact_name": output.get("artifact_name"),
+                        "required_fields": output.get("required_fields", []),
+                        "allow_partial": output.get("allow_partial", True),
+                    }
+                    if isinstance(output, dict)
+                    else output
+                    for output in raw_expected_outputs
+                ]
             for field_name in (
                 "context_refs",
                 "artifact_refs",
@@ -904,7 +921,15 @@ class RoomSupervisorService:
         for question in raw_questions:
             if not isinstance(question, dict):
                 raise ValueError("planner action question must be an object")
-            questions.append(question)
+            questions.append(
+                {
+                    "prompt": question.get("prompt"),
+                    "prompt_type": question.get("prompt_type", "text"),
+                    "choices": question.get("choices"),
+                    "reason": question.get("reason", "initial_clarification"),
+                    "blocker_keys": question.get("blocker_keys", []),
+                }
+            )
 
         completion_evidence = response_json.get("completion_evidence")
         if (

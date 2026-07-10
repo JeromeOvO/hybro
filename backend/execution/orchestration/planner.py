@@ -70,13 +70,29 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                             "type": "object",
                             "additionalProperties": False,
                             "properties": {
+                                "output_key": {"type": ["string", "null"]},
                                 "kind": {"type": "string"},
                                 "required": {"type": "boolean"},
                                 "description": {"type": ["string", "null"]},
+                                "artifact_name": {"type": ["string", "null"]},
+                                "required_fields": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "allow_partial": {"type": "boolean"},
                             },
-                            "required": ["kind", "required", "description"],
+                            "required": [
+                                "output_key",
+                                "kind",
+                                "required",
+                                "description",
+                                "artifact_name",
+                                "required_fields",
+                                "allow_partial",
+                            ],
                         },
                     },
+                    "repair_of_intent_id": {"type": ["string", "null"]},
                 },
                 "required": [
                     "agent_id",
@@ -89,6 +105,7 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "artifact_refs",
                     "attachment_refs",
                     "expected_outputs",
+                    "repair_of_intent_id",
                 ],
             },
         },
@@ -107,8 +124,22 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         "type": ["array", "null"],
                         "items": {"type": "string"},
                     },
+                    "reason": {
+                        "type": "string",
+                        "enum": ["initial_clarification", "blocker"],
+                    },
+                    "blocker_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
-                "required": ["prompt", "prompt_type", "choices"],
+                "required": [
+                    "prompt",
+                    "prompt_type",
+                    "choices",
+                    "reason",
+                    "blocker_keys",
+                ],
             },
         },
         "synthesis_instruction": {"type": ["string", "null"]},
@@ -267,6 +298,12 @@ class RoomSupervisorPlannerAdapter:
             "and leave depends_on empty because all targets must be independent. "
             "Use required_resource_refs to declare resource IDs that must resolve "
             "before the target is dispatched.\n\n"
+            "Unknown values are non-blocking by default. Continue with explicit assumptions\n"
+            "and conditional results when useful. Use repair_of_intent_id only for semantic\n"
+            "partial/no-progress repair. Failed operational retries use open failure recovery\n"
+            "lineage and leave repair_of_intent_id null. Post-dispatch ask_user questions must\n"
+            "reference validated blocker_keys. Do not delegate the same output contract to the\n"
+            "same agent twice in one action.\n\n"
             "Valid action values are delegate, synthesize, complete, ask_user, "
             "fail, plus legacy aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."
