@@ -1345,13 +1345,14 @@ def test_completion_accepts_referenced_abandoned_family_without_output_waivers()
     )
 
 
-def test_completion_accepts_abandoned_active_dispatch():
+@pytest.mark.parametrize("status", ["abandoned", "expired"])
+def test_completion_accepts_terminal_active_dispatch(status):
     state = _complete_run_state(
         active_dispatches=[
             ActiveDispatchRef(
                 agent_message_id="agent-msg-2",
                 agent_id="agent-1",
-                status="abandoned",
+                status=status,
             )
         ]
     )
