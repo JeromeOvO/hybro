@@ -503,6 +503,80 @@ def test_post_dispatch_empty_question_list_requires_blocker_keys():
     assert _validation_code(action, state) == "ask_user_blocker_keys_required"
 
 
+def test_post_dispatch_whitespace_only_question_requires_normalized_prompt():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt=" \t ",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+
+    assert _validation_code(action, state) == "ask_user_blocker_keys_required"
+
+
+def test_post_dispatch_rejects_duplicate_question_in_same_action():
+    quote_blocker = _validated_quote_blocker("quote-input")
+    terms_blocker = _validated_quote_blocker("quote-terms")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[quote_blocker, terms_blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing required value",
+                reason="blocker",
+                blocker_keys=[quote_blocker.key],
+            ),
+            PlannerQuestion(
+                prompt="  Provide the missing required value  ",
+                reason="blocker",
+                blocker_keys=[terms_blocker.key],
+            ),
+        ],
+    )
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
+def test_post_dispatch_rejects_duplicate_blocker_in_same_action():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing required value",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            ),
+            PlannerQuestion(
+                prompt="Which carrier should receive the quote request?",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            ),
+        ],
+    )
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
 def test_post_dispatch_question_rejects_blocker_already_pending_under_new_prompt():
     blocker = _validated_quote_blocker("quote-input")
     state = _guardrail_state(

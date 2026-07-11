@@ -279,13 +279,28 @@ class PlannerActionValidator:
             if output.required
         }
         blockers_by_key = {blocker.key: blocker for blocker in run_state.blockers}
+        seen_prompts: set[str] = set()
+        seen_blocker_keys: set[str] = set()
         for question in action.questions:
-            if question.reason != "blocker" or not question.blocker_keys:
+            prompt = PlannerActionValidator._normalize_question_prompt(question.prompt)
+            blocker_keys = set(question.blocker_keys)
+            if (
+                not prompt
+                or question.reason != "blocker"
+                or not question.blocker_keys
+            ):
                 raise PlannerActionValidationError(
                     "post-dispatch ask_user action requires blocker keys",
                     code="ask_user_blocker_keys_required",
                 )
-            for blocker_key in question.blocker_keys:
+            if prompt in seen_prompts or blocker_keys & seen_blocker_keys:
+                raise PlannerActionValidationError(
+                    "ask_user action repeats a question or blocker in the same action",
+                    code="duplicate_question_in_action",
+                )
+            seen_prompts.add(prompt)
+            seen_blocker_keys.update(blocker_keys)
+            for blocker_key in blocker_keys:
                 blocker = blockers_by_key.get(blocker_key)
                 if (
                     blocker is None
