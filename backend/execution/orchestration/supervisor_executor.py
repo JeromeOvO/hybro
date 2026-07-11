@@ -4811,14 +4811,26 @@ class SupervisorExecutor:
         if not reason.strip():
             raise ValueError("goal family disposition reason must be nonempty")
 
-        revision_outcomes = [
+        family_outcomes = [
             outcome
             for outcome in state.delegation_outcomes
             if outcome.goal_family_fingerprint == goal_family_fingerprint
-            and outcome.goal_revision_fingerprint == through_goal_revision_fingerprint
         ]
-        if not revision_outcomes:
+        through_index = next(
+            (
+                index
+                for index in range(len(family_outcomes) - 1, -1, -1)
+                if family_outcomes[index].goal_revision_fingerprint
+                == through_goal_revision_fingerprint
+            ),
+            None,
+        )
+        if through_index is None:
             raise ValueError("goal family disposition revision is not known")
+        covered_outcome_intent_ids = {
+            outcome.dispatch_intent_id
+            for outcome in family_outcomes[: through_index + 1]
+        }
         latest_outcome_by_intent_id = {
             outcome.dispatch_intent_id: outcome
             for outcome in state.delegation_outcomes
@@ -4834,11 +4846,7 @@ class SupervisorExecutor:
 
         def add_matching_repair_lineage(intent_id: str) -> None:
             outcome = latest_outcome_by_intent_id.get(intent_id)
-            if outcome is not None and (
-                outcome.goal_family_fingerprint != goal_family_fingerprint
-                or outcome.goal_revision_fingerprint
-                != through_goal_revision_fingerprint
-            ):
+            if outcome is not None and intent_id not in covered_outcome_intent_ids:
                 return
             if intent_id in intent_ids:
                 return
@@ -4846,7 +4854,7 @@ class SupervisorExecutor:
             for child_intent_id in child_intents_by_parent_id.get(intent_id, []):
                 add_matching_repair_lineage(child_intent_id)
 
-        for outcome in revision_outcomes:
+        for outcome in family_outcomes[: through_index + 1]:
             add_matching_repair_lineage(outcome.dispatch_intent_id)
         event_id = event_id or f"goal-family-disposed:{uuid4().hex}"
         disposition = GoalFamilyDispositionRecord(

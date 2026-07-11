@@ -6428,6 +6428,75 @@ async def test_goal_family_disposition_does_not_terminalize_later_revision_repai
 
 
 @pytest.mark.asyncio
+async def test_goal_family_disposition_through_revision_terminalizes_earlier_work():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+            ),
+            DelegationOutcomeRecord(
+                outcome_id="outcome-2",
+                dispatch_intent_id="intent-2",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-2",
+                attempt_fingerprint="attempt-2",
+                status="partial",
+            ),
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce the original quote.",
+                task_hash="task-hash-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Produce the revised quote.",
+                task_hash="task-hash-2",
+            ),
+        ],
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-1", agent_id="agent-1", status="running"
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._dispose_v2_goal_family(
+        await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
+        through_goal_revision_fingerprint="revision-2",
+        status="abandoned",
+        reason="The full goal family is no longer needed.",
+    )
+
+    assert saved.dispatch_intents[0].status == "abandoned"
+    assert saved.active_dispatches[0].status == "abandoned"
+
+
+@pytest.mark.asyncio
 async def test_run_complete_creates_referenced_goal_family_disposition_before_terminalizing(
     monkeypatch,
 ):
