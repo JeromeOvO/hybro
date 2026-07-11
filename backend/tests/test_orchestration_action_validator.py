@@ -930,6 +930,28 @@ def test_completion_validator_rejects_constructed_blank_disposition_reason():
     assert exc_info.value.code == "completion_disposition_request_invalid"
 
 
+def test_completion_validator_rejects_requested_unknown_disposition_revision():
+    action = _complete_action(
+        abandoned_goal_disposition_event_ids=["dispose-1"],
+        requested_goal_family_dispositions=[
+            {
+                "event_id": "dispose-1",
+                "goal_family_fingerprint": "family-1",
+                "through_goal_revision_fingerprint": "unknown-revision",
+                "status": "abandoned",
+                "reason": "The requested revision is no longer needed.",
+            }
+        ],
+    )
+    state = _state_for_validation(
+        delegation_outcomes=[
+            _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+        ]
+    )
+
+    assert _validation_code(action, state) == "completion_disposition_unreferenced"
+
+
 def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
     action = RoomSupervisorService._parse_legacy_action_as_planner_action(
         {

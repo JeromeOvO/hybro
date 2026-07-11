@@ -6357,6 +6357,93 @@ async def test_goal_family_disposition_covers_inflight_same_revision_repair():
 
 
 @pytest.mark.asyncio
+async def test_goal_family_disposition_preserves_inflight_later_revision_repair():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+            )
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce the quote.",
+                task_hash="task-hash-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Repair the original quote.",
+                task_hash="task-hash-2",
+                repair_of_intent_id="intent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+            ),
+            DispatchIntent(
+                step_id="step-3",
+                step_target_id="step-3:target-1",
+                dispatch_intent_id="intent-3",
+                planned_agent_message_id="agent-msg-3",
+                agent_id="agent-1",
+                task="Repair the revised quote.",
+                task_hash="task-hash-3",
+                repair_of_intent_id="intent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-2",
+            ),
+        ],
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-2", agent_id="agent-1", status="running"
+            ),
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-3", agent_id="agent-1", status="running"
+            ),
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._dispose_v2_goal_family(
+        await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
+        through_goal_revision_fingerprint="revision-1",
+        status="abandoned",
+        reason="The original revision is no longer needed.",
+    )
+
+    assert [intent.status for intent in saved.dispatch_intents] == [
+        "abandoned",
+        "abandoned",
+        "planned",
+    ]
+    assert [dispatch.status for dispatch in saved.active_dispatches] == [
+        "abandoned",
+        "running",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_goal_family_disposition_does_not_terminalize_later_revision_repair():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(

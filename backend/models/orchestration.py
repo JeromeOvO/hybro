@@ -358,6 +358,8 @@ class DispatchIntent(BaseModel):
     agent_id: str
     task: str
     task_hash: str
+    goal_family_fingerprint: str | None = None
+    goal_revision_fingerprint: str | None = None
     status: str = "planned"
     depends_on: list[str] = Field(default_factory=list)
     parallel_group: str | None = None

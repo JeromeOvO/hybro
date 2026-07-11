@@ -498,12 +498,28 @@ class PlannerActionValidator:
     @staticmethod
     def _completion_state_with_requested_dispositions(evidence, run_state):
         completion_state = run_state.model_copy(deep=True)
+        known_revisions = {
+            (
+                outcome.goal_family_fingerprint,
+                outcome.goal_revision_fingerprint,
+            )
+            for outcome in run_state.delegation_outcomes
+        }
         disposition_by_event_id = {
             disposition.event_id: disposition
             for disposition in completion_state.goal_family_dispositions
         }
         requested_event_ids = set()
         for request in evidence.requested_goal_family_dispositions:
+            if (
+                request.goal_family_fingerprint,
+                request.through_goal_revision_fingerprint,
+            ) not in known_revisions:
+                raise PlannerActionValidationError(
+                    "complete action disposition request references an unknown "
+                    "goal family revision",
+                    code="completion_disposition_unreferenced",
+                )
             disposition = GoalFamilyDispositionRecord(**request.model_dump())
             existing = disposition_by_event_id.get(disposition.event_id)
             if existing is None:

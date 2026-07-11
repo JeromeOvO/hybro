@@ -4835,6 +4835,9 @@ class SupervisorExecutor:
             outcome.dispatch_intent_id: outcome
             for outcome in state.delegation_outcomes
         }
+        intents_by_id = {
+            intent.dispatch_intent_id: intent for intent in state.dispatch_intents
+        }
         child_intents_by_parent_id: dict[str, list[str]] = {}
         for intent in state.dispatch_intents:
             if intent.repair_of_intent_id:
@@ -4852,6 +4855,20 @@ class SupervisorExecutor:
                 return
             intent_ids.add(intent_id)
             for child_intent_id in child_intents_by_parent_id.get(intent_id, []):
+                child_intent = intents_by_id.get(child_intent_id)
+                if child_intent is not None and (
+                    (
+                        child_intent.goal_family_fingerprint is not None
+                        and child_intent.goal_family_fingerprint
+                        != goal_family_fingerprint
+                    )
+                    or (
+                        child_intent.goal_revision_fingerprint is not None
+                        and child_intent.goal_revision_fingerprint
+                        != through_goal_revision_fingerprint
+                    )
+                ):
+                    continue
                 add_matching_repair_lineage(child_intent_id)
 
         for outcome in family_outcomes[: through_index + 1]:
@@ -5129,6 +5146,24 @@ class SupervisorExecutor:
     ) -> DispatchIntent:
         step_id = f"{run_id}:step-{step_number}"
         step_target_id = f"{step_id}:target-{target_index}"
+        selected_resource_fingerprints = sorted(
+            {
+                (resource_fingerprints or {})[ref.ref_id]
+                for ref in (
+                    *target.context_refs,
+                    *target.artifact_refs,
+                    *target.attachment_refs,
+                )
+                if ref.ref_id in (resource_fingerprints or {})
+            }
+        )
+        fingerprints = goal_fingerprints(
+            agent_id=target.agent_id,
+            expected_outputs=list(target.expected_outputs),
+            selected_content_fingerprints=selected_resource_fingerprints,
+            dependency_family_fingerprints=[],
+            upstream_output_fingerprints=[],
+        )
         return DispatchIntent(
             step_id=step_id,
             step_target_id=step_target_id,
@@ -5137,23 +5172,15 @@ class SupervisorExecutor:
             agent_id=target.agent_id,
             task=target.task,
             task_hash=hashlib.sha256(target.task.encode("utf-8")).hexdigest(),
+            goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+            goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
             depends_on=list(target.depends_on),
             parallel_group=target.parallel_group,
             required_resource_refs=list(target.required_resource_refs),
             context_refs=list(target.context_refs),
             artifact_refs=list(target.artifact_refs),
             attachment_refs=list(target.attachment_refs),
-            selected_resource_fingerprints=sorted(
-                {
-                    (resource_fingerprints or {})[ref.ref_id]
-                    for ref in (
-                        *target.context_refs,
-                        *target.artifact_refs,
-                        *target.attachment_refs,
-                    )
-                    if ref.ref_id in (resource_fingerprints or {})
-                }
-            ),
+            selected_resource_fingerprints=selected_resource_fingerprints,
             expected_outputs=list(target.expected_outputs),
             attachment_policy=target.attachment_policy,
         )
