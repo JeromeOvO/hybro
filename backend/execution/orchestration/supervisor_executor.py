@@ -1580,7 +1580,7 @@ class SupervisorExecutor:
         action = self._v2_supervisor_action(planner_action, agent_registry)
         state = await self._supersede_unresolved_input_required_outputs(
             state,
-            chosen_agent_ids={target.agent_id for target in action.targets},
+            chosen_targets=planner_action.targets,
         )
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
@@ -2205,6 +2205,7 @@ class SupervisorExecutor:
         self,
         *,
         claimed_continuation: PendingAgentContinuation | None,
+        continuation_state: OrchestrationRunState | None = None,
         awaiting_output: AgentOutputRecord,
         target: DelegateTarget,
         resolved_payload: ResolvedDispatchPayload,
@@ -2224,12 +2225,21 @@ class SupervisorExecutor:
         ).strip()
         if not resource_text:
             return None
-        reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
-            message_id=awaiting_output.agent_message_id,
-            task_id=awaiting_output.a2a_task_id,
-            context_id=awaiting_output.a2a_context_id,
-            user_input=resource_text,
-        )
+        try:
+            reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
+                message_id=awaiting_output.agent_message_id,
+                task_id=awaiting_output.a2a_task_id,
+                context_id=awaiting_output.a2a_context_id,
+                user_input=resource_text,
+            )
+        except Exception:
+            if continuation_state is not None:
+                await self._reconcile_persisted_continuation(
+                    state=continuation_state,
+                    continuation_id=claimed_continuation.continuation_id,
+                    status="open",
+                )
+            raise
         await self._record_a2a_task_recovery(
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
@@ -2252,6 +2262,12 @@ class SupervisorExecutor:
                 status_message=response_text,
                 interactive_state=task_state,
                 requires_auth=task_state == "auth-required",
+            )
+        if task_state in {"failed", "canceled", "rejected"} and continuation_state is not None:
+            await self._reconcile_persisted_continuation(
+                state=continuation_state,
+                continuation_id=claimed_continuation.continuation_id,
+                status="open",
             )
         return StepResult(
             step_number=0,
@@ -2486,21 +2502,44 @@ class SupervisorExecutor:
         self,
         state: OrchestrationRunState,
         *,
-        chosen_agent_ids: set[str],
+        chosen_targets: list[PlannedDelegateTarget],
     ) -> OrchestrationRunState:
+        chosen_agent_ids = {target.agent_id for target in chosen_targets}
+        repair_intent_ids = {
+            target.repair_of_intent_id
+            for target in chosen_targets
+            if target.repair_of_intent_id
+        }
         continuation_ids_to_abandon = [
             continuation.continuation_id
             for continuation in state.pending_agent_continuations
             if continuation.status in {"open", "resuming"}
-            and continuation.agent_id not in chosen_agent_ids
+            and continuation.source_intent_id not in repair_intent_ids
         ]
+        superseded_lineage_message_ids: set[str] = set()
+        for continuation in state.pending_agent_continuations:
+            if continuation.continuation_id not in continuation_ids_to_abandon:
+                continue
+            lineage_intent_ids = self._lineage_intent_ids(
+                state,
+                continuation.source_intent_id,
+            )
+            superseded_lineage_message_ids.update(
+                intent.planned_agent_message_id
+                for intent in state.dispatch_intents
+                if intent.dispatch_intent_id in lineage_intent_ids
+            )
+            superseded_lineage_message_ids.add(continuation.source_agent_message_id)
 
         def mutate(updated: OrchestrationRunState) -> None:
             superseded_message_ids = {
                 output.agent_message_id
                 for output in updated.agent_outputs
                 if (
-                    output.agent_id not in chosen_agent_ids
+                    (
+                        output.agent_id not in chosen_agent_ids
+                        or output.agent_message_id in superseded_lineage_message_ids
+                    )
                     and self._is_plain_a2a_input_output(output)
                     and any(
                         failure.status == "open"
@@ -4565,6 +4604,12 @@ class SupervisorExecutor:
                             continuation_id=persisted_continuation.continuation_id,
                             status="resolved",
                         )
+                    elif result.status == StepStatus.FAILED:
+                        current = await self._reconcile_persisted_continuation(
+                            state=current,
+                            continuation_id=persisted_continuation.continuation_id,
+                            status="open",
+                        )
 
         return current
 
@@ -5738,6 +5783,7 @@ class SupervisorExecutor:
                                 if awaiting_output is not None:
                                     continued = await self._continue_agent_task_with_resolved_refs(
                                         claimed_continuation=claimed,
+                                        continuation_state=run_state,
                                         awaiting_output=awaiting_output,
                                         target=target,
                                         resolved_payload=resolved_payload,
