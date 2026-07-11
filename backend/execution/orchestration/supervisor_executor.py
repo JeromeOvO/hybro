@@ -54,6 +54,7 @@ from execution.orchestration.dispatch_payload import (
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
+    goal_fingerprints,
 )
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
@@ -2203,11 +2204,16 @@ class SupervisorExecutor:
     async def _continue_agent_task_with_resolved_refs(
         self,
         *,
+        claimed_continuation: PendingAgentContinuation | None,
         awaiting_output: AgentOutputRecord,
         target: DelegateTarget,
         resolved_payload: ResolvedDispatchPayload,
     ) -> StepResult | None:
-        if self.hitl_coordinator is None:
+        if (
+            claimed_continuation is None
+            or claimed_continuation.status != "resuming"
+            or self.hitl_coordinator is None
+        ):
             return None
         if not awaiting_output.a2a_task_id or not awaiting_output.a2a_context_id:
             return None
@@ -2517,7 +2523,7 @@ class SupervisorExecutor:
                     failure.status = "abandoned"
                     failure.updated_at = utcnow()
 
-        return await self._save_v2_state(
+        saved = await self._save_v2_state(
             state,
             event_type=OrchestrationEventType.STATE_REDUCED,
             payload={
@@ -5672,26 +5678,73 @@ class SupervisorExecutor:
                             status_message=exc.code,
                         )
 
-                awaiting_output = None
                 if run_state is not None and resolved_payload is not None:
-                    awaiting_output = next(
+                    intent = next(
                         (
-                            output
-                            for output in reversed(run_state.agent_outputs)
-                            if output.agent_id == target.agent_id
-                            and self._is_plain_a2a_input_output(output)
+                            item
+                            for item in run_state.dispatch_intents
+                            if item.planned_agent_message_id == planned_message_id
                         ),
                         None,
                     )
-                if awaiting_output is not None:
-                    continued = await self._continue_agent_task_with_resolved_refs(
-                        awaiting_output=awaiting_output,
-                        target=target,
-                        resolved_payload=resolved_payload,
-                    )
-                    if continued is not None:
-                        continued.step_number = step_number
-                        return continued
+                    if intent is not None and intent.repair_of_intent_id:
+                        continuation = next(
+                            (
+                                item
+                                for item in run_state.pending_agent_continuations
+                                if item.source_intent_id == intent.repair_of_intent_id
+                            ),
+                            None,
+                        )
+                        if continuation is not None:
+                            planned_target = PlannedDelegateTarget(
+                                agent_id=target.agent_id,
+                                task=target.task,
+                                agent_name=target.agent_name,
+                                repair_of_intent_id=intent.repair_of_intent_id,
+                                expected_outputs=list(intent.expected_outputs),
+                            )
+                            selected_resource_fingerprints = (
+                                self._resolved_resource_fingerprints(
+                                    resolved_payload
+                                )
+                            )
+                            claimed = await self._claim_matching_continuation(
+                                state=run_state,
+                                target=planned_target,
+                                goal_family_fingerprint=goal_fingerprints(
+                                    agent_id=target.agent_id,
+                                    expected_outputs=list(intent.expected_outputs),
+                                    selected_content_fingerprints=list(
+                                        selected_resource_fingerprints
+                                    ),
+                                    dependency_family_fingerprints=[],
+                                    upstream_output_fingerprints=[],
+                                ).goal_family_fingerprint,
+                                selected_resource_fingerprints=(
+                                    selected_resource_fingerprints
+                                ),
+                            )
+                            if claimed is not None:
+                                awaiting_output = next(
+                                    (
+                                        output
+                                        for output in run_state.agent_outputs
+                                        if output.agent_message_id
+                                        == claimed.source_agent_message_id
+                                    ),
+                                    None,
+                                )
+                                if awaiting_output is not None:
+                                    continued = await self._continue_agent_task_with_resolved_refs(
+                                        claimed_continuation=claimed,
+                                        awaiting_output=awaiting_output,
+                                        target=target,
+                                        resolved_payload=resolved_payload,
+                                    )
+                                    if continued is not None:
+                                        continued.step_number = step_number
+                                        return continued
 
                 dispatch_task = self._dispatch_task_with_ref_projection(
                     task=target.task,

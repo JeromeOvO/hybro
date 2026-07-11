@@ -13,6 +13,10 @@ from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     ResolvedResourcePayload,
 )
+from execution.orchestration.outcome_evaluator import (
+    canonical_content_fingerprint,
+    goal_fingerprints,
+)
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -422,6 +426,20 @@ def _run_state(**overrides):
     }
     values.update(overrides)
     return OrchestrationRunState(**values)
+
+
+def _claimed_continuation() -> PendingAgentContinuation:
+    return PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+        status="resuming",
+    )
 
 
 def _executor(
@@ -7853,6 +7871,7 @@ async def test_same_agent_retry_continues_existing_input_required_task():
     )
 
     result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
         awaiting_output=state.agent_outputs[0],
         target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
         resolved_payload=resolved_payload,
@@ -7866,6 +7885,52 @@ async def test_same_agent_retry_continues_existing_input_required_task():
         context_id="ctx-1",
         user_input="Projected input",
     )
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_continuation_does_not_call_remote_reply():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    reply_to_task = AsyncMock(
+        return_value={"blocking": True, "task_state": "completed", "response_text": "Done"}
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=None,
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
+        resolved_payload=ResolvedDispatchPayload(
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ]
+        ),
+    )
+
+    assert result is None
+    reply_to_task.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -7893,6 +7958,7 @@ async def test_same_agent_retry_that_still_needs_input_requires_hitl():
         )
     )
     result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -7993,6 +8059,119 @@ async def test_persisted_continuation_claim_allows_one_remote_reply_under_race()
     persisted = await store.get_run("run-1")
     assert persisted is not None
     assert persisted.pending_agent_continuations[0].status == "resuming"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_delegate_recovery_claims_before_one_remote_reply():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use the selected resource"),
+    )
+    resource = ResolvedResourcePayload(
+        ref_id="ctx:file-1:text",
+        kind="context",
+        mime_type="text/plain",
+        text="Projected input",
+    )
+    resource_fingerprints = {
+        canonical_content_fingerprint(resource.model_dump(mode="json"))
+    }
+    goal_family_fingerprint = goal_fingerprints(
+        agent_id="agent-1",
+        expected_outputs=[],
+        selected_content_fingerprints=list(resource_fingerprints),
+        dependency_family_fingerprints=[],
+        upstream_output_fingerprints=[],
+    ).goal_family_fingerprint
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Initial task",
+                task_hash="hash-1",
+                status="awaiting_input",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="target-2",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="repair-msg",
+                agent_id="agent-1",
+                task="Use the selected resource",
+                task_hash="hash-2",
+                repair_of_intent_id="intent-1",
+            ),
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint=goal_family_fingerprint,
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(state)
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.orchestration_resource_provider = SimpleNamespace(
+        resolve_ref=AsyncMock(return_value=resource)
+    )
+    reply_to_task = AsyncMock(
+        return_value={"blocking": True, "task_state": "completed", "response_text": "Done"}
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+    target = DelegateTarget(
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Use the selected resource",
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx:file-1:text",
+                source_agent_message_id="source-msg-1",
+                mime_type="text/plain",
+            )
+        ],
+    )
+
+    await asyncio.gather(
+        executor._dispatch_targets(
+            targets=[target], agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+            room_id="room-1", user_message_id="message-1", step_number=2, token=None,
+            request_user_id="user-1", quoted_text=None, planned_message_ids=["repair-msg"],
+            run_state=state, user_message=user_message,
+        ),
+        executor._dispatch_targets(
+            targets=[target], agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+            room_id="room-1", user_message_id="message-1", step_number=2, token=None,
+            request_user_id="user-1", quoted_text=None, planned_message_ids=["repair-msg"],
+            run_state=state, user_message=user_message,
+        ),
+    )
+
+    reply_to_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -8156,6 +8335,7 @@ async def test_plain_continuation_preserves_auth_required_classification():
     )
 
     result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -8196,6 +8376,61 @@ async def test_plain_continuation_preserves_auth_required_classification():
 
 
 @pytest.mark.asyncio
+async def test_plain_continuation_preserves_policy_required_classification():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "task_state": "input-required",
+                    "response_text": "Approve policy to continue",
+                    "requires_policy": True,
+                }
+            )
+        )
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
+        resolved_payload=ResolvedDispatchPayload(
+            selected_context_refs=["ctx:file-file-1:text"],
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ],
+        ),
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.AWAITING_INPUT
+    assert result.interactive_state == "policy-required"
+    assert result.requires_policy is True
+    assert SupervisorExecutor._awaiting_result_requires_hitl(result) is True
+
+
+@pytest.mark.asyncio
 async def test_supersede_unresolved_input_required_outputs_for_other_agents():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -8210,6 +8445,30 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
         user_message=user_message,
     )
     state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1", step_target_id="target-1", dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1", agent_id="agent-1", task="Initial",
+                task_hash="hash-1", status="awaiting_input",
+            ),
+            DispatchIntent(
+                step_id="step-2", step_target_id="target-2", dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-1-repair", agent_id="agent-1", task="Repair",
+                task_hash="hash-2", repair_of_intent_id="intent-1", status="dispatching",
+            ),
+        ],
+        active_dispatches=[
+            {"agent_message_id": "agent-msg-1", "agent_id": "agent-1", "status": "awaiting_input"},
+            {"agent_message_id": "agent-msg-1-repair", "agent_id": "agent-1", "status": "dispatching"},
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1", source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1", agent_id="agent-1",
+                goal_family_fingerprint="family-1", goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1", a2a_context_id="context-1",
+            )
+        ],
         agent_outputs=[
             AgentOutputRecord(
                 agent_message_id="agent-msg-1",
@@ -8264,6 +8523,9 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
         "abandoned",
         "open",
     ]
+    assert [intent.status for intent in saved.dispatch_intents] == ["abandoned", "abandoned"]
+    assert [dispatch.status for dispatch in saved.active_dispatches] == ["abandoned", "abandoned"]
+    assert saved.pending_agent_continuations[0].status == "abandoned"
 
 
 @pytest.mark.asyncio
