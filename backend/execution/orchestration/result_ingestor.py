@@ -13,6 +13,7 @@ from common.utils.time import utcnow
 from execution.orchestration.failure_classifier import classify_agent_failure
 from models.orchestration import (
     AgentOutputRecord,
+    BlockerRecord,
     DispatchIntent,
     OpenFailureRecord,
     OrchestrationRunState,
@@ -196,6 +197,8 @@ class AgentResultIngestor:
             state.artifacts.append(artifact_record)
             existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
+
+        _upsert_structured_blockers(state, result_artifact_keys)
 
         if not preserve_sparse_replay:
             current_artifact_keys = set(result_artifact_keys)
@@ -471,6 +474,47 @@ class AgentResultIngestor:
             ]
             return True
         return False
+
+
+def _upsert_structured_blockers(
+    state: OrchestrationRunState,
+    artifact_keys: list[str],
+) -> None:
+    existing_by_key = {blocker.key: blocker for blocker in state.blockers}
+    artifact_key_set = set(artifact_keys)
+    for artifact in state.artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_key = artifact.get("artifact_key")
+        if artifact_key not in artifact_key_set:
+            continue
+        raw_blockers = artifact.get("blockers")
+        if not isinstance(raw_blockers, list):
+            continue
+        for raw_blocker in raw_blockers:
+            if not isinstance(raw_blocker, dict):
+                continue
+            blocker_payload = copy.deepcopy(raw_blocker)
+            evidence_refs = list(blocker_payload.get("evidence_refs") or [])
+            if artifact_key and artifact_key not in evidence_refs:
+                evidence_refs.append(str(artifact_key))
+            blocker_payload["evidence_refs"] = evidence_refs
+            blocker = BlockerRecord.model_validate(blocker_payload)
+            existing = existing_by_key.get(blocker.key)
+            if existing is None:
+                state.blockers.append(blocker)
+                existing_by_key[blocker.key] = blocker
+            else:
+                replacement = blocker.model_copy(
+                    update={
+                        "evidence_refs": sorted(
+                            set(existing.evidence_refs) | set(blocker.evidence_refs)
+                        )
+                    }
+                )
+                index = state.blockers.index(existing)
+                state.blockers[index] = replacement
+                existing_by_key[blocker.key] = replacement
 
 
 def _artifact_summary(artifact: dict[str, Any]) -> str:

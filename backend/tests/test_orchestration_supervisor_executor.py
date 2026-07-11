@@ -18,6 +18,7 @@ from execution.orchestration.dispatch_payload import (
     ResolvedResourcePayload,
 )
 from execution.orchestration.outcome_evaluator import (
+    DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
     goal_fingerprints,
 )
@@ -825,6 +826,58 @@ def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat(
             guardrails_enabled=True,
         )
     assert error.value.code == "delegate_goal_already_fulfilled"
+
+
+def test_completion_open_blocker_is_enforced_only_when_guardrails_enabled():
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+    action = PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="The available answer is enough in shadow mode.",
+        completion_evidence=CompletionEvidence(
+            satisfied_criteria=["answer_ready"],
+            referenced_fact_ids=[],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=0.8,
+        ),
+    )
+    state = _run_state(
+        candidate_agent_ids=["agent-1"],
+        blockers=[blocker],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="Answer ready.",
+            )
+        ],
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+        )
+        is action
+    )
+    with pytest.raises(PlannerActionValidationError) as error:
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+    assert error.value.code == "completion_open_blocker"
 
 
 @pytest.mark.asyncio
@@ -6715,6 +6768,176 @@ async def test_append_v2_event_swallows_non_required_store_conflicts(monkeypatch
             required=True,
             payload={},
         )
+
+
+def test_invalidated_required_evidence_can_be_satisfied_by_fresh_fact():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-2",
+        agent_id="agent-1",
+        task="Produce a quote.",
+        task_hash="task-hash",
+        status="completed",
+        expected_outputs=[
+            DispatchExpectedOutput(
+                output_key="quote",
+                kind="fact",
+                required=True,
+                required_fields=["limit"],
+            )
+        ],
+    )
+    before = _run_state(
+        facts=[
+            {
+                "fact_id": "stale-quote",
+                "semantic_key": "quote",
+                "kind": "structured_fact",
+                "value": {"limit": "1M"},
+            }
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-0",
+                agent_id="agent-1",
+                goal_family_fingerprint=goal_fingerprints(
+                    agent_id="agent-1",
+                    expected_outputs=intent.expected_outputs,
+                    selected_content_fingerprints=[],
+                    dependency_family_fingerprints=[],
+                    upstream_output_fingerprints=[],
+                ).goal_family_fingerprint,
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="fulfilled",
+                newly_satisfied_required_obligations=[
+                    "quote:$present",
+                    "quote:limit",
+                ],
+            )
+        ],
+        decision_log=[
+            {
+                "code": "required_evidence_invalidated",
+                "evidence_key": "stale-quote",
+                "obligation_keys": ["quote:$present", "quote:limit"],
+                "reason": "source_retracted",
+                "source_event_id": "event-1",
+            }
+        ],
+    )
+    after = before.model_copy(deep=True)
+    after.facts = [
+        {
+            "fact_id": "fresh-quote",
+            "semantic_key": "quote",
+            "kind": "structured_fact",
+            "value": {"limit": "2M"},
+        }
+    ]
+
+    outcome = evaluator.evaluate(
+        before,
+        after,
+        intent,
+        AgentOutputRecord(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+        ),
+        {},
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.remaining_required_obligations == []
+    assert outcome.newly_satisfied_required_obligations == [
+        "quote:$present",
+        "quote:limit",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ingest_v2_results_persists_structured_validated_blockers():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state()
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Produce quote.",
+            ),
+        )
+    ]
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_content=SimpleNamespace(
+                message_task={
+                    "artifacts": [
+                        {
+                            "artifact_id": "blockers",
+                            "blockers": [
+                                {
+                                    "key": "quote:missing-limit",
+                                    "description": (
+                                        "Only the user can provide the limit."
+                                    ),
+                                    "blocked_output_keys": ["quote"],
+                                    "source": "agent",
+                                    "claimed_user_only": True,
+                                    "validated_user_only": True,
+                                    "validation_status": "validated",
+                                    "resolution_attempts": [
+                                        {
+                                            "kind": "resource",
+                                            "reference_id": "submission",
+                                            "outcome": "unavailable",
+                                            "applies_to_output_keys": ["quote"],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+    )
+    await store.create_run(state)
+
+    persisted = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Produce quote.",
+                response_text="",
+                success=True,
+                status=StepStatus.SUCCESS,
+                agent_message_id="run-1:step-1:target-1:message",
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert len(persisted.blockers) == 1
+    assert persisted.blockers[0].key == "quote:missing-limit"
+    assert persisted.blockers[0].source == "agent"
 
 
 @pytest.mark.asyncio
