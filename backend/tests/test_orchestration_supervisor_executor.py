@@ -454,6 +454,7 @@ def _executor(
     store: InMemoryOrchestrationRunStore,
     planner: RecordingPlanner,
     user_message: RoomUserMessage,
+    guardrails_enabled: bool | None = None,
 ) -> SupervisorExecutor:
     created_message_ids: list[str] = []
 
@@ -509,10 +510,98 @@ def _executor(
         ),
         orchestration_run_store=store,
         orchestration_planner=planner,
+        guardrails_enabled=guardrails_enabled,
     )
     executor.bind_execution_event_deps(AsyncMock())
     executor._stream_supervisor_synthesis = AsyncMock(return_value="Final summary")
     return executor
+
+
+def _duplicate_generic_delegate_action() -> PlannerAction:
+    return PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Ask the generic producer twice.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce the requested structured result.",
+                parallel_group="generic-work",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce the requested structured result again.",
+                parallel_group="generic-work",
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrails_enabled", "expected_dispatch_count"),
+    [(False, 2), (True, 0)],
+)
+async def test_injected_outcome_guardrails_atomically_control_duplicate_delegate_enforcement(
+    monkeypatch,
+    caplog,
+    guardrails_enabled: bool,
+    expected_dispatch_count: int,
+):
+    """Shadow mode records generic-agent outcomes without rejecting the action."""
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate generic work."),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            _duplicate_generic_delegate_action(),
+            PlannerAction(
+                action=PlannerActionType.FAIL,
+                reasoning="End the regression fixture.",
+                failure_reason="fixture complete",
+            ),
+        ),
+        user_message=user_message,
+        guardrails_enabled=guardrails_enabled,
+    )
+    monkeypatch.setattr(
+        supervisor_executor_module._settings,
+        "orchestration_outcome_guardrails",
+        not guardrails_enabled,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate generic work.",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Generic Producer"),
+            AgentProfile(agent_id="agent-2", agent_name="Generic Consumer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert len(result.run_state.dispatch_intents) == expected_dispatch_count
+    if guardrails_enabled:
+        assert not result.run_state.delegation_outcomes
+        assert "orchestration_delegate_retry_rejected" in caplog.text
+    else:
+        assert len(result.run_state.delegation_outcomes) == 2
+        assert "orchestration_delegate_outcome_evaluated" in caplog.text
 
 
 def _dispatch_refs_payload():

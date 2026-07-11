@@ -1024,6 +1024,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 orchestration_run_store=orchestration_run_store,
                 orchestration_planner=orchestration_planner,
                 orchestration_resource_provider=orchestration_resource_provider,
+                guardrails_enabled=runtime.settings.orchestration_outcome_guardrails,
                 hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state

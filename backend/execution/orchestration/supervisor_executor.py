@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import inspect
+import json
 from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -139,6 +141,44 @@ DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 
 
+def _log_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _open_failure_count(state: OrchestrationRunState) -> int:
+    return len([failure for failure in state.open_failures if failure.status == "open"])
+
+
+def _join_log_ids(values: Sequence[str]) -> str:
+    return ",".join(values) if values else "-"
+
+
+def _short_text_hash(value: str | None) -> str:
+    if not value:
+        return "-"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _fingerprint_prefix(value: str | None) -> str:
+    return value[:12] if value else "-"
+
+
+def _planner_question_hashes(action: PlannerAction) -> list[str]:
+    return [
+        _short_text_hash(question.prompt)
+        for question in action.questions
+        if isinstance(question.prompt, str) and question.prompt.strip()
+    ]
+
+
+def _artifact_keys_for_log(state: OrchestrationRunState) -> list[str]:
+    return [
+        str(artifact.get("artifact_key"))
+        for artifact in state.artifacts
+        if isinstance(artifact, Mapping) and artifact.get("artifact_key") is not None
+    ]
+
+
 def _resource_fingerprints(resources: Sequence[Any]) -> dict[str, str]:
     fingerprints: dict[str, str] = {}
     for resource in resources:
@@ -181,6 +221,7 @@ class SupervisorExecutor:
         orchestration_planner: OrchestrationPlanner | None = None,
         orchestration_resource_provider: OrchestrationResourceProvider | None = None,
         delegation_outcome_evaluator: DelegationOutcomeEvaluator | None = None,
+        guardrails_enabled: bool | None = None,
     ) -> None:
         if event_publisher is None:
             raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
@@ -211,8 +252,21 @@ class SupervisorExecutor:
         self.delegation_outcome_evaluator = (
             delegation_outcome_evaluator or DelegationOutcomeEvaluator()
         )
+        self._guardrails_enabled = guardrails_enabled
         self.result_ingestor = AgentResultIngestor()
         self._processing_status_emitter = None
+
+    @property
+    def guardrails_enabled(self) -> bool:
+        """Use injected production configuration while preserving legacy callers."""
+        configured = getattr(self, "_guardrails_enabled", None)
+        if configured is None:
+            return _settings.orchestration_outcome_guardrails
+        return configured
+
+    @guardrails_enabled.setter
+    def guardrails_enabled(self, value: bool) -> None:
+        self._guardrails_enabled = value
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
@@ -472,12 +526,31 @@ class SupervisorExecutor:
         result: SupervisorRunResult,
     ) -> SupervisorRunResult:
         logger.info(
-            "supervisor_run_completed",
+            "supervisor_run_completed room_id=%s run_id=%s user_message_id=%s "
+            "status=%s orchestration_status=%s steps_used=%d step_budget=%d "
+            "open_failure_count=%d agent_output_count=%d dispatch_intent_count=%d "
+            "terminal_reason=%s",
+            room_id,
+            state.run_id,
+            state.user_message_id,
+            _log_value(result.status),
+            _log_value(state.status),
+            state.steps_used,
+            state.step_budget,
+            _open_failure_count(state),
+            len(state.agent_outputs),
+            len(state.dispatch_intents),
+            state.terminal_reason,
             extra={
                 "room_id": room_id,
                 "run_id": state.run_id,
+                "user_message_id": state.user_message_id,
                 "status": result.status,
+                "orchestration_status": state.status,
                 "steps_used": state.steps_used,
+                "step_budget": state.step_budget,
+                "open_failure_count": _open_failure_count(state),
+                "terminal_reason": state.terminal_reason,
             },
         )
 
@@ -748,6 +821,20 @@ class SupervisorExecutor:
             request_user_id=request_user_id,
             state=state,
         )
+        logger.info(
+            "supervisor_loop_started room_id=%s run_id=%s user_message_id=%s "
+            "client_request_id=%s candidate_count=%d agent_registry_count=%d "
+            "steps_used=%d step_budget=%d status=%s",
+            room_id,
+            state.run_id,
+            user_message_id,
+            state.client_request_id,
+            len(state.candidate_agent_ids),
+            len(agent_registry),
+            state.steps_used,
+            state.step_budget,
+            _log_value(state.status),
+        )
         state, recovered_status = await self._recover_v2_inflight_dispatch(
             state=state,
             agent_registry=agent_registry,
@@ -823,6 +910,27 @@ class SupervisorExecutor:
                 room_background=conversation_context,
                 available_resources=available_resources,
             )
+            logger.info(
+                "supervisor_planner_context_built room_id=%s run_id=%s "
+                "user_message_id=%s steps_used=%d step_budget=%d "
+                "candidate_count=%d open_failure_count=%d agent_output_count=%d "
+                "dispatch_intent_count=%d fact_count=%d artifact_count=%d "
+                "open_question_count=%d pending_hitl_count=%d artifact_keys=%s",
+                room_id,
+                state.run_id,
+                user_message_id,
+                state.steps_used,
+                state.step_budget,
+                len(context.candidate_agent_ids),
+                _open_failure_count(state),
+                len(state.agent_outputs),
+                len(state.dispatch_intents),
+                len(state.facts),
+                len(state.artifacts),
+                len(state.open_questions),
+                len(state.pending_hitl_request_ids),
+                _join_log_ids(_artifact_keys_for_log(state)),
+            )
             await self._append_v2_event(
                 state,
                 OrchestrationEventType.PLANNER_CONTEXT_BUILT,
@@ -858,10 +966,20 @@ class SupervisorExecutor:
                     ),
                 )
             except (PlannerActionValidationError, ValueError) as exc:
-                if (
-                    isinstance(exc, PlannerActionValidationError)
-                    and not exc.recoverable
-                ):
+                logger.warning(
+                    "supervisor_planner_action_rejected room_id=%s run_id=%s "
+                    "user_message_id=%s stage=adapter error=%s",
+                    room_id,
+                    state.run_id,
+                    user_message_id,
+                    str(exc),
+                )
+                if isinstance(exc, PlannerActionValidationError) and not exc.recoverable:
+                    state = await self._record_v2_rejected_planner_invocation(
+                        state,
+                        stage="adapter",
+                        error_code=exc.code,
+                    )
                     terminal_status = (
                         OrchestrationStatus.BUDGET_EXHAUSTED
                         if exc.code == "step_budget_exhausted"
@@ -906,10 +1024,48 @@ class SupervisorExecutor:
                     planner_action,
                     run_state=state,
                     resource_fingerprints=resource_fingerprints,
-                    guardrails_enabled=_settings.orchestration_outcome_guardrails,
+                    guardrails_enabled=self.guardrails_enabled,
                 )
             except PlannerActionValidationError as exc:
-                if not exc.recoverable:
+                if exc.code.startswith(
+                    ("delegate_", "duplicate_delegate_", "recovery_retry_")
+                ):
+                    logger.info(
+                        "orchestration_delegate_retry_rejected run_id=%s action=%s "
+                        "code=%s outcome_count=%d open_failure_count=%d blocker_count=%d",
+                        state.run_id,
+                        planner_action.action.value,
+                        exc.code,
+                        len(state.delegation_outcomes),
+                        _open_failure_count(state),
+                        len(state.blockers),
+                    )
+                elif exc.code.startswith("ask_user_blocker"):
+                    logger.info(
+                        "orchestration_hitl_blocker_validated run_id=%s action=%s "
+                        "valid=false code=%s question_count=%d blocker_count=%d",
+                        state.run_id,
+                        planner_action.action.value,
+                        exc.code,
+                        len(planner_action.questions),
+                        len(state.blockers),
+                    )
+                logger.warning(
+                    "supervisor_planner_action_rejected room_id=%s run_id=%s "
+                    "user_message_id=%s stage=state_validation action=%s "
+                    "error=%s",
+                    room_id,
+                    state.run_id,
+                    user_message_id,
+                    planner_action.action.value,
+                    str(exc),
+                )
+                if not getattr(exc, "recoverable", True):
+                    state = await self._record_v2_rejected_planner_invocation(
+                        state,
+                        stage="state_validation",
+                        error_code=exc.code,
+                    )
                     terminal_status = (
                         OrchestrationStatus.BUDGET_EXHAUSTED
                         if exc.code == "step_budget_exhausted"
@@ -944,6 +1100,18 @@ class SupervisorExecutor:
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
                 continue
+            if (
+                self.guardrails_enabled
+                and planner_action.action == PlannerActionType.ASK_USER
+            ):
+                logger.info(
+                    "orchestration_hitl_blocker_validated run_id=%s action=%s "
+                    "valid=true question_count=%d blocker_count=%d",
+                    state.run_id,
+                    planner_action.action.value,
+                    len(planner_action.questions),
+                    len(state.blockers),
+                )
             state = await self._record_v2_planner_action(state, planner_action)
 
             match planner_action.action:
@@ -983,7 +1151,7 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
-                    if _settings.orchestration_outcome_guardrails:
+                    if self.guardrails_enabled:
                         disposition_by_event_id = {
                             disposition.event_id: disposition
                             for disposition in state.goal_family_dispositions
@@ -1501,33 +1669,46 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         planner_action: PlannerAction,
     ) -> OrchestrationRunState:
+        target_agent_ids = [target.agent_id for target in planner_action.targets]
+        artifact_refs = [
+            ref.ref_id
+            for target in planner_action.targets
+            for ref in target.artifact_refs
+        ]
+        attachment_refs = [
+            ref.ref_id
+            for target in planner_action.targets
+            for ref in target.attachment_refs
+        ]
+        question_hashes = _planner_question_hashes(planner_action)
         logger.info(
-            "supervisor_planner_decision",
+            "supervisor_planner_decision run_id=%s room_id=%s "
+            "user_message_id=%s action=%s target_count=%d target_agent_ids=%s "
+            "artifact_ref_count=%d attachment_ref_count=%d open_failure_count=%d "
+            "question_count=%d question_hashes=%s steps_used=%d step_budget=%d",
+            state.run_id,
+            state.room_id,
+            state.user_message_id,
+            planner_action.action.value,
+            len(target_agent_ids),
+            _join_log_ids(target_agent_ids),
+            len(artifact_refs),
+            len(attachment_refs),
+            _open_failure_count(state),
+            len(planner_action.questions),
+            _join_log_ids(question_hashes),
+            state.steps_used,
+            state.step_budget,
             extra={
                 "run_id": state.run_id,
                 "room_id": state.room_id,
                 "user_message_id": state.user_message_id,
                 "action": planner_action.action.value,
-                "target_agent_ids": [
-                    target.agent_id for target in planner_action.targets
-                ],
-                "artifact_refs": [
-                    ref.ref_id
-                    for target in planner_action.targets
-                    for ref in target.artifact_refs
-                ],
-                "attachment_refs": [
-                    ref.ref_id
-                    for target in planner_action.targets
-                    for ref in target.attachment_refs
-                ],
-                "open_failure_count": len(
-                    [
-                        failure
-                        for failure in state.open_failures
-                        if failure.status == "open"
-                    ]
-                ),
+                "target_agent_ids": target_agent_ids,
+                "artifact_refs": artifact_refs,
+                "attachment_refs": attachment_refs,
+                "open_failure_count": _open_failure_count(state),
+                "question_hashes": question_hashes,
             },
         )
 
@@ -1701,10 +1882,26 @@ class SupervisorExecutor:
             ],
         )
 
+        logger.info(
+            "supervisor_dispatch_started room_id=%s run_id=%s "
+            "user_message_id=%s step_number=%d target_count=%d "
+            "target_agent_ids=%s dispatch_intent_ids=%s",
+            room_id,
+            state.run_id,
+            user_message_id,
+            step_number,
+            len(action.targets),
+            _join_log_ids([target.agent_id for target in action.targets]),
+            _join_log_ids([intent.dispatch_intent_id for intent in intents]),
+        )
         state = await self._save_v2_state(
             state,
             event_type=OrchestrationEventType.DISPATCH_INTENT_RECORDED,
-            payload={"dispatch_intent_ids": [intent.dispatch_intent_id for intent in intents]},
+            payload={
+                "dispatch_intent_ids": [
+                    intent.dispatch_intent_id for intent in intents
+                ]
+            },
             mutate=lambda updated: self._apply_v2_dispatch_intents(updated, intents),
         )
 
@@ -2468,6 +2665,17 @@ class SupervisorExecutor:
                     "source_intent_id": claimed.source_intent_id,
                 },
             )
+            logger.info(
+                "orchestration_continuation_claimed run_id=%s continuation_id=%s "
+                "source_intent_id=%s agent_id=%s goal_family_fingerprint=%s "
+                "resource_fingerprint_count=%d",
+                saved.run_id,
+                claimed.continuation_id,
+                claimed.source_intent_id,
+                claimed.agent_id,
+                _fingerprint_prefix(claimed.goal_family_fingerprint),
+                len(claimed.attempted_resource_fingerprints),
+            )
             return claimed
         return None
 
@@ -2698,6 +2906,14 @@ class SupervisorExecutor:
                 state=saved,
                 continuation_id=continuation_id,
                 status="abandoned",
+            )
+            logger.info(
+                "orchestration_continuation_abandoned run_id=%s continuation_id=%s "
+                "chosen_agent_count=%d abandoned_continuation_count=%d",
+                saved.run_id,
+                continuation_id,
+                len(chosen_agent_ids),
+                len(continuation_ids_to_abandon),
             )
         return saved
 
@@ -3364,7 +3580,11 @@ class SupervisorExecutor:
                 pending_status = (
                     OrchestrationStatus.AWAITING_USER
                     if has_awaiting_input and self._has_open_pending_hitl(synced)
-                    else OrchestrationStatus.WAITING_AGENT
+                    else (
+                        OrchestrationStatus.WAITING_AGENT
+                        if has_paused_pending
+                        else OrchestrationStatus.RUNNING
+                    )
                 )
                 if pending_to_ingest:
                     synced = await self._ingest_v2_results(
@@ -4091,6 +4311,7 @@ class SupervisorExecutor:
                     existing["prompt"] = question.prompt
                     existing["prompt_type"] = question.prompt_type
                     existing["choices"] = question.choices
+                    existing["blocker_keys"] = blocker_keys
                     existing["status"] = "open"
             self._clear_stale_pending_hitl_request_ids(updated)
 
@@ -4707,6 +4928,56 @@ class SupervisorExecutor:
                     },
                 )
             if outcome is not None:
+                chain = OutcomeHistoryView.from_state(current).chain(
+                    outcome.agent_id,
+                    outcome.goal_revision_fingerprint,
+                )
+                logger.info(
+                    "orchestration_delegate_outcome_evaluated run_id=%s outcome_id=%s "
+                    "dispatch_intent_id=%s agent_id=%s status=%s "
+                    "goal_family_fingerprint=%s goal_revision_fingerprint=%s "
+                    "attempt_fingerprint=%s result_fingerprint=%s "
+                    "required_obligation_count=%d unknown_count=%d blocker_count=%d "
+                    "attempt=%d epoch=%d",
+                    current.run_id,
+                    outcome.outcome_id,
+                    outcome.dispatch_intent_id,
+                    outcome.agent_id,
+                    outcome.status,
+                    _fingerprint_prefix(outcome.goal_family_fingerprint),
+                    _fingerprint_prefix(outcome.goal_revision_fingerprint),
+                    _fingerprint_prefix(outcome.attempt_fingerprint),
+                    _fingerprint_prefix(outcome.result_fingerprint),
+                    len(outcome.remaining_required_obligations),
+                    len(outcome.unknowns),
+                    len(outcome.blockers),
+                    chain.same_agent_attempt_number,
+                    chain.required_progress_epoch,
+                )
+                if outcome.status == "no_progress":
+                    logger.info(
+                        "orchestration_delegate_no_progress run_id=%s outcome_id=%s "
+                        "agent_id=%s goal_revision_fingerprint=%s attempt=%d epoch=%d "
+                        "required_obligation_count=%d",
+                        current.run_id,
+                        outcome.outcome_id,
+                        outcome.agent_id,
+                        _fingerprint_prefix(outcome.goal_revision_fingerprint),
+                        chain.same_agent_attempt_number,
+                        chain.required_progress_epoch,
+                        len(outcome.remaining_required_obligations),
+                    )
+                if outcome.unknowns:
+                    logger.info(
+                        "orchestration_unknowns_carried_forward run_id=%s outcome_id=%s "
+                        "goal_revision_fingerprint=%s unknown_count=%d "
+                        "required_obligation_count=%d",
+                        current.run_id,
+                        outcome.outcome_id,
+                        _fingerprint_prefix(outcome.goal_revision_fingerprint),
+                        len(outcome.unknowns),
+                        len(outcome.remaining_required_obligations),
+                    )
                 await self._append_v2_event(
                     current,
                     OrchestrationEventType.OUTCOME_EVALUATED,
@@ -5906,9 +6177,62 @@ class SupervisorExecutor:
                 for name, value in fields
                 if value is not None and str(value).strip()
             ]
+            content = SupervisorExecutor._artifact_projection_content(artifact)
+            if content:
+                parts.append(
+                    "content="
+                    + SupervisorExecutor._bounded_projection_value(content, 800)
+                )
             if parts:
                 lines.append("- " + "; ".join(parts))
         return lines
+
+    @staticmethod
+    def _artifact_projection_content(artifact: dict[str, Any]) -> str:
+        parts = artifact.get("parts")
+        fragments: list[str] = []
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, Mapping):
+                    continue
+                for key in ("text", "data", "json", "content"):
+                    value = part.get(key)
+                    if value is None:
+                        continue
+                    fragments.append(SupervisorExecutor._projection_json_or_text(value))
+                    break
+        if fragments:
+            return "\n\n".join(fragment for fragment in fragments if fragment.strip())
+
+        payload = {
+            key: value
+            for key, value in artifact.items()
+            if key
+            not in {
+                "artifact_key",
+                "artifact_id",
+                "artifactId",
+                "name",
+                "title",
+                "summary",
+                "description",
+                "source_agent_message_id",
+                "source_agent_id",
+                "mime_type",
+                "mimeType",
+                "parts",
+            }
+        }
+        return SupervisorExecutor._projection_json_or_text(payload) if payload else ""
+
+    @staticmethod
+    def _projection_json_or_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except TypeError:
+            return str(value)
 
     @staticmethod
     def _bounded_projection_value(value: Any, max_chars: int) -> str:
@@ -5933,6 +6257,17 @@ class SupervisorExecutor:
     ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
         valid_ids = {a.agent_id for a in agent_registry}
+        logger.info(
+            "supervisor_dispatch_targets_started room_id=%s user_message_id=%s "
+            "step_number=%d target_count=%d target_agent_ids=%s "
+            "original_attachment_count=%d",
+            room_id,
+            user_message_id,
+            step_number,
+            len(targets),
+            _join_log_ids([target.agent_id for target in targets]),
+            len(original_attachments or []),
+        )
 
         def planned_message_id_at(index: int) -> str | None:
             if planned_message_ids is None or index >= len(planned_message_ids):
@@ -5944,6 +6279,20 @@ class SupervisorExecutor:
             planned_message_id: str | None = None,
         ) -> StepResult:
             try:
+                logger.info(
+                    "supervisor_dispatch_target_started room_id=%s "
+                    "user_message_id=%s step_number=%d agent_id=%s "
+                    "planned_message_id=%s context_ref_count=%d "
+                    "artifact_ref_count=%d attachment_ref_count=%d",
+                    room_id,
+                    user_message_id,
+                    step_number,
+                    target.agent_id,
+                    planned_message_id,
+                    len(getattr(target, "context_refs", [])),
+                    len(getattr(target, "artifact_refs", [])),
+                    len(getattr(target, "attachment_refs", [])),
+                )
                 # Validate agent_id against registry before any DB writes
                 if target.agent_id not in valid_ids:
                     logger.warning(
@@ -6028,7 +6377,21 @@ class SupervisorExecutor:
                 resolved_payload: ResolvedDispatchPayload | None = None
                 if run_state is not None:
                     try:
-                        resolved_payload = await resolve_dispatch_payload_refs(
+                        logger.info(
+                            "supervisor_dispatch_payload_resolving room_id=%s "
+                            "run_id=%s user_message_id=%s step_number=%d "
+                            "agent_id=%s context_ref_count=%d "
+                            "artifact_ref_count=%d attachment_ref_count=%d",
+                            room_id,
+                            run_state.run_id,
+                            user_message_id,
+                            step_number,
+                            target.agent_id,
+                            len(getattr(target, "context_refs", [])),
+                            len(getattr(target, "artifact_refs", [])),
+                            len(getattr(target, "attachment_refs", [])),
+                        )
+                        maybe_payload = resolve_dispatch_payload_refs(
                             run_state=run_state,
                             target_agent_card=getattr(agent, "agent_card", None)
                             or agent,
@@ -6039,7 +6402,26 @@ class SupervisorExecutor:
                             required_resource_refs=target.required_resource_refs,
                             resource_provider=self.orchestration_resource_provider,
                         )
+                        resolved_payload = (
+                            await maybe_payload
+                            if inspect.isawaitable(maybe_payload)
+                            else maybe_payload
+                        )
                     except DispatchPayloadValidationError as exc:
+                        logger.warning(
+                            "supervisor_dispatch_payload_resolution_failed "
+                            "room_id=%s run_id=%s user_message_id=%s "
+                            "step_number=%d agent_id=%s planned_message_id=%s "
+                            "error_code=%s error=%s",
+                            room_id,
+                            run_state.run_id,
+                            user_message_id,
+                            step_number,
+                            target.agent_id,
+                            planned_message_id,
+                            exc.code,
+                            str(exc),
+                        )
                         return self._dispatch_payload_failure_result(
                             target=target,
                             step_number=step_number,
@@ -6047,6 +6429,43 @@ class SupervisorExecutor:
                             error_message=str(exc),
                             status_message=exc.code,
                         )
+                    if resolved_payload.attachment_failures:
+                        failure = resolved_payload.attachment_failures[0]
+                        logger.warning(
+                            "supervisor_dispatch_payload_attachment_failed "
+                            "room_id=%s run_id=%s user_message_id=%s "
+                            "step_number=%d agent_id=%s planned_message_id=%s "
+                            "error_code=%s ref_id=%s",
+                            room_id,
+                            run_state.run_id,
+                            user_message_id,
+                            step_number,
+                            target.agent_id,
+                            planned_message_id,
+                            failure.get("code"),
+                            failure.get("ref_id"),
+                        )
+                        return self._dispatch_payload_failure_result(
+                            target=target,
+                            step_number=step_number,
+                            planned_message_id=planned_message_id,
+                            error_message=failure["message"],
+                            status_message=failure["code"],
+                        )
+                    logger.info(
+                        "supervisor_dispatch_payload_resolved room_id=%s "
+                        "run_id=%s user_message_id=%s step_number=%d "
+                        "agent_id=%s selected_context_count=%d "
+                        "selected_artifact_count=%d selected_attachment_count=%d",
+                        room_id,
+                        run_state.run_id,
+                        user_message_id,
+                        step_number,
+                        target.agent_id,
+                        len(resolved_payload.selected_context_refs),
+                        len(resolved_payload.selected_artifact_refs),
+                        len(resolved_payload.selected_attachment_refs),
+                    )
 
                 if run_state is not None and resolved_payload is not None:
                     intent = next(
@@ -6151,6 +6570,12 @@ class SupervisorExecutor:
                 message.extend_info["resolved_dispatch_payload_refs"] = (
                     self._resolved_dispatch_payload_refs(resolved_payload)
                 )
+                message.extend_info["resolved_dispatch_resource_payloads"] = [
+                    resource_payload.model_dump(mode="json")
+                    for resource_payload in (
+                        resolved_payload.resource_payloads if resolved_payload else []
+                    )
+                ]
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)
@@ -6211,7 +6636,15 @@ class SupervisorExecutor:
                         )
 
                 logger.info(
-                    "supervisor_agent_dispatching",
+                    "supervisor_agent_invocation_started room_id=%s "
+                    "user_message_id=%s step_number=%d agent_id=%s "
+                    "agent_name=%s agent_message_id=%s",
+                    room_id,
+                    user_message_id,
+                    step_number,
+                    target.agent_id,
+                    target.agent_name,
+                    message.message_id,
                     extra={
                         "room_id": room_id,
                         "step_number": step_number,
@@ -6230,6 +6663,21 @@ class SupervisorExecutor:
                     step_number=step_number,
                     total_steps=None,
                     quoted_text=quoted_text,
+                )
+                logger.info(
+                    "supervisor_agent_invocation_completed room_id=%s "
+                    "user_message_id=%s step_number=%d agent_id=%s "
+                    "agent_message_id=%s processing_status=%s "
+                    "a2a_task_id=%s a2a_context_id=%s status_message=%s",
+                    room_id,
+                    user_message_id,
+                    step_number,
+                    target.agent_id,
+                    message.message_id,
+                    _log_value(result.status),
+                    getattr(result, "a2a_task_id", None),
+                    getattr(result, "a2a_context_id", None),
+                    getattr(result, "status_message", None),
                 )
 
                 if result.status in (
@@ -6319,7 +6767,18 @@ class SupervisorExecutor:
                 )
 
                 logger.info(
-                    "supervisor_agent_dispatched",
+                    "supervisor_agent_dispatched room_id=%s user_message_id=%s "
+                    "step_number=%d agent_id=%s agent_name=%s success=%s "
+                    "status=%s error=%s agent_message_id=%s",
+                    room_id,
+                    user_message_id,
+                    step_number,
+                    target.agent_id,
+                    target.agent_name,
+                    step_result.success,
+                    _log_value(step_result.status),
+                    step_result.error_message,
+                    step_result.agent_message_id,
                     extra={
                         "room_id": room_id,
                         "step_number": step_number,

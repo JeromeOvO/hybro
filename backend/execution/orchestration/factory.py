@@ -15,6 +15,7 @@ def create_room_message_center(
     debate_rounds: int,
     **kwargs: Any,
 ) -> RoomMessageCenter:
+    guardrails_enabled = kwargs.pop("guardrails_enabled", None)
     default_store = _defaults.default_store
     deps: dict[str, Any] = {
         "room_runtime": _defaults.room_runtime,
@@ -65,7 +66,12 @@ def create_room_message_center(
     deps.update(kwargs)
     if deps.get("event_publisher") is None:
         raise RuntimeError("RoomMessageCenter event_publisher dependency is required")
-    return RoomMessageCenter(**deps)
+    room_message_center = RoomMessageCenter(**deps)
+    if guardrails_enabled is not None:
+        room_message_center.supervisor_executor.guardrails_enabled = bool(
+            guardrails_enabled
+        )
+    return room_message_center
 
 
 __all__ = [
