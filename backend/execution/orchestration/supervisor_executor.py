@@ -984,35 +984,36 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
-                    disposition_by_event_id = {
-                        disposition.event_id: disposition
-                        for disposition in state.goal_family_dispositions
-                    }
-                    disposition_by_event_id.update(
-                        {
+                    if _settings.orchestration_outcome_guardrails:
+                        disposition_by_event_id = {
                             disposition.event_id: disposition
-                            for disposition in (
-                                planner_action.completion_evidence.requested_goal_family_dispositions
-                            )
+                            for disposition in state.goal_family_dispositions
                         }
-                    )
-                    for event_id in (
-                        planner_action.completion_evidence.abandoned_goal_disposition_event_ids
-                    ):
-                        disposition = disposition_by_event_id[event_id]
-                        state = await self._dispose_v2_goal_family(
-                            state,
-                            goal_family_fingerprint=disposition.goal_family_fingerprint,
-                            through_goal_revision_fingerprint=(
-                                disposition.through_goal_revision_fingerprint
-                            ),
-                            status=disposition.status,
-                            reason=disposition.reason,
-                            replacement_goal_family_fingerprint=(
-                                disposition.replacement_goal_family_fingerprint
-                            ),
-                            event_id=disposition.event_id,
+                        disposition_by_event_id.update(
+                            {
+                                disposition.event_id: disposition
+                                for disposition in (
+                                    planner_action.completion_evidence.requested_goal_family_dispositions
+                                )
+                            }
                         )
+                        for event_id in (
+                            planner_action.completion_evidence.abandoned_goal_disposition_event_ids
+                        ):
+                            disposition = disposition_by_event_id[event_id]
+                            state = await self._dispose_v2_goal_family(
+                                state,
+                                goal_family_fingerprint=disposition.goal_family_fingerprint,
+                                through_goal_revision_fingerprint=(
+                                    disposition.through_goal_revision_fingerprint
+                                ),
+                                status=disposition.status,
+                                reason=disposition.reason,
+                                replacement_goal_family_fingerprint=(
+                                    disposition.replacement_goal_family_fingerprint
+                                ),
+                                event_id=disposition.event_id,
+                            )
 
                     def record_completion_evidence(
                         updated: OrchestrationRunState,
@@ -4810,28 +4811,43 @@ class SupervisorExecutor:
         if not reason.strip():
             raise ValueError("goal family disposition reason must be nonempty")
 
-        family_outcomes = [
+        revision_outcomes = [
             outcome
             for outcome in state.delegation_outcomes
             if outcome.goal_family_fingerprint == goal_family_fingerprint
+            and outcome.goal_revision_fingerprint == through_goal_revision_fingerprint
         ]
-        through_index = next(
-            (
-                index
-                for index in range(len(family_outcomes) - 1, -1, -1)
-                if family_outcomes[index].goal_revision_fingerprint
-                == through_goal_revision_fingerprint
-            ),
-            None,
-        )
-        if through_index is None:
+        if not revision_outcomes:
             raise ValueError("goal family disposition revision is not known")
-        intent_ids = set().union(
-            *(
-                self._lineage_intent_ids(state, outcome.dispatch_intent_id)
-                for outcome in family_outcomes[: through_index + 1]
-            )
-        )
+        latest_outcome_by_intent_id = {
+            outcome.dispatch_intent_id: outcome
+            for outcome in state.delegation_outcomes
+        }
+        child_intents_by_parent_id: dict[str, list[str]] = {}
+        for intent in state.dispatch_intents:
+            if intent.repair_of_intent_id:
+                child_intents_by_parent_id.setdefault(
+                    intent.repair_of_intent_id, []
+                ).append(intent.dispatch_intent_id)
+
+        intent_ids: set[str] = set()
+
+        def add_matching_repair_lineage(intent_id: str) -> None:
+            outcome = latest_outcome_by_intent_id.get(intent_id)
+            if outcome is not None and (
+                outcome.goal_family_fingerprint != goal_family_fingerprint
+                or outcome.goal_revision_fingerprint
+                != through_goal_revision_fingerprint
+            ):
+                return
+            if intent_id in intent_ids:
+                return
+            intent_ids.add(intent_id)
+            for child_intent_id in child_intents_by_parent_id.get(intent_id, []):
+                add_matching_repair_lineage(child_intent_id)
+
+        for outcome in revision_outcomes:
+            add_matching_repair_lineage(outcome.dispatch_intent_id)
         event_id = event_id or f"goal-family-disposed:{uuid4().hex}"
         disposition = GoalFamilyDispositionRecord(
             event_id=event_id,

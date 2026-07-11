@@ -876,6 +876,42 @@ def test_planner_schema_rejects_blank_completion_disposition_reason():
         )
 
 
+def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
+    payload = {
+        "action": "complete",
+        "reasoning": "The quote is ready.",
+        "targets": [],
+        "questions": [],
+        "synthesis_instruction": None,
+        "failure_reason": None,
+        "completion_evidence": {
+            "satisfied_criteria": ["quote_collected"],
+            "referenced_fact_ids": ["fact-1"],
+            "referenced_artifact_keys": ["artifact-1"],
+            "unresolved_questions": [],
+            "final_answer_intent": "answer_user",
+            "confidence": 0.8,
+            "satisfied_output_keys": ["quote"],
+            "waived_outputs": [
+                {
+                    "output_key": "non_required_addendum",
+                    "reason": "The user did not request the addendum.",
+                    "blocker_keys": [],
+                }
+            ],
+        },
+    }
+
+    validate(payload, PLANNER_ACTION_RESPONSE_SCHEMA)
+
+    action = RoomSupervisorPlannerAdapter._parse_action(payload)
+
+    assert action.completion_evidence.satisfied_output_keys == ["quote"]
+    assert action.completion_evidence.waived_outputs[0].reason == (
+        "The user did not request the addendum."
+    )
+
+
 def test_completion_validator_rejects_constructed_blank_disposition_reason():
     action = _complete_action()
     action.completion_evidence.requested_goal_family_dispositions.append(

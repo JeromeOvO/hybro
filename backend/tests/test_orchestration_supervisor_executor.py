@@ -8,6 +8,7 @@ import pytest
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
+from execution.orchestration import supervisor_executor as supervisor_executor_module
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
@@ -6356,7 +6357,80 @@ async def test_goal_family_disposition_covers_inflight_same_revision_repair():
 
 
 @pytest.mark.asyncio
-async def test_run_complete_creates_referenced_goal_family_disposition_before_terminalizing():
+async def test_goal_family_disposition_does_not_terminalize_later_revision_repair():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+            ),
+            DelegationOutcomeRecord(
+                outcome_id="outcome-2",
+                dispatch_intent_id="intent-2",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-2",
+                attempt_fingerprint="attempt-2",
+                status="partial",
+            ),
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce the quote.",
+                task_hash="task-hash-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Repair the quote for the revised goal.",
+                task_hash="task-hash-2",
+                repair_of_intent_id="intent-1",
+            ),
+        ],
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-2", agent_id="agent-1", status="running"
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._dispose_v2_goal_family(
+        await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
+        through_goal_revision_fingerprint="revision-1",
+        status="abandoned",
+        reason="The original revision is no longer needed.",
+    )
+
+    assert saved.dispatch_intents[0].status == "abandoned"
+    assert saved.dispatch_intents[1].status == "planned"
+    assert saved.active_dispatches[0].status == "running"
+
+
+@pytest.mark.asyncio
+async def test_run_complete_creates_referenced_goal_family_disposition_before_terminalizing(
+    monkeypatch,
+):
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -6437,6 +6511,11 @@ async def test_run_complete_creates_referenced_goal_family_disposition_before_te
         ),
         user_message=user_message,
     )
+    monkeypatch.setattr(
+        supervisor_executor_module._settings,
+        "orchestration_outcome_guardrails",
+        True,
+    )
 
     result = await executor.run(
         room_id="room-1",
@@ -6461,6 +6540,83 @@ async def test_run_complete_creates_referenced_goal_family_disposition_before_te
     assert OrchestrationEventType.GOAL_FAMILY_DISPOSED in event_types
     assert event_types.index(OrchestrationEventType.GOAL_FAMILY_DISPOSED) < event_types.index(
         OrchestrationEventType.RUN_TERMINAL
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_complete_ignores_unknown_disposition_when_guardrails_disabled(
+    monkeypatch,
+):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Complete the work"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        candidate_agent_ids=["agent-1"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="The answer is ready.",
+            )
+        ],
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.COMPLETE,
+                reasoning="The answer is ready.",
+                completion_evidence=CompletionEvidence(
+                    satisfied_criteria=["answer_ready"],
+                    referenced_fact_ids=[],
+                    referenced_artifact_keys=[],
+                    unresolved_questions=[],
+                    final_answer_intent="answer_user",
+                    confidence=0.9,
+                    abandoned_goal_disposition_event_ids=["unknown-disposition"],
+                ),
+            )
+        ),
+        user_message=user_message,
+    )
+    monkeypatch.setattr(
+        supervisor_executor_module._settings,
+        "orchestration_outcome_guardrails",
+        False,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Complete the work",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    saved = await store.get_run("message-1")
+    assert saved is not None
+    assert saved.goal_family_dispositions == []
+    assert all(
+        event.type != OrchestrationEventType.GOAL_FAMILY_DISPOSED
+        for event in store._events_by_run["message-1"]
     )
 
 

@@ -168,6 +168,30 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         },
                         "final_answer_intent": {"type": "string"},
                         "confidence": {"type": "number"},
+                        "satisfied_output_keys": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "waived_outputs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "output_key": {"type": "string"},
+                                    "reason": {"type": "string", "pattern": "\\S"},
+                                    "blocker_keys": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": [
+                                    "output_key",
+                                    "reason",
+                                    "blocker_keys",
+                                ],
+                            },
+                        },
                         "abandoned_goal_disposition_event_ids": {
                             "type": "array",
                             "items": {"type": "string"},
