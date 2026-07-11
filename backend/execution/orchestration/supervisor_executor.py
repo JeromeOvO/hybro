@@ -4826,9 +4826,12 @@ class SupervisorExecutor:
         )
         if through_index is None:
             raise ValueError("goal family disposition revision is not known")
-        intent_ids = {
-            outcome.dispatch_intent_id for outcome in family_outcomes[: through_index + 1]
-        }
+        intent_ids = set().union(
+            *(
+                self._lineage_intent_ids(state, outcome.dispatch_intent_id)
+                for outcome in family_outcomes[: through_index + 1]
+            )
+        )
         event_id = event_id or f"goal-family-disposed:{uuid4().hex}"
         disposition = GoalFamilyDispositionRecord(
             event_id=event_id,

@@ -284,6 +284,24 @@ class GoalFamilyDispositionRequest(BaseModel):
     reason: str
     replacement_goal_family_fingerprint: str | None = None
 
+    @field_validator(
+        "event_id",
+        "goal_family_fingerprint",
+        "through_goal_revision_fingerprint",
+        "reason",
+        "replacement_goal_family_fingerprint",
+    )
+    @classmethod
+    def _nonempty_request_fields(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                f"completion disposition request {info.field_name} must be nonempty"
+            )
+        return normalized
+
 
 class CompletionEvidence(BaseModel):
     satisfied_criteria: list[str] = Field(default_factory=list)

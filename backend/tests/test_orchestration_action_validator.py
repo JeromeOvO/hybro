@@ -24,6 +24,7 @@ from models.orchestration import (
     DispatchIntent,
     DispatchRefKind,
     GoalFamilyDispositionRecord,
+    GoalFamilyDispositionRequest,
     OpenFailureRecord,
     OrchestrationRunState,
     ParticipantSnapshot,
@@ -831,6 +832,66 @@ def test_planner_schema_requires_v2_outcome_policy_fields():
             },
             PLANNER_ACTION_RESPONSE_SCHEMA,
         )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "event_id",
+        "goal_family_fingerprint",
+        "through_goal_revision_fingerprint",
+        "reason",
+    ],
+)
+def test_completion_disposition_request_rejects_blank_required_fields(field_name):
+    payload = {
+        "event_id": "dispose-1",
+        "goal_family_fingerprint": "family-1",
+        "through_goal_revision_fingerprint": "revision-1",
+        "status": "abandoned",
+        "reason": "The user withdrew the request.",
+    }
+    payload[field_name] = " "
+
+    with pytest.raises(ValueError, match="nonempty"):
+        GoalFamilyDispositionRequest(**payload)
+
+
+def test_planner_schema_rejects_blank_completion_disposition_reason():
+    disposition_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"][
+        "completion_evidence"
+    ]["anyOf"][0]["properties"]["requested_goal_family_dispositions"]["items"]
+
+    with pytest.raises(ValidationError, match="reason"):
+        validate(
+            {
+                "event_id": "dispose-1",
+                "goal_family_fingerprint": "family-1",
+                "through_goal_revision_fingerprint": "revision-1",
+                "status": "abandoned",
+                "reason": " ",
+                "replacement_goal_family_fingerprint": None,
+            },
+            disposition_schema,
+        )
+
+
+def test_completion_validator_rejects_constructed_blank_disposition_reason():
+    action = _complete_action()
+    action.completion_evidence.requested_goal_family_dispositions.append(
+        GoalFamilyDispositionRequest.model_construct(
+            event_id="dispose-1",
+            goal_family_fingerprint="family-1",
+            through_goal_revision_fingerprint="revision-1",
+            status="abandoned",
+            reason=" ",
+        )
+    )
+
+    with pytest.raises(PlannerActionValidationError, match="nonempty") as exc_info:
+        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+
+    assert exc_info.value.code == "completion_disposition_request_invalid"
 
 
 def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():

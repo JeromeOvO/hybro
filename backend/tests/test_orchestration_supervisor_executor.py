@@ -6277,7 +6277,7 @@ async def test_goal_family_disposition_requires_nonempty_reason():
 
 
 @pytest.mark.asyncio
-async def test_goal_family_disposition_covers_latest_duplicate_revision_attempt():
+async def test_goal_family_disposition_covers_inflight_same_revision_repair():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
         store=store,
@@ -6294,15 +6294,6 @@ async def test_goal_family_disposition_covers_latest_duplicate_revision_attempt(
                 goal_revision_fingerprint="revision-1",
                 attempt_fingerprint="attempt-1",
                 status="partial",
-            ),
-            DelegationOutcomeRecord(
-                outcome_id="outcome-2",
-                dispatch_intent_id="intent-2",
-                agent_id="agent-1",
-                goal_family_fingerprint="family-1",
-                goal_revision_fingerprint="revision-1",
-                attempt_fingerprint="attempt-2",
-                status="failed",
             ),
         ],
         dispatch_intents=[
@@ -6323,6 +6314,7 @@ async def test_goal_family_disposition_covers_latest_duplicate_revision_attempt(
                 agent_id="agent-1",
                 task="Repair the quote.",
                 task_hash="task-hash-2",
+                repair_of_intent_id="intent-1",
             ),
         ],
         active_dispatches=[
@@ -6430,6 +6422,16 @@ async def test_run_complete_creates_referenced_goal_family_disposition_before_te
                     final_answer_intent="answer_user",
                     confidence=0.9,
                     abandoned_goal_disposition_event_ids=["dispose-1"],
+                    requested_goal_family_dispositions=[
+                        {
+                            "event_id": "dispose-1",
+                            "goal_family_fingerprint": "family-1",
+                            "through_goal_revision_fingerprint": "revision-1",
+                            "status": "abandoned",
+                            "reason": "The user no longer needs this quote.",
+                            "replacement_goal_family_fingerprint": "family-2",
+                        }
+                    ],
                 ),
             )
         ),

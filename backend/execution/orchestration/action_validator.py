@@ -137,6 +137,7 @@ class PlannerActionValidator:
                 "complete action requires completion evidence",
                 code="completion_evidence_invalid",
             )
+        PlannerActionValidator._validate_completion_disposition_requests(evidence)
         _validate_completion_blockers(
             run_state,
             evidence,
@@ -467,6 +468,32 @@ class PlannerActionValidator:
                 "complete action is missing required output evidence",
                 code="completion_required_output_missing",
             )
+
+    @staticmethod
+    def _validate_completion_disposition_requests(evidence) -> None:
+        for request in evidence.requested_goal_family_dispositions:
+            for field_name in (
+                "event_id",
+                "goal_family_fingerprint",
+                "through_goal_revision_fingerprint",
+                "reason",
+            ):
+                value = getattr(request, field_name, None)
+                if not isinstance(value, str) or not value.strip():
+                    raise PlannerActionValidationError(
+                        "complete action disposition request requires nonempty "
+                        f"{field_name}",
+                        code="completion_disposition_request_invalid",
+                    )
+            replacement = request.replacement_goal_family_fingerprint
+            if replacement is not None and (
+                not isinstance(replacement, str) or not replacement.strip()
+            ):
+                raise PlannerActionValidationError(
+                    "complete action disposition request requires nonempty "
+                    "replacement_goal_family_fingerprint when provided",
+                    code="completion_disposition_request_invalid",
+                )
 
     @staticmethod
     def _completion_state_with_requested_dispositions(evidence, run_state):

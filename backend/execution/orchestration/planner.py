@@ -178,18 +178,25 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                                 "type": "object",
                                 "additionalProperties": False,
                                 "properties": {
-                                    "event_id": {"type": "string"},
-                                    "goal_family_fingerprint": {"type": "string"},
+                                    "event_id": {"type": "string", "pattern": "\\S"},
+                                    "goal_family_fingerprint": {
+                                        "type": "string",
+                                        "pattern": "\\S",
+                                    },
                                     "through_goal_revision_fingerprint": {
-                                        "type": "string"
+                                        "type": "string",
+                                        "pattern": "\\S",
                                     },
                                     "status": {
                                         "type": "string",
                                         "enum": ["abandoned", "superseded"],
                                     },
-                                    "reason": {"type": "string"},
+                                    "reason": {"type": "string", "pattern": "\\S"},
                                     "replacement_goal_family_fingerprint": {
-                                        "type": ["string", "null"]
+                                        "anyOf": [
+                                            {"type": "string", "pattern": "\\S"},
+                                            {"type": "null"},
+                                        ]
                                     },
                                 },
                                 "required": [
@@ -198,7 +205,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                                     "through_goal_revision_fingerprint",
                                     "status",
                                     "reason",
-                                    "replacement_goal_family_fingerprint",
                                 ],
                             },
                         },
