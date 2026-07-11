@@ -1943,6 +1943,10 @@ class SupervisorExecutor:
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
             ]
+            if not self.guardrails_enabled:
+                # Legacy default-off behavior opens HITL for all A2A input requests.
+                # Outcome ingestion still records shadow decisions before the pause.
+                hitl_required = awaiting
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
                 state = await self._ingest_v2_results(
@@ -2357,6 +2361,7 @@ class SupervisorExecutor:
         interactive_states = {
             "input-required",
             "auth-required",
+            "policy-required",
         }
 
         last_state = getattr(msg, "last_notified_state", None)

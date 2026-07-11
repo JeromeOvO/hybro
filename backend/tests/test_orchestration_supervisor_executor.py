@@ -5791,6 +5791,102 @@ async def test_recover_v2_inflight_dispatch_rehydrates_a2a_task_fields_for_auth_
 
 
 @pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_rehydrates_policy_required_task_state():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id="message-1:step-1:target-1:message",
+            message_content=SimpleNamespace(
+                message_text="",
+                message_task={
+                    "id": "task-from-task",
+                    "context_id": "ctx-from-task",
+                    "status": {
+                        "state": "policy-required",
+                        "message": {
+                            "parts": [
+                                {
+                                    "kind": "text",
+                                    "text": "Please approve the required policy.",
+                                }
+                            ]
+                        },
+                    },
+                },
+            ),
+        )
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    request_input_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert request_input_kwargs["a2a_task_id"] == "task-from-task"
+    assert request_input_kwargs["a2a_context_id"] == "ctx-from-task"
+    assert request_input_kwargs["prompt"] == "Please approve the required policy."
+    recovered_output = recovered_state.agent_outputs[0]
+    assert recovered_output.interactive_state == "policy-required"
+    assert recovered_output.requires_policy is True
+
+
+@pytest.mark.asyncio
 async def test_recover_v2_inflight_dispatch_paused_and_awaiting_saves_paused_before_hitl():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -9061,6 +9157,69 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
         planner.contexts[1].state_context.open_failures[0]["error_code"]
         == "agent_input_required"
     )
+
+
+@pytest.mark.asyncio
+async def test_plain_input_required_creates_legacy_hitl_when_guardrails_disabled():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="ask broker",
+            targets=[PlannedDelegateTarget(agent_id="agent-1", task="Read input")],
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=planner,
+        user_message=user_message,
+        guardrails_enabled=False,
+    )
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.AWAITING_INPUT,
+            response_text="",
+            message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Need the selected text projection.",
+        )
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert hitl_kwargs["source"] == "agent"
+    assert hitl_kwargs["prompt"] == "Need the selected text projection."
+    assert result.run_state.pending_hitl_request_ids == ["hitl-agent-1"]
+    assert len(planner.contexts) == 1
 
 
 @pytest.mark.parametrize(
