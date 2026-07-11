@@ -1682,23 +1682,7 @@ class SupervisorExecutor:
         ]
         question_hashes = _planner_question_hashes(planner_action)
         logger.info(
-            "supervisor_planner_decision run_id=%s room_id=%s "
-            "user_message_id=%s action=%s target_count=%d target_agent_ids=%s "
-            "artifact_ref_count=%d attachment_ref_count=%d open_failure_count=%d "
-            "question_count=%d question_hashes=%s steps_used=%d step_budget=%d",
-            state.run_id,
-            state.room_id,
-            state.user_message_id,
-            planner_action.action.value,
-            len(target_agent_ids),
-            _join_log_ids(target_agent_ids),
-            len(artifact_refs),
-            len(attachment_refs),
-            _open_failure_count(state),
-            len(planner_action.questions),
-            _join_log_ids(question_hashes),
-            state.steps_used,
-            state.step_budget,
+            "supervisor_planner_decision",
             extra={
                 "run_id": state.run_id,
                 "room_id": state.room_id,
@@ -1709,6 +1693,12 @@ class SupervisorExecutor:
                 "attachment_refs": attachment_refs,
                 "open_failure_count": _open_failure_count(state),
                 "question_hashes": question_hashes,
+                "target_count": len(target_agent_ids),
+                "artifact_ref_count": len(artifact_refs),
+                "attachment_ref_count": len(attachment_refs),
+                "question_count": len(planner_action.questions),
+                "steps_used": state.steps_used,
+                "step_budget": state.step_budget,
             },
         )
 
