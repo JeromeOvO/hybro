@@ -335,6 +335,7 @@ class DispatchIntent(BaseModel):
     context_refs: list[DispatchContentRef] = Field(default_factory=list)
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
+    selected_resource_fingerprints: list[str] = Field(default_factory=list)
     expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
     repair_of_intent_id: str | None = None
     attachment_policy: Literal["explicit_refs_only", "compatible_only"] = (

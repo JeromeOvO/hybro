@@ -1169,9 +1169,21 @@ def _validation_code(action, state):
 
 
 def test_duplicate_delegate_pair_rejected_before_intents_exist():
-    action = _guardrail_action([_guardrail_target(), _guardrail_target()])
+    targets = [
+        _guardrail_target().model_copy(update={"parallel_group": "parallel-1"}),
+        _guardrail_target().model_copy(update={"parallel_group": "parallel-1"}),
+    ]
+    action = _guardrail_action(targets)
     assert _validation_code(action, _guardrail_state()) == (
         "duplicate_delegate_goal_target"
+    )
+
+
+def test_delegate_structural_errors_precede_outcome_policy_when_guardrails_enabled():
+    action = _guardrail_action([_guardrail_target(), _guardrail_target()])
+
+    assert _validation_code(action, _guardrail_state()) == (
+        "parallel_dependency_unspecified"
     )
 
 

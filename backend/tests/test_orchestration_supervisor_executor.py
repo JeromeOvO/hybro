@@ -8,7 +8,10 @@ import pytest
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
-from execution.orchestration.action_validator import PlannerActionValidationError
+from execution.orchestration.action_validator import (
+    PlannerActionValidationError,
+    PlannerActionValidator,
+)
 from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     ResolvedResourcePayload,
@@ -552,6 +555,7 @@ def _explicit_dispatch_intent(
     step_number: int,
     target_index: int,
     target,
+    resource_fingerprints=None,
 ) -> DispatchIntent:
     return DispatchIntent(
         step_id=f"{run_id}:step-{step_number}",
@@ -564,6 +568,17 @@ def _explicit_dispatch_intent(
         context_refs=list(target.context_refs),
         artifact_refs=list(target.artifact_refs),
         attachment_refs=list(target.attachment_refs),
+        selected_resource_fingerprints=sorted(
+            {
+                (resource_fingerprints or {})[ref.ref_id]
+                for ref in (
+                    *target.context_refs,
+                    *target.artifact_refs,
+                    *target.attachment_refs,
+                )
+                if ref.ref_id in (resource_fingerprints or {})
+            }
+        ),
         expected_outputs=list(target.expected_outputs),
         attachment_policy=target.attachment_policy,
     )
@@ -5980,6 +5995,74 @@ async def test_ingest_v2_results_persists_one_idempotent_outcome():
     assert [event.type for event in events].count(
         OrchestrationEventType.OUTCOME_EVALUATED
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_backed_outcome_blocks_matching_delegate_revision():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review the projected resource"),
+    )
+    resource_ref = DispatchContentRef(
+        kind=DispatchRefKind.CONTEXT,
+        ref_id="ctx:file-1:text",
+        source_agent_message_id="source-msg-1",
+    )
+    target = PlannedDelegateTarget(
+        agent_id="agent-1",
+        task="Review the projected resource",
+        context_refs=[resource_ref],
+    )
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="step-1:target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        task=target.task,
+        task_hash="hash-1",
+        context_refs=[resource_ref],
+        selected_resource_fingerprints=["resource-fingerprint-1"],
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(dispatch_intents=[intent])
+    await store.create_run(state)
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+
+    persisted = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task=target.task,
+                response_text="Reviewed",
+                success=True,
+                status=StepStatus.SUCCESS,
+                agent_message_id="agent-msg-1",
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert len(persisted.delegation_outcomes) == 1
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Repeat the selected-resource review",
+                targets=[target],
+            ),
+            run_state=persisted,
+            resource_fingerprints={resource_ref.ref_id: "resource-fingerprint-1"},
+            guardrails_enabled=True,
+        )
+
+    assert exc_info.value.code == "delegate_goal_already_fulfilled"
 
 
 @pytest.mark.asyncio
