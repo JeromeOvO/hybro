@@ -399,6 +399,19 @@ def test_initial_clarification_uses_dispatch_history_not_steps_used():
     )
 
 
+def test_initial_clarification_rejects_duplicate_question_in_same_action():
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(prompt="Which account should we use?"),
+            PlannerQuestion(prompt="  Which account should we use?  "),
+        ],
+    )
+
+    assert _validation_code(action, _guardrail_state()) == "duplicate_question_in_action"
+
+
 def test_post_dispatch_question_requires_blocker_keys():
     state = _guardrail_state(intents=[_completed_quote_intent()])
 

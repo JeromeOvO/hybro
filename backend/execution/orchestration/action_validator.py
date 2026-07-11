@@ -206,12 +206,18 @@ class PlannerActionValidator:
         if not guardrails_enabled:
             return
 
-        question_prompts = {
+        question_prompts = [
             normalized
             for question in action.questions
             if (normalized := PlannerActionValidator._normalize_question_prompt(question.prompt))
-        }
-        if not question_prompts:
+        ]
+        if len(question_prompts) != len(set(question_prompts)):
+            raise PlannerActionValidationError(
+                "ask_user action repeats a question in the same action",
+                code="duplicate_question_in_action",
+            )
+        normalized_question_prompts = set(question_prompts)
+        if not normalized_question_prompts:
             if run_state.dispatch_intents:
                 PlannerActionValidator._validate_post_dispatch_ask_user(
                     action,
@@ -232,7 +238,7 @@ class PlannerActionValidator:
                 )
             )
         }
-        if question_prompts & resolved_prompts:
+        if normalized_question_prompts & resolved_prompts:
             raise PlannerActionValidationError(
                 "ask_user action repeats already answered supervisor question(s)",
                 code="duplicate_answered_question",
@@ -250,7 +256,7 @@ class PlannerActionValidator:
                 )
             )
         }
-        if question_prompts & pending_prompts:
+        if normalized_question_prompts & pending_prompts:
             raise PlannerActionValidationError(
                 "ask_user action repeats pending supervisor question(s)",
                 code="duplicate_pending_question",
