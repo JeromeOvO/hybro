@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
@@ -28,6 +31,7 @@ from execution.orchestration.outcome_policy import (
 )
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
+    AttachmentProjectionService,
     OrchestrationResourceProvider,
     ResourcePayload,
     ResourceProjectionRef,
@@ -456,6 +460,31 @@ def _claimed_continuation() -> PendingAgentContinuation:
         a2a_context_id="ctx-1",
         status="resuming",
     )
+
+
+def _text_pdf_bytes(text: str) -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {NameObject("/F1"): writer._add_object(font)}
+            )
+        }
+    )
+    content = DecodedStreamObject()
+    content.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode())
+    page[NameObject("/Contents")] = writer._add_object(content)
+    writer.write(buffer)
+    return buffer.getvalue()
 
 
 def _executor(
@@ -9350,7 +9379,12 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
         ),
     )
     store = InMemoryOrchestrationRunStore()
-    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor = _executor(
+        store=store,
+        planner=planner,
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
     executor.agent_message_processor.process_single_message = AsyncMock(
         return_value=ProcessingResult(
             ProcessingStatus.AWAITING_INPUT,
@@ -10738,18 +10772,6 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         envelope=user_message.extend_info,
         goal="Use uploaded text",
     )
-    state.dispatch_intents.append(
-        DispatchIntent(
-            step_id="step-1",
-            step_target_id="target-1",
-            dispatch_intent_id="intent-1",
-            planned_agent_message_id="agent-msg-1",
-            agent_id="agent-1",
-            task="Initial task",
-            task_hash="hash-1",
-            status=StepStatus.AWAITING_INPUT.value,
-        )
-    )
     state.agent_outputs.append(
         AgentOutputRecord(
             agent_message_id="agent-msg-1",
@@ -10771,19 +10793,42 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
             recoverable=True,
         )
     )
+    resource_payload = ResolvedResourcePayload(
+        ref_id="ctx:file-file-1:text",
+        kind="context",
+        mime_type="text/plain",
+        text="Projected input",
+    )
+    resource_fingerprint = canonical_content_fingerprint(
+        resource_payload.model_dump(mode="json")
+    )
+    goal_family_fingerprint = goal_fingerprints(
+        agent_id="agent-1",
+        expected_outputs=[],
+        selected_content_fingerprints=[resource_fingerprint],
+        dependency_family_fingerprints=[],
+        upstream_output_fingerprints=[],
+    ).goal_family_fingerprint
+    state.dispatch_intents.append(
+        DispatchIntent(
+            step_id="step-1",
+            step_target_id="target-1",
+            dispatch_intent_id="intent-1",
+            planned_agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            task="Use uploaded text",
+            task_hash="hash-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            goal_family_fingerprint=goal_family_fingerprint,
+        )
+    )
     state.pending_agent_continuations.append(
         PendingAgentContinuation(
-            continuation_id="continuation-1",
+            continuation_id="cont-1",
             source_intent_id="intent-1",
             source_agent_message_id="agent-msg-1",
             agent_id="agent-1",
-            goal_family_fingerprint=goal_fingerprints(
-                agent_id="agent-1",
-                expected_outputs=[],
-                selected_content_fingerprints=[],
-                dependency_family_fingerprints=[],
-                upstream_output_fingerprints=[],
-            ).goal_family_fingerprint,
+            goal_family_fingerprint=goal_family_fingerprint,
             goal_revision_fingerprint="revision-1",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
@@ -10817,12 +10862,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
     )
     executor.orchestration_resource_provider = SimpleNamespace(
         resolve_ref=AsyncMock(
-            return_value=ResolvedResourcePayload(
-                ref_id="ctx:file-file-1:text",
-                kind="context",
-                mime_type="text/plain",
-                text="Projected input",
-            )
+            return_value=resource_payload
         )
     )
     visible_message = _agent_message("agent-msg-1")
@@ -10857,6 +10897,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         request_user_id="user-1",
         quoted_text=None,
         user_message=user_message,
+        resource_fingerprints={"ctx:file-file-1:text": resource_fingerprint},
     )
 
     assert status is None
@@ -10870,4 +10911,233 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         "selected_attachment_refs": [],
     }
     assert saved.agent_outputs[0].status == "completed"
-    assert saved.dispatch_intents[0].status == "completed"
+    assert saved.dispatch_intents[-1].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch():
+    pdf_bytes = _text_pdf_bytes("Insured has 250 employees and 50M revenue.")
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use uploaded PDF",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=len(pdf_bytes),
+                )
+            ],
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["broker-agent", "insurer-agent"],
+            "client_request_id": "client-1",
+        },
+    )
+    content_reader = SimpleNamespace(get_bytes=AsyncMock(return_value=pdf_bytes))
+    provider = OrchestrationResourceProvider(
+        projection_service=AttachmentProjectionService(content_reader=content_reader)
+    )
+
+    planner_actions = [
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="extract submission",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="broker-agent",
+                    agent_name="Broker",
+                    task="Extract submission facts from the selected projection.",
+                    context_refs=[
+                        DispatchContentRef(
+                            kind=DispatchRefKind.CONTEXT,
+                            ref_id="ctx:file-file-1:text",
+                            mime_type="text/plain",
+                        )
+                    ],
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            kind="submission_pack",
+                            required=True,
+                            description="Structured submission pack.",
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="assess downstream",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="insurer-agent",
+                    agent_name="Insurer",
+                    task="Assess the upstream submission artifact.",
+                    artifact_refs=[
+                        DispatchContentRef(
+                            kind=DispatchRefKind.ARTIFACT,
+                            ref_id="broker-msg:artifact_id:submission",
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="workflow complete",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["submission extracted", "assessment returned"],
+                referenced_fact_ids=[],
+                referenced_artifact_keys=["broker-msg:artifact_id:submission"],
+                unresolved_questions=[],
+                final_answer_intent="summarize",
+                confidence=0.9,
+            ),
+        ),
+    ]
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(*planner_actions),
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = provider
+
+    def dispatch_intent(
+        run_id: str,
+        step_number: int,
+        target_index: int,
+        target,
+        resource_fingerprints,
+    ):
+        intent = _explicit_dispatch_intent(
+            run_id,
+            step_number,
+            target_index,
+            target,
+        )
+        intent.planned_agent_message_id = (
+            "broker-msg" if step_number == 1 else "insurer-msg"
+        )
+        return intent
+
+    executor._v2_dispatch_intent = MagicMock(side_effect=dispatch_intent)
+    broker_message = _agent_message("broker-msg")
+    broker_message.message_content.message_task = {
+        "artifacts": [
+            {
+                "artifact_id": "submission",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "Insured has 250 employees and 50M revenue.",
+                    }
+                ],
+            }
+        ]
+    }
+
+    async def get_agent_message(message_id: str):
+        return broker_message if message_id == "broker-msg" else None
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=get_agent_message
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        agent_registry=[
+            AgentProfile(agent_id="broker-agent", agent_name="Broker"),
+            AgentProfile(agent_id="insurer-agent", agent_name="Insurer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    dispatched_messages = [
+        call.args[0]
+        for call in executor.agent_message_processor.process_single_message.await_args_list
+    ]
+    broker_dispatch, insurer_dispatch = dispatched_messages
+    assert broker_dispatch.message_id == "broker-msg"
+    assert broker_dispatch.extend_info["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert broker_dispatch.extend_info["resolved_dispatch_payload_refs"] == {
+        "context_refs": ["ctx:file-file-1:text"],
+        "artifact_refs": [],
+        "attachment_refs": [],
+        "resource_payloads": [
+            {
+                "ref_id": "ctx:file-file-1:text",
+                "kind": "context",
+                "mime_type": "text/plain",
+                "text": "Insured has 250 employees and 50M revenue.",
+                "summary": "Extracted 42 characters from 1 PDF page(s).",
+                "metadata": {
+                    "source_ref_id": "file:file-1",
+                    "file_id": "file-1",
+                    "file_name": "submission.pdf",
+                    "char_count": 42,
+                    "page_count": 1,
+                    "is_truncated": False,
+                },
+            }
+        ],
+    }
+    assert broker_dispatch.extend_info["resolved_dispatch_resource_payloads"] == [
+        {
+            "ref_id": "ctx:file-file-1:text",
+            "kind": "context",
+            "mime_type": "text/plain",
+            "text": "Insured has 250 employees and 50M revenue.",
+            "summary": "Extracted 42 characters from 1 PDF page(s).",
+            "metadata": {
+                "source_ref_id": "file:file-1",
+                "file_id": "file-1",
+                "file_name": "submission.pdf",
+                "char_count": 42,
+                "page_count": 1,
+                "is_truncated": False,
+            },
+        }
+    ]
+    assert insurer_dispatch.message_id == "insurer-msg"
+    assert insurer_dispatch.extend_info["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert insurer_dispatch.extend_info["dispatch_payload_refs"]["artifact_refs"] == [
+        {
+            "kind": "artifact",
+            "ref_id": "broker-msg:artifact_id:submission",
+            "source_agent_message_id": None,
+            "mime_type": None,
+            "required": True,
+        }
+    ]
+    assert insurer_dispatch.extend_info["resolved_dispatch_payload_refs"][
+        "artifact_refs"
+    ] == ["broker-msg:artifact_id:submission"]
+
+    dispatched_agents = [intent.agent_id for intent in result.run_state.dispatch_intents]
+    assert dispatched_agents == ["broker-agent", "insurer-agent"]
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.run_state.steps_used == 3
+    assert (
+        executor.orchestration_planner.contexts[0]
+        .available_resources[0]
+        .projections[0]
+        .status
+        == "ready"
+    )
+    content_reader.get_bytes.assert_awaited_once()
