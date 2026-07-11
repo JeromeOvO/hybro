@@ -39,6 +39,12 @@ from execution.orchestration.candidate_scope import (
     normalize_candidate_scope,
 )
 from execution.orchestration.context_builder import build_orchestration_planner_context
+from execution.orchestration.continuation_policy import (
+    claim_continuation,
+    continuation_id_for,
+    continuation_match,
+    reconcile_continuation,
+)
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from execution.orchestration.dispatch_payload import (
     DispatchPayloadValidationError,
@@ -83,6 +89,7 @@ from models.orchestration import (
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
+    PendingAgentContinuation,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
@@ -1591,13 +1598,23 @@ class SupervisorExecutor:
             )
             for index, target in enumerate(action.targets, start=1)
         ]
+        for intent, planned_target in zip(intents, planner_action.targets, strict=True):
+            intent.repair_of_intent_id = planned_target.repair_of_intent_id
         exhausted_failure = self._exhausted_recoverable_failure_for_intents(
             state,
             intents,
         )
         if exhausted_failure is not None:
             logger.info(
-                "orchestration_recovery_retry_blocked",
+                "orchestration_recovery_retry_blocked run_id=%s failure_id=%s "
+                "dispatch_intent_id=%s retry_count=%d max_retries=%d "
+                "error_code=%s",
+                state.run_id,
+                exhausted_failure.failure_id,
+                exhausted_failure.dispatch_intent_id,
+                exhausted_failure.retry_count,
+                exhausted_failure.max_retries,
+                exhausted_failure.error_code,
                 extra={
                     "run_id": state.run_id,
                     "failure_id": exhausted_failure.failure_id,
@@ -1651,6 +1668,9 @@ class SupervisorExecutor:
             run_state=state,
             original_attachments=self._user_attachments_from_message(user_message),
         )
+        persisted_after_dispatch = await self.orchestration_run_store.get_run(state.run_id)
+        if persisted_after_dispatch is not None:
+            state = persisted_after_dispatch
         await self._emit_supervisor_stage(
             room_id=room_id,
             user_message_id=user_message_id,
@@ -2254,6 +2274,175 @@ class SupervisorExecutor:
             and interactive_state not in {"auth-required", "policy-required"}
         )
 
+    @staticmethod
+    def _resolved_resource_fingerprints(
+        resolved_payload: ResolvedDispatchPayload,
+    ) -> set[str]:
+        return {
+            canonical_content_fingerprint(payload.model_dump(mode="json"))
+            for payload in resolved_payload.resource_payloads
+        }
+
+    @staticmethod
+    def _lineage_intent_ids(
+        state: OrchestrationRunState,
+        source_intent_id: str,
+    ) -> set[str]:
+        lineage = {source_intent_id}
+        while True:
+            expanded = {
+                intent.dispatch_intent_id
+                for intent in state.dispatch_intents
+                if intent.repair_of_intent_id in lineage
+            }
+            if expanded <= lineage:
+                return lineage
+            lineage.update(expanded)
+
+    async def _claim_matching_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        target: PlannedDelegateTarget,
+        goal_family_fingerprint: str,
+        selected_resource_fingerprints: set[str],
+    ) -> PendingAgentContinuation | None:
+        current = await self.orchestration_run_store.get_run(state.run_id)
+        if current is None:
+            return None
+        for continuation in current.pending_agent_continuations:
+            match = continuation_match(
+                continuation,
+                target=target,
+                goal_family_fingerprint=goal_family_fingerprint,
+                selected_resource_fingerprints=selected_resource_fingerprints,
+            )
+            if not match.allowed:
+                continue
+            claimed = claim_continuation(
+                continuation,
+                match.new_resource_fingerprints,
+            )
+            if claimed is None:
+                continue
+            updated = current.model_copy(deep=True)
+            updated.pending_agent_continuations = [
+                claimed if item.continuation_id == claimed.continuation_id else item
+                for item in updated.pending_agent_continuations
+            ]
+            updated.state_version = current.state_version + 1
+            updated.updated_at = utcnow()
+            try:
+                saved = await self.orchestration_run_store.save_state(
+                    updated,
+                    expected_version=current.state_version,
+                )
+            except OrchestrationStoreConflict:
+                return None
+            await self._append_v2_event(
+                saved,
+                OrchestrationEventType.CONTINUATION_CLAIMED,
+                payload={
+                    "continuation_id": claimed.continuation_id,
+                    "source_intent_id": claimed.source_intent_id,
+                },
+            )
+            return claimed
+        return None
+
+    async def _reconcile_persisted_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation_id: str,
+        status: str,
+    ) -> OrchestrationRunState:
+        current = await self.orchestration_run_store.get_run(state.run_id)
+        if current is None:
+            return state
+        continuation = next(
+            (
+                item
+                for item in current.pending_agent_continuations
+                if item.continuation_id == continuation_id
+            ),
+            None,
+        )
+        if continuation is None:
+            return current
+        reconciled = reconcile_continuation(continuation, status=status)
+        if reconciled == continuation:
+            return current
+
+        lineage_intent_ids = self._lineage_intent_ids(
+            current,
+            continuation.source_intent_id,
+        )
+        lineage_message_ids = {
+            intent.planned_agent_message_id
+            for intent in current.dispatch_intents
+            if intent.dispatch_intent_id in lineage_intent_ids
+        }
+        lineage_message_ids.add(continuation.source_agent_message_id)
+        terminal_status = "completed" if status == "resolved" else "abandoned"
+        updated = current.model_copy(deep=True)
+        updated.pending_agent_continuations = [
+            reconciled if item.continuation_id == continuation_id else item
+            for item in updated.pending_agent_continuations
+        ]
+        if status in {"resolved", "abandoned"}:
+            for intent in updated.dispatch_intents:
+                if intent.dispatch_intent_id in lineage_intent_ids and intent.status not in {
+                    "completed",
+                    "failed",
+                    "canceled",
+                    "rejected",
+                    "expired",
+                    "abandoned",
+                }:
+                    intent.status = terminal_status
+            for dispatch in updated.active_dispatches:
+                if dispatch.agent_message_id in lineage_message_ids and dispatch.status not in {
+                    "completed",
+                    "failed",
+                    "canceled",
+                    "rejected",
+                    "expired",
+                    "abandoned",
+                }:
+                    dispatch.status = terminal_status
+            if status == "abandoned":
+                for output in updated.agent_outputs:
+                    if output.agent_message_id in lineage_message_ids:
+                        output.status = "abandoned"
+                for failure in updated.open_failures:
+                    if (
+                        failure.agent_message_id in lineage_message_ids
+                        and failure.status == "open"
+                    ):
+                        failure.status = "abandoned"
+                        failure.updated_at = utcnow()
+        updated.state_version = current.state_version + 1
+        updated.updated_at = utcnow()
+        saved = await self.orchestration_run_store.save_state(
+            updated,
+            expected_version=current.state_version,
+        )
+        if status in {"resolved", "abandoned"}:
+            await self._append_v2_event(
+                saved,
+                (
+                    OrchestrationEventType.CONTINUATION_RESOLVED
+                    if status == "resolved"
+                    else OrchestrationEventType.CONTINUATION_ABANDONED
+                ),
+                payload={
+                    "continuation_id": continuation_id,
+                    "source_intent_id": continuation.source_intent_id,
+                },
+            )
+        return saved
+
     async def _record_a2a_task_recovery(
         self,
         *,
@@ -2293,6 +2482,13 @@ class SupervisorExecutor:
         *,
         chosen_agent_ids: set[str],
     ) -> OrchestrationRunState:
+        continuation_ids_to_abandon = [
+            continuation.continuation_id
+            for continuation in state.pending_agent_continuations
+            if continuation.status in {"open", "resuming"}
+            and continuation.agent_id not in chosen_agent_ids
+        ]
+
         def mutate(updated: OrchestrationRunState) -> None:
             superseded_message_ids = {
                 output.agent_message_id
@@ -2330,6 +2526,13 @@ class SupervisorExecutor:
             },
             mutate=mutate,
         )
+        for continuation_id in continuation_ids_to_abandon:
+            saved = await self._reconcile_persisted_continuation(
+                state=saved,
+                continuation_id=continuation_id,
+                status="abandoned",
+            )
+        return saved
 
     async def _run_agent_awaiting_input_action(
         self,
@@ -2943,8 +3146,15 @@ class SupervisorExecutor:
                 for result in entry.results
                 if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
-            has_awaiting_input = any(
-                result.status == StepStatus.AWAITING_INPUT for result in pending
+            hitl_required_pending = [
+                result
+                for result in pending
+                if result.status == StepStatus.AWAITING_INPUT
+                and self._awaiting_result_requires_hitl(result)
+            ]
+            has_awaiting_input = bool(hitl_required_pending)
+            has_paused_pending = any(
+                result.status == StepStatus.PAUSED for result in pending
             )
             terminal_results = [
                 result
@@ -2962,7 +3172,7 @@ class SupervisorExecutor:
                     if has_awaiting_input and has_open_pending_hitl
                     else (
                         OrchestrationStatus.WAITING_AGENT
-                        if pending
+                        if has_paused_pending
                         else OrchestrationStatus.RUNNING
                     )
                 )
@@ -3025,11 +3235,7 @@ class SupervisorExecutor:
                     synced, awaiting_status = await self._run_agent_awaiting_input_action(
                         state=synced,
                         results=entry.results,
-                        awaiting=[
-                            result
-                            for result in pending
-                            if result.status == StepStatus.AWAITING_INPUT
-                        ],
+                        awaiting=hitl_required_pending,
                         trajectory=trajectory,
                         agent_registry=agent_registry,
                         room_config=room_config,
@@ -3041,6 +3247,8 @@ class SupervisorExecutor:
                         quoted_text=quoted_text,
                     )
                     return synced, awaiting_status
+                if blocking_run_status is None:
+                    return synced, None
                 return synced, blocking_run_status
 
         return synced, None
@@ -4030,6 +4238,27 @@ class SupervisorExecutor:
             return []
         return self._v2_artifacts_from_agent_message(message)
 
+    async def _v2_persisted_resource_fingerprints(
+        self,
+        output_message_id: str,
+    ) -> list[str]:
+        message = await self.message_reader.get_room_agent_message_by_message_id(
+            output_message_id
+        )
+        extend_info = getattr(message, "extend_info", None) if message else None
+        payloads = (
+            extend_info.get("resolved_dispatch_resource_payloads")
+            if isinstance(extend_info, Mapping)
+            else None
+        )
+        if not isinstance(payloads, list):
+            return []
+        return sorted(
+            canonical_content_fingerprint(payload)
+            for payload in payloads
+            if isinstance(payload, Mapping)
+        )
+
     @staticmethod
     def _v2_artifacts_from_agent_message(message) -> list[dict[str, Any]]:
         message_content = getattr(message, "message_content", None)
@@ -4227,6 +4456,47 @@ class SupervisorExecutor:
                         outcome = existing_outcome
                     raw_result_already_ingested = existing_outcome is not None
 
+                    if self._is_plain_a2a_input_output(output):
+                        continuation_id = continuation_id_for(
+                            run_id=next_state.run_id,
+                            source_intent_id=matched_intent.dispatch_intent_id,
+                            a2a_task_id=output.a2a_task_id or "",
+                            a2a_context_id=output.a2a_context_id or "",
+                        )
+                        existing_continuation = next(
+                            (
+                                item
+                                for item in next_state.pending_agent_continuations
+                                if item.continuation_id == continuation_id
+                            ),
+                            None,
+                        )
+                        if existing_continuation is None:
+                            attempted_resource_fingerprints = (
+                                await self._v2_persisted_resource_fingerprints(
+                                    output.agent_message_id
+                                )
+                            )
+                            next_state.pending_agent_continuations.append(
+                                PendingAgentContinuation(
+                                    continuation_id=continuation_id,
+                                    source_intent_id=matched_intent.dispatch_intent_id,
+                                    source_agent_message_id=output.agent_message_id,
+                                    agent_id=output.agent_id,
+                                    goal_family_fingerprint=(
+                                        outcome.goal_family_fingerprint
+                                    ),
+                                    goal_revision_fingerprint=(
+                                        outcome.goal_revision_fingerprint
+                                    ),
+                                    a2a_task_id=output.a2a_task_id or "",
+                                    a2a_context_id=output.a2a_context_id or "",
+                                    attempted_resource_fingerprints=(
+                                        attempted_resource_fingerprints
+                                    ),
+                                )
+                            )
+
             current = await self.run_store.save_state(
                 next_state,
                 expected_version=expected_version,
@@ -4257,6 +4527,38 @@ class SupervisorExecutor:
                         "status": outcome.status,
                     },
                 )
+
+            if output_message_id:
+                persisted_continuation = next(
+                    (
+                        item
+                        for item in current.pending_agent_continuations
+                        if item.source_agent_message_id == output_message_id
+                        and item.a2a_task_id == (result.a2a_task_id or item.a2a_task_id)
+                        and item.a2a_context_id
+                        == (result.a2a_context_id or item.a2a_context_id)
+                    ),
+                    None,
+                )
+                if persisted_continuation is not None:
+                    if self._is_plain_a2a_input_output(
+                        next(
+                            output
+                            for output in current.agent_outputs
+                            if output.agent_message_id == output_message_id
+                        )
+                    ):
+                        current = await self._reconcile_persisted_continuation(
+                            state=current,
+                            continuation_id=persisted_continuation.continuation_id,
+                            status="open",
+                        )
+                    elif result.status == StepStatus.SUCCESS:
+                        current = await self._reconcile_persisted_continuation(
+                            state=current,
+                            continuation_id=persisted_continuation.continuation_id,
+                            status="resolved",
+                        )
 
         return current
 

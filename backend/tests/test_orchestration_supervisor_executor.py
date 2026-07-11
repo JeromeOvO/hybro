@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -38,6 +39,7 @@ from models.orchestration import (
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
+    PendingAgentContinuation,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
@@ -4652,12 +4654,12 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
         synced_trajectory,
     )
 
-    assert blocking_status == RunStatus.AWAITING_INPUT
-    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
+    assert blocking_status is None
+    assert restored_state.status == OrchestrationStatus.RUNNING
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
+    assert persisted_state.status == OrchestrationStatus.RUNNING
     assert len(persisted_state.agent_outputs) == 2
     assert [
         output.status
@@ -4744,12 +4746,12 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
         synced_trajectory,
     )
 
-    assert blocking_status == RunStatus.AWAITING_INPUT
-    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
+    assert blocking_status is None
+    assert restored_state.status == OrchestrationStatus.RUNNING
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
+    assert persisted_state.status == OrchestrationStatus.RUNNING
     assert len(persisted_state.agent_outputs) == 1
     assert persisted_state.agent_outputs[0].agent_message_id == (
         "message-1:step-1:target-1:message"
@@ -4825,12 +4827,12 @@ async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persist
         synced_trajectory,
     )
 
-    assert blocking_status == RunStatus.AWAITING_INPUT
-    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
+    assert blocking_status is None
+    assert restored_state.status == OrchestrationStatus.RUNNING
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
+    assert persisted_state.status == OrchestrationStatus.RUNNING
     assert persisted_state.pending_hitl_request_ids == []
     assert [
         output.agent_message_id for output in persisted_state.agent_outputs
@@ -7864,6 +7866,269 @@ async def test_same_agent_retry_continues_existing_input_required_task():
         context_id="ctx-1",
         user_input="Projected input",
     )
+
+
+@pytest.mark.asyncio
+async def test_same_agent_retry_that_still_needs_input_requires_hitl():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": "Still need the broker submission pack.",
+                }
+            )
+        )
+    )
+    result = await executor._continue_agent_task_with_resolved_refs(
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
+        resolved_payload=ResolvedDispatchPayload(
+            selected_context_refs=["ctx:file-file-1:text"],
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ],
+        ),
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.AWAITING_INPUT
+    assert result.paused_message_id == "agent-msg-1"
+    assert result.status_message == "Still need the broker submission pack."
+    assert SupervisorExecutor._awaiting_result_requires_hitl(result) is False
+
+
+def test_awaiting_result_requires_hitl_only_for_auth_or_policy():
+    plain_input_required = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Need a resource",
+        response_text="",
+        status=StepStatus.AWAITING_INPUT,
+        interactive_state="input-required",
+    )
+    auth_required = plain_input_required.model_copy(
+        update={"interactive_state": "auth-required", "requires_auth": True}
+    )
+    policy_required = plain_input_required.model_copy(
+        update={"interactive_state": "policy-required", "requires_policy": True}
+    )
+
+    assert SupervisorExecutor._awaiting_result_requires_hitl(plain_input_required) is False
+    assert SupervisorExecutor._awaiting_result_requires_hitl(auth_required) is True
+    assert SupervisorExecutor._awaiting_result_requires_hitl(policy_required) is True
+
+
+@pytest.mark.asyncio
+async def test_persisted_continuation_claim_allows_one_remote_reply_under_race():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ]
+    )
+    await store.create_run(state)
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    target = PlannedDelegateTarget(
+        agent_id="agent-1",
+        task="Continue with projected resource",
+        repair_of_intent_id="intent-1",
+    )
+
+    claims = await asyncio.gather(
+        executor._claim_matching_continuation(
+            state=state,
+            target=target,
+            goal_family_fingerprint="family-1",
+            selected_resource_fingerprints={"resource-new"},
+        ),
+        executor._claim_matching_continuation(
+            state=state,
+            target=target,
+            goal_family_fingerprint="family-1",
+            selected_resource_fingerprints={"resource-new"},
+        ),
+    )
+
+    assert sum(claim is not None for claim in claims) == 1
+    persisted = await store.get_run("run-1")
+    assert persisted is not None
+    assert persisted.pending_agent_continuations[0].status == "resuming"
+
+
+@pytest.mark.asyncio
+async def test_plain_input_required_reopens_persisted_continuation():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+                status="resuming",
+            )
+        ]
+    )
+    await store.create_run(state)
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+
+    saved = await executor._reconcile_persisted_continuation(
+        state=state,
+        continuation_id="cont-1",
+        status="open",
+    )
+
+    assert saved.pending_agent_continuations[0].status == "open"
+
+
+@pytest.mark.asyncio
+async def test_persisted_resource_fingerprints_seed_continuation_attempts():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            extend_info={
+                "resolved_dispatch_resource_payloads": [
+                    {
+                        "ref_id": "ctx:file-1:text",
+                        "kind": "context",
+                        "mime_type": "text/plain",
+                        "text": "Projected input",
+                    }
+                ]
+            }
+        )
+    )
+
+    fingerprints = await executor._v2_persisted_resource_fingerprints(
+        "agent-msg-1"
+    )
+
+    assert len(fingerprints) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolving_continuation_completes_nonterminal_lineage():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Continue"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Initial",
+                task_hash="hash-1",
+                status="awaiting_input",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="target-2",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Repair",
+                task_hash="hash-2",
+                repair_of_intent_id="intent-1",
+                status="planned",
+            ),
+        ],
+        active_dispatches=[
+            {"agent_message_id": "agent-msg-1", "agent_id": "agent-1", "status": "awaiting_input"},
+            {"agent_message_id": "agent-msg-2", "agent_id": "agent-1", "status": "dispatching"},
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+                status="resuming",
+            )
+        ],
+    )
+    await store.create_run(state)
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+
+    saved = await executor._reconcile_persisted_continuation(
+        state=state,
+        continuation_id="cont-1",
+        status="resolved",
+    )
+
+    assert [intent.status for intent in saved.dispatch_intents] == ["completed", "completed"]
+    assert [dispatch.status for dispatch in saved.active_dispatches] == ["completed", "completed"]
+    assert saved.pending_agent_continuations[0].status == "resolved"
 
 
 @pytest.mark.asyncio
