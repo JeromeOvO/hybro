@@ -9861,9 +9861,9 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
     state = _run_state(
-        guardrails_enabled=True,
         dispatch_intents=[
             DispatchIntent(
                 step_id="step-1", step_target_id="target-1", dispatch_intent_id="intent-1",
@@ -9935,7 +9935,6 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
     )
 
     assert [output.status for output in saved.agent_outputs] == [
-        guardrails_enabled=True,
         "abandoned",
         StepStatus.AWAITING_INPUT.value,
     ]
@@ -10030,79 +10029,6 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
 
 
 @pytest.mark.asyncio
-async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
-    user_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="message-1",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Use another agent"),
-    )
-    store = InMemoryOrchestrationRunStore()
-    executor = _executor(
-        store=store,
-        planner=RecordingPlanner(),
-        user_message=user_message,
-    )
-    state = _run_state(
-        agent_outputs=[
-            AgentOutputRecord(
-                agent_message_id="plain-msg",
-                agent_id="plain-agent",
-                status=StepStatus.AWAITING_INPUT.value,
-                a2a_task_id="plain-task",
-                a2a_context_id="plain-context",
-            ),
-            AgentOutputRecord(
-                agent_message_id="auth-msg",
-                agent_id="auth-agent",
-                status=StepStatus.AWAITING_INPUT.value,
-                interactive_state="auth-required",
-                requires_auth=True,
-            ),
-            AgentOutputRecord(
-                agent_message_id="policy-msg",
-                agent_id="policy-agent",
-                status=StepStatus.AWAITING_INPUT.value,
-                interactive_state="policy-required",
-                requires_policy=True,
-            ),
-        ],
-        open_failures=[
-            OpenFailureRecord(
-                failure_id="plain-failure",
-                fingerprint="plain-agent:plain-msg:agent_input_required",
-                source="a2a_adapter",
-                agent_id="plain-agent",
-                agent_message_id="plain-msg",
-                error_code="agent_input_required",
-                error_message="Need input",
-                recoverable=True,
-            ),
-            OpenFailureRecord(
-                failure_id="auth-failure",
-                fingerprint="auth-agent:auth-msg:auth_required",
-                source="a2a_adapter",
-                agent_id="auth-agent",
-                agent_message_id="auth-msg",
-                error_code="auth_required",
-                error_message="Authorize access",
-                recoverable=True,
-            ),
-            OpenFailureRecord(
-                failure_id="policy-failure",
-                fingerprint="policy-agent:policy-msg:policy_required",
-                source="a2a_adapter",
-                agent_id="policy-agent",
-                agent_message_id="policy-msg",
-                error_code="policy_required",
-                error_message="Approve policy",
-                recoverable=True,
-            ),
-        ],
-    )
-    await store.create_run(state)
-
-    saved = await executor._supersede_unresolved_input_required_outputs(
 @pytest.mark.parametrize(
     ("guardrails_enabled", "expected_status"),
     [(False, "open"), (True, "abandoned")],
@@ -10188,6 +10114,80 @@ async def test_continuation_supersession_respects_injected_guardrail_flag(
 
 
 @pytest.mark.asyncio
+async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use another agent"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="plain-msg",
+                agent_id="plain-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="plain-task",
+                a2a_context_id="plain-context",
+            ),
+            AgentOutputRecord(
+                agent_message_id="auth-msg",
+                agent_id="auth-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                interactive_state="auth-required",
+                requires_auth=True,
+            ),
+            AgentOutputRecord(
+                agent_message_id="policy-msg",
+                agent_id="policy-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                interactive_state="policy-required",
+                requires_policy=True,
+            ),
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="plain-failure",
+                fingerprint="plain-agent:plain-msg:agent_input_required",
+                source="a2a_adapter",
+                agent_id="plain-agent",
+                agent_message_id="plain-msg",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            ),
+            OpenFailureRecord(
+                failure_id="auth-failure",
+                fingerprint="auth-agent:auth-msg:auth_required",
+                source="a2a_adapter",
+                agent_id="auth-agent",
+                agent_message_id="auth-msg",
+                error_code="auth_required",
+                error_message="Authorize access",
+                recoverable=True,
+            ),
+            OpenFailureRecord(
+                failure_id="policy-failure",
+                fingerprint="policy-agent:policy-msg:policy_required",
+                source="a2a_adapter",
+                agent_id="policy-agent",
+                agent_message_id="policy-msg",
+                error_code="policy_required",
+                error_message="Approve policy",
+                recoverable=True,
+            ),
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
         state,
         chosen_targets=[
             PlannedDelegateTarget(agent_id="chosen-agent", task="New task")
@@ -10200,7 +10200,6 @@ async def test_continuation_supersession_respects_injected_guardrail_flag(
         StepStatus.AWAITING_INPUT.value,
     ]
     assert [failure.status for failure in saved.open_failures] == [
-        guardrails_enabled=True,
         "abandoned",
         "open",
         "open",
