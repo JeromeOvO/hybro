@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.orchestration.agent_observation import extract_agent_observation
 from execution.orchestration.failure_classifier import classify_agent_failure
 from models.orchestration import (
     AgentOutputRecord,
@@ -114,6 +115,11 @@ class AgentResultIngestor:
             updated,
             result,
         )
+        observation_changed = self._merge_observation(
+            updated,
+            result,
+            result_artifact_keys,
+        )
         output_changed = self._merge_output(
             updated,
             result,
@@ -123,7 +129,13 @@ class AgentResultIngestor:
         failure_changed = self._merge_failures(updated, result)
 
         if not any(
-            (artifacts_changed, output_changed, fact_changed, failure_changed)
+            (
+                artifacts_changed,
+                observation_changed,
+                output_changed,
+                fact_changed,
+                failure_changed,
+            )
         ):
             return state
         updated.state_version += 1
@@ -198,7 +210,8 @@ class AgentResultIngestor:
             existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
 
-        _upsert_structured_blockers(state, result_artifact_keys)
+        if _upsert_structured_blockers(state, result_artifact_keys):
+            changed = True
 
         if not preserve_sparse_replay:
             current_artifact_keys = set(result_artifact_keys)
@@ -229,6 +242,32 @@ class AgentResultIngestor:
                 changed = True
 
         return result_artifact_keys, changed
+
+    @staticmethod
+    def _merge_observation(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+        result_artifact_keys: list[str],
+    ) -> bool:
+        artifact_key_set = set(result_artifact_keys)
+        observation_artifacts = [
+            artifact
+            for artifact in state.artifacts
+            if isinstance(artifact, dict)
+            and artifact.get("artifact_key") in artifact_key_set
+        ]
+        observation = extract_agent_observation(
+            agent_message_id=result.agent_message_id,
+            agent_id=result.agent_id,
+            status=result.status,
+            text=result.text,
+            status_message=result.status_message,
+            artifact_records=observation_artifacts,
+        )
+        facts_changed = _upsert_observation_facts(state, observation.facts)
+        unknowns_changed = _upsert_unknowns(state, observation.unknowns)
+        blockers_changed = _upsert_blockers(state, observation.blocker_candidates)
+        return facts_changed or unknowns_changed or blockers_changed
 
     @staticmethod
     def _merge_output(
@@ -433,12 +472,14 @@ class AgentResultIngestor:
     ) -> bool:
         text = result.text.strip() if isinstance(result.text, str) else ""
         fact_id = f"{result.agent_message_id}:text"
-        existing_facts_by_id = {
-            fact.get("fact_id"): fact
-            for fact in state.facts
-            if isinstance(fact, dict)
-        }
-        existing_fact = existing_facts_by_id.get(fact_id)
+        existing_fact_index = next(
+            (
+                index
+                for index, fact in enumerate(state.facts)
+                if isinstance(fact, dict) and fact.get("fact_id") == fact_id
+            ),
+            None,
+        )
         existing_output = next(
             (
                 output
@@ -457,13 +498,13 @@ class AgentResultIngestor:
                 "kind": "agent_text",
                 "text": text,
             }
-            if existing_fact is None:
+            if existing_fact_index is None:
                 state.facts.append(fact_record)
                 return True
-            if any(existing_fact.get(key) != value for key, value in fact_record.items()):
-                existing_fact.update(fact_record)
+            if state.facts[existing_fact_index] != fact_record:
+                state.facts[existing_fact_index] = fact_record
                 return True
-        elif existing_fact is not None:
+        elif existing_fact_index is not None:
             state.facts = [
                 fact
                 for fact in state.facts
@@ -479,8 +520,8 @@ class AgentResultIngestor:
 def _upsert_structured_blockers(
     state: OrchestrationRunState,
     artifact_keys: list[str],
-) -> None:
-    existing_by_key = {blocker.key: blocker for blocker in state.blockers}
+) -> bool:
+    changed = False
     artifact_key_set = set(artifact_keys)
     for artifact in state.artifacts:
         if not isinstance(artifact, dict):
@@ -499,22 +540,97 @@ def _upsert_structured_blockers(
             if artifact_key and artifact_key not in evidence_refs:
                 evidence_refs.append(str(artifact_key))
             blocker_payload["evidence_refs"] = evidence_refs
+            blocker_payload["claimed_user_only"] = False
+            blocker_payload["validated_user_only"] = False
+            blocker_payload["validation_status"] = "candidate"
+            blocker_payload["status"] = blocker_payload.get("status") or "open"
             blocker = BlockerRecord.model_validate(blocker_payload)
-            existing = existing_by_key.get(blocker.key)
-            if existing is None:
-                state.blockers.append(blocker)
-                existing_by_key[blocker.key] = blocker
-            else:
-                replacement = blocker.model_copy(
+            if _upsert_blockers(state, [blocker]):
+                changed = True
+    return changed
+
+
+def _upsert_observation_facts(
+    state: OrchestrationRunState,
+    facts: list[dict[str, Any]],
+) -> bool:
+    changed = False
+    existing_by_id = {
+        fact.get("fact_id"): index
+        for index, fact in enumerate(state.facts)
+        if isinstance(fact, dict) and fact.get("fact_id")
+    }
+    for fact in facts:
+        fact_id = fact.get("fact_id")
+        if not isinstance(fact_id, str) or not fact_id:
+            continue
+        existing_index = existing_by_id.get(fact_id)
+        if existing_index is None:
+            state.facts.append(copy.deepcopy(fact))
+            existing_by_id[fact_id] = len(state.facts) - 1
+            changed = True
+        elif state.facts[existing_index] != fact:
+            state.facts[existing_index] = copy.deepcopy(fact)
+            changed = True
+    return changed
+
+
+def _upsert_unknowns(
+    state: OrchestrationRunState,
+    unknowns: list,
+) -> bool:
+    changed = False
+    existing_by_key = {item.key: index for index, item in enumerate(state.unknowns)}
+    for unknown in unknowns:
+        existing_index = existing_by_key.get(unknown.key)
+        if existing_index is None:
+            state.unknowns.append(unknown)
+            existing_by_key[unknown.key] = len(state.unknowns) - 1
+            changed = True
+        elif state.unknowns[existing_index] != unknown:
+            state.unknowns[existing_index] = unknown
+            changed = True
+    return changed
+
+
+def _upsert_blockers(
+    state: OrchestrationRunState,
+    blockers: list[BlockerRecord],
+) -> bool:
+    changed = False
+    existing_by_key = {item.key: index for index, item in enumerate(state.blockers)}
+    for blocker in blockers:
+        existing_index = existing_by_key.get(blocker.key)
+        if existing_index is None:
+            state.blockers.append(blocker)
+            existing_by_key[blocker.key] = len(state.blockers) - 1
+            changed = True
+        else:
+            existing = state.blockers[existing_index]
+            merged_evidence_refs = sorted(
+                set(existing.evidence_refs) | set(blocker.evidence_refs)
+            )
+            if existing.validation_status == "validated" or existing.validated_user_only:
+                replacement = existing.model_copy(
                     update={
-                        "evidence_refs": sorted(
-                            set(existing.evidence_refs) | set(blocker.evidence_refs)
-                        )
+                        "evidence_refs": merged_evidence_refs,
+                        "blocked_output_keys": sorted(
+                            set(existing.blocked_output_keys)
+                            | set(blocker.blocked_output_keys)
+                        ),
                     }
                 )
-                index = state.blockers.index(existing)
-                state.blockers[index] = replacement
-                existing_by_key[blocker.key] = replacement
+                if replacement != existing:
+                    state.blockers[existing_index] = replacement
+                    changed = True
+                continue
+            replacement = blocker.model_copy(
+                update={"evidence_refs": merged_evidence_refs}
+            )
+            if replacement != existing:
+                state.blockers[existing_index] = replacement
+                changed = True
+    return changed
 
 
 def _artifact_summary(artifact: dict[str, Any]) -> str:

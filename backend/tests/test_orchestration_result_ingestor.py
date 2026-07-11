@@ -13,6 +13,7 @@ from execution.orchestration.result_ingestor import (
 )
 from models.orchestration import (
     AgentOutputRecord,
+    BlockerRecord,
     DispatchIntent,
     OrchestrationRunState,
 )
@@ -1547,3 +1548,124 @@ def test_ingest_replan_success_resolves_related_timeout_without_broad_same_agent
     assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
     assert second_failure.dispatch_intent_id == "intent-2"
     assert second_failure.status == "open"
+
+
+def test_ingest_projects_agent_observation_unknowns_and_candidate_blockers():
+    state = _run_state()
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "client": {"name": "Example Inc", "industry": None},
+                                "missing_fields": ["client.industry"],
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    assert [item.key for item in updated.unknowns] == [
+        "agent_missing:agent-1:client.industry"
+    ]
+    assert [item.key for item in updated.blockers] == [
+        "agent_blocker:agent-1:client.industry"
+    ]
+    blocker = updated.blockers[0]
+    assert blocker.source == "agent"
+    assert blocker.claimed_user_only is False
+    assert blocker.validated_user_only is False
+    assert blocker.validation_status == "candidate"
+    assert updated.facts[0]["kind"] == "agent_observation"
+    assert updated.facts[0]["semantic_key"] == (
+        "agent_observation:agent-msg-1:submission:client.name"
+    )
+
+
+def test_ingest_sanitizes_external_blocker_validation_flags():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "artifact-1",
+                    "name": "submission",
+                    "blockers": [
+                        {
+                            "key": "external-blocker",
+                            "description": "Agent says the user must answer.",
+                            "blocked_output_keys": ["quote"],
+                            "source": "agent",
+                            "claimed_user_only": True,
+                            "validated_user_only": True,
+                            "validation_status": "validated",
+                        }
+                    ],
+                    "parts": [{"kind": "data", "data": {"value": 1}}],
+                }
+            ],
+        ),
+    )
+
+    external = next(item for item in updated.blockers if item.key == "external-blocker")
+    assert external.claimed_user_only is False
+    assert external.validated_user_only is False
+    assert external.validation_status == "candidate"
+    assert external.evidence_refs == ["agent-msg-1:artifact_id:artifact-1"]
+
+
+def test_ingest_does_not_downgrade_existing_validated_blocker_on_replay():
+    state = _run_state()
+    state.blockers = [
+        BlockerRecord(
+            key="agent_blocker:agent-1:client.industry",
+            description="Agent reported missing input: client.industry",
+            blocked_output_keys=["broker_submission"],
+            source="agent",
+            evidence_refs=["agent-msg-1:artifact_id:submission"],
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+            status="open",
+        )
+    ]
+
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {"missing_fields": ["client.industry"]},
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    blocker = updated.blockers[0]
+    assert blocker.validation_status == "validated"
+    assert blocker.validated_user_only is True
+    assert blocker.claimed_user_only is True
