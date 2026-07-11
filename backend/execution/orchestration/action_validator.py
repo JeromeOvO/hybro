@@ -289,7 +289,7 @@ class PlannerActionValidator:
         seen_blocker_keys: set[str] = set()
         for question in action.questions:
             prompt = PlannerActionValidator._normalize_question_prompt(question.prompt)
-            blocker_keys = set(question.blocker_keys)
+            blocker_keys = question.blocker_keys
             if (
                 not prompt
                 or question.reason != "blocker"
@@ -299,7 +299,11 @@ class PlannerActionValidator:
                     "post-dispatch ask_user action requires blocker keys",
                     code="ask_user_blocker_keys_required",
                 )
-            if prompt in seen_prompts or blocker_keys & seen_blocker_keys:
+            if (
+                prompt in seen_prompts
+                or len(blocker_keys) != len(set(blocker_keys))
+                or set(blocker_keys) & seen_blocker_keys
+            ):
                 raise PlannerActionValidationError(
                     "ask_user action repeats a question or blocker in the same action",
                     code="duplicate_question_in_action",

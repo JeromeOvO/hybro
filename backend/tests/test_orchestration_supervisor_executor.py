@@ -3047,6 +3047,8 @@ async def test_run_stale_awaiting_user_pending_hitl_does_not_block_recovering_aw
             agent_id="agent-1",
             status=StepStatus.AWAITING_INPUT.value,
             text="Needs review",
+            interactive_state="auth-required",
+            requires_auth=True,
         )
     ]
     await store.create_run(state)
@@ -4000,6 +4002,8 @@ async def test_run_resumed_trajectory_only_pending_awaiting_input_rehydrates_hit
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-1:message",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     )
                 ],
                 started_at=utcnow(),
@@ -4129,6 +4133,8 @@ async def test_run_resumed_trajectory_mixed_terminal_and_pending_awaiting_input_
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-2:message",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     ),
                 ],
                 started_at=utcnow(),
@@ -4280,6 +4286,8 @@ async def test_run_resumed_trajectory_mixed_terminal_and_awaiting_input_clears_r
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-2:message",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     ),
                 ],
                 started_at=utcnow(),
@@ -4432,6 +4440,8 @@ async def test_run_resumed_trajectory_clears_resolved_agent_hitl_without_reply_s
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-2:message",
                         status_message="Second approval?",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     ),
                 ],
                 started_at=utcnow(),
@@ -4592,6 +4602,9 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
         "message-1:step-1:target-1:message",
     ]
     assert result_events[0].state_version == 1
+    assert any(
+        event.type == OrchestrationEventType.OUTCOME_EVALUATED for event in events
+    )
 
 
 @pytest.mark.asyncio
@@ -5647,6 +5660,8 @@ async def test_run_agent_awaiting_input_cancels_hitl_request_if_v2_state_save_fa
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-1:message",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     )
                 ],
                 started_at=utcnow(),
@@ -5773,6 +5788,8 @@ async def test_run_agent_awaiting_input_preserves_request_reference_when_cleanup
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-1:message",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     )
                 ],
                 started_at=utcnow(),

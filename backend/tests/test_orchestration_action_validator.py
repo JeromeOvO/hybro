@@ -590,6 +590,17 @@ def test_post_dispatch_rejects_duplicate_blocker_in_same_action():
     assert _validation_code(action, state) == "duplicate_question_in_action"
 
 
+def test_post_dispatch_rejects_duplicate_blocker_within_one_question():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = _question_action("blocker", [blocker.key, blocker.key])
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
 def test_post_dispatch_question_rejects_blocker_already_pending_under_new_prompt():
     blocker = _validated_quote_blocker("quote-input")
     state = _guardrail_state(
