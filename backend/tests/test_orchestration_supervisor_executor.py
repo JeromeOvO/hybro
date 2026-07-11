@@ -827,6 +827,133 @@ def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat(
     assert error.value.code == "delegate_goal_already_fulfilled"
 
 
+@pytest.mark.asyncio
+async def test_outcome_guardrails_generic_validated_user_only_blocker_creates_exactly_one_hitl():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="generic-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id=consumer,
+                outcome="failed",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="generic-result",
+                outcome="insufficient",
+                applies_to_output_keys=["generic-result"],
+            ),
+        ],
+    )
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate generic work."),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": [producer, consumer],
+            "client_request_id": "client-1",
+        },
+    )
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=[producer, consumer],
+        status=OrchestrationStatus.RUNNING,
+        steps_used=1,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="producer-msg-1",
+                agent_id=producer,
+                task="Produce a generic result.",
+                task_hash="producer-task",
+                status="completed",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="generic-result",
+                        kind="artifact",
+                        required=True,
+                    )
+                ],
+            )
+        ],
+        blockers=[blocker],
+    )
+    ask_user = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Request the one remaining user value.",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing generic value.",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(ask_user),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate generic work.",
+        agent_registry=[
+            AgentProfile(agent_id=producer, agent_name="Generic Producer"),
+            AgentProfile(agent_id=consumer, agent_name="Generic Consumer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert hitl_kwargs["source"] == "supervisor"
+    assert hitl_kwargs["prompt"] == "Provide the missing generic value."
+
+    saved = await store.get_run("message-1")
+    assert saved is not None
+    assert saved.pending_hitl_request_ids == ["hitl-1"]
+    assert [
+        question.get("blocker_keys")
+        for question in saved.open_questions
+        if question.get("source") == "supervisor"
+    ] == [[blocker.key]]
+
+
 def _dispatch_refs_payload():
     return {
         "context_refs": [

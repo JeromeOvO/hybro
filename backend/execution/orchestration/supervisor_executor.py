@@ -526,21 +526,7 @@ class SupervisorExecutor:
         result: SupervisorRunResult,
     ) -> SupervisorRunResult:
         logger.info(
-            "supervisor_run_completed room_id=%s run_id=%s user_message_id=%s "
-            "status=%s orchestration_status=%s steps_used=%d step_budget=%d "
-            "open_failure_count=%d agent_output_count=%d dispatch_intent_count=%d "
-            "terminal_reason=%s",
-            room_id,
-            state.run_id,
-            state.user_message_id,
-            _log_value(result.status),
-            _log_value(state.status),
-            state.steps_used,
-            state.step_budget,
-            _open_failure_count(state),
-            len(state.agent_outputs),
-            len(state.dispatch_intents),
-            state.terminal_reason,
+            "supervisor_run_completed",
             extra={
                 "room_id": room_id,
                 "run_id": state.run_id,
@@ -550,6 +536,8 @@ class SupervisorExecutor:
                 "steps_used": state.steps_used,
                 "step_budget": state.step_budget,
                 "open_failure_count": _open_failure_count(state),
+                "agent_output_count": len(state.agent_outputs),
+                "dispatch_intent_count": len(state.dispatch_intents),
                 "terminal_reason": state.terminal_reason,
             },
         )
@@ -6640,17 +6628,10 @@ class SupervisorExecutor:
                         )
 
                 logger.info(
-                    "supervisor_agent_invocation_started room_id=%s "
-                    "user_message_id=%s step_number=%d agent_id=%s "
-                    "agent_name=%s agent_message_id=%s",
-                    room_id,
-                    user_message_id,
-                    step_number,
-                    target.agent_id,
-                    target.agent_name,
-                    message.message_id,
+                    "supervisor_agent_dispatching",
                     extra={
                         "room_id": room_id,
+                        "user_message_id": user_message_id,
                         "step_number": step_number,
                         "agent_id": target.agent_id,
                         "agent_name": target.agent_name,
@@ -6669,19 +6650,17 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 logger.info(
-                    "supervisor_agent_invocation_completed room_id=%s "
-                    "user_message_id=%s step_number=%d agent_id=%s "
-                    "agent_message_id=%s processing_status=%s "
-                    "a2a_task_id=%s a2a_context_id=%s status_message=%s",
-                    room_id,
-                    user_message_id,
-                    step_number,
-                    target.agent_id,
-                    message.message_id,
-                    _log_value(result.status),
-                    getattr(result, "a2a_task_id", None),
-                    getattr(result, "a2a_context_id", None),
-                    getattr(result, "status_message", None),
+                    "supervisor_agent_invocation_completed",
+                    extra={
+                        "room_id": room_id,
+                        "user_message_id": user_message_id,
+                        "step_number": step_number,
+                        "agent_id": target.agent_id,
+                        "agent_message_id": message.message_id,
+                        "processing_status": result.status,
+                        "a2a_task_id": getattr(result, "a2a_task_id", None),
+                        "a2a_context_id": getattr(result, "a2a_context_id", None),
+                    },
                 )
 
                 if result.status in (
@@ -6771,26 +6750,16 @@ class SupervisorExecutor:
                 )
 
                 logger.info(
-                    "supervisor_agent_dispatched room_id=%s user_message_id=%s "
-                    "step_number=%d agent_id=%s agent_name=%s success=%s "
-                    "status=%s error=%s agent_message_id=%s",
-                    room_id,
-                    user_message_id,
-                    step_number,
-                    target.agent_id,
-                    target.agent_name,
-                    step_result.success,
-                    _log_value(step_result.status),
-                    step_result.error_message,
-                    step_result.agent_message_id,
+                    "supervisor_agent_dispatched",
                     extra={
                         "room_id": room_id,
+                        "user_message_id": user_message_id,
                         "step_number": step_number,
                         "agent_id": target.agent_id,
                         "agent_name": target.agent_name,
                         "success": step_result.success,
                         "status": step_result.status,
-                        "error_message": step_result.error_message,
+                        "has_error": step_result.error_message is not None,
                         "agent_message_id": step_result.agent_message_id,
                     },
                 )
