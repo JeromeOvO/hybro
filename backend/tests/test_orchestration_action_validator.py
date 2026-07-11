@@ -293,7 +293,11 @@ def test_ask_user_rejects_repeating_answered_supervisor_questions():
     )
 
     with pytest.raises(PlannerActionValidationError) as exc_info:
-        PlannerActionValidator.validate(action, run_state=state)
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
 
     assert exc_info.value.code == "duplicate_answered_question"
     assert exc_info.value.recoverable is True
@@ -323,7 +327,14 @@ def test_ask_user_allows_new_question_after_answered_supervisor_question():
         ],
     )
 
-    assert PlannerActionValidator.validate(action, run_state=state) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+        is action
+    )
 
 
 def _question_action(reason: str, blocker_keys: list[str]) -> PlannerAction:
@@ -453,6 +464,43 @@ def test_post_dispatch_question_rejects_pending_or_answered_duplicate(status: st
         if status == "resolved"
         else "duplicate_pending_question"
     )
+
+
+def test_post_dispatch_duplicate_question_is_allowed_when_guardrails_disabled():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "source": "supervisor",
+                "prompt": "Provide the missing required value",
+                "status": "open",
+            }
+        ],
+    )
+    action = _question_action("blocker", [blocker.key])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+def test_post_dispatch_empty_question_list_requires_blocker_keys():
+    state = _guardrail_state(intents=[_completed_quote_intent()])
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[],
+    )
+
+    assert _validation_code(action, state) == "ask_user_blocker_keys_required"
 
 
 def test_post_dispatch_question_rejects_blocker_already_pending_under_new_prompt():

@@ -203,12 +203,20 @@ class PlannerActionValidator:
         *,
         guardrails_enabled: bool,
     ) -> None:
+        if not guardrails_enabled:
+            return
+
         question_prompts = {
             normalized
             for question in action.questions
             if (normalized := PlannerActionValidator._normalize_question_prompt(question.prompt))
         }
         if not question_prompts:
+            if run_state.dispatch_intents:
+                PlannerActionValidator._validate_post_dispatch_ask_user(
+                    action,
+                    run_state,
+                )
             return
 
         resolved_prompts = {
@@ -248,7 +256,7 @@ class PlannerActionValidator:
                 code="duplicate_pending_question",
             )
 
-        if not guardrails_enabled or not run_state.dispatch_intents:
+        if not run_state.dispatch_intents:
             return
 
         PlannerActionValidator._validate_post_dispatch_ask_user(action, run_state)
