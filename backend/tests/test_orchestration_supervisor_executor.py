@@ -21,6 +21,10 @@ from execution.orchestration.outcome_evaluator import (
     canonical_content_fingerprint,
     goal_fingerprints,
 )
+from execution.orchestration.outcome_policy import (
+    BlockerPolicyValidator,
+    evaluate_retry,
+)
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -39,6 +43,8 @@ from models.hitl import InterruptKind
 from models.orchestration import (
     ActiveDispatchRef,
     AgentOutputRecord,
+    BlockerRecord,
+    BlockerResolutionAttempt,
     CompletionEvidence,
     DelegationOutcomeRecord,
     DispatchContentRef,
@@ -54,6 +60,8 @@ from models.orchestration import (
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
+    PlannerQuestion,
+    UnknownRecord,
 )
 from models.processing import ProcessingResult, ProcessingStatus
 from models.response import OrchestrationResponse
@@ -602,6 +610,221 @@ async def test_injected_outcome_guardrails_atomically_control_duplicate_delegate
     else:
         assert len(result.run_state.delegation_outcomes) == 2
         assert "orchestration_delegate_outcome_evaluated" in caplog.text
+
+
+def test_generic_agents_cover_conditional_no_progress_and_failed_retry_contracts():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    family = "generic-family"
+    revision = "generic-revision"
+    first_intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="producer-msg-1",
+        agent_id=producer,
+        task="Produce a structured generic artifact.",
+        task_hash="producer-task",
+        status="completed",
+    )
+    repeated_intent = first_intent.model_copy(
+        update={
+            "step_id": "step-2",
+            "step_target_id": "target-2",
+            "dispatch_intent_id": "intent-2",
+            "planned_agent_message_id": "producer-msg-2",
+            "status": "completed",
+            "repair_of_intent_id": "intent-1",
+        }
+    )
+    partial = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id=producer,
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+        attempt_fingerprint="producer-attempt-1",
+        status="partial",
+        remaining_required_obligations=["generic:required"],
+        newly_satisfied_required_obligations=["generic:artifact"],
+        unknowns=[
+            UnknownRecord(
+                key="generic:unknown",
+                description="The remaining generic field is unknown.",
+                source_agent_message_id="producer-msg-1",
+            )
+        ],
+    )
+    repeated = partial.model_copy(
+        update={
+            "outcome_id": "outcome-2",
+            "dispatch_intent_id": "intent-2",
+            "attempt_fingerprint": "producer-attempt-2",
+            "status": "no_progress",
+            "newly_satisfied_required_obligations": [],
+        }
+    )
+    state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        dispatch_intents=[first_intent, repeated_intent],
+        delegation_outcomes=[partial, repeated],
+        facts=[
+            {
+                "fact_id": "consumer-msg-1:conditional",
+                "source_agent_id": consumer,
+                "kind": "conditional_result",
+                "text": "The partial artifact is conditionally usable.",
+            }
+        ],
+    )
+
+    assert state.delegation_outcomes[0].unknowns[0].key == "generic:unknown"
+    assert state.facts[0]["source_agent_id"] == consumer
+    no_progress = evaluate_retry(
+        state,
+        PlannedDelegateTarget(
+            agent_id=producer,
+            task=first_intent.task,
+            repair_of_intent_id="intent-2",
+        ),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+    assert no_progress.code == "delegate_no_progress_repeat"
+
+    failed_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        dispatch_intents=[first_intent.model_copy(update={"status": "failed"})],
+        delegation_outcomes=[
+            partial.model_copy(
+                update={
+                    "status": "failed",
+                    "newly_satisfied_required_obligations": [],
+                }
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="transport-failure",
+                fingerprint="generic-transport",
+                source="runtime",
+                agent_id=producer,
+                agent_message_id="producer-msg-1",
+                dispatch_intent_id="intent-1",
+                error_code="transport_error",
+                error_message="Connection reset.",
+                recoverable=True,
+            )
+        ],
+    )
+    retry = evaluate_retry(
+        failed_state,
+        PlannedDelegateTarget(agent_id=producer, task=first_intent.task),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+    alternate = evaluate_retry(
+        state,
+        PlannedDelegateTarget(agent_id=consumer, task=first_intent.task),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+
+    assert retry.allowed is True
+    assert retry.kind == "operational_retry"
+    assert alternate.kind == "alternate_agent"
+    assert alternate.allowed is True
+
+
+def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    target = PlannedDelegateTarget(agent_id=producer, task="Produce a generic result.")
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(target, {})
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="generic-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id=consumer,
+                outcome="failed",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="generic-result",
+                outcome="insufficient",
+                applies_to_output_keys=["generic-result"],
+            ),
+        ],
+    )
+    assert BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"generic-result"},
+        available_resource_refs={"generic-resource"},
+        eligible_alternate_agent_ids={consumer},
+        conditional_result_viable=False,
+    ).code == "blocker_user_only_validated"
+
+    ask_user = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Request the one remaining user value.",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing generic value.",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+    blocked_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        blockers=[blocker],
+    )
+    assert PlannerActionValidator.validate(
+        ask_user,
+        run_state=blocked_state,
+        guardrails_enabled=True,
+    ) is ask_user
+    assert len(ask_user.questions) == 1
+
+    fulfilled_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="fulfilled-outcome",
+                dispatch_intent_id="fulfilled-intent",
+                agent_id=producer,
+                goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+                goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+                attempt_fingerprint="fulfilled-attempt",
+                status="fulfilled",
+            )
+        ],
+    )
+    with pytest.raises(PlannerActionValidationError) as error:
+        PlannerActionValidator.validate(
+            PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Repeat the fulfilled generic result.",
+                targets=[target],
+            ),
+            run_state=fulfilled_state,
+            guardrails_enabled=True,
+        )
+    assert error.value.code == "delegate_goal_already_fulfilled"
 
 
 def _dispatch_refs_payload():
@@ -4708,6 +4931,7 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -4827,6 +5051,7 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -4910,6 +5135,7 @@ async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persist
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -5186,6 +5412,7 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
     executor._run_agent_awaiting_input_action = AsyncMock()
 
@@ -5263,6 +5490,7 @@ async def test_inflight_recovery_persists_outcome_for_interactive_message_withou
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=False,
     )
     executor.hitl_coordinator = SimpleNamespace(
         request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
@@ -9635,6 +9863,7 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
         user_message=user_message,
     )
     state = _run_state(
+        guardrails_enabled=True,
         dispatch_intents=[
             DispatchIntent(
                 step_id="step-1", step_target_id="target-1", dispatch_intent_id="intent-1",
@@ -9706,6 +9935,7 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
     )
 
     assert [output.status for output in saved.agent_outputs] == [
+        guardrails_enabled=True,
         "abandoned",
         StepStatus.AWAITING_INPUT.value,
     ]
@@ -9727,7 +9957,12 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
         message_content=MessageContent(message_text="Start a fresh task"),
     )
     store = InMemoryOrchestrationRunStore()
-    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
     state = _run_state(
         dispatch_intents=[
             DispatchIntent(
@@ -9868,6 +10103,91 @@ async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
     await store.create_run(state)
 
     saved = await executor._supersede_unresolved_input_required_outputs(
+@pytest.mark.parametrize(
+    ("guardrails_enabled", "expected_status"),
+    [(False, "open"), (True, "abandoned")],
+)
+async def test_continuation_supersession_respects_injected_guardrail_flag(
+    guardrails_enabled: bool,
+    expected_status: str,
+):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Delegate generic work"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=guardrails_enabled,
+    )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce a generic artifact",
+                task_hash="hash-1",
+                status="awaiting_input",
+            )
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="agent-1:agent-msg-1:agent_input_required",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_targets=[PlannedDelegateTarget(agent_id="agent-2", task="Consume it")],
+    )
+
+    assert saved.pending_agent_continuations[0].status == expected_status
+    if guardrails_enabled:
+        assert saved.agent_outputs[0].status == "abandoned"
+        assert saved.open_failures[0].status == "abandoned"
+    else:
+        assert saved.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+        assert saved.open_failures[0].status == "open"
+
+
+@pytest.mark.asyncio
         state,
         chosen_targets=[
             PlannedDelegateTarget(agent_id="chosen-agent", task="New task")
@@ -9880,6 +10200,7 @@ async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
         StepStatus.AWAITING_INPUT.value,
     ]
     assert [failure.status for failure in saved.open_failures] == [
+        guardrails_enabled=True,
         "abandoned",
         "open",
         "open",

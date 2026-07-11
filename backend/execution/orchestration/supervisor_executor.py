@@ -2176,6 +2176,10 @@ class SupervisorExecutor:
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
             ]
+            if not self.guardrails_enabled:
+                # Legacy recovery turns every in-flight input request into HITL.
+                # Shadow outcome evaluation still occurs through result ingestion.
+                hitl_required = awaiting
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
                 state = await self._ingest_v2_results(
@@ -2834,6 +2838,8 @@ class SupervisorExecutor:
         *,
         chosen_targets: list[PlannedDelegateTarget],
     ) -> OrchestrationRunState:
+        if not self.guardrails_enabled:
+            return state
         chosen_agent_ids = {target.agent_id for target in chosen_targets}
         repair_intent_ids = {
             target.repair_of_intent_id
@@ -3535,6 +3541,14 @@ class SupervisorExecutor:
                 if result.status == StepStatus.AWAITING_INPUT
                 and self._awaiting_result_requires_hitl(result)
             ]
+            plain_awaiting_pending = [
+                result
+                for result in pending
+                if result.status == StepStatus.AWAITING_INPUT
+                and not self._awaiting_result_requires_hitl(result)
+            ]
+            if not self.guardrails_enabled:
+                hitl_required_pending.extend(plain_awaiting_pending)
             has_awaiting_input = bool(hitl_required_pending)
             has_paused_pending = any(
                 result.status == StepStatus.PAUSED for result in pending
