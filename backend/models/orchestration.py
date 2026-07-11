@@ -276,6 +276,15 @@ class WaivedOutputEvidence(BaseModel):
     blocker_keys: list[str] = Field(default_factory=list)
 
 
+class GoalFamilyDispositionRequest(BaseModel):
+    event_id: str
+    goal_family_fingerprint: str
+    through_goal_revision_fingerprint: str
+    status: Literal["abandoned", "superseded"]
+    reason: str
+    replacement_goal_family_fingerprint: str | None = None
+
+
 class CompletionEvidence(BaseModel):
     satisfied_criteria: list[str] = Field(default_factory=list)
     referenced_fact_ids: list[str] = Field(default_factory=list)
@@ -286,6 +295,9 @@ class CompletionEvidence(BaseModel):
     satisfied_output_keys: list[str] = Field(default_factory=list)
     waived_outputs: list[WaivedOutputEvidence] = Field(default_factory=list)
     abandoned_goal_disposition_event_ids: list[str] = Field(default_factory=list)
+    requested_goal_family_dispositions: list[GoalFamilyDispositionRequest] = Field(
+        default_factory=list
+    )
     assumption_keys: list[str] = Field(default_factory=list)
     unresolved_non_blocking_unknown_keys: list[str] = Field(default_factory=list)
 

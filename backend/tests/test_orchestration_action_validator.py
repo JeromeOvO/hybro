@@ -1285,6 +1285,32 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
     assert exc_info.value.code == "completion_required_output_missing"
 
 
+@pytest.mark.parametrize(
+    ("state_overrides", "expected_code"),
+    [
+        ({"pending_hitl_request_ids": ["hitl-1"]}, "completion_pending_hitl"),
+        (
+            {
+                "active_dispatches": [
+                    ActiveDispatchRef(
+                        agent_message_id="agent-msg-2",
+                        agent_id="agent-1",
+                        status="running",
+                    )
+                ]
+            },
+            "completion_required_output_missing",
+        ),
+    ],
+)
+def test_complete_state_preconditions_take_priority_without_output(
+    state_overrides, expected_code
+):
+    state = _state_for_validation(agent_outputs=[], facts=[], **state_overrides)
+
+    assert _validation_code(_complete_action(), state) == expected_code
+
+
 def test_complete_rejected_when_recoverable_failure_is_open():
     state = _complete_run_state(
         open_failures=[

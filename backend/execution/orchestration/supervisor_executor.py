@@ -988,6 +988,14 @@ class SupervisorExecutor:
                         disposition.event_id: disposition
                         for disposition in state.goal_family_dispositions
                     }
+                    disposition_by_event_id.update(
+                        {
+                            disposition.event_id: disposition
+                            for disposition in (
+                                planner_action.completion_evidence.requested_goal_family_dispositions
+                            )
+                        }
+                    )
                     for event_id in (
                         planner_action.completion_evidence.abandoned_goal_disposition_event_ids
                     ):
@@ -4810,8 +4818,9 @@ class SupervisorExecutor:
         through_index = next(
             (
                 index
-                for index, outcome in enumerate(family_outcomes)
-                if outcome.goal_revision_fingerprint == through_goal_revision_fingerprint
+                for index in range(len(family_outcomes) - 1, -1, -1)
+                if family_outcomes[index].goal_revision_fingerprint
+                == through_goal_revision_fingerprint
             ),
             None,
         )

@@ -6277,7 +6277,94 @@ async def test_goal_family_disposition_requires_nonempty_reason():
 
 
 @pytest.mark.asyncio
-async def test_run_complete_applies_referenced_goal_family_disposition_before_terminalizing():
+async def test_goal_family_disposition_covers_latest_duplicate_revision_attempt():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+            ),
+            DelegationOutcomeRecord(
+                outcome_id="outcome-2",
+                dispatch_intent_id="intent-2",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-2",
+                status="failed",
+            ),
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce the quote.",
+                task_hash="task-hash-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Repair the quote.",
+                task_hash="task-hash-2",
+            ),
+        ],
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-2", agent_id="agent-1", status="running"
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-2",
+                fingerprint="failure-fingerprint-2",
+                source="runtime",
+                dispatch_intent_id="intent-2",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-2",
+                error_code="transport_error",
+                error_message="Connection reset.",
+                recoverable=True,
+                status="open",
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._dispose_v2_goal_family(
+        await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
+        through_goal_revision_fingerprint="revision-1",
+        status="abandoned",
+        reason="The user withdrew the request.",
+    )
+
+    assert [intent.status for intent in saved.dispatch_intents] == [
+        "abandoned",
+        "abandoned",
+    ]
+    assert saved.active_dispatches[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
+
+
+@pytest.mark.asyncio
+async def test_run_complete_creates_referenced_goal_family_disposition_before_terminalizing():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -6324,16 +6411,6 @@ async def test_run_complete_applies_referenced_goal_family_disposition_before_te
                 agent_id="agent-1",
                 task="Produce the quote.",
                 task_hash="task-hash-1",
-            )
-        ],
-        goal_family_dispositions=[
-            GoalFamilyDispositionRecord(
-                event_id="dispose-1",
-                goal_family_fingerprint="family-1",
-                through_goal_revision_fingerprint="revision-1",
-                status="abandoned",
-                reason="The user no longer needs this quote.",
-                replacement_goal_family_fingerprint="family-2",
             )
         ],
     )

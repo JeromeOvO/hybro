@@ -15,6 +15,7 @@ from execution.orchestration.outcome_policy import (
 )
 from models.orchestration import (
     CompletionEvidence,
+    GoalFamilyDispositionRecord,
     OrchestrationRunState,
     PlannedDelegateTarget,
     PlannerAction,
@@ -88,7 +89,8 @@ class PlannerActionValidator:
                 resource_fingerprints=resource_fingerprints or {},
                 guardrails_enabled=guardrails_enabled,
             )
-        _validate_terminal_output(action, has_agent_output=has_agent_output)
+        if action.action != PlannerActionType.COMPLETE:
+            _validate_terminal_output(action, has_agent_output=has_agent_output)
         if (
             action.action == PlannerActionType.ASK_USER
             and run_state is not None
@@ -114,6 +116,10 @@ class PlannerActionValidator:
                 action,
                 run_state,
                 guardrails_enabled=guardrails_enabled,
+            )
+        elif action.action == PlannerActionType.COMPLETE and not has_agent_output:
+            raise PlannerActionValidationError(
+                f"planner action {action.action.value!r} requires agent output"
             )
 
         return action
@@ -376,19 +382,30 @@ class PlannerActionValidator:
         evidence: CompletionEvidence,
         run_state: OrchestrationRunState,
     ) -> None:
+        completion_state, requested_event_ids = (
+            PlannerActionValidator._completion_state_with_requested_dispositions(
+                evidence,
+                run_state,
+            )
+        )
         referenced_disposition_event_ids = set(
             evidence.abandoned_goal_disposition_event_ids
         )
+        if requested_event_ids - referenced_disposition_event_ids:
+            raise PlannerActionValidationError(
+                "complete action must reference requested dispositions",
+                code="completion_disposition_unreferenced",
+            )
         disposition_event_ids = {
-            disposition.event_id for disposition in run_state.goal_family_dispositions
+            disposition.event_id for disposition in completion_state.goal_family_dispositions
         }
         try:
             active_scope = active_completion_scope(
-                run_state,
+                completion_state,
                 referenced_disposition_event_ids,
             )
             fully_disposed_scope = active_completion_scope(
-                run_state,
+                completion_state,
                 disposition_event_ids,
             )
         except ValueError as exc:
@@ -407,7 +424,7 @@ class PlannerActionValidator:
                 outcome.goal_family_fingerprint,
                 outcome.goal_revision_fingerprint,
             ): outcome
-            for outcome in run_state.delegation_outcomes
+            for outcome in completion_state.delegation_outcomes
         }
         active_obligations = {
             obligation
@@ -450,6 +467,28 @@ class PlannerActionValidator:
                 "complete action is missing required output evidence",
                 code="completion_required_output_missing",
             )
+
+    @staticmethod
+    def _completion_state_with_requested_dispositions(evidence, run_state):
+        completion_state = run_state.model_copy(deep=True)
+        disposition_by_event_id = {
+            disposition.event_id: disposition
+            for disposition in completion_state.goal_family_dispositions
+        }
+        requested_event_ids = set()
+        for request in evidence.requested_goal_family_dispositions:
+            disposition = GoalFamilyDispositionRecord(**request.model_dump())
+            existing = disposition_by_event_id.get(disposition.event_id)
+            if existing is None:
+                completion_state.goal_family_dispositions.append(disposition)
+                disposition_by_event_id[disposition.event_id] = disposition
+            elif existing != disposition:
+                raise PlannerActionValidationError(
+                    "complete action disposition request conflicts with state",
+                    code="completion_disposition_unreferenced",
+                )
+            requested_event_ids.add(disposition.event_id)
+        return completion_state, requested_event_ids
 
     @staticmethod
     def _obligation_matches_any_output_key(

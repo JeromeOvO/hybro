@@ -168,6 +168,40 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         },
                         "final_answer_intent": {"type": "string"},
                         "confidence": {"type": "number"},
+                        "abandoned_goal_disposition_event_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "requested_goal_family_dispositions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "event_id": {"type": "string"},
+                                    "goal_family_fingerprint": {"type": "string"},
+                                    "through_goal_revision_fingerprint": {
+                                        "type": "string"
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["abandoned", "superseded"],
+                                    },
+                                    "reason": {"type": "string"},
+                                    "replacement_goal_family_fingerprint": {
+                                        "type": ["string", "null"]
+                                    },
+                                },
+                                "required": [
+                                    "event_id",
+                                    "goal_family_fingerprint",
+                                    "through_goal_revision_fingerprint",
+                                    "status",
+                                    "reason",
+                                    "replacement_goal_family_fingerprint",
+                                ],
+                            },
+                        },
                     },
                     "required": [
                         "satisfied_criteria",
