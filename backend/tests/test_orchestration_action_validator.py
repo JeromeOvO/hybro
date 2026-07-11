@@ -1269,7 +1269,7 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
             run_state=_complete_run_state(pending_hitl_request_ids=["hitl-1"]),
         )
 
-    with pytest.raises(PlannerActionValidationError, match="active dispatch"):
+    with pytest.raises(PlannerActionValidationError, match="active dispatch") as exc_info:
         PlannerActionValidator.validate(
             action,
             run_state=_complete_run_state(
@@ -1282,6 +1282,7 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
                 ]
             ),
         )
+    assert exc_info.value.code == "completion_required_output_missing"
 
 
 def test_complete_rejected_when_recoverable_failure_is_open():

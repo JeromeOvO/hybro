@@ -984,6 +984,28 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
+                    disposition_by_event_id = {
+                        disposition.event_id: disposition
+                        for disposition in state.goal_family_dispositions
+                    }
+                    for event_id in (
+                        planner_action.completion_evidence.abandoned_goal_disposition_event_ids
+                    ):
+                        disposition = disposition_by_event_id[event_id]
+                        state = await self._dispose_v2_goal_family(
+                            state,
+                            goal_family_fingerprint=disposition.goal_family_fingerprint,
+                            through_goal_revision_fingerprint=(
+                                disposition.through_goal_revision_fingerprint
+                            ),
+                            status=disposition.status,
+                            reason=disposition.reason,
+                            replacement_goal_family_fingerprint=(
+                                disposition.replacement_goal_family_fingerprint
+                            ),
+                            event_id=disposition.event_id,
+                        )
+
                     def record_completion_evidence(
                         updated: OrchestrationRunState,
                         evidence=planner_action.completion_evidence,
@@ -4771,6 +4793,7 @@ class SupervisorExecutor:
         status: str,
         reason: str,
         replacement_goal_family_fingerprint: str | None = None,
+        event_id: str | None = None,
     ) -> OrchestrationRunState:
         if status not in {"abandoned", "superseded"}:
             raise ValueError(
@@ -4797,7 +4820,7 @@ class SupervisorExecutor:
         intent_ids = {
             outcome.dispatch_intent_id for outcome in family_outcomes[: through_index + 1]
         }
-        event_id = f"goal-family-disposed:{uuid4().hex}"
+        event_id = event_id or f"goal-family-disposed:{uuid4().hex}"
         disposition = GoalFamilyDispositionRecord(
             event_id=event_id,
             goal_family_fingerprint=goal_family_fingerprint,
@@ -4816,7 +4839,18 @@ class SupervisorExecutor:
         }
 
         def mutate(updated: OrchestrationRunState) -> None:
-            updated.goal_family_dispositions.append(disposition)
+            recorded_disposition = next(
+                (
+                    item
+                    for item in updated.goal_family_dispositions
+                    if item.event_id == event_id
+                ),
+                None,
+            )
+            if recorded_disposition is None:
+                updated.goal_family_dispositions.append(disposition)
+            elif recorded_disposition != disposition:
+                raise ValueError("goal family disposition event does not match state")
             message_ids = {
                 intent.planned_agent_message_id
                 for intent in updated.dispatch_intents

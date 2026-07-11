@@ -567,7 +567,7 @@ def _validate_completion_blockers(
     ):
         raise PlannerActionValidationError(
             "complete action is blocked by active dispatches",
-            code="completion_evidence_invalid",
+            code="completion_required_output_missing",
         )
     if guardrails_enabled and any(
         failure.source != "planner_validator" and failure.status == "open"

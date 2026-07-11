@@ -6277,6 +6277,115 @@ async def test_goal_family_disposition_requires_nonempty_reason():
 
 
 @pytest.mark.asyncio
+async def test_run_complete_applies_referenced_goal_family_disposition_before_terminalizing():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Complete the active work"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        candidate_agent_ids=["agent-1"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="The answer is ready.",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+                remaining_required_obligations=["quote"],
+            )
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce the quote.",
+                task_hash="task-hash-1",
+            )
+        ],
+        goal_family_dispositions=[
+            GoalFamilyDispositionRecord(
+                event_id="dispose-1",
+                goal_family_fingerprint="family-1",
+                through_goal_revision_fingerprint="revision-1",
+                status="abandoned",
+                reason="The user no longer needs this quote.",
+                replacement_goal_family_fingerprint="family-2",
+            )
+        ],
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.COMPLETE,
+                reasoning="The remaining goal family was abandoned.",
+                completion_evidence=CompletionEvidence(
+                    satisfied_criteria=["The completed output is sufficient."],
+                    referenced_fact_ids=[],
+                    referenced_artifact_keys=[],
+                    unresolved_questions=[],
+                    final_answer_intent="answer_user",
+                    confidence=0.9,
+                    abandoned_goal_disposition_event_ids=["dispose-1"],
+                ),
+            )
+        ),
+        user_message=user_message,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Complete the active work",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    saved = await store.get_run("message-1")
+    assert saved is not None
+    assert saved.dispatch_intents[0].status == "abandoned"
+    assert saved.goal_family_dispositions[0].event_id == "dispose-1"
+    assert (
+        saved.goal_family_dispositions[0].replacement_goal_family_fingerprint
+        == "family-2"
+    )
+    event_types = [event.type for event in store._events_by_run["message-1"]]
+    assert OrchestrationEventType.GOAL_FAMILY_DISPOSED in event_types
+    assert event_types.index(OrchestrationEventType.GOAL_FAMILY_DISPOSED) < event_types.index(
+        OrchestrationEventType.RUN_TERMINAL
+    )
+
+
+@pytest.mark.asyncio
 async def test_ingest_v2_results_distinguishes_changed_error_message():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
