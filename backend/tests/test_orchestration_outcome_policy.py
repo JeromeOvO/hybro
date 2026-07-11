@@ -179,6 +179,38 @@ def test_failed_retry_uses_open_failure_budget_without_repair_lineage():
     assert decision.kind == "operational_retry"
 
 
+def test_failed_retry_without_repair_lineage_requires_same_task():
+    failure = OpenFailureRecord(
+        failure_id="failure-1",
+        fingerprint="failure-fingerprint",
+        source="runtime",
+        agent_id="agent-1",
+        agent_message_id="i1:message",
+        dispatch_intent_id="i1",
+        error_code="transport_error",
+        error_message="connection reset",
+        recoverable=True,
+        retry_count=0,
+        max_retries=2,
+    )
+    state = _state(
+        [_outcome("o1", "i1", "failed", ["quote:$present"], [])],
+        [_intent("i1", "failed")],
+        [failure],
+    )
+
+    decision = evaluate_retry(
+        state,
+        PlannedDelegateTarget(agent_id="agent-1", task="fresh unrelated task"),
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "recovery_retry_unavailable"
+    assert decision.kind == "operational_retry"
+
+
 def test_failed_retry_is_blocked_when_budget_exhausted():
     failure = OpenFailureRecord(
         failure_id="failure-1",

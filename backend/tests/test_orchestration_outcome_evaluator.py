@@ -438,6 +438,54 @@ def test_invalidation_is_scoped_to_its_goal_family():
     assert outcome.remaining_required_obligations == []
 
 
+def test_fresh_required_evidence_after_invalidation_is_retained_later():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-2", "intent-2")
+    invalidated, _ = invalidate_required_evidence(
+        _state(),
+        goal_family_fingerprint=_goal_family(intent),
+        evidence_key="quote-evidence",
+        obligation_keys=[
+            "quote:$present",
+            "quote:requested_coverage.limit",
+            "quote:requested_coverage.retention",
+        ],
+        reason="The retained quote evidence is no longer valid.",
+        source_event_id="event-1",
+    )
+    fresh_after = invalidated.model_copy(deep=True)
+    fresh_after.artifacts.append(
+        _artifact(
+            "agent-msg-2",
+            {"requested_coverage": {"limit": 1_000_000, "retention": 25_000}},
+        )
+    )
+
+    fresh = evaluator.evaluate(
+        invalidated,
+        fresh_after,
+        intent,
+        _output("agent-msg-2"),
+        {},
+    )
+    later_before = fresh_after.model_copy(deep=True)
+    later_before.delegation_outcomes.append(fresh)
+    later_after = later_before.model_copy(deep=True)
+    later_after.facts.append(_agent_text("agent-msg-3", "no additional evidence"))
+
+    later = evaluator.evaluate(
+        later_before,
+        later_after,
+        _intent("agent-msg-3", "intent-3"),
+        _output("agent-msg-3", "no additional evidence"),
+        {},
+    )
+
+    assert fresh.status == "fulfilled"
+    assert later.status == "fulfilled"
+    assert later.remaining_required_obligations == []
+
+
 def test_required_output_presence_is_partial_progress_when_fields_are_missing():
     evaluator = DelegationOutcomeEvaluator()
     after = _state(artifacts=[_artifact("agent-msg-1", {})])

@@ -105,10 +105,7 @@ class PlannerActionValidator:
             run_state is not None
             and action.action
             in (PlannerActionType.SYNTHESIZE, PlannerActionType.COMPLETE)
-            and not (
-                action.action == PlannerActionType.COMPLETE
-                and guardrails_enabled
-            )
+            and guardrails_enabled
         ):
             _validate_no_blocking_recoverable_failures(action, run_state)
         if action.action == PlannerActionType.COMPLETE and run_state is not None:
