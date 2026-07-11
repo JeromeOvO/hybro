@@ -9,6 +9,7 @@ from execution.orchestration.outcome_evaluator import (
     goal_fingerprints,
 )
 from execution.orchestration.outcome_policy import (
+    active_completion_scope,
     duplicate_delegate_target_code,
     evaluate_retry,
 )
@@ -102,10 +103,18 @@ class PlannerActionValidator:
             run_state is not None
             and action.action
             in (PlannerActionType.SYNTHESIZE, PlannerActionType.COMPLETE)
+            and not (
+                action.action == PlannerActionType.COMPLETE
+                and guardrails_enabled
+            )
         ):
             _validate_no_blocking_recoverable_failures(action, run_state)
         if action.action == PlannerActionType.COMPLETE and run_state is not None:
-            PlannerActionValidator._validate_completion(action, run_state)
+            PlannerActionValidator._validate_completion(
+                action,
+                run_state,
+                guardrails_enabled=guardrails_enabled,
+            )
 
         return action
 
@@ -113,6 +122,8 @@ class PlannerActionValidator:
     def _validate_completion(
         action: PlannerAction,
         run_state: OrchestrationRunState,
+        *,
+        guardrails_enabled: bool,
     ) -> None:
         evidence = action.completion_evidence
         if evidence is None:
@@ -120,7 +131,11 @@ class PlannerActionValidator:
                 "complete action requires completion evidence",
                 code="completion_evidence_invalid",
             )
-        _validate_completion_blockers(run_state, evidence)
+        _validate_completion_blockers(
+            run_state,
+            evidence,
+            guardrails_enabled=guardrails_enabled,
+        )
         _validate_completion_references(run_state, evidence)
         if not evidence.satisfied_criteria or any(
             not criterion.strip() for criterion in evidence.satisfied_criteria
@@ -129,6 +144,8 @@ class PlannerActionValidator:
                 "complete action requires satisfied criteria",
                 code="completion_evidence_invalid",
             )
+        if guardrails_enabled:
+            PlannerActionValidator._validate_completion_scope(evidence, run_state)
 
     @staticmethod
     def _validate_delegate_outcome_policy(
@@ -354,6 +371,107 @@ class PlannerActionValidator:
             return ""
         return " ".join(prompt.lower().split())
 
+    @staticmethod
+    def _validate_completion_scope(
+        evidence: CompletionEvidence,
+        run_state: OrchestrationRunState,
+    ) -> None:
+        referenced_disposition_event_ids = set(
+            evidence.abandoned_goal_disposition_event_ids
+        )
+        disposition_event_ids = {
+            disposition.event_id for disposition in run_state.goal_family_dispositions
+        }
+        try:
+            active_scope = active_completion_scope(
+                run_state,
+                referenced_disposition_event_ids,
+            )
+            fully_disposed_scope = active_completion_scope(
+                run_state,
+                disposition_event_ids,
+            )
+        except ValueError as exc:
+            raise PlannerActionValidationError(
+                "complete action references an unknown goal family disposition",
+                code="completion_disposition_unreferenced",
+            ) from exc
+        if active_scope - fully_disposed_scope:
+            raise PlannerActionValidationError(
+                "complete action must reference dispositions for excluded goal families",
+                code="completion_disposition_unreferenced",
+            )
+
+        latest_outcomes = {
+            (
+                outcome.goal_family_fingerprint,
+                outcome.goal_revision_fingerprint,
+            ): outcome
+            for outcome in run_state.delegation_outcomes
+        }
+        active_obligations = {
+            obligation
+            for scope in active_scope
+            for obligation in latest_outcomes[scope].remaining_required_obligations
+        }
+        waived_obligations: set[str] = set()
+        for waiver in evidence.waived_outputs:
+            if not waiver.reason.strip():
+                raise PlannerActionValidationError(
+                    "complete action requires a reason for each output waiver",
+                    code="completion_required_output_missing",
+                )
+            matched = {
+                obligation
+                for obligation in active_obligations
+                if PlannerActionValidator._obligation_matches_output_key(
+                    obligation,
+                    waiver.output_key,
+                )
+            }
+            if not matched:
+                raise PlannerActionValidationError(
+                    "complete action waiver is outside the active goal families",
+                    code="completion_required_output_missing",
+                )
+            waived_obligations.update(matched)
+        satisfied_output_keys = set(evidence.satisfied_output_keys)
+        missing_obligations = [
+            obligation
+            for obligation in active_obligations
+            if obligation not in waived_obligations
+            and not PlannerActionValidator._obligation_matches_any_output_key(
+                obligation,
+                satisfied_output_keys,
+            )
+        ]
+        if missing_obligations:
+            raise PlannerActionValidationError(
+                "complete action is missing required output evidence",
+                code="completion_required_output_missing",
+            )
+
+    @staticmethod
+    def _obligation_matches_any_output_key(
+        obligation: str,
+        output_keys: set[str],
+    ) -> bool:
+        return any(
+            PlannerActionValidator._obligation_matches_output_key(
+                obligation,
+                output_key,
+            )
+            for output_key in output_keys
+        )
+
+    @staticmethod
+    def _obligation_matches_output_key(
+        obligation: str,
+        output_key: str,
+    ) -> bool:
+        return obligation == output_key or obligation.split(":$", 1)[0] == output_key
+
+
 def _validate_step_budget(
     action: PlannerAction,
     *,
@@ -413,7 +531,6 @@ def _validate_delegate(
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)
 
-
 def _validate_terminal_output(
     action: PlannerAction,
     *,
@@ -431,19 +548,44 @@ def _validate_terminal_output(
 def _validate_completion_blockers(
     run_state: OrchestrationRunState,
     evidence: CompletionEvidence,
+    *,
+    guardrails_enabled: bool,
 ) -> None:
     if run_state.pending_hitl_request_ids:
         raise PlannerActionValidationError(
             "complete action is blocked by pending HITL",
-            code="completion_evidence_invalid",
+            code=(
+                "completion_pending_hitl"
+                if guardrails_enabled
+                else "completion_evidence_invalid"
+            ),
         )
     if any(
-        item.status not in {"completed", "failed", "canceled", "rejected"}
+        item.status
+        not in {"completed", "failed", "canceled", "rejected", "abandoned"}
         for item in run_state.active_dispatches
     ):
         raise PlannerActionValidationError(
             "complete action is blocked by active dispatches",
             code="completion_evidence_invalid",
+        )
+    if guardrails_enabled and any(
+        failure.source != "planner_validator" and failure.status == "open"
+        for failure in run_state.open_failures
+    ):
+        raise PlannerActionValidationError(
+            "complete action is blocked by an open runtime failure",
+            code="completion_open_failure",
+        )
+    if guardrails_enabled and any(
+        blocker.status == "open"
+        and blocker.validation_status == "validated"
+        and blocker.validated_user_only
+        for blocker in run_state.blockers
+    ):
+        raise PlannerActionValidationError(
+            "complete action is blocked by a validated open blocker",
+            code="completion_open_blocker",
         )
     has_unresolved_question = any(
         not isinstance(question, Mapping)
@@ -485,7 +627,6 @@ def _validate_no_blocking_recoverable_failures(
             f"{action.action.value} action is blocked by open recoverable failure",
             code="completion_blocked_by_recoverable_failure",
         )
-
 
 def _validate_completion_references(
     run_state: OrchestrationRunState,

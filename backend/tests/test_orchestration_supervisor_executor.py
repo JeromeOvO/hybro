@@ -36,12 +36,15 @@ from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.hitl import InterruptKind
 from models.orchestration import (
+    ActiveDispatchRef,
     AgentOutputRecord,
     CompletionEvidence,
+    DelegationOutcomeRecord,
     DispatchContentRef,
     DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
+    GoalFamilyDispositionRecord,
     OpenFailureRecord,
     OrchestrationEventType,
     OrchestrationRunState,
@@ -6170,6 +6173,106 @@ async def test_append_v2_event_swallows_non_required_store_conflicts(monkeypatch
             OrchestrationEventType.OUTCOME_EVALUATED,
             required=True,
             payload={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_goal_family_disposition_terminalizes_related_work_and_records_event():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="produce quote",
+                task_hash="hash-1",
+                status="planned",
+            )
+        ],
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="running",
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="failure-fingerprint-1",
+                source="runtime",
+                dispatch_intent_id="intent-1",
+                error_code="transport_error",
+                error_message="Connection reset.",
+                recoverable=True,
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="failed",
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._dispose_v2_goal_family(
+        await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
+        through_goal_revision_fingerprint="revision-1",
+        status="abandoned",
+        reason="The user withdrew the request.",
+        replacement_goal_family_fingerprint="family-2",
+    )
+
+    assert saved.dispatch_intents[0].status == "abandoned"
+    assert saved.active_dispatches[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
+    assert saved.goal_family_dispositions == [
+        GoalFamilyDispositionRecord(
+            event_id=saved.goal_family_dispositions[0].event_id,
+            goal_family_fingerprint="family-1",
+            through_goal_revision_fingerprint="revision-1",
+            status="abandoned",
+            reason="The user withdrew the request.",
+            replacement_goal_family_fingerprint="family-2",
+        )
+    ]
+    event = store._events_by_run["run-1"][-1]
+    assert event.type == OrchestrationEventType.GOAL_FAMILY_DISPOSED
+    assert event.payload["event_id"] == saved.goal_family_dispositions[0].event_id
+
+
+@pytest.mark.asyncio
+async def test_goal_family_disposition_requires_nonempty_reason():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    await store.create_run(_run_state())
+
+    with pytest.raises(ValueError, match="reason"):
+        await executor._dispose_v2_goal_family(
+            await store.get_run("run-1"),
+            goal_family_fingerprint="family-1",
+            through_goal_revision_fingerprint="revision-1",
+            status="abandoned",
+            reason=" ",
         )
 
 

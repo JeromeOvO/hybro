@@ -22,6 +22,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
@@ -55,6 +56,7 @@ from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
     goal_fingerprints,
+    invalidate_required_evidence,
 )
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
@@ -85,6 +87,7 @@ from models.orchestration import (
     AgentOutputRecord,
     DispatchIntent,
     DispatchRefKind,
+    GoalFamilyDispositionRecord,
     OrchestrationEventType,
     OrchestrationRunEvent,
     OrchestrationRunState,
@@ -4727,6 +4730,136 @@ class SupervisorExecutor:
                         )
 
         return current
+
+    async def _invalidate_v2_required_evidence(
+        self,
+        state: OrchestrationRunState,
+        *,
+        evidence_key: str,
+        obligation_keys: list[str],
+        reason: str,
+        source_event_id: str,
+    ) -> OrchestrationRunState:
+        expected_version = state.state_version
+        updated, payload = invalidate_required_evidence(
+            state,
+            evidence_key=evidence_key,
+            obligation_keys=obligation_keys,
+            reason=reason,
+            source_event_id=source_event_id,
+        )
+        updated.state_version = expected_version + 1
+        updated.updated_at = utcnow()
+        saved = await self.run_store.save_state(
+            updated,
+            expected_version=expected_version,
+        )
+        await self._append_v2_event(
+            saved,
+            OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED,
+            required=True,
+            payload=payload,
+        )
+        return saved
+
+    async def _dispose_v2_goal_family(
+        self,
+        state: OrchestrationRunState,
+        *,
+        goal_family_fingerprint: str,
+        through_goal_revision_fingerprint: str,
+        status: str,
+        reason: str,
+        replacement_goal_family_fingerprint: str | None = None,
+    ) -> OrchestrationRunState:
+        if status not in {"abandoned", "superseded"}:
+            raise ValueError(
+                "goal family disposition status must be abandoned or superseded"
+            )
+        if not reason.strip():
+            raise ValueError("goal family disposition reason must be nonempty")
+
+        family_outcomes = [
+            outcome
+            for outcome in state.delegation_outcomes
+            if outcome.goal_family_fingerprint == goal_family_fingerprint
+        ]
+        through_index = next(
+            (
+                index
+                for index, outcome in enumerate(family_outcomes)
+                if outcome.goal_revision_fingerprint == through_goal_revision_fingerprint
+            ),
+            None,
+        )
+        if through_index is None:
+            raise ValueError("goal family disposition revision is not known")
+        intent_ids = {
+            outcome.dispatch_intent_id for outcome in family_outcomes[: through_index + 1]
+        }
+        event_id = f"goal-family-disposed:{uuid4().hex}"
+        disposition = GoalFamilyDispositionRecord(
+            event_id=event_id,
+            goal_family_fingerprint=goal_family_fingerprint,
+            through_goal_revision_fingerprint=through_goal_revision_fingerprint,
+            status=status,
+            reason=reason.strip(),
+            replacement_goal_family_fingerprint=replacement_goal_family_fingerprint,
+        )
+        terminal_statuses = {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "expired",
+            "abandoned",
+        }
+
+        def mutate(updated: OrchestrationRunState) -> None:
+            updated.goal_family_dispositions.append(disposition)
+            message_ids = {
+                intent.planned_agent_message_id
+                for intent in updated.dispatch_intents
+                if intent.dispatch_intent_id in intent_ids
+            }
+            for intent in updated.dispatch_intents:
+                if (
+                    intent.dispatch_intent_id in intent_ids
+                    and intent.status not in terminal_statuses
+                ):
+                    intent.status = "abandoned"
+            for dispatch in updated.active_dispatches:
+                if (
+                    dispatch.agent_message_id in message_ids
+                    and dispatch.status not in terminal_statuses
+                ):
+                    dispatch.status = "abandoned"
+            for failure in updated.open_failures:
+                if (
+                    failure.status == "open"
+                    and (
+                        failure.dispatch_intent_id in intent_ids
+                        or failure.agent_message_id in message_ids
+                    )
+                ):
+                    failure.status = "abandoned"
+                    failure.updated_at = utcnow()
+
+        return await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.GOAL_FAMILY_DISPOSED,
+            payload={
+                "event_id": event_id,
+                "goal_family_fingerprint": goal_family_fingerprint,
+                "through_goal_revision_fingerprint": through_goal_revision_fingerprint,
+                "status": status,
+                "reason": reason.strip(),
+                "replacement_goal_family_fingerprint": (
+                    replacement_goal_family_fingerprint
+                ),
+            },
+            mutate=mutate,
+        )
 
     async def _mark_v2_terminal(
         self,

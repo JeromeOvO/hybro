@@ -23,6 +23,7 @@ from models.orchestration import (
     DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
+    GoalFamilyDispositionRecord,
     OpenFailureRecord,
     OrchestrationRunState,
     ParticipantSnapshot,
@@ -1079,6 +1080,170 @@ def _failure(status: str, *, recoverable: bool = True) -> OpenFailureRecord:
         status=status,
         recovery_hints=["retry_same_agent_with_smaller_context"],
     )
+
+
+def _completion_outcome(
+    outcome_id: str,
+    intent_id: str,
+    *,
+    family: str = "family-1",
+    revision: str = "revision-1",
+    remaining: list[str] | None = None,
+) -> DelegationOutcomeRecord:
+    return DelegationOutcomeRecord(
+        outcome_id=outcome_id,
+        dispatch_intent_id=intent_id,
+        agent_id="agent-1",
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+        attempt_fingerprint=f"attempt-{outcome_id}",
+        status="partial" if remaining else "fulfilled",
+        remaining_required_obligations=list(remaining or []),
+    )
+
+
+def _completion_case(case: str):
+    action = _complete_action()
+    cases = {
+        "active_missing_obligation": (
+            action,
+            _complete_run_state(
+                delegation_outcomes=[
+                    _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+                ]
+            ),
+        ),
+        "unreferenced_disposition": (
+            action,
+            _complete_run_state(
+                delegation_outcomes=[
+                    _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+                ],
+                goal_family_dispositions=[
+                    GoalFamilyDispositionRecord(
+                        event_id="dispose-1",
+                        goal_family_fingerprint="family-1",
+                        through_goal_revision_fingerprint="revision-1",
+                        status="abandoned",
+                        reason="No longer needed.",
+                    )
+                ],
+            ),
+        ),
+        "open_runtime_failure": (
+            action,
+            _complete_run_state(
+                open_failures=[
+                    OpenFailureRecord(
+                        failure_id="runtime-failure-1",
+                        fingerprint="runtime-fingerprint-1",
+                        source="runtime",
+                        error_code="transport_error",
+                        error_message="Connection reset.",
+                        recoverable=True,
+                        status="open",
+                    )
+                ]
+            ),
+        ),
+        "pending_hitl": (
+            action,
+            _complete_run_state(pending_hitl_request_ids=["hitl-1"]),
+        ),
+        "validated_open_blocker": (
+            action,
+            _complete_run_state(
+                blockers=[
+                    BlockerRecord(
+                        key="missing-quote",
+                        description="Quote cannot be completed without user input.",
+                        blocked_output_keys=["quote"],
+                        source="agent",
+                        claimed_user_only=True,
+                        validated_user_only=True,
+                        validation_status="validated",
+                    )
+                ]
+            ),
+        ),
+    }
+    return cases[case]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_code"),
+    [
+        ("active_missing_obligation", "completion_required_output_missing"),
+        ("unreferenced_disposition", "completion_disposition_unreferenced"),
+        ("open_runtime_failure", "completion_open_failure"),
+        ("pending_hitl", "completion_pending_hitl"),
+        ("validated_open_blocker", "completion_open_blocker"),
+    ],
+)
+def test_completion_scope_rejections(case, expected_code):
+    action, state = _completion_case(case)
+
+    assert _validation_code(action, state) == expected_code
+
+
+def test_completion_accepts_satisfied_latest_active_revision_obligations():
+    state = _complete_run_state(
+        delegation_outcomes=[
+            _completion_outcome(
+                "outcome-1", "intent-1", revision="revision-1", remaining=["quote"]
+            ),
+            _completion_outcome("outcome-2", "intent-2", revision="revision-2"),
+        ]
+    )
+
+    assert PlannerActionValidator.validate(
+        _complete_action(satisfied_output_keys=["quote"]),
+        run_state=state,
+        guardrails_enabled=True,
+    )
+
+
+def test_completion_accepts_referenced_abandoned_family_without_output_waivers():
+    state = _complete_run_state(
+        delegation_outcomes=[
+            _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+        ],
+        goal_family_dispositions=[
+            GoalFamilyDispositionRecord(
+                event_id="dispose-1",
+                goal_family_fingerprint="family-1",
+                through_goal_revision_fingerprint="revision-1",
+                status="abandoned",
+                reason="The user withdrew the request.",
+            )
+        ],
+    )
+
+    assert PlannerActionValidator.validate(
+        _complete_action(abandoned_goal_disposition_event_ids=["dispose-1"]),
+        run_state=state,
+        guardrails_enabled=True,
+    )
+
+
+def test_completion_accepts_abandoned_active_dispatch():
+    state = _complete_run_state(
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                status="abandoned",
+            )
+        ]
+    )
+
+    assert PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
+def test_completion_accepts_abandoned_failure():
+    state = _complete_run_state(open_failures=[_failure("abandoned")])
+
+    assert PlannerActionValidator.validate(_complete_action(), run_state=state)
 
 
 def test_complete_requires_structured_evidence():
