@@ -1920,51 +1920,65 @@ class SupervisorExecutor:
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
         if awaiting:
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            hitl_required = [
+                result
+                for result in awaiting
+                if self._awaiting_result_requires_hitl(result)
+            ]
+            if hitl_required:
+                trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                )
+                if paused:
+                    trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                    saved = await self._save_interrupted_state(
+                        kind=InterruptKind.PUSH_NOTIFICATION,
+                        trajectory=trajectory,
+                        paused_results=paused,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        request_user_id=request_user_id,
+                        message_text=message_text,
+                        agent_registry=agent_registry,
+                        room_config=room_config,
+                        conversation_context=conversation_context,
+                        quoted_text=quoted_text,
+                    )
+                    if not saved:
+                        trajectory.status = TrajectoryStatus.FAILED
+                        state = await self._mark_v2_terminal(
+                            state,
+                            OrchestrationStatus.FAILED,
+                            reason="failed to save paused v2 recovery continuation",
+                        )
+                        return state, RunStatus.FAILED
+                state, awaiting_status = await self._run_agent_awaiting_input_action(
+                    state=state,
+                    results=results,
+                    awaiting=hitl_required,
+                    trajectory=trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                )
+                return state, awaiting_status
+
             state = await self._ingest_v2_results(
                 state,
                 results,
-                status=OrchestrationStatus.WAITING_AGENT,
+                status=OrchestrationStatus.RUNNING,
                 advance_step=False,
             )
-            if paused:
-                trajectory.status = TrajectoryStatus.AWAITING_INPUT
-                saved = await self._save_interrupted_state(
-                    kind=InterruptKind.PUSH_NOTIFICATION,
-                    trajectory=trajectory,
-                    paused_results=paused,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                    request_user_id=request_user_id,
-                    message_text=message_text,
-                    agent_registry=agent_registry,
-                    room_config=room_config,
-                    conversation_context=conversation_context,
-                    quoted_text=quoted_text,
-                )
-                if not saved:
-                    trajectory.status = TrajectoryStatus.FAILED
-                    state = await self._mark_v2_terminal(
-                        state,
-                        OrchestrationStatus.FAILED,
-                        reason="failed to save paused v2 recovery continuation",
-                    )
-                    return state, RunStatus.FAILED
-            state, awaiting_status = await self._run_agent_awaiting_input_action(
-                state=state,
-                results=results,
-                awaiting=awaiting,
-                trajectory=trajectory,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-            )
-            return state, awaiting_status
+            return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING

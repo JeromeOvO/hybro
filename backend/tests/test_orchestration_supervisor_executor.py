@@ -5016,6 +5016,8 @@ async def test_recover_v2_inflight_dispatch_rehydrates_awaiting_input_output_to_
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
             status_message="Provide missing details",
+            interactive_state="auth-required",
+            requires_auth=True,
         )
     ]
     await store.create_run(state)
@@ -5042,6 +5044,76 @@ async def test_recover_v2_inflight_dispatch_rehydrates_awaiting_input_output_to_
     assert request_input_kwargs["a2a_task_id"] == "task-1"
     assert request_input_kwargs["a2a_context_id"] == "ctx-1"
     assert request_input_kwargs["prompt"] == "Provide missing details"
+
+
+@pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for_planner():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._run_agent_awaiting_input_action = AsyncMock()
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            text="Needs an available resource",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Provide the selected resource.",
+            interactive_state="input-required",
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    executor._run_agent_awaiting_input_action.assert_not_awaited()
+    assert run_status is None
+    assert recovered_state.status == OrchestrationStatus.RUNNING
+    assert recovered_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+    assert recovered_state.open_failures[0].error_code == "agent_input_required"
 
 
 @pytest.mark.asyncio
@@ -5147,6 +5219,103 @@ async def test_inflight_recovery_persists_outcome_for_interactive_message_withou
 
 
 @pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_rehydrates_a2a_task_fields_for_auth_required():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id="message-1:step-1:target-1:message",
+            message_content=SimpleNamespace(
+                message_text="",
+                message_task={
+                    "id": "task-from-task",
+                    "context_id": "ctx-from-task",
+                    "status": {
+                        "state": "auth-required",
+                        "message": {
+                            "parts": [
+                                {
+                                    "kind": "text",
+                                    "text": "Please provide missing details.",
+                                }
+                            ]
+                        },
+                    },
+                },
+            ),
+        )
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    request_input_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert request_input_kwargs["a2a_task_id"] == "task-from-task"
+    assert request_input_kwargs["a2a_context_id"] == "ctx-from-task"
+    assert request_input_kwargs["prompt"] == "Please provide missing details."
+    recovered_output = recovered_state.agent_outputs[0]
+    assert recovered_output.a2a_task_id == "task-from-task"
+    assert recovered_output.a2a_context_id == "ctx-from-task"
+    assert recovered_output.status_message == "Please provide missing details."
+
+
+@pytest.mark.asyncio
 async def test_recover_v2_inflight_dispatch_paused_and_awaiting_saves_paused_before_hitl():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -5221,6 +5390,8 @@ async def test_recover_v2_inflight_dispatch_paused_and_awaiting_saves_paused_bef
             agent_id="agent-1",
             status=StepStatus.AWAITING_INPUT.value,
             text="Needs human input",
+            interactive_state="auth-required",
+            requires_auth=True,
         ),
         AgentOutputRecord(
             agent_message_id="message-1:step-1:target-2:message",
@@ -5332,6 +5503,8 @@ async def test_recover_v2_inflight_dispatch_paused_and_awaiting_fails_without_hi
             agent_id="agent-1",
             status=StepStatus.AWAITING_INPUT.value,
             text="Needs human input",
+            interactive_state="auth-required",
+            requires_auth=True,
         ),
         AgentOutputRecord(
             agent_message_id="message-1:step-1:target-2:message",
