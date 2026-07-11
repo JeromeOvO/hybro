@@ -3344,6 +3344,8 @@ class SupervisorExecutor:
                     RunStatus.AWAITING_INPUT
                     if has_awaiting_input
                     else RunStatus.PAUSED
+                    if has_paused_pending
+                    else None
                 )
                 if synced.status != pending_status:
                     synced = await self._save_v2_state(
@@ -3703,6 +3705,7 @@ class SupervisorExecutor:
             request_id: str,
             question: ClarifyQuestion,
             message_id: str,
+            blocker_keys: list[str],
         ) -> None:
             # The request can be persisted before its continuation. Keep the run
             # non-answerable until continuation recovery is durable.
@@ -3735,6 +3738,7 @@ class SupervisorExecutor:
                         "prompt": question.prompt,
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
+                        "blocker_keys": blocker_keys,
                         "status": "creating",
                         "display_message_id": message_id,
                         "created_at": utcnow().isoformat(),
@@ -3748,6 +3752,7 @@ class SupervisorExecutor:
                 existing["prompt"] = question.prompt
                 existing["prompt_type"] = question.prompt_type
                 existing["choices"] = question.choices
+                existing["blocker_keys"] = blocker_keys
                 existing["display_message_id"] = message_id
             self._clear_stale_pending_hitl_request_ids(updated)
 
@@ -3756,6 +3761,7 @@ class SupervisorExecutor:
             *,
             question: ClarifyQuestion,
             message_id: str,
+            blocker_keys: list[str],
         ) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
             updated.steps_used = max(updated.steps_used, step_number)
@@ -3777,6 +3783,7 @@ class SupervisorExecutor:
                         "prompt": question.prompt,
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
+                        "blocker_keys": blocker_keys,
                         "status": "creating",
                         "display_message_id": message_id,
                         "created_at": utcnow().isoformat(),
@@ -3788,9 +3795,15 @@ class SupervisorExecutor:
                 existing["prompt"] = question.prompt
                 existing["prompt_type"] = question.prompt_type
                 existing["choices"] = question.choices
+                existing["blocker_keys"] = blocker_keys
                 existing["display_message_id"] = message_id
 
         for qi, question in enumerate(questions):
+            blocker_keys = (
+                list(planner_action.questions[qi].blocker_keys)
+                if qi < len(planner_action.questions)
+                else []
+            )
             prompt_type = HITLPromptType.TEXT
             if question.prompt_type:
                 try:
@@ -3822,11 +3835,13 @@ class SupervisorExecutor:
                     *,
                     question: ClarifyQuestion = question,
                     message_id: str = hitl_agent_message.message_id,
+                    blocker_keys: list[str] = blocker_keys,
                 ) -> None:
                     mark_supervisor_request_creating(
                         updated,
                         question=question,
                         message_id=message_id,
+                        blocker_keys=blocker_keys,
                     )
 
                 state = await self._save_v2_state(
@@ -3875,12 +3890,14 @@ class SupervisorExecutor:
                     request_id: str = request.request_id,
                     question: ClarifyQuestion = question,
                     message_id: str = hitl_agent_message.message_id,
+                    blocker_keys: list[str] = blocker_keys,
                 ) -> None:
                     mark_supervisor_request_open(
                         updated,
                         request_id=request_id,
                         question=question,
                         message_id=message_id,
+                        blocker_keys=blocker_keys,
                     )
 
                 state = await self._save_v2_state(
@@ -4003,6 +4020,11 @@ class SupervisorExecutor:
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
                 question = questions[min(index, len(questions) - 1)]
+                blocker_keys = (
+                    list(planner_action.questions[index].blocker_keys)
+                    if index < len(planner_action.questions)
+                    else []
+                )
                 existing = next(
                     (
                         item
@@ -4027,6 +4049,7 @@ class SupervisorExecutor:
                             "prompt": question.prompt,
                             "prompt_type": question.prompt_type,
                             "choices": question.choices,
+                            "blocker_keys": blocker_keys,
                             "status": "open",
                             "created_at": utcnow().isoformat(),
                         }
