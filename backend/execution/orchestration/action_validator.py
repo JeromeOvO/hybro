@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from execution.orchestration.outcome_evaluator import goal_fingerprints
+from execution.orchestration.outcome_policy import (
+    duplicate_delegate_target_code,
+    evaluate_retry,
+)
 from models.orchestration import (
     CompletionEvidence,
     OrchestrationRunState,
@@ -49,6 +54,8 @@ class PlannerActionValidator:
         steps_used: int = 0,
         step_budget: int = 8,
         has_agent_output: bool = False,
+        resource_fingerprints: Mapping[str, str] | None = None,
+        guardrails_enabled: bool = False,
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 
@@ -70,6 +77,12 @@ class PlannerActionValidator:
                 action,
                 candidate_agent_ids=candidate_agent_ids,
                 run_state=run_state,
+            )
+            PlannerActionValidator._validate_delegate_outcome_policy(
+                action,
+                run_state=run_state,
+                resource_fingerprints=resource_fingerprints or {},
+                guardrails_enabled=guardrails_enabled,
             )
         _validate_terminal_output(action, has_agent_output=has_agent_output)
         if (
@@ -103,6 +116,74 @@ class PlannerActionValidator:
                 "complete action requires satisfied criteria",
                 code="completion_evidence_invalid",
             )
+
+    @staticmethod
+    def _validate_delegate_outcome_policy(
+        action: PlannerAction,
+        *,
+        run_state: OrchestrationRunState | None,
+        resource_fingerprints: Mapping[str, str],
+        guardrails_enabled: bool,
+    ) -> None:
+        if run_state is None:
+            return
+
+        target_fingerprints = [
+            PlannerActionValidator._target_goal_fingerprints(
+                target,
+                resource_fingerprints,
+            )
+            for target in action.targets
+        ]
+        duplicate_code = duplicate_delegate_target_code(
+            action.targets,
+            [item.goal_family_fingerprint for item in target_fingerprints],
+        )
+        decisions = [
+            duplicate_code,
+            *[
+                evaluate_retry(
+                    run_state,
+                    target,
+                    fingerprints.goal_family_fingerprint,
+                    fingerprints.goal_revision_fingerprint,
+                ).code
+                for target, fingerprints in zip(
+                    action.targets,
+                    target_fingerprints,
+                    strict=True,
+                )
+            ],
+        ]
+        if not guardrails_enabled:
+            return
+        if code := next((code for code in decisions if code is not None), None):
+            raise PlannerActionValidationError(
+                f"delegate action violates outcome policy: {code}",
+                code=code,
+            )
+
+    @staticmethod
+    def _target_goal_fingerprints(
+        target: PlannedDelegateTarget,
+        resource_fingerprints: Mapping[str, str],
+    ):
+        selected_content_fingerprints = [
+            resource_fingerprints[ref.ref_id]
+            for ref in (
+                *target.context_refs,
+                *target.artifact_refs,
+                *target.attachment_refs,
+            )
+            if ref.ref_id in resource_fingerprints
+        ]
+        return goal_fingerprints(
+            agent_id=target.agent_id,
+            expected_outputs=list(target.expected_outputs),
+            selected_content_fingerprints=selected_content_fingerprints,
+            dependency_family_fingerprints=[],
+            upstream_output_fingerprints=[],
+        )
 
 
 def _validate_step_budget(

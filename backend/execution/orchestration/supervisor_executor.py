@@ -137,6 +137,21 @@ DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 
 
+def _resource_fingerprints(resources: Sequence[Any]) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    for resource in resources:
+        resource_id = getattr(resource, "ref_id", None)
+        fingerprint = getattr(resource, "content_fingerprint", None)
+        if resource_id and fingerprint:
+            fingerprints[resource_id] = fingerprint
+        for projection in getattr(resource, "projections", []):
+            projection_id = getattr(projection, "ref_id", None)
+            projection_fingerprint = getattr(projection, "content_fingerprint", None)
+            if projection_id and projection_fingerprint:
+                fingerprints[projection_id] = projection_fingerprint
+    return fingerprints
+
+
 class SupervisorExecutor:
     """Executes the Supervisor's adaptive loop for a single user message."""
 
@@ -887,6 +902,8 @@ class SupervisorExecutor:
                 planner_action = PlannerActionValidator.validate(
                     planner_action,
                     run_state=state,
+                    resource_fingerprints=_resource_fingerprints(available_resources),
+                    guardrails_enabled=_settings.orchestration_outcome_guardrails,
                 )
             except PlannerActionValidationError as exc:
                 if not exc.recoverable:
