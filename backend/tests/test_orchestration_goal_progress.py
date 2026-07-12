@@ -1,4 +1,5 @@
 from execution.orchestration.goal_progress import rebuild_goal_progress
+from execution.orchestration.outcome_evaluator import invalidate_required_evidence
 from models.orchestration import (
     DelegationOutcomeRecord,
     GoalFamilyDispositionRecord,
@@ -73,15 +74,17 @@ def test_goal_progress_reopens_invalidated_required_evidence():
                 remaining_required_obligations=[],
             )
         ],
-        decision_log=[
-            {
-                "code": "required_evidence_invalidated",
-                "obligation_keys": ["quote:$present"],
-            }
-        ],
     )
 
-    updated = rebuild_goal_progress(state)
+    invalidated, _ = invalidate_required_evidence(
+        state,
+        evidence_key="quote-evidence",
+        obligation_keys=["quote:$present"],
+        reason="The quote evidence is no longer valid.",
+        source_event_id="event-1",
+    )
+
+    updated = rebuild_goal_progress(invalidated)
 
     assert updated.goal_progress[0].satisfied_required_obligations == []
     assert updated.goal_progress[0].remaining_required_obligations == ["quote:$present"]
@@ -104,28 +107,29 @@ def test_goal_progress_allows_later_satisfaction_to_supersede_invalidation():
         user_message_id="msg-1",
         goal="Broker to insurer workflow",
         candidate_agent_ids=["broker-agent"],
-        delegation_outcomes=[
-            first_outcome,
-            first_outcome.model_copy(
-                update={
-                    "outcome_id": "outcome-2",
-                    "dispatch_intent_id": "intent-2",
-                    "attempt_fingerprint": "attempt-2",
-                    "status": "fulfilled",
-                    "newly_satisfied_required_obligations": ["quote:$present"],
-                    "remaining_required_obligations": [],
-                }
-            ),
-        ],
-        decision_log=[
-            {
-                "code": "required_evidence_invalidated",
-                "obligation_keys": ["quote:$present"],
+        delegation_outcomes=[first_outcome],
+    )
+    invalidated, _ = invalidate_required_evidence(
+        state,
+        evidence_key="quote-evidence",
+        obligation_keys=["quote:$present"],
+        reason="The original quote evidence is no longer valid.",
+        source_event_id="event-1",
+    )
+    invalidated.delegation_outcomes.append(
+        first_outcome.model_copy(
+            update={
+                "outcome_id": "outcome-2",
+                "dispatch_intent_id": "intent-2",
+                "attempt_fingerprint": "attempt-2",
+                "status": "fulfilled",
+                "newly_satisfied_required_obligations": ["quote:$present"],
+                "remaining_required_obligations": [],
             }
-        ],
+        )
     )
 
-    updated = rebuild_goal_progress(state)
+    updated = rebuild_goal_progress(invalidated)
 
     assert updated.goal_progress[0].satisfied_required_obligations == [
         "quote:$present"

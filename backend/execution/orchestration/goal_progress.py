@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
-
 from execution.orchestration.outcome_evaluator import canonical_content_fingerprint
 from execution.orchestration.outcome_policy import active_completion_scope
 from models.orchestration import (
@@ -27,29 +25,12 @@ def rebuild_goal_progress(state: OrchestrationRunState) -> OrchestrationRunState
         outcomes_by_scope.setdefault(scope, []).append(outcome)
     for (family, revision), outcomes in sorted(outcomes_by_scope.items()):
         latest = outcomes[-1]
-        newly_satisfied = [
+        satisfied = {
             obligation
             for outcome in outcomes
             for obligation in outcome.newly_satisfied_required_obligations
-        ]
-        resatisfied = {
-            obligation
-            for obligation, count in Counter(newly_satisfied).items()
-            if count > 1
         }
-        satisfied = {
-            obligation
-            for obligation in newly_satisfied
-            if obligation not in invalidated
-        } | resatisfied
-        remaining = set(latest.remaining_required_obligations) | (
-            invalidated
-            & {
-                obligation
-                for outcome in outcomes
-                for obligation in outcome.newly_satisfied_required_obligations
-            }
-        )
+        remaining = set(latest.remaining_required_obligations) | invalidated
         records.append(
             GoalProgressRecord(
                 progress_id="goal-progress:"
