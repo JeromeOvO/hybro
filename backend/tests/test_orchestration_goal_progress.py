@@ -87,6 +87,52 @@ def test_goal_progress_reopens_invalidated_required_evidence():
     assert updated.goal_progress[0].remaining_required_obligations == ["quote:$present"]
 
 
+def test_goal_progress_allows_later_satisfaction_to_supersede_invalidation():
+    first_outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="broker-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        newly_satisfied_required_obligations=["quote:$present"],
+    )
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Broker to insurer workflow",
+        candidate_agent_ids=["broker-agent"],
+        delegation_outcomes=[
+            first_outcome,
+            first_outcome.model_copy(
+                update={
+                    "outcome_id": "outcome-2",
+                    "dispatch_intent_id": "intent-2",
+                    "attempt_fingerprint": "attempt-2",
+                    "status": "fulfilled",
+                    "newly_satisfied_required_obligations": ["quote:$present"],
+                    "remaining_required_obligations": [],
+                }
+            ),
+        ],
+        decision_log=[
+            {
+                "code": "required_evidence_invalidated",
+                "obligation_keys": ["quote:$present"],
+            }
+        ],
+    )
+
+    updated = rebuild_goal_progress(state)
+
+    assert updated.goal_progress[0].satisfied_required_obligations == [
+        "quote:$present"
+    ]
+    assert updated.goal_progress[0].remaining_required_obligations == []
+
+
 def test_goal_progress_excludes_disposed_latest_revision():
     state = OrchestrationRunState(
         run_id="run-1",
