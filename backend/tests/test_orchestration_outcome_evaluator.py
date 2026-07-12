@@ -8,9 +8,11 @@ from execution.orchestration.outcome_evaluator import (
 )
 from models.orchestration import (
     AgentOutputRecord,
+    BlockerRecord,
     DispatchExpectedOutput,
     DispatchIntent,
     OrchestrationRunState,
+    UnknownRecord,
 )
 
 
@@ -71,6 +73,12 @@ def _artifact(message_id, data):
         "name": "quote",
         "parts": [{"data": data}],
     }
+
+
+def _named_artifact(message_id, name, data):
+    artifact = _artifact(message_id, data)
+    artifact["name"] = name
+    return artifact
 
 
 def _agent_text(message_id, text):
@@ -502,6 +510,30 @@ def test_required_output_presence_is_partial_progress_when_fields_are_missing():
     ]
 
 
+def test_output_owned_artifact_presence_counts_when_artifact_name_differs():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(
+        artifacts=[
+            _named_artifact(
+                "agent-msg-1",
+                "cyber_submission",
+                {"company": {"name": "Acme"}},
+            )
+        ]
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "partial"
+    assert outcome.newly_satisfied_required_obligations == ["quote:$present"]
+    assert outcome.remaining_required_obligations == [
+        "quote:requested_coverage.limit",
+        "quote:requested_coverage.retention",
+    ]
+
+
 def test_required_output_presence_is_retained_from_prior_outcome():
     evaluator = DelegationOutcomeEvaluator()
     intent = _intent("agent-msg-1")
@@ -563,6 +595,43 @@ def test_validated_user_only_blocker_returns_blocked():
     )
 
     assert outcome.status == "blocked"
+
+
+def test_outcome_carries_relevant_unknowns_and_validated_blockers():
+    evaluator = DelegationOutcomeEvaluator()
+    blocker = BlockerRecord(
+        key="blocker-1",
+        description="Need requested limit.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        evidence_refs=["agent-msg-1:artifact:quote"],
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+    unknown = UnknownRecord(
+        key="unknown-1",
+        description="requested limit is missing",
+        source_agent_message_id="agent-msg-1",
+        applies_to_output_keys=["quote"],
+    )
+    after = _state(
+        artifacts=[_artifact("agent-msg-1", {"requested_coverage": {"limit": None}})],
+        blockers=[blocker],
+    )
+    after.unknowns = [unknown]
+
+    outcome = evaluator.evaluate(
+        _state(),
+        after,
+        _intent("agent-msg-1"),
+        _output("agent-msg-1"),
+        {},
+    )
+
+    assert outcome.status == "blocked"
+    assert outcome.unknowns == [unknown]
+    assert outcome.blockers == [blocker]
 
 
 def test_transport_failure_returns_failed():

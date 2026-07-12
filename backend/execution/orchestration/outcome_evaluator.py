@@ -200,10 +200,6 @@ def _output_artifacts(
         for artifact in state.artifacts
         if isinstance(artifact, dict)
         and artifact.get("artifact_key") in artifact_keys
-        and (
-            not expected_output.artifact_name
-            or artifact.get("name") == expected_output.artifact_name
-        )
     ]
 
 
@@ -434,6 +430,12 @@ class DelegationOutcomeEvaluator:
         output_keys = {
             effective_output_key(expected) for expected in intent.expected_outputs
         }
+        unknowns = [
+            unknown
+            for unknown in after_state.unknowns
+            if unknown.source_agent_message_id == output.agent_message_id
+            or bool(set(unknown.applies_to_output_keys) & output_keys)
+        ]
         blockers = [
             blocker
             for blocker in after_state.blockers
@@ -522,5 +524,6 @@ class DelegationOutcomeEvaluator:
             changed_artifact_keys=changed_artifact_keys,
             changed_fact_keys=changed_fact_keys,
             open_failure_ids=open_failure_ids,
+            unknowns=unknowns,
             blockers=blockers,
         )
