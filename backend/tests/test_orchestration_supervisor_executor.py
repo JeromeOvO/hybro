@@ -6641,6 +6641,92 @@ async def test_ingest_v2_results_persists_one_idempotent_outcome():
 
 
 @pytest.mark.asyncio
+async def test_ingest_v2_results_validates_agent_missing_fields_as_blocker():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review submission."),
+        extend_info={},
+    )
+    state = _run_state(candidate_agent_ids=["broker-agent"])
+    state.dispatch_intents = [
+        DispatchIntent(
+            step_id="step-1",
+            step_target_id="target-1",
+            dispatch_intent_id="intent-1",
+            planned_agent_message_id="agent-msg-1",
+            agent_id="broker-agent",
+            task="Review submission.",
+            task_hash="hash-1",
+            expected_outputs=[
+                DispatchExpectedOutput(
+                    output_key="broker_submission",
+                    kind="artifact",
+                    required=True,
+                    required_fields=["industry"],
+                )
+            ],
+            context_refs=[
+                DispatchContentRef(
+                    kind=DispatchRefKind.CONTEXT,
+                    ref_id="ctx:file-1:text",
+                )
+            ],
+        )
+    ]
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._v2_artifacts_for_output_message = AsyncMock(
+        return_value=[
+            {
+                "artifact_id": "submission",
+                "name": "submission",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "client": {"industry": None},
+                            "missing_fields": ["client.industry"],
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+
+    updated = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="broker-agent",
+                agent_name="Broker",
+                task="Review submission.",
+                success=True,
+                response_text="Submission is missing industry.",
+                agent_message_id="agent-msg-1",
+            )
+        ],
+        status=OrchestrationStatus.INGESTING,
+        advance_step=False,
+        available_resource_refs={"ctx:file-1:text"},
+        attempted_agent_ids={"broker-agent"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated.delegation_outcomes[-1].status == "blocked"
+    assert updated.blockers[0].validation_status == "validated"
+    assert updated.blockers[0].validated_user_only is True
+
+
+@pytest.mark.asyncio
 async def test_resource_backed_outcome_blocks_matching_delegate_revision():
     user_message = RoomUserMessage(
         room_id="room-1",

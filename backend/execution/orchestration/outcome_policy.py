@@ -103,7 +103,9 @@ class BlockerPolicyValidator:
     ) -> BlockerValidationDecision:
         if not set(blocker.blocked_output_keys) & required_output_keys:
             return BlockerValidationDecision(False, "blocker_not_required_output")
-        if not blocker.claimed_user_only or blocker.validation_status != "validated":
+        if blocker.status != "open":
+            return BlockerValidationDecision(False, "blocker_not_open")
+        if not blocker.claimed_user_only:
             return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
         blocked_required_output_keys = (
             set(blocker.blocked_output_keys) & required_output_keys

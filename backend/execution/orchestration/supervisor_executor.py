@@ -37,6 +37,7 @@ from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
 )
+from execution.orchestration.blocker_resolver import resolve_agent_observed_blockers
 from execution.orchestration.candidate_scope import (
     candidate_scope_from_legacy_envelope,
     normalize_candidate_scope,
@@ -1901,6 +1902,17 @@ class SupervisorExecutor:
         entry.results = results
         entry.completed_at = utcnow()
 
+        blocker_available_resource_refs = set(resource_fingerprints)
+        blocker_attempted_agent_ids = {target.agent_id for target in action.targets}
+        blocker_eligible_alternate_agent_ids = (
+            self._eligible_alternate_agent_ids_for_blocker_context(
+                state=state,
+                planner_action=planner_action,
+                agent_registry=agent_registry,
+                attempted_agent_ids=blocker_attempted_agent_ids,
+            )
+        )
+
         for result in results:
             if result.status == StepStatus.SUCCESS and result.success:
                 await self._publish_agent_message_committed(
@@ -1944,6 +1956,12 @@ class SupervisorExecutor:
                     results,
                     status=OrchestrationStatus.WAITING_AGENT,
                     advance_step=False,
+                    available_resource_refs=blocker_available_resource_refs,
+                    attempted_agent_ids=blocker_attempted_agent_ids,
+                    eligible_alternate_agent_ids=(
+                        blocker_eligible_alternate_agent_ids
+                    ),
+                    conditional_result_viable=False,
                 )
                 state, awaiting_status = await self._run_agent_awaiting_input_action(
                     state=state,
@@ -1966,6 +1984,10 @@ class SupervisorExecutor:
                 results,
                 status=OrchestrationStatus.RUNNING,
                 advance_step=True,
+                available_resource_refs=blocker_available_resource_refs,
+                attempted_agent_ids=blocker_attempted_agent_ids,
+                eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
+                conditional_result_viable=False,
             )
             logger.info(
                 "orchestration_input_required_recoverable run_id=%s "
@@ -1982,6 +2004,10 @@ class SupervisorExecutor:
                 results,
                 status=OrchestrationStatus.WAITING_AGENT,
                 advance_step=False,
+                available_resource_refs=blocker_available_resource_refs,
+                attempted_agent_ids=blocker_attempted_agent_ids,
+                eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
+                conditional_result_viable=False,
             )
             saved = await self._save_interrupted_state(
                 kind=InterruptKind.PUSH_NOTIFICATION,
@@ -2011,6 +2037,10 @@ class SupervisorExecutor:
             results,
             status=OrchestrationStatus.RUNNING,
             advance_step=True,
+            available_resource_refs=blocker_available_resource_refs,
+            attempted_agent_ids=blocker_attempted_agent_ids,
+            eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
+            conditional_result_viable=False,
         )
         return state, None
 
@@ -4717,6 +4747,10 @@ class SupervisorExecutor:
         status: OrchestrationStatus,
         advance_step: bool,
         clear_pending_hitl_request_ids: bool = False,
+        available_resource_refs: set[str] | None = None,
+        attempted_agent_ids: set[str] | None = None,
+        eligible_alternate_agent_ids: set[str] | None = None,
+        conditional_result_viable: bool = False,
     ) -> OrchestrationRunState:
         if not results:
             return state
@@ -4836,6 +4870,15 @@ class SupervisorExecutor:
                             )[:20],
                             "result_fingerprint": result_fingerprint,
                         }
+                    )
+                    next_state, outcome = resolve_agent_observed_blockers(
+                        next_state,
+                        intent=matched_intent,
+                        outcome=outcome,
+                        available_resource_refs=available_resource_refs,
+                        attempted_agent_ids=attempted_agent_ids,
+                        eligible_alternate_agent_ids=eligible_alternate_agent_ids,
+                        conditional_result_viable=conditional_result_viable,
                     )
                     existing_outcome = next(
                         (
@@ -5498,6 +5541,21 @@ class SupervisorExecutor:
             )
             for agent_id in state.candidate_agent_ids
         ]
+
+    def _eligible_alternate_agent_ids_for_blocker_context(
+        self,
+        *,
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+        agent_registry: list[AgentProfile],
+        attempted_agent_ids: set[str],
+    ) -> set[str]:
+        del planner_action
+        return {
+            agent.agent_id
+            for agent in self._v2_candidate_scope(state, agent_registry)
+            if agent.agent_id not in attempted_agent_ids
+        }
 
     @staticmethod
     def _orchestration_envelope_from_user_message(user_message) -> dict[str, Any]:

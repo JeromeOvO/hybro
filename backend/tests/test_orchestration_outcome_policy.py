@@ -363,7 +363,7 @@ def test_candidate_blocker_is_rejected_as_user_only():
         description="Retention is not available.",
         blocked_output_keys=["quote"],
         source="agent",
-        claimed_user_only=True,
+        claimed_user_only=False,
     )
 
     decision = BlockerPolicyValidator().validate(
@@ -372,6 +372,49 @@ def test_candidate_blocker_is_rejected_as_user_only():
     )
 
     assert decision.code == "blocker_candidate_unvalidated"
+
+
+def test_blocker_policy_validator_accepts_backend_candidate_after_full_coverage():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention is not available.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=False,
+        validation_status="candidate",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="file:file-1",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id="broker-agent",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="intent-1",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs={"file:file-1"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert decision.valid is True
+    assert decision.code == "blocker_user_only_validated"
 
 
 def test_validated_blocker_requires_required_output_linkage():
