@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.utils.cancellation import CancellationToken
 from common.dto import RoomMessageInfo
 from common.types import (
     Message,
@@ -251,6 +252,144 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc.bind_attachment_content_reader(content_reader)
         svc.bind_a2a_inline_file_limits(max_raw_bytes=1024, max_encoded_bytes=4096)
         return content_reader
+
+    async def test_processor_forwards_dispatch_task_into_request(self):
+        from execution.dispatch.agent_message_processor import AgentMessageProcessor
+        from models.processing import ProcessingResult, ProcessingStatus
+
+        dispatch_task = self._task_with_history("dispatch from processor")
+        room_runtime = SimpleNamespace(
+            process_agent_message=AsyncMock(
+                return_value=SimpleNamespace(
+                    success=True,
+                    a2a_message=Message(
+                        role=MessageRole.USER,
+                        parts=[Part(root=TextPart(text="prepared"))],
+                    ),
+                )
+            )
+        )
+        room_memory_reader = SimpleNamespace(
+            get_room_memory_by_room_id=AsyncMock(return_value=None)
+        )
+        direct_transport = SimpleNamespace(
+            dispatch=AsyncMock(
+                return_value=ProcessingResult(
+                    ProcessingStatus.SUCCESS,
+                    response_text="ok",
+                )
+            )
+        )
+        processor = AgentMessageProcessor(
+            delivery=MagicMock(),
+            room_runtime=room_runtime,
+            room_memory_reader=room_memory_reader,
+            task_tracker=MagicMock(),
+            transports={"direct": direct_transport},
+        )
+
+        result = await processor.process_single_message(
+            self._message(),
+            "room-1",
+            SimpleNamespace(agent_id="agent-1"),
+            "user-msg-1",
+            token=CancellationToken("agent-msg-1"),
+            dispatch_task=dispatch_task,
+        )
+
+        assert result.status == ProcessingStatus.SUCCESS
+        request = room_runtime.process_agent_message.await_args.args[0]
+        assert isinstance(request, RoomCenterAgentMessageRequest)
+        assert request.dispatch_task == dispatch_task
+
+    async def test_request_dispatch_task_overrides_legacy_runtime_inputs(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="f2",
+            s3_key="uploads/r/f2/report.pdf",
+            mime_type="application/pdf",
+            file_name="report.pdf",
+            size_bytes=4,
+        )
+        reader = self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
+            content=b"%PDF",
+        )
+        svc._build_room_awareness = AsyncMock(return_value=None)
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-msg-public",
+            agent_id="agent-1",
+            related_message_id="user-msg-1",
+            message_content=MessageContent(message_text="public-visible-message"),
+            task_content="persisted task content should not be used",
+            extend_info={
+                "attachment_forwarding_policy": "explicit_refs_only",
+                "resolved_dispatch_resource_payloads": [
+                    {
+                        "ref_id": "ctx:legacy",
+                        "mime_type": "text/plain",
+                        "text": "legacy resource text",
+                    }
+                ],
+                "dispatch_payload_refs": {
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [],
+                },
+            },
+        )
+        dispatch_task = self._task_with_history("dispatch task text")
+
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                room_id=message.room_id,
+                message_id=message.message_id,
+                agent_id=message.agent_id,
+                related_message_id=message.related_message_id,
+                message=message,
+                dispatch_task=dispatch_task,
+                resolved_resource_payloads=[
+                    {
+                        "ref_id": "ctx:request",
+                        "mime_type": "text/plain",
+                        "text": "request resource text",
+                    }
+                ],
+                explicit_attachment_refs=["f2"],
+                attachment_forwarding_policy="explicit_refs_only",
+            )
+        )
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        texts = [
+            part.root.text
+            for part in result.a2a_message.parts
+            if hasattr(part.root, "text")
+        ]
+        assert any("dispatch task text" in text for text in texts)
+        assert any("request resource text" in text for text in texts)
+        assert all("legacy resource text" not in text for text in texts)
+        assert any(
+            getattr(part.root, "file", None) is not None
+            for part in result.a2a_message.parts
+        )
+        assert message.message_content.message_task is None
+        assert message.task_content == "persisted task content should not be used"
+        svc._build_room_awareness.assert_awaited_once_with(
+            room_id="room-1",
+            current_agent_id="agent-1",
+            task_description="dispatch task text",
+            agent_profiles=None,
+        )
+        reader.get_bytes.assert_awaited_once_with(
+            "uploads/r/f2/report.pdf",
+            max_bytes=1024,
+        )
 
     async def test_compatible_pdf_attachment_appends_inline_bytes(self):
         svc = RoomServices()

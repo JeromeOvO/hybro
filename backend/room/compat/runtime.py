@@ -3398,18 +3398,17 @@ class RoomServices:
             )
 
         agent_msg = request.message
-        task = (
-            agent_msg.message_content.message_task
-            if agent_msg.message_content
-            else None
-        )
+        task = request.dispatch_task
+        if task is None and agent_msg.message_content:
+            task = agent_msg.message_content.message_task
         if task and isinstance(task, dict):
             from common.types import Task as TaskModel
 
             task = TaskModel.model_validate(task)
-            agent_msg.message_content.message_task = task
+            if request.dispatch_task is None:
+                agent_msg.message_content.message_task = task
         if task and task.history:
-            agent_message = task.history[0]
+            agent_message = task.history[0].model_copy(deep=True)
         else:
             return RoomCenterAgentMessageResponse(
                 message_id=None,
@@ -3452,6 +3451,9 @@ class RoomServices:
             turn_ctx.message_text if turn_ctx else original_text
         )
         agent_task_for_cas = original_text if turn_ctx else None
+        room_awareness_task_description = (
+            original_text if request.dispatch_task is not None else message.task_content
+        )
         quoted_for_cas: str | None = None
         if turn_ctx and turn_ctx.quoted_text:
             hdr = format_quoted_context_header(turn_ctx)
@@ -3469,7 +3471,7 @@ class RoomServices:
         room_awareness = await self._build_room_awareness(
             room_id=message.room_id,
             current_agent_id=agent_id,
-            task_description=message.task_content,
+            task_description=room_awareness_task_description,
             agent_profiles=agent_profiles,
         )
 
@@ -3572,16 +3574,24 @@ class RoomServices:
             # Log but continue with original message if context building fails
             logger.warning(f"Failed to build context for agent message: {e}")
 
-        resolved_payload_refs = (
-            message.extend_info.get("resolved_dispatch_payload_refs")
-            if isinstance(message.extend_info, dict)
-            else None
-        )
-        resolved_resource_payloads = (
-            resolved_payload_refs.get("resource_payloads")
-            if isinstance(resolved_payload_refs, dict)
-            else None
-        )
+        resolved_resource_payloads = request.resolved_resource_payloads
+        if resolved_resource_payloads is None:
+            resolved_payload_refs = (
+                message.extend_info.get("resolved_dispatch_payload_refs")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+            resolved_resource_payloads = (
+                resolved_payload_refs.get("resource_payloads")
+                if isinstance(resolved_payload_refs, dict)
+                else None
+            )
+        if resolved_resource_payloads is None:
+            resolved_resource_payloads = (
+                message.extend_info.get("resolved_dispatch_resource_payloads")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
         if isinstance(resolved_resource_payloads, list):
             for payload in resolved_resource_payloads:
                 if not isinstance(payload, dict):
@@ -3622,25 +3632,43 @@ class RoomServices:
                 if not isinstance(attachment, dict | UserAttachment):
                     continue
                 user_attachments.append(UserAttachment.model_validate(attachment))
-        forwarding_policy = (
-            message.extend_info.get("attachment_forwarding_policy")
+        forwarding_policy = request.attachment_forwarding_policy
+        if forwarding_policy is None:
+            forwarding_policy = (
+                message.extend_info.get("attachment_forwarding_policy")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+        dispatch_payload_refs = (
+            message.extend_info.get("dispatch_payload_refs")
             if isinstance(message.extend_info, dict)
             else None
         )
-        if (
-            user_attachments
-            and forwarding_policy == "explicit_refs_only"
-            and isinstance(message.extend_info, dict)
-        ):
-            resolved_refs = message.extend_info.get("resolved_dispatch_payload_refs")
-            selected_refs = (
-                resolved_refs.get("attachment_refs")
-                if isinstance(resolved_refs, dict)
-                else []
-            )
-            selected_ref_set = {
-                str(ref) for ref in selected_refs if isinstance(ref, str)
-            }
+        resolved_dispatch_payload_refs = (
+            message.extend_info.get("resolved_dispatch_payload_refs")
+            if isinstance(message.extend_info, dict)
+            else None
+        )
+        if user_attachments and forwarding_policy == "explicit_refs_only":
+            raw_attachment_refs = request.explicit_attachment_refs
+            if raw_attachment_refs is None:
+                ref_payload = (
+                    resolved_dispatch_payload_refs
+                    if isinstance(resolved_dispatch_payload_refs, dict)
+                    else dispatch_payload_refs
+                )
+                raw_attachment_refs = (
+                    ref_payload.get("attachment_refs")
+                    if isinstance(ref_payload, dict)
+                    else None
+                )
+            selected_ref_set: set[str] = set()
+            for raw_ref in raw_attachment_refs or []:
+                if isinstance(raw_ref, str) and raw_ref:
+                    selected_ref_set.add(raw_ref)
+                    continue
+                if isinstance(raw_ref, dict) and raw_ref.get("ref_id"):
+                    selected_ref_set.add(str(raw_ref["ref_id"]))
             user_attachments = [
                 attachment
                 for attachment in user_attachments
