@@ -3429,6 +3429,8 @@ class SupervisorExecutor:
     ) -> StepResult:
         prompt = self._extract_input_required_prompt(result)
         continuation = self._find_or_create_pending_continuation(state, result)
+        if self._awaiting_result_requires_hitl(result):
+            return result
         answer = self._find_fact_answer_for_input_required(state, prompt)
         if answer and continuation is not None:
             return await self._resume_agent_continuation_after_hitl_answer(
