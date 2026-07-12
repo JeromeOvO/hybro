@@ -10241,6 +10241,179 @@ async def test_agent_input_required_uses_existing_projection_without_creating_hi
 
 
 @pytest.mark.asyncio
+async def test_agent_input_required_ignores_unrelated_projection():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Get the quote"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            facts=[
+                {
+                    "fact_id": "ctx:file-file-1:text",
+                    "kind": "attachment_projection",
+                    "text": "Warehouse inspection notes only.",
+                }
+            ],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status=StepStatus.AWAITING_INPUT.value,
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                    status_message="Need annual revenue",
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1")),
+        agent_reply=SimpleNamespace(reply_to_task=AsyncMock()),
+    )
+
+    result = await executor._handle_agent_input_required(
+        state=state,
+        result=StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Need annual revenue",
+            response_text="Need annual revenue",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        user_message=user_message,
+    )
+
+    assert result.status == StepStatus.AWAITING_INPUT
+    executor.hitl_coordinator.agent_reply.reply_to_task.assert_not_awaited()
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_uses_existing_dispatch_ref_provider_before_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Get the quote"),
+        message_id="msg-1",
+    )
+    context_ref = DispatchContentRef(
+        kind=DispatchRefKind.CONTEXT,
+        ref_id="ctx:file-file-1:text",
+        mime_type="text/plain",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="step-1",
+                    step_target_id="target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Need projection",
+                    task_hash="hash-1",
+                    context_refs=[context_ref],
+                )
+            ],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status=StepStatus.AWAITING_INPUT.value,
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                    status_message="Need projection",
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.orchestration_resource_provider = SimpleNamespace(
+        resolve_ref=AsyncMock(
+            return_value=ResolvedResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected submission from resource provider.",
+            )
+        )
+    )
+    reply_to_task = AsyncMock(
+        return_value={
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Continued with provider payload",
+        }
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task),
+    )
+
+    result = await executor._handle_agent_input_required(
+        state=state,
+        result=StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Need projection",
+            response_text="Need projection",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        user_message=user_message,
+    )
+
+    assert result.status == StepStatus.SUCCESS
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    executor.orchestration_resource_provider.resolve_ref.assert_awaited_once()
+    reply_kwargs = reply_to_task.await_args.kwargs
+    assert reply_kwargs["task_id"] == "task-1"
+    assert reply_kwargs["context_id"] == "ctx-1"
+    assert "resource provider" in reply_kwargs["user_input"]
+
+
+@pytest.mark.asyncio
 async def test_agent_input_required_resumes_same_a2a_task_after_answer():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(

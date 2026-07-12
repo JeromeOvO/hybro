@@ -3105,6 +3105,8 @@ class SupervisorExecutor:
         prompt: str,
     ) -> ResolvedDispatchPayload | None:
         prompt_tokens = self._input_required_prompt_tokens(prompt)
+        if not prompt_tokens:
+            return None
         selected_context_refs: list[str] = []
         resource_payloads: list[ResolvedResourcePayload] = []
 
@@ -3144,18 +3146,23 @@ class SupervisorExecutor:
             fact_kind = str(fact.get("kind") or "").lower()
             ref_id_lower = ref_id.lower()
             key_tokens = self._input_required_prompt_tokens(key.replace("_", " "))
+            kind_tokens = self._input_required_prompt_tokens(
+                fact_kind.replace("_", " ")
+            )
             ref_tokens = self._input_required_prompt_tokens(
                 ref_id_lower.replace(":", " ")
             )
             is_projection = (
                 ref_id_lower.startswith("ctx:")
                 or "projection" in fact_kind
-                or fact_kind in {"context", "attachment_text", "agent_text"}
+                or fact_kind in {"context", "attachment_text"}
             )
+            text_tokens = self._input_required_prompt_tokens(text)
             if (
-                is_projection
-                or (prompt_tokens and (prompt_tokens & key_tokens))
-                or (prompt_tokens and (prompt_tokens & ref_tokens))
+                prompt_tokens & key_tokens
+                or prompt_tokens & kind_tokens
+                or prompt_tokens & ref_tokens
+                or (is_projection and prompt_tokens & text_tokens)
             ):
                 add_payload(
                     ref_id=ref_id or f"fact:{len(resource_payloads) + 1}",
@@ -3191,7 +3198,8 @@ class SupervisorExecutor:
                     if value
                 )
             )
-            if not prompt_tokens or prompt_tokens & artifact_tokens:
+            text_tokens = self._input_required_prompt_tokens(text)
+            if prompt_tokens & artifact_tokens or prompt_tokens & text_tokens:
                 add_payload(
                     ref_id=ref_id or f"artifact:{len(resource_payloads) + 1}",
                     kind="artifact",
@@ -3199,6 +3207,12 @@ class SupervisorExecutor:
                 )
 
         for output in reversed(state.agent_outputs):
+            if output.status in {
+                StepStatus.AWAITING_INPUT.value,
+                StepStatus.PAUSED.value,
+                "input_required",
+            }:
+                continue
             text = output.text or output.status_message
             if not isinstance(text, str) or not text.strip():
                 continue
@@ -3213,7 +3227,8 @@ class SupervisorExecutor:
                     if value
                 )
             )
-            if prompt_tokens and not (prompt_tokens & output_tokens):
+            text_tokens = self._input_required_prompt_tokens(text)
+            if not (prompt_tokens & output_tokens or prompt_tokens & text_tokens):
                 continue
             add_payload(
                 ref_id=f"agent-output:{output.agent_message_id}",
@@ -3227,6 +3242,59 @@ class SupervisorExecutor:
             selected_context_refs=selected_context_refs,
             resource_payloads=resource_payloads,
         )
+
+    async def _resolved_payload_from_continuation_refs(
+        self,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation | None,
+        result: StepResult,
+    ) -> ResolvedDispatchPayload | None:
+        if continuation is None:
+            return None
+        source_intent = next(
+            (
+                intent
+                for intent in state.dispatch_intents
+                if intent.dispatch_intent_id == continuation.source_intent_id
+                or intent.planned_agent_message_id
+                == continuation.source_agent_message_id
+            ),
+            None,
+        )
+        if source_intent is None:
+            return None
+        if not (
+            source_intent.context_refs
+            or source_intent.artifact_refs
+            or source_intent.attachment_refs
+        ):
+            return None
+        try:
+            resolved = await resolve_dispatch_payload_refs(
+                run_state=state,
+                target_agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+                context_refs=source_intent.context_refs,
+                artifact_refs=source_intent.artifact_refs,
+                attachment_refs=source_intent.attachment_refs,
+                original_attachments=[],
+                resource_provider=self.orchestration_resource_provider,
+            )
+        except DispatchPayloadValidationError:
+            return None
+        except Exception:
+            logger.debug(
+                "Failed to resolve input-required dispatch refs",
+                extra={
+                    "run_id": state.run_id,
+                    "agent_id": result.agent_id,
+                    "agent_message_id": result.agent_message_id,
+                },
+                exc_info=True,
+            )
+            return None
+        if resolved.resource_payloads:
+            return resolved
+        return None
 
     def _find_or_create_pending_continuation(
         self,
@@ -3369,7 +3437,13 @@ class SupervisorExecutor:
                 answer=answer,
                 user_message=user_message,
             )
-        resolved_payload = self._resolved_payload_for_input_required(state, prompt)
+        resolved_payload = await self._resolved_payload_from_continuation_refs(
+            state,
+            continuation,
+            result,
+        )
+        if resolved_payload is None:
+            resolved_payload = self._resolved_payload_for_input_required(state, prompt)
         if resolved_payload is not None and continuation is not None:
             awaiting_output = next(
                 (
