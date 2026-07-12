@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.utils.cancellation import CancellationToken
 from common.dto import RoomMessageInfo
 from common.types import (
     Message,
@@ -15,6 +14,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from common.utils.cancellation import CancellationToken
 from models.request import RoomCenterAgentMessageRequest
 from models.room import MessageContent, RoomAgentMessage, UserAttachment
 from room.compat.runtime import RoomServices
@@ -257,7 +257,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         from execution.dispatch.agent_message_processor import AgentMessageProcessor
         from models.processing import ProcessingResult, ProcessingStatus
 
-        dispatch_task = self._task_with_history("dispatch from processor")
+        dispatch_task = "dispatch from processor sentinel"
         room_runtime = SimpleNamespace(
             process_agent_message=AsyncMock(
                 return_value=SimpleNamespace(
@@ -342,7 +342,7 @@ class TestProcessAgentMessageAttachmentPreflight:
                 },
             },
         )
-        dispatch_task = self._task_with_history("dispatch task text")
+        dispatch_task = "dispatch task text sentinel"
 
         result = await svc.process_agent_message(
             RoomCenterAgentMessageRequest(
@@ -371,7 +371,7 @@ class TestProcessAgentMessageAttachmentPreflight:
             for part in result.a2a_message.parts
             if hasattr(part.root, "text")
         ]
-        assert any("dispatch task text" in text for text in texts)
+        assert any("dispatch task text sentinel" in text for text in texts)
         assert any("request resource text" in text for text in texts)
         assert all("legacy resource text" not in text for text in texts)
         assert any(
@@ -383,7 +383,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._build_room_awareness.assert_awaited_once_with(
             room_id="room-1",
             current_agent_id="agent-1",
-            task_description="dispatch task text",
+            task_description="dispatch task text sentinel",
             agent_profiles=None,
         )
         reader.get_bytes.assert_awaited_once_with(

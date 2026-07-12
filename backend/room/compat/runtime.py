@@ -3398,25 +3398,38 @@ class RoomServices:
             )
 
         agent_msg = request.message
-        task = request.dispatch_task
-        if task is None and agent_msg.message_content:
-            task = agent_msg.message_content.message_task
-        if task and isinstance(task, dict):
-            from common.types import Task as TaskModel
-
-            task = TaskModel.model_validate(task)
-            if request.dispatch_task is None:
-                agent_msg.message_content.message_task = task
-        if task and task.history:
-            agent_message = task.history[0].model_copy(deep=True)
-        else:
-            return RoomCenterAgentMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="No task content found",
-                status_code=400,
+        dispatch_task_text = (
+            request.dispatch_task.strip()
+            if isinstance(request.dispatch_task, str)
+            else None
+        )
+        if dispatch_task_text:
+            agent_message = Message(
+                message_id=uuid4().hex,
+                role=Role.USER,
+                parts=[Part(root=TextPart(text=dispatch_task_text))],
             )
+        else:
+            task = (
+                agent_msg.message_content.message_task
+                if agent_msg.message_content
+                else None
+            )
+            if task and isinstance(task, dict):
+                from common.types import Task as TaskModel
+
+                task = TaskModel.model_validate(task)
+                agent_msg.message_content.message_task = task
+            if task and task.history:
+                agent_message = task.history[0].model_copy(deep=True)
+            else:
+                return RoomCenterAgentMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="No task content found",
+                    status_code=400,
+                )
 
         # Get agent info for context personalization
         agent = await self._store.get_agent_by_agent_id(agent_id)
@@ -3452,7 +3465,7 @@ class RoomServices:
         )
         agent_task_for_cas = original_text if turn_ctx else None
         room_awareness_task_description = (
-            original_text if request.dispatch_task is not None else message.task_content
+            dispatch_task_text if dispatch_task_text else message.task_content
         )
         quoted_for_cas: str | None = None
         if turn_ctx and turn_ctx.quoted_text:

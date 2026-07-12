@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
-from common.types import Task
 from execution.dispatch.dispatch_middleware import DispatchChain, DispatchContext
 from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
@@ -171,7 +170,7 @@ class AgentMessageProcessor:
         step_number: int | None = None,
         total_steps: int | None = None,
         quoted_text: str | None = None,
-        dispatch_task: Task | None = None,
+        dispatch_task: str | None = None,
         resolved_resource_payloads: list[dict[str, Any]] | None = None,
         explicit_attachment_refs: list[str | dict[str, Any]] | None = None,
         attachment_forwarding_policy: str | None = None,
