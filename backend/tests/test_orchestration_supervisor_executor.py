@@ -5471,7 +5471,7 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
 
 
 @pytest.mark.asyncio
-async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_no_awaiting_user():
+async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_blocks_for_user():
     user_message = _state_unification_user_message(message_id="message-1")
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
@@ -5555,7 +5555,7 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
 
 
 @pytest.mark.asyncio
-async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persisted_recoverably():
+async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_blocks_for_user():
     user_message = _state_unification_user_message(message_id="message-1")
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
@@ -5841,7 +5841,12 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         user_message=user_message,
         guardrails_enabled=True,
     )
-    executor._run_agent_awaiting_input_action = AsyncMock()
+    async def run_agent_awaiting_input_action(**kwargs):
+        return kwargs["state"], RunStatus.AWAITING_INPUT
+
+    executor._run_agent_awaiting_input_action = AsyncMock(
+        side_effect=run_agent_awaiting_input_action
+    )
 
     state = _run_state(
         run_id="message-1",
@@ -5890,9 +5895,9 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         user_message=user_message,
     )
 
-    executor._run_agent_awaiting_input_action.assert_not_awaited()
-    assert run_status is None
-    assert recovered_state.status == OrchestrationStatus.RUNNING
+    executor._run_agent_awaiting_input_action.assert_awaited_once()
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.WAITING_AGENT
     assert recovered_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
     assert recovered_state.open_failures[0].error_code == "agent_input_required"
 
@@ -10151,6 +10156,88 @@ async def test_agent_input_required_uses_existing_fact_without_creating_hitl():
     assert result.status == StepStatus.SUCCESS
     assert saved is not None
     assert saved.pending_hitl_request_ids == []
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_uses_existing_projection_without_creating_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Get the quote"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            facts=[
+                {
+                    "fact_id": "ctx:file-file-1:text",
+                    "kind": "attachment_projection",
+                    "text": "Projected broker submission with annual revenue $2M.",
+                }
+            ],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status=StepStatus.AWAITING_INPUT.value,
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                    status_message="Need projection",
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    reply_to_task = AsyncMock(
+        return_value={
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Continued with projection",
+        }
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task),
+    )
+
+    result = await executor._handle_agent_input_required(
+        state=state,
+        result=StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Need projection",
+            response_text="Need projection",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        user_message=user_message,
+    )
+
+    assert result.status == StepStatus.SUCCESS
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    reply_to_task.assert_awaited_once()
+    reply_kwargs = reply_to_task.await_args.kwargs
+    assert reply_kwargs["task_id"] == "task-1"
+    assert reply_kwargs["context_id"] == "ctx-1"
+    assert "Projected broker submission" in reply_kwargs["user_input"]
 
 
 @pytest.mark.asyncio
