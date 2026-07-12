@@ -2151,3 +2151,48 @@ def test_unresolved_revision_allows_an_alternate_agent_attempt_chain():
         )
         is action
     )
+
+
+def test_normalized_semantic_repair_passes_delegate_lineage_guardrail():
+    from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
+    from execution.orchestration.recovery_policy import (
+        normalize_delegate_repair_lineage,
+    )
+
+    target = _guardrail_target()
+    fingerprints = target_goal_fingerprints(target, {})
+    intent = DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        context_refs=target.context_refs,
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        remaining_required_obligations=["quote:$present"],
+    )
+    state = _guardrail_state(outcomes=[outcome], intents=[intent])
+    action = normalize_delegate_repair_lineage(_guardrail_action([target]), state, {})
+
+    assert action.targets[0].repair_of_intent_id == "i1"
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )

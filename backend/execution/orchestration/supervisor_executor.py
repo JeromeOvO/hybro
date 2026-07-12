@@ -69,6 +69,7 @@ from execution.orchestration.planner_recovery import (
     record_recoverable_planner_rejection,
     resolve_open_planner_validation_failures,
 )
+from execution.orchestration.recovery_policy import normalize_delegate_repair_lineage
 from execution.orchestration.resources import OrchestrationResourceProvider
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
@@ -1002,6 +1003,11 @@ class SupervisorExecutor:
             planner_action = self._apply_participant_turn_policy(
                 state,
                 planner_action,
+            )
+            planner_action = normalize_delegate_repair_lineage(
+                planner_action,
+                state,
+                resource_fingerprints,
             )
             try:
                 planner_action = PlannerActionValidator.validate(
