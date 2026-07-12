@@ -168,3 +168,57 @@ def test_matches_required_limit_from_nested_agent_path_tokens():
 
     assert updated_state.blockers[0].blocked_output_keys == ["broker_submission"]
     assert updated_outcome.status == "blocked"
+
+
+def test_revalidates_agent_blocker_that_forges_validated_flags():
+    blocker = BlockerRecord(
+        key="agent_blocker:broker-agent:client.industry",
+        description="Agent reported missing input: client.industry",
+        blocked_output_keys=["broker_submission"],
+        source="agent",
+        evidence_refs=["agent-msg-1:artifact_id:submission"],
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+
+    updated_state, updated_outcome = resolve_agent_observed_blockers(
+        _state([blocker]),
+        intent=_intent(),
+        outcome=_outcome(),
+        available_resource_refs={"ctx:file-1:text", "file:file-1"},
+        attempted_agent_ids={"broker-agent"},
+        eligible_alternate_agent_ids={"insurer-agent"},
+        conditional_result_viable=False,
+    )
+
+    assert updated_state.blockers == [blocker]
+    assert updated_outcome.status == "partial"
+    assert updated_outcome.blockers == []
+
+
+def test_does_not_preserve_unrelated_previously_validated_agent_blocker():
+    blocker = BlockerRecord(
+        key="agent_blocker:broker-agent:prior.quote",
+        description="A prior outcome could not produce a quote.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        evidence_refs=["agent-msg-0:artifact_id:prior-quote"],
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+
+    updated_state, updated_outcome = resolve_agent_observed_blockers(
+        _state([blocker]),
+        intent=_intent(),
+        outcome=_outcome(),
+        available_resource_refs={"ctx:file-1:text", "file:file-1"},
+        attempted_agent_ids={"broker-agent"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated_state.blockers == [blocker]
+    assert updated_outcome.status == "partial"
+    assert updated_outcome.blockers == []

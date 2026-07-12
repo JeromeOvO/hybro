@@ -39,9 +39,6 @@ def resolve_agent_observed_blockers(
             continue
         if blocker.source != "agent":
             continue
-        if blocker.validation_status == "validated" and blocker.validated_user_only:
-            validated.append(blocker)
-            continue
         if not set(blocker.evidence_refs) & evidence_refs:
             continue
         blocked_keys = _matched_output_keys(
