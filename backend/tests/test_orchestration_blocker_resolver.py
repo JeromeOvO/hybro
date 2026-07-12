@@ -430,6 +430,45 @@ def test_keeps_hitl_blocker_open_when_answer_names_field_without_value(answer):
     assert state.blockers[0].status == "open"
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Requested limit is confirmed.",
+        "Requested limit is available.",
+        "Requested limit is pending.",
+    ],
+)
+def test_keeps_hitl_limit_blocker_open_without_numeric_value(answer):
+    blocker = _validated_blocker()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["blocker-1"],
+                "required_obligation_keys": ["quote:requested_limit"],
+                "answer": answer,
+            }
+        ],
+    )
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": answer},
+    )
+
+    assert state.blockers[0].status == "open"
+
+
 def test_keeps_hitl_blocker_open_without_obligation_metadata():
     blocker = _validated_blocker()
     state = OrchestrationRunState(

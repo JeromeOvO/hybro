@@ -120,6 +120,22 @@ _ANSWER_VALUE_FILLER = {
     "to",
 }
 
+_NON_VALUE_ANSWER_TOKENS = {
+    "available",
+    "confirmed",
+    "pending",
+}
+
+_AMOUNT_LIKE_FIELD_TOKENS = {
+    "amount",
+    "cost",
+    "deductible",
+    "limit",
+    "premium",
+    "price",
+    "value",
+}
+
 
 def validate_hitl_answered_blockers(
     state: OrchestrationRunState,
@@ -193,7 +209,18 @@ def _answer_is_insufficient(answer_text: str) -> bool:
 def _answer_has_field_value(
     answer_tokens: set[str], field_tokens: set[str]
 ) -> bool:
-    return bool(answer_tokens - field_tokens - _ANSWER_VALUE_FILLER - {"requested"})
+    value_tokens = (
+        answer_tokens
+        - field_tokens
+        - _ANSWER_VALUE_FILLER
+        - _NON_VALUE_ANSWER_TOKENS
+        - {"requested"}
+    )
+    if not value_tokens:
+        return False
+    if field_tokens & _AMOUNT_LIKE_FIELD_TOKENS:
+        return any(any(character.isdigit() for character in token) for token in value_tokens)
+    return True
 
 
 def _normalize_answer_text(answer_text: str) -> set[str]:
