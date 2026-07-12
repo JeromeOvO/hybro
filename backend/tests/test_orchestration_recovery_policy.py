@@ -1,6 +1,11 @@
-from execution.orchestration.recovery_policy import normalize_delegate_repair_lineage
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
+from execution.orchestration.recovery_policy import (
+    action_for_rejected_delegate,
+    normalize_delegate_repair_lineage,
+    recovery_directives,
+)
 from models.orchestration import (
+    BlockerRecord,
     DelegationOutcomeRecord,
     DispatchExpectedOutput,
     DispatchIntent,
@@ -8,6 +13,7 @@ from models.orchestration import (
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
+    PlannerQuestion,
 )
 
 
@@ -77,6 +83,66 @@ def test_normalizes_missing_repair_of_intent_for_same_agent_unfulfilled_revision
 
     assert normalized.targets[0].repair_of_intent_id == "intent-1"
     assert action.targets[0].repair_of_intent_id is None
+
+
+def test_recovery_directives_prefer_validated_blocker_question():
+    state = _state()
+    state.blockers = [
+        BlockerRecord(
+            key="blocker-1",
+            description="Need requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+
+    directives = recovery_directives(state)
+
+    assert directives == [
+        {
+            "code": "ask_user_for_validated_blocker",
+            "blocker_keys": ["blocker-1"],
+            "reason": "Validated user-only blocker is open.",
+        }
+    ]
+
+
+def test_rejected_delegate_falls_back_to_ask_user_for_validated_blocker():
+    state = _state()
+    state.delegation_outcomes[-1].remaining_required_obligations = [
+        "quote:requested_limit"
+    ]
+    state.blockers = [
+        BlockerRecord(
+            key="blocker-1",
+            description="Need requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+
+    action = action_for_rejected_delegate(
+        state,
+        error_code="delegate_blocked_pending_user",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.ASK_USER
+    assert action.questions == [
+        PlannerQuestion(
+            prompt="Need requested limit.",
+            reason="blocker",
+            blocker_keys=["blocker-1"],
+            required_obligation_keys=["quote:requested_limit"],
+            blocker_obligations={"blocker-1": ["quote:requested_limit"]},
+        )
+    ]
 
 
 def test_does_not_set_repair_lineage_for_failed_operational_retry():

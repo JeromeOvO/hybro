@@ -180,11 +180,38 @@ def evaluate_retry(
         return RetryDecision(True, kind)
     if latest.status == "failed":
         return _evaluate_operational_retry(run_state, latest, target)
+    if (
+        latest.status == "blocked"
+        and _latest_outcome_has_open_validated_user_blocker(run_state, latest)
+    ):
+        return _rejected("delegate_blocked_pending_user")
     if target.repair_of_intent_id != latest.dispatch_intent_id:
         return _rejected("delegate_repair_lineage_required")
     if chain.no_progress_repair_used_in_epoch:
         return _rejected("delegate_no_progress_repeat")
     return RetryDecision(True, "semantic_repair")
+
+
+def _latest_outcome_has_open_validated_user_blocker(
+    run_state: OrchestrationRunState,
+    latest: DelegationOutcomeRecord,
+) -> bool:
+    outcome_blocker_keys = {blocker.key for blocker in latest.blockers}
+    remaining_outputs = {
+        obligation.split(":", 1)[0]
+        for obligation in latest.remaining_required_obligations
+        if obligation
+    }
+    for blocker in run_state.blockers:
+        if blocker.status != "open":
+            continue
+        if blocker.validation_status != "validated" or not blocker.validated_user_only:
+            continue
+        if blocker.key in outcome_blocker_keys:
+            return True
+        if set(blocker.blocked_output_keys) & remaining_outputs:
+            return True
+    return False
 
 
 def active_completion_scope(

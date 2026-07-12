@@ -69,7 +69,10 @@ from execution.orchestration.planner_recovery import (
     record_recoverable_planner_rejection,
     resolve_open_planner_validation_failures,
 )
-from execution.orchestration.recovery_policy import normalize_delegate_repair_lineage
+from execution.orchestration.recovery_policy import (
+    action_for_rejected_delegate,
+    normalize_delegate_repair_lineage,
+)
 from execution.orchestration.resources import OrchestrationResourceProvider
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
@@ -998,6 +1001,7 @@ class SupervisorExecutor:
                         state,
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
+
                 continue
 
             planner_action = self._apply_participant_turn_policy(
@@ -1084,7 +1088,38 @@ class SupervisorExecutor:
                         state,
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
-                continue
+
+                fallback_action = action_for_rejected_delegate(
+                    state,
+                    error_code=exc.code,
+                )
+                if fallback_action is None:
+                    continue
+
+                try:
+                    planner_action = PlannerActionValidator.validate(
+                        fallback_action,
+                        run_state=state,
+                        resource_fingerprints=resource_fingerprints,
+                        guardrails_enabled=self.guardrails_enabled,
+                    )
+                except PlannerActionValidationError as fallback_exc:
+                    logger.warning(
+                        "orchestration_recovery_fallback_rejected run_id=%s "
+                        "from_error=%s fallback_error=%s",
+                        state.run_id,
+                        exc.code,
+                        str(fallback_exc),
+                    )
+                    continue
+
+                logger.info(
+                    "orchestration_recovery_fallback_selected run_id=%s "
+                    "from_error=%s action=%s",
+                    state.run_id,
+                    exc.code,
+                    planner_action.action.value,
+                )
             if (
                 self.guardrails_enabled
                 and planner_action.action == PlannerActionType.ASK_USER

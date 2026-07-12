@@ -992,3 +992,32 @@ def _collect_strings(value, output: list[str]) -> None:
     if isinstance(value, list):
         for nested in value:
             _collect_strings(nested, output)
+
+
+def test_context_builder_exposes_recovery_directives_for_validated_blocker():
+    state = _run_state(
+        blockers=[
+            BlockerRecord(
+                key="blocker-1",
+                description="Need requested limit.",
+                blocked_output_keys=["quote"],
+                source="agent",
+                claimed_user_only=True,
+                validated_user_only=True,
+                validation_status="validated",
+            )
+        ]
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Finish the workflow",
+    )
+
+    assert context.state_context.recovery_directives == [
+        {
+            "code": "ask_user_for_validated_blocker",
+            "blocker_keys": ["blocker-1"],
+            "reason": "Validated user-only blocker is open.",
+        }
+    ]

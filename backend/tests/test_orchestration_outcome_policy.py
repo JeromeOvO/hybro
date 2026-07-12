@@ -9,6 +9,7 @@ from models.orchestration import (
     BlockerRecord,
     BlockerResolutionAttempt,
     DelegationOutcomeRecord,
+    DispatchExpectedOutput,
     DispatchIntent,
     GoalFamilyDispositionRecord,
     OpenFailureRecord,
@@ -862,3 +863,65 @@ def test_validated_blocker_rejects_alternate_agent_attempt_for_unrelated_output(
     )
 
     assert decision.code == "blocker_alternate_agent_available"
+
+
+def test_evaluate_retry_rejects_blocked_goal_with_open_validated_user_blocker():
+    blocker = BlockerRecord(
+        key="blocker-1",
+        description="Need requested limit.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        status="open",
+    )
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="broker-agent",
+        task="Produce quote.",
+        task_hash="task-hash",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="broker-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="blocked",
+        remaining_required_obligations=["quote:requested_limit"],
+        blockers=[blocker],
+    )
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        dispatch_intents=[intent],
+        delegation_outcomes=[outcome],
+        blockers=[blocker],
+    )
+    target = PlannedDelegateTarget(
+        agent_id="broker-agent",
+        task="Produce quote.",
+        expected_outputs=[
+            DispatchExpectedOutput(output_key="quote", kind="artifact", required=True)
+        ],
+    )
+
+    decision = evaluate_retry(
+        state,
+        target,
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "delegate_blocked_pending_user"

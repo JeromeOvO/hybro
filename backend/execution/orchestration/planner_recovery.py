@@ -11,6 +11,25 @@ from models.orchestration import (
 )
 
 
+def recovery_hints_for_planner_error(error_code: str) -> list[str]:
+    if error_code == "delegate_blocked_pending_user":
+        return ["ask_user_for_validated_blocker", "do_not_repeat_blocked_agent_goal"]
+    if error_code == "delegate_repair_lineage_required":
+        return [
+            "use_backend_normalized_repair_lineage",
+            "choose_alternate_agent_or_ask_user",
+        ]
+    if error_code == "delegate_no_progress_repeat":
+        return [
+            "ask_user_for_validated_blocker",
+            "choose_alternate_agent",
+            "fail_with_actionable_summary",
+        ]
+    if error_code.startswith("ask_user_blocker"):
+        return ["reference_validated_blocker_keys"]
+    return ["replan_with_valid_schema", "choose_valid_refs"]
+
+
 def planner_validation_fingerprint(
     *,
     error_code: str,
@@ -75,7 +94,7 @@ def record_recoverable_planner_rejection(
             retry_count=0,
             max_retries=max_retries,
             status="open",
-            recovery_hints=["replan_with_valid_schema", "choose_valid_refs"],
+            recovery_hints=recovery_hints_for_planner_error(error_code),
             updated_at=utcnow(),
         )
         state.open_failures.append(failure)
