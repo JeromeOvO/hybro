@@ -37,7 +37,10 @@ from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
 )
-from execution.orchestration.blocker_resolver import resolve_agent_observed_blockers
+from execution.orchestration.blocker_resolver import (
+    resolve_agent_observed_blockers,
+    validate_hitl_answered_blockers,
+)
 from execution.orchestration.candidate_scope import (
     candidate_scope_from_legacy_envelope,
     normalize_candidate_scope,
@@ -3396,17 +3399,21 @@ class SupervisorExecutor:
                     resolved_question["resolved_at"] = resolved_at
                     updated.open_questions.append(resolved_question)
                 prompts.extend(recovered_prompts)
-            updated.facts.append(
-                {
-                    "fact_id": (
-                        f"{state.run_id}:hitl-reply:{state.state_version + 1}"
-                    ),
-                    "source": "hitl_user_reply",
-                    "text": answer,
-                    "request_ids": resolved_request_ids,
-                    "question_prompts": prompts,
-                    "created_at": resolved_at,
-                }
+            answer_fact = {
+                "fact_id": (
+                    f"{state.run_id}:hitl-reply:{state.state_version + 1}"
+                ),
+                "source": "hitl_user_reply",
+                "text": answer,
+                "request_ids": resolved_request_ids,
+                "question_prompts": prompts,
+                "created_at": resolved_at,
+            }
+            updated.facts.append(answer_fact)
+            validate_hitl_answered_blockers(
+                updated,
+                resolved_request_ids=set(resolved_request_ids),
+                answer_fact=answer_fact,
             )
             updated.pending_hitl_request_ids = [
                 request_id

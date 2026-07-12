@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from execution.orchestration.outcome_policy import BlockerPolicyValidator
 from models.orchestration import (
     BlockerRecord,
@@ -95,6 +97,82 @@ def resolve_agent_observed_blockers(
         }
     )
     return updated, updated_outcome
+
+
+_INSUFFICIENT_ANSWER_MARKERS = {
+    "i do not know",
+    "i don't know",
+    "unknown",
+    "not sure",
+    "skip",
+    "n/a",
+}
+
+
+def validate_hitl_answered_blockers(
+    state: OrchestrationRunState,
+    *,
+    resolved_request_ids: set[str],
+    answer_fact: Mapping[str, object],
+) -> None:
+    if not resolved_request_ids:
+        return
+    answer_text = str(answer_fact.get("text") or "").strip()
+    if not answer_text:
+        return
+    normalized_answer = " ".join(answer_text.lower().split())
+    if normalized_answer in _INSUFFICIENT_ANSWER_MARKERS:
+        return
+    answer_fact_id = str(answer_fact.get("fact_id") or "").strip()
+    for question in state.open_questions:
+        if not isinstance(question, Mapping):
+            continue
+        if question.get("request_id") not in resolved_request_ids:
+            continue
+        if question.get("resolved") is not True:
+            continue
+        blocker_keys = question.get("blocker_keys") or []
+        blocker_obligations = question.get("blocker_obligations") or {}
+        if not isinstance(blocker_obligations, Mapping):
+            blocker_obligations = {}
+        shared_obligations = question.get("required_obligation_keys") or []
+        for blocker in state.blockers:
+            if blocker.key not in blocker_keys or blocker.status != "open":
+                continue
+            obligations = blocker_obligations.get(blocker.key, shared_obligations)
+            if not _answer_satisfies_obligations(answer_text, obligations):
+                continue
+            blocker.status = "resolved"
+            if answer_fact_id and answer_fact_id not in blocker.evidence_refs:
+                blocker.evidence_refs.append(answer_fact_id)
+
+
+def _answer_satisfies_obligations(answer_text: str, obligations: object) -> bool:
+    if not isinstance(obligations, list) or not obligations:
+        return False
+    normalized = _normalize_answer_text(answer_text)
+    for obligation in obligations:
+        if not isinstance(obligation, str) or ":" not in obligation:
+            return False
+        field_key = obligation.split(":", 1)[1]
+        if field_key == "$present":
+            continue
+        field_tokens = {
+            token
+            for token in field_key.replace(".", "_").split("_")
+            if token and token not in {"requested"}
+        }
+        if field_tokens and not field_tokens <= normalized:
+            return False
+    return True
+
+
+def _normalize_answer_text(answer_text: str) -> set[str]:
+    return {
+        token
+        for token in answer_text.lower().replace(".", " ").replace("_", " ").split()
+        if token
+    }
 
 
 def _matched_output_keys(
