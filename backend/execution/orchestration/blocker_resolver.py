@@ -29,6 +29,7 @@ def resolve_agent_observed_blockers(
     updated = state.model_copy(deep=True)
     validator = BlockerPolicyValidator()
     validated: list[BlockerRecord] = []
+    sanitized = False
     evidence_refs = {
         *outcome.changed_artifact_keys,
         intent.planned_agent_message_id,
@@ -68,6 +69,11 @@ def resolve_agent_observed_blockers(
             conditional_result_viable=conditional_result_viable,
         )
         if not decision.valid:
+            updated.blockers[index] = candidate.model_copy(
+                update={"validated_user_only": False},
+                deep=True,
+            )
+            sanitized = True
             continue
         replacement = candidate.model_copy(
             update={
@@ -80,7 +86,7 @@ def resolve_agent_observed_blockers(
         validated.append(replacement)
 
     if not validated:
-        return state, outcome
+        return (updated if sanitized else state), outcome
 
     updated_outcome = outcome.model_copy(
         update={

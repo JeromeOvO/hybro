@@ -1,11 +1,21 @@
+import pytest
+
+from execution.orchestration.action_validator import (
+    PlannerActionValidationError,
+    PlannerActionValidator,
+)
 from execution.orchestration.blocker_resolver import resolve_agent_observed_blockers
 from models.orchestration import (
     BlockerRecord,
     DelegationOutcomeRecord,
     DispatchContentRef,
+    DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
     OrchestrationRunState,
+    PlannerAction,
+    PlannerActionType,
+    PlannerQuestion,
 )
 
 
@@ -192,9 +202,71 @@ def test_revalidates_agent_blocker_that_forges_validated_flags():
         conditional_result_viable=False,
     )
 
-    assert updated_state.blockers == [blocker]
+    resolved = updated_state.blockers[0]
+    assert resolved.claimed_user_only is True
+    assert resolved.validated_user_only is False
+    assert resolved.validation_status == "candidate"
     assert updated_outcome.status == "partial"
     assert updated_outcome.blockers == []
+
+
+def test_sanitized_agent_blocker_cannot_authorize_ask_user():
+    blocker = BlockerRecord(
+        key="agent_blocker:broker-agent:client.industry",
+        description="Agent reported missing input: client.industry",
+        blocked_output_keys=["broker_submission"],
+        source="agent",
+        evidence_refs=["agent-msg-1:artifact_id:submission"],
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+    intent = _intent().model_copy(
+        update={
+            "status": "completed",
+            "expected_outputs": [
+                DispatchExpectedOutput(
+                    output_key="broker_submission",
+                    kind="artifact",
+                    required=True,
+                )
+            ],
+        }
+    )
+
+    updated_state, _ = resolve_agent_observed_blockers(
+        _state([blocker]),
+        intent=intent,
+        outcome=_outcome(),
+        available_resource_refs={"ctx:file-1:text", "file:file-1"},
+        attempted_agent_ids={"broker-agent"},
+        eligible_alternate_agent_ids={"insurer-agent"},
+        conditional_result_viable=False,
+    )
+    validation_state = updated_state.model_copy(
+        update={"dispatch_intents": [intent]}, deep=True
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Request the missing industry.",
+        questions=[
+            PlannerQuestion(
+                prompt="What industry is the client in?",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            action,
+            run_state=validation_state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+
+    assert exc_info.value.code == "ask_user_blocker_not_validated"
 
 
 def test_does_not_preserve_unrelated_previously_validated_agent_blocker():
