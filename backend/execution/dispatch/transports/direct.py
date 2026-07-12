@@ -433,17 +433,12 @@ class DirectTransport(AgentTransport):
             if isinstance(public_task_label, str) and public_task_label.strip():
                 return public_task_label
 
-        task_content = current_message.task_content
         message_content = current_message.message_content
         public_message_text = (
             message_content.message_text if message_content is not None else None
         )
-        if (
-            isinstance(task_content, str)
-            and task_content.strip()
-            and task_content == public_message_text
-        ):
-            return task_content
+        if isinstance(public_message_text, str) and public_message_text.strip():
+            return public_message_text
 
         return f"Requesting {agent_name}"
 

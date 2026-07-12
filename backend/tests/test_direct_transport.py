@@ -287,7 +287,32 @@ def _make_room_agent_message(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_task_tracking_uses_public_label_not_internal_task_content():
+@pytest.mark.parametrize(
+    ("extend_info", "message_text", "expected_public_label"),
+    [
+        (
+            {"public_task_label": "Public label from extend_info"},
+            "Public label from message",
+            "Public label from extend_info",
+        ),
+        (
+            None,
+            "Public label from message",
+            "Public label from message",
+        ),
+        (
+            None,
+            "   ",
+            "Requesting Insurer",
+        ),
+    ],
+)
+async def test_task_tracking_uses_public_label_policy_without_leaking_private_task(
+    extend_info,
+    message_text,
+    expected_public_label,
+):
+    private_task = "private internal prompt"
     delivery = MagicMock()
     delivery.send_task_submitted = AsyncMock()
     delivery.send_task_update = AsyncMock()
@@ -311,25 +336,27 @@ async def test_task_tracking_uses_public_label_not_internal_task_content():
         message_id="agent-msg-1",
         related_message_id="user-msg-1",
         agent_id="agent-1",
-        message_content=MessageContent(message_text="Requesting Insurer"),
-        task_content="private internal prompt",
+        message_content=MessageContent(message_text=message_text),
+        task_content=private_task,
         client_request_id="client-1",
-        extend_info={"public_task_label": "Requesting Insurer"},
+        extend_info=extend_info,
     )
+    agent_card = MagicMock()
+    agent_card.name = "Insurer"
 
     await transport._setup_task_tracking(
         message,
-        MagicMock(name="Insurer"),
-        Message(role=MessageRole.USER, parts=[TextPart(text="private internal prompt")]),
+        agent_card,
+        Message(role=MessageRole.USER, parts=[TextPart(text=private_task)]),
         "room-1",
     )
 
     submitted_kwargs = delivery.send_task_submitted.await_args.kwargs
     update_kwargs = delivery.send_task_update.await_args.kwargs
-    assert submitted_kwargs["task_content"] == "Requesting Insurer"
-    assert update_kwargs["status_message"] == "Requesting Insurer"
-    assert "private internal prompt" not in str(submitted_kwargs)
-    assert "private internal prompt" not in str(update_kwargs)
+    assert submitted_kwargs["task_content"] == expected_public_label
+    assert update_kwargs["status_message"] == expected_public_label
+    assert private_task not in str(submitted_kwargs)
+    assert private_task not in str(update_kwargs)
 
 
 class TestHandleSyncResponseSuccess:
