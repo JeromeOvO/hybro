@@ -90,6 +90,7 @@ from execution.orchestration.run_store import (
     OrchestrationRunStore,
     OrchestrationStoreConflict,
 )
+from execution.orchestration.terminal_summary import build_terminal_summary
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.hitl import HITLPromptType, InterruptKind
 from models.orchestration import (
@@ -327,6 +328,7 @@ class SupervisorExecutor:
             synthesis_text=synthesis_text,
             clarification_question=clarification_question,
             terminal_reason=state.terminal_reason,
+            terminal_summary=state.terminal_summary,
         )
 
     @staticmethod
@@ -5358,14 +5360,24 @@ class SupervisorExecutor:
         updated = mark_terminal(state, status, reason=reason)
         if mutate is not None:
             mutate(updated)
+        terminal_summary = None
+        if status in {
+            OrchestrationStatus.FAILED,
+            OrchestrationStatus.BUDGET_EXHAUSTED,
+        }:
+            terminal_summary = build_terminal_summary(updated, reason=reason)
+            updated.terminal_summary = terminal_summary
         saved = await self.orchestration_run_store.save_state(
             updated,
             expected_version=expected_version,
         )
+        payload = {"status": saved.status.value, "reason": reason}
+        if terminal_summary is not None:
+            payload["terminal_summary"] = terminal_summary
         await self._append_v2_event(
             saved,
             OrchestrationEventType.RUN_TERMINAL,
-            payload={"status": saved.status.value, "reason": reason},
+            payload=payload,
         )
         return saved
 
