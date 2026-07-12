@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 
 from execution.orchestration.outcome_policy import BlockerPolicyValidator
 from models.orchestration import (
@@ -99,13 +100,24 @@ def resolve_agent_observed_blockers(
     return updated, updated_outcome
 
 
-_INSUFFICIENT_ANSWER_MARKERS = {
+_INSUFFICIENT_ANSWER_MARKERS = (
     "i do not know",
     "i don't know",
     "unknown",
     "not sure",
     "skip",
     "n/a",
+)
+
+_ANSWER_VALUE_FILLER = {
+    "a",
+    "an",
+    "are",
+    "be",
+    "is",
+    "of",
+    "the",
+    "to",
 }
 
 
@@ -120,8 +132,7 @@ def validate_hitl_answered_blockers(
     answer_text = str(answer_fact.get("text") or "").strip()
     if not answer_text:
         return
-    normalized_answer = " ".join(answer_text.lower().split())
-    if normalized_answer in _INSUFFICIENT_ANSWER_MARKERS:
+    if _answer_is_insufficient(answer_text):
         return
     answer_fact_id = str(answer_fact.get("fact_id") or "").strip()
     for question in state.open_questions:
@@ -132,14 +143,17 @@ def validate_hitl_answered_blockers(
         if question.get("resolved") is not True:
             continue
         blocker_keys = question.get("blocker_keys") or []
-        blocker_obligations = question.get("blocker_obligations") or {}
-        if not isinstance(blocker_obligations, Mapping):
-            blocker_obligations = {}
         shared_obligations = question.get("required_obligation_keys") or []
+        blocker_obligations = question.get("blocker_obligations")
         for blocker in state.blockers:
             if blocker.key not in blocker_keys or blocker.status != "open":
                 continue
-            obligations = blocker_obligations.get(blocker.key, shared_obligations)
+            if blocker_obligations is None:
+                obligations = shared_obligations
+            elif isinstance(blocker_obligations, Mapping):
+                obligations = blocker_obligations.get(blocker.key)
+            else:
+                obligations = None
             if not _answer_satisfies_obligations(answer_text, obligations):
                 continue
             blocker.status = "resolved"
@@ -149,6 +163,8 @@ def validate_hitl_answered_blockers(
 
 def _answer_satisfies_obligations(answer_text: str, obligations: object) -> bool:
     if not isinstance(obligations, list) or not obligations:
+        return False
+    if _answer_is_insufficient(answer_text):
         return False
     normalized = _normalize_answer_text(answer_text)
     for obligation in obligations:
@@ -164,15 +180,24 @@ def _answer_satisfies_obligations(answer_text: str, obligations: object) -> bool
         }
         if field_tokens and not field_tokens <= normalized:
             return False
+        if field_tokens and not _answer_has_field_value(normalized, field_tokens):
+            return False
     return True
 
 
+def _answer_is_insufficient(answer_text: str) -> bool:
+    normalized_answer = " ".join(answer_text.lower().split())
+    return any(marker in normalized_answer for marker in _INSUFFICIENT_ANSWER_MARKERS)
+
+
+def _answer_has_field_value(
+    answer_tokens: set[str], field_tokens: set[str]
+) -> bool:
+    return bool(answer_tokens - field_tokens - _ANSWER_VALUE_FILLER - {"requested"})
+
+
 def _normalize_answer_text(answer_text: str) -> set[str]:
-    return {
-        token
-        for token in answer_text.lower().replace(".", " ").replace("_", " ").split()
-        if token
-    }
+    return set(re.findall(r"[a-z0-9]+", answer_text.lower()))
 
 
 def _matched_output_keys(

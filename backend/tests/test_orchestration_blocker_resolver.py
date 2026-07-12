@@ -392,6 +392,106 @@ def test_keeps_hitl_blocker_open_when_answer_is_insufficient():
     assert state.blockers[0].status == "open"
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I don't know the requested limit.",
+        "The requested limit is unknown.",
+    ],
+)
+def test_keeps_hitl_blocker_open_when_answer_names_field_without_value(answer):
+    blocker = _validated_blocker()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["blocker-1"],
+                "required_obligation_keys": ["quote:requested_limit"],
+                "answer": answer,
+            }
+        ],
+    )
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": answer},
+    )
+
+    assert state.blockers[0].status == "open"
+
+
+def test_keeps_hitl_blocker_open_without_obligation_metadata():
+    blocker = _validated_blocker()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["blocker-1"],
+                "answer": "Requested limit is 5M.",
+            }
+        ],
+    )
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": "Requested limit is 5M."},
+    )
+
+    assert state.blockers[0].status == "open"
+
+
+def test_keeps_hitl_blocker_open_when_mapping_omits_blocker_obligations():
+    blocker = _validated_blocker()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["blocker-1"],
+                "required_obligation_keys": ["quote:requested_limit"],
+                "blocker_obligations": {"other-blocker": ["quote:industry"]},
+                "answer": "Requested limit is 5M.",
+            }
+        ],
+    )
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": "Requested limit is 5M."},
+    )
+
+    assert state.blockers[0].status == "open"
+
+
 def test_resolves_only_addressed_blocker_for_multi_blocker_answer():
     first = _validated_blocker("limit-blocker")
     second = _validated_blocker("industry-blocker")
