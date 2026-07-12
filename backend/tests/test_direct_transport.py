@@ -286,6 +286,52 @@ def _make_room_agent_message(**overrides):
     return RoomAgentMessage(**defaults)
 
 
+@pytest.mark.asyncio
+async def test_task_tracking_uses_public_label_not_internal_task_content():
+    delivery = MagicMock()
+    delivery.send_task_submitted = AsyncMock()
+    delivery.send_task_update = AsyncMock()
+    transport = DirectTransport(
+        response_handler=MagicMock(),
+        tsm=MagicMock(),
+        a2a_transport=MagicMock(
+            create_task_for_tracking=AsyncMock(
+                return_value={"created_at": "2026-01-01T00:00:00Z"}
+            )
+        ),
+        remote_task_reader=MagicMock(),
+        delivery=delivery,
+        message_reader=MagicMock(),
+        artifact_store=MagicMock(),
+        task_updater=MagicMock(),
+        object_storage=MagicMock(),
+    )
+    message = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-msg-1",
+        related_message_id="user-msg-1",
+        agent_id="agent-1",
+        message_content=MessageContent(message_text="Requesting Insurer"),
+        task_content="private internal prompt",
+        client_request_id="client-1",
+        extend_info={"public_task_label": "Requesting Insurer"},
+    )
+
+    await transport._setup_task_tracking(
+        message,
+        MagicMock(name="Insurer"),
+        Message(role=MessageRole.USER, parts=[TextPart(text="private internal prompt")]),
+        "room-1",
+    )
+
+    submitted_kwargs = delivery.send_task_submitted.await_args.kwargs
+    update_kwargs = delivery.send_task_update.await_args.kwargs
+    assert submitted_kwargs["task_content"] == "Requesting Insurer"
+    assert update_kwargs["status_message"] == "Requesting Insurer"
+    assert "private internal prompt" not in str(submitted_kwargs)
+    assert "private internal prompt" not in str(update_kwargs)
+
+
 class TestHandleSyncResponseSuccess:
     """handle_sync_response returns extracted content for a message-type response."""
 

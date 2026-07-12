@@ -422,6 +422,31 @@ class DirectTransport(AgentTransport):
         """Wrap accumulated non-text streaming parts into a task artifact."""
         materialize_non_text_parts_as_artifact(task, non_text_parts)
 
+    @staticmethod
+    def _public_task_label(
+        current_message: RoomAgentMessage,
+        agent_name: str,
+    ) -> str:
+        extend_info = current_message.extend_info
+        if isinstance(extend_info, dict):
+            public_task_label = extend_info.get("public_task_label")
+            if isinstance(public_task_label, str) and public_task_label.strip():
+                return public_task_label
+
+        task_content = current_message.task_content
+        message_content = current_message.message_content
+        public_message_text = (
+            message_content.message_text if message_content is not None else None
+        )
+        if (
+            isinstance(task_content, str)
+            and task_content.strip()
+            and task_content == public_message_text
+        ):
+            return task_content
+
+        return f"Requesting {agent_name}"
+
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
@@ -481,7 +506,7 @@ class DirectTransport(AgentTransport):
                 else task_info.get("created_at")
             )
 
-            task_content = current_message.task_content
+            task_content = self._public_task_label(current_message, agent_card.name)
 
             logger.info(
                 "DirectTransport: Sending task_submitted SSE for step %s/%s, task_content: %s",
