@@ -83,7 +83,13 @@ from execution.orchestration.result_ingestor import (
     AgentResultRead,
     related_open_failure_for_dispatch_intent,
 )
-from execution.orchestration.run_reducer import mark_running, mark_terminal
+from execution.orchestration.run_reducer import (
+    mark_running,
+    mark_terminal,
+    record_dispatch_intents,
+    record_planner_action,
+    record_step_result_metadata,
+)
 from execution.orchestration.run_store import (
     DuplicateEventIdConflict,
     InMemoryOrchestrationRunStore,
@@ -1747,18 +1753,10 @@ class SupervisorExecutor:
         )
 
         def mutate(updated: OrchestrationRunState) -> None:
+            reduced = record_planner_action(updated, planner_action)
+            updated.last_planner_action = reduced.last_planner_action
+            updated.decision_log = reduced.decision_log
             resolve_open_planner_validation_failures(updated)
-            updated.decision_log.append(
-                {
-                    "action": planner_action.action.value,
-                    "reasoning": planner_action.reasoning,
-                    "targets": [
-                        target.model_dump(mode="json")
-                        for target in planner_action.targets
-                    ],
-                    "planner_action": planner_action.model_dump(mode="json"),
-                }
-            )
 
         saved = await self._save_v2_state(
             state,
@@ -1936,7 +1934,10 @@ class SupervisorExecutor:
                     intent.dispatch_intent_id for intent in intents
                 ]
             },
-            mutate=lambda updated: self._apply_v2_dispatch_intents(updated, intents),
+            mutate=lambda updated: self._apply_v2_dispatch_intents(
+                updated,
+                intents,
+            ),
         )
 
         results = await self._dispatch_targets(
@@ -4855,12 +4856,17 @@ class SupervisorExecutor:
         advance_step: bool,
         matched_intent_id: str | None,
     ) -> None:
-        state.status = status
-        for intent in state.dispatch_intents:
-            if intent.dispatch_intent_id == matched_intent_id:
-                intent.status = result.status.value
-        if advance_step:
-            state.steps_used += 1
+        reduced = record_step_result_metadata(
+            state,
+            result,
+            status=status,
+            matched_intent_id=matched_intent_id,
+            advance_step=advance_step,
+        )
+        state.status = reduced.status
+        state.dispatch_intents = reduced.dispatch_intents
+        state.active_dispatches = reduced.active_dispatches
+        state.steps_used = reduced.steps_used
 
     @staticmethod
     def _v2_result_status_to_agent_result_status(
@@ -5492,8 +5498,10 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         intents: list[DispatchIntent],
     ) -> None:
-        state.status = OrchestrationStatus.DISPATCHING
-        state.dispatch_intents.extend(intents)
+        reduced = record_dispatch_intents(state, intents)
+        state.status = reduced.status
+        state.dispatch_intents = reduced.dispatch_intents
+        state.active_dispatches = reduced.active_dispatches
 
     @staticmethod
     def _apply_v2_results(
