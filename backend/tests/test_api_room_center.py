@@ -10,6 +10,7 @@ Tests cover:
 - Authorization checks
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,6 +31,7 @@ from api.room_center import (
     verify_room_ownership,
 )
 from common.dto import ExecutionAck
+from models.room import MessageContent, RoomAgentMessage
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -860,6 +862,53 @@ class TestInquiryRoomMessages:
         )
 
         assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_returns_public_agent_message_payload_without_private_dispatch_text(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
+
+        public_label = "Requesting Insurer"
+        client_request_id = "cr-insurer-001"
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
+            sample_room
+        )
+        patch_room_center_deps[
+            "room_center"
+        ].inquiry_room_messages_by_room_id.return_value = RoomCenterRoomMessageResponse(
+            success=True,
+            message_list=[
+                RoomAgentMessage(
+                    room_id=sample_room.room_id,
+                    message_id="agent-msg-insurer-001",
+                    agent_id="insurer-agent",
+                    related_message_id=sample_user_message.message_id,
+                    client_request_id=client_request_id,
+                    message_content=MessageContent(message_text=public_label),
+                    extend_info={"public_task_label": public_label},
+                )
+            ],
+        )
+
+        response = await inquiry_room_messages(
+            mock_request,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            center=patch_room_center_deps["room_center"],
+        )
+
+        assert response.success is True
+        assert response.message_list is not None
+        assert response.message_list[0].message_content.message_text == public_label
+        assert response.message_list[0].client_request_id == client_request_id
+        assert response.message_list[0].extend_info == {
+            "public_task_label": public_label
+        }
+        assert "INTERNAL DISPATCH TASK" not in json.dumps(
+            response.model_dump(mode="json")
+        )
 
 
 class TestSendMessage:
