@@ -526,7 +526,9 @@ def _executor(
         task_state_store=SimpleNamespace(
             resolve_client_request_id_for_message_id=AsyncMock(return_value="client-1")
         ),
-        continuation_store=SimpleNamespace(),
+        continuation_store=SimpleNamespace(
+            save_continuation_on_user_message=AsyncMock(return_value=True)
+        ),
         event_publisher=SimpleNamespace(emit_internal=AsyncMock()),
         rate_limit_service=None,
         agent_dispatcher=SimpleNamespace(
@@ -6776,6 +6778,118 @@ async def test_ingest_v2_results_validates_agent_missing_fields_as_blocker():
     assert updated.delegation_outcomes[-1].status == "blocked"
     assert updated.blockers[0].validation_status == "validated"
     assert updated.blockers[0].validated_user_only is True
+
+
+@pytest.mark.asyncio
+async def test_agent_missing_fields_stop_repeat_delegate_and_create_hitl():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run broker to insurer workflow"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "candidate_agent_ids": ["broker-agent"],
+        },
+    )
+    planner_actions = [
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Ask broker to extract submission",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="broker-agent",
+                    task="Extract submission and identify missing client inputs.",
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            output_key="broker_submission",
+                            kind="artifact",
+                            required=True,
+                            required_fields=["industry", "requested_limit"],
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Incorrectly repeat broker despite missing info",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="broker-agent",
+                    task="Extract submission and identify missing client inputs.",
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            output_key="broker_submission",
+                            kind="artifact",
+                            required=True,
+                            required_fields=["industry", "requested_limit"],
+                        )
+                    ],
+                )
+            ],
+        ),
+    ]
+    store = InMemoryOrchestrationRunStore()
+    planner = RecordingPlanner(*planner_actions)
+    executor = _executor(
+        store=store,
+        planner=planner,
+        user_message=user_message,
+    )
+    executor.guardrails_enabled = True
+    executor._v2_artifacts_for_output_message = AsyncMock(
+        return_value=[
+            {
+                "artifact_id": "submission",
+                "name": "submission",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "client": {"industry": None},
+                            "requested_coverage": {"limit": None},
+                            "missing_fields": [
+                                "client.industry",
+                                "requested_coverage.limit",
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Run broker to insurer workflow",
+        agent_registry=[
+            AgentProfile(agent_id="broker-agent", agent_name="Broker Agent"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.AWAITING_USER
+    assert result.run_state.pending_hitl_request_ids == ["hitl-1"]
+    assert result.run_state.delegation_outcomes[-1].status == "blocked"
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    assert [
+        intent.agent_id for intent in result.run_state.dispatch_intents
+    ] == ["broker-agent"]
+    assert len(planner.contexts) == 2
+    assert result.run_state.open_questions[-1]["blocker_keys"]
+    assert {
+        blocker.key for blocker in result.run_state.delegation_outcomes[-1].blockers
+    } == set(result.run_state.open_questions[-1]["blocker_keys"])
 
 
 @pytest.mark.asyncio

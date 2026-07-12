@@ -70,24 +70,30 @@ def action_for_rejected_delegate(
     ]
     if not validated_blockers:
         return None
+    sorted_blockers = sorted(validated_blockers, key=lambda item: item.key)
     blocker_obligations = {
         blocker.key: _required_obligations_for_blocker(state, blocker)
-        for blocker in validated_blockers
+        for blocker in sorted_blockers
     }
+    blocker_keys = [blocker.key for blocker in sorted_blockers]
+    required_obligation_keys = sorted(
+        {
+            obligation
+            for obligations in blocker_obligations.values()
+            for obligation in obligations
+        }
+    )
     return PlannerAction(
         action=PlannerActionType.ASK_USER,
         reasoning="Backend recovery selected HITL because validated user-only blockers are open.",
         questions=[
             PlannerQuestion(
-                prompt=blocker.description,
+                prompt="\n".join(blocker.description for blocker in sorted_blockers),
                 reason="blocker",
-                blocker_keys=[blocker.key],
-                required_obligation_keys=blocker_obligations[blocker.key],
-                blocker_obligations={
-                    blocker.key: blocker_obligations[blocker.key]
-                },
+                blocker_keys=blocker_keys,
+                required_obligation_keys=required_obligation_keys,
+                blocker_obligations=blocker_obligations,
             )
-            for blocker in sorted(validated_blockers, key=lambda item: item.key)
         ],
     )
 
