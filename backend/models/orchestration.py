@@ -437,6 +437,21 @@ class GoalFamilyDispositionRecord(BaseModel):
     replacement_goal_family_fingerprint: str | None = None
 
 
+class GoalProgressRecord(BaseModel):
+    progress_id: str
+    goal_family_fingerprint: str
+    through_goal_revision_fingerprint: str
+    latest_outcome_id: str
+    source_outcome_ids: list[str] = Field(default_factory=list)
+    agent_ids: list[str] = Field(default_factory=list)
+    status: Literal["fulfilled", "partial", "blocked", "no_progress", "failed"]
+    satisfied_required_obligations: list[str] = Field(default_factory=list)
+    remaining_required_obligations: list[str] = Field(default_factory=list)
+    blocker_keys: list[str] = Field(default_factory=list)
+    unknown_keys: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class OrchestrationRunState(BaseModel):
     run_id: str
     room_id: str
@@ -479,6 +494,7 @@ class OrchestrationRunState(BaseModel):
     goal_family_dispositions: list[GoalFamilyDispositionRecord] = Field(
         default_factory=list
     )
+    goal_progress: list[GoalProgressRecord] = Field(default_factory=list)
     assumptions: list[AssumptionRecord] = Field(default_factory=list)
     unknowns: list[UnknownRecord] = Field(default_factory=list)
     blockers: list[BlockerRecord] = Field(default_factory=list)

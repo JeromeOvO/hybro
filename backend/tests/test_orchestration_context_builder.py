@@ -426,6 +426,34 @@ def test_context_builder_exposes_open_failures_to_planner():
     assert context.state_context.open_failures[0]["recoverable"] is True
 
 
+def test_context_builder_exposes_goal_progress():
+    from models.orchestration import GoalProgressRecord
+
+    state = _run_state()
+    state.goal_progress = [
+        GoalProgressRecord(
+            progress_id="gp-1",
+            goal_family_fingerprint="family-1",
+            through_goal_revision_fingerprint="revision-1",
+            latest_outcome_id="outcome-1",
+            source_outcome_ids=["outcome-1"],
+            agent_ids=["agent-1"],
+            status="blocked",
+            satisfied_required_obligations=["quote:$present"],
+            remaining_required_obligations=["quote:requested_limit"],
+            blocker_keys=["blocker-1"],
+        )
+    ]
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Finish the workflow",
+    )
+
+    assert context.state_context.goal_progress[0]["progress_id"] == "gp-1"
+    assert context.state_context.goal_progress[0]["status"] == "blocked"
+
+
 def test_context_builder_exposes_immutable_outcome_policy_views_without_artifacts():
     outcome = DelegationOutcomeRecord(
         outcome_id="outcome-1",

@@ -142,6 +142,7 @@ class OrchestrationStateContext(BaseModel):
     pending_hitl_request_ids: list[str] = Field(default_factory=list)
     open_failures: list[dict[str, Any]] = Field(default_factory=list)
     outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    goal_progress: list[dict[str, Any]] = Field(default_factory=list)
     continuations: list[dict[str, Any]] = Field(default_factory=list)
     dispositions: list[dict[str, Any]] = Field(default_factory=list)
     blockers: list[dict[str, Any]] = Field(default_factory=list)
@@ -502,6 +503,7 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
             failure.model_dump(mode="json") for failure in run_state.open_failures
         ],
         outcomes=_stable_model_list(outcome_history.outcomes),
+        goal_progress=_stable_model_list(run_state.goal_progress),
         continuations=_stable_model_list(run_state.pending_agent_continuations),
         dispositions=_stable_model_list(run_state.goal_family_dispositions),
         blockers=_stable_model_list(run_state.blockers),

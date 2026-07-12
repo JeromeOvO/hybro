@@ -55,6 +55,7 @@ from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     resolve_dispatch_payload_refs,
 )
+from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
@@ -4938,6 +4939,7 @@ class SupervisorExecutor:
                     )
                     if existing_outcome is None:
                         next_state.delegation_outcomes.append(outcome)
+                        next_state = rebuild_goal_progress(next_state)
                     else:
                         outcome = existing_outcome
                     raw_result_already_ingested = existing_outcome is not None
@@ -5242,6 +5244,8 @@ class SupervisorExecutor:
                 ):
                     failure.status = "abandoned"
                     failure.updated_at = utcnow()
+            rebuilt = rebuild_goal_progress(updated)
+            updated.goal_progress = rebuilt.goal_progress
 
         return await self._save_v2_state(
             state,
