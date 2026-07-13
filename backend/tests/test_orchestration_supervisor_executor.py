@@ -11026,6 +11026,56 @@ async def test_hitl_answer_follow_up_input_required_stays_awaiting_input():
     assert result.status_message == "Need coverage limit too."
 
 
+@pytest.mark.asyncio
+async def test_hitl_answer_policy_follow_up_preserves_same_a2a_task_context():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="I approve the policy exception."),
+        message_id="msg-2",
+    )
+    state = await store.create_run(_run_state(status=OrchestrationStatus.AWAITING_USER))
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "policy-required",
+                    "response_text": "Please approve the required policy.",
+                    "requires_policy": True,
+                }
+            )
+        )
+    )
+
+    result = await executor._resume_agent_continuation_after_hitl_answer(
+        state=state,
+        continuation=PendingAgentContinuation(
+            continuation_id="cont-1",
+            source_intent_id="intent-1",
+            source_agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            goal_family_fingerprint="family-1",
+            goal_revision_fingerprint="revision-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        answer="I approve the policy exception.",
+        user_message=user_message,
+    )
+
+    assert result.status == StepStatus.AWAITING_INPUT
+    assert result.agent_message_id == "agent-msg-1"
+    assert result.paused_message_id == "agent-msg-1"
+    assert result.a2a_task_id == "task-1"
+    assert result.a2a_context_id == "ctx-1"
+    assert result.interactive_state == "policy-required"
+    assert result.requires_policy is True
+    assert result.status_message == "Please approve the required policy."
+
+
 @pytest.mark.parametrize(
     ("interactive_state", "requires_auth", "requires_policy"),
     [
