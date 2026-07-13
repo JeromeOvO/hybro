@@ -8,6 +8,7 @@ Tests cover:
 - Room ownership verification
 """
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -214,6 +215,91 @@ class TestGetPendingHitlRequests:
         pending = result["requests"][0]
         assert "orchestration_run_id" not in pending
         assert "orchestration_schema_version" not in pending
+
+    @pytest.mark.asyncio
+    async def test_pending_requests_use_public_sse_projection(
+        self,
+        mock_user,
+        mock_db_service,
+        mock_hitl_service,
+        sample_room,
+    ):
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+        mock_hitl_service.get_pending_hitl.return_value = [
+            CommonHITLRequest(
+                request_id="hitl-public-1",
+                room_id=sample_room.room_id,
+                user_message_id="user-msg-private",
+                source="agent",
+                prompt="Approve this action?",
+                message_id="display-msg-1",
+                source_step_id="step-public-1",
+                agent_id="agent-public-1",
+                agent_name="Researcher",
+                a2a_task_id="a2a-task-private",
+                a2a_context_id="a2a-context-private",
+                continuation_message_id="continuation-private",
+                display_message_id="display-msg-1",
+                client_request_id="client-public-1",
+                orchestration_run_id="run-private",
+                orchestration_schema_version=2,
+                prompt_type="choice",
+                choices=["Approve", "Reject"],
+                group_id="group-public-1",
+                group_total=3,
+                group_index=2,
+                status="processing",
+                expires_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+                created_at=datetime(2026, 1, 2, 2, 4, 5, tzinfo=UTC),
+                user_input="private answer",
+                responded_at=datetime(2026, 1, 2, 2, 5, 5, tzinfo=UTC),
+                responded_by_user_id="user-private",
+            )
+        ]
+
+        result = await get_pending_hitl_requests(
+            sample_room.room_id,
+            mock_user,
+            manager=mock_hitl_service,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
+        pending = result["requests"][0]
+        assert pending == {
+            "request_id": "hitl-public-1",
+            "message_id": "display-msg-1",
+            "prompt": "Approve this action?",
+            "prompt_type": "choice",
+            "choices": ["Approve", "Reject"],
+            "source": "agent",
+            "agent_id": "agent-public-1",
+            "agent_name": "Researcher",
+            "source_step_id": "step-public-1",
+            "group_id": "group-public-1",
+            "group_total": 3,
+            "group_index": 2,
+            "related_message_id": "user-msg-private",
+            "client_request_id": "client-public-1",
+            "expires_at": "2026-01-02T03:04:05Z",
+            "created_at": "2026-01-02T02:04:05Z",
+        }
+        assert (
+            not {
+                "room_id",
+                "user_message_id",
+                "a2a_task_id",
+                "a2a_context_id",
+                "continuation_message_id",
+                "display_message_id",
+                "orchestration_run_id",
+                "orchestration_schema_version",
+                "status",
+                "user_input",
+                "responded_at",
+                "responded_by_user_id",
+            }
+            & pending.keys()
+        )
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_pending(

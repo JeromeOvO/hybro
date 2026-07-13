@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api_gateway.dependencies import get_hitl_manager, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
+from common.dto import HITLRequest
 from common.protocols import HITLManager, RoomOwnershipReader
 from models.hitl import HITLResponseRequest
 
@@ -42,11 +43,45 @@ _HITL_ERROR_STATUS = {
     "HITLRoutingFailedError": 502,
 }
 
+_PUBLIC_PENDING_HITL_FIELDS = {
+    "request_id",
+    "message_id",
+    "prompt",
+    "prompt_type",
+    "choices",
+    "source",
+    "agent_id",
+    "agent_name",
+    "source_step_id",
+    "created_at",
+    "expires_at",
+    "group_id",
+    "group_total",
+    "group_index",
+    "client_request_id",
+}
+
 
 def _raise_http_for_hitl_error(exc: Exception) -> None:
     status_code = _HITL_ERROR_STATUS.get(exc.__class__.__name__, 500)
     message = getattr(exc, "message", str(exc))
     raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+def _pending_hitl_public_payload(request: HITLRequest) -> dict:
+    payload = request.model_dump(
+        mode="json",
+        include=_PUBLIC_PENDING_HITL_FIELDS,
+        exclude_none=True,
+    )
+    payload["message_id"] = (
+        request.display_message_id
+        or request.continuation_message_id
+        or request.message_id
+        or request.user_message_id
+    )
+    payload["related_message_id"] = request.user_message_id
+    return payload
 
 
 @router.post("/respond")
@@ -86,15 +121,7 @@ async def get_pending_hitl_requests(
     await verify_room_ownership(room_id, user, room_ownership)
 
     requests = await manager.get_pending_hitl(room_id)
-    return {
-        "requests": [
-            {
-                **r.model_dump(mode="json", exclude_none=True),
-                "message_id": r.message_id,
-            }
-            for r in requests
-        ]
-    }
+    return {"requests": [_pending_hitl_public_payload(r) for r in requests]}
 
 
 @router.post("/{request_id}/cancel")
