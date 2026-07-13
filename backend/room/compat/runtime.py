@@ -118,6 +118,13 @@ _PUBLIC_ATTACHMENT_PREFLIGHT_MESSAGES = {
     "encoding_failed": "An attached file could not be encoded.",
 }
 
+_PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
+    "quoted_text",
+    "quoted_sender_name",
+    "quote_id",
+)
+_PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
+
 
 def _public_attachment_preflight_failure(
     failure: AttachmentPreflightFailure,
@@ -129,6 +136,22 @@ def _public_attachment_preflight_failure(
             "Attachment preflight failed.",
         ),
     }
+
+
+def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | None:
+    if not isinstance(extend_info, dict):
+        return None
+
+    public_extend_info = {
+        key: value
+        for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
+        if isinstance((value := extend_info.get(key)), str)
+    }
+    turn_completion_kind = extend_info.get("turn_completion_kind")
+    if turn_completion_kind in _PUBLIC_TURN_COMPLETION_KINDS:
+        public_extend_info["turn_completion_kind"] = turn_completion_kind
+
+    return public_extend_info or None
 
 
 @dataclass(slots=True)
@@ -4081,7 +4104,9 @@ class RoomServices:
                         message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
                         user_id=user_msg.user_id,
-                        extend_info=user_msg.extend_info,
+                        extend_info=_public_user_message_extend_info(
+                            user_msg.extend_info
+                        ),
                     )
                     combined_messages.append(room_message)
 

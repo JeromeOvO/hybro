@@ -50,7 +50,7 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
-from models.room import MessageContent, RoomAgentMessage
+from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 from room.compat.runtime import RoomServices
 from room.route_adapter import RoomRouteAdapter as RoomCenter
 
@@ -1122,6 +1122,78 @@ class TestInquiryRoomMessages:
         )
 
         assert response.success is True
+
+    @pytest.mark.asyncio
+    async def test_returns_public_user_message_payload_without_private_extend_info(
+        self, mock_user, sample_room, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
+
+        private_sentinel = "PRIVATE_SENTINEL_user_extend_info_history_boundary"
+        public_extend_info = {
+            "quoted_text": "Public quoted excerpt",
+            "quoted_sender_name": "Agent One",
+            "quote_id": "quote-public-001",
+            "turn_completion_kind": "synthesis",
+        }
+        user_message = RoomUserMessage(
+            room_id=sample_room.room_id,
+            message_id="user-msg-privacy-001",
+            user_id=mock_user.user_id,
+            client_request_id="client-request-top-level-001",
+            message_content=MessageContent(message_text="Please review the quote"),
+            extend_info={
+                **public_extend_info,
+                "client_request_id": private_sentinel,
+                "orchestration": True,
+                "orchestration_run_id": private_sentinel,
+                "orchestration_status": private_sentinel,
+                "candidate_scope_snapshot_id": private_sentinel,
+                "candidate_agent_ids": [private_sentinel],
+                "supervisor_trajectory": {
+                    "status": "running",
+                    "entries": [{"prompt": private_sentinel}],
+                },
+                "agent_registry": [{"agent_id": private_sentinel}],
+                "conversation_context": private_sentinel,
+                "room_config": {"explicit_mentions": [private_sentinel]},
+                "dispatch_strategy": private_sentinel,
+                "dispatch_payload_refs": {"payload": private_sentinel},
+                "resolved_dispatch_resource_payloads": [
+                    {"resource": private_sentinel}
+                ],
+                "orchestration_recovery": {"prompt": private_sentinel},
+                "prompt": private_sentinel,
+            },
+        )
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
+            sample_room
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[user_message])
+        facade.get_agent_messages_for_room = AsyncMock(return_value=[])
+        runtime = RoomServices()
+        runtime.bind_facade(facade)
+        runtime.bind_object_storage(
+            SimpleNamespace(get_presigned_url=AsyncMock(return_value="unused"))
+        )
+        center = RoomCenter(room_services=runtime)
+
+        response = await inquiry_room_messages(
+            mock_request,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            center=center,
+        )
+
+        assert response.success is True
+        assert response.message_list is not None
+        public_user = response.message_list[0]
+        assert public_user.message_type == "user"
+        assert public_user.client_request_id == "client-request-top-level-001"
+        assert public_user.extend_info == public_extend_info
+        assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
 
     @pytest.mark.asyncio
     async def test_returns_public_agent_message_payload_without_private_dispatch_text(
