@@ -220,7 +220,7 @@ def normalize_hub_publish_payload(
             "client_request_id", getattr(lineage, "client_request_id", None)
         )
 
-    if event_type == "agent_response":
+    if kind == "response":
         payload.setdefault("text", str(payload.get("content") or ""))
         payload.setdefault("content", payload.get("text", ""))
         if isinstance(payload.get("parts"), list):
@@ -286,27 +286,43 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
     normalized: list[dict] = []
     seen_file_keys: set[tuple] = set()
     for part in parts:
-        if not isinstance(part, dict) or part.get("kind"):
+        if not isinstance(part, dict):
+            normalized.append(part)
+        elif part.get("kind") == "file":
+            file_payload = part.get("file")
+            if not isinstance(file_payload, dict) and not (
+                "raw" in part or "url" in part
+            ):
+                normalized.append(part)
+                continue
+            out = {"kind": "file", "file": _normalize_hub_file_info(part)}
+            if "metadata" in part:
+                out["metadata"] = part["metadata"]
+            normalized.append(out)
+        elif part.get("kind"):
             normalized.append(part)
         elif "text" in part:
             out = {"kind": "text", "text": part.get("text", "")}
             if "metadata" in part:
                 out["metadata"] = part["metadata"]
             normalized.append(out)
-        elif "raw" in part or "url" in part:
-            file_info = {}
-            if "raw" in part:
-                file_info["bytes"] = part["raw"]
-            if "url" in part:
-                file_info["uri"] = part["url"]
-            media_type = (
-                part.get("mime_type") or part.get("mimeType") or part.get("mediaType")
+        elif "file" in part and isinstance(part.get("file"), dict):
+            file_info = _normalize_hub_file_info(part)
+            file_key = (
+                file_info.get("bytes"),
+                file_info.get("uri"),
+                file_info.get("mimeType"),
+                file_info.get("name"),
             )
-            if media_type:
-                file_info["mimeType"] = media_type
-            filename = part.get("filename") or part.get("name")
-            if filename:
-                file_info["name"] = filename
+            if file_key in seen_file_keys:
+                continue
+            seen_file_keys.add(file_key)
+            out = {"kind": "file", "file": file_info}
+            if "metadata" in part:
+                out["metadata"] = part["metadata"]
+            normalized.append(out)
+        elif "raw" in part or "url" in part:
+            file_info = _normalize_hub_file_info(part)
             file_key = (
                 file_info.get("bytes"),
                 file_info.get("uri"),
@@ -328,6 +344,38 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
         else:
             normalized.append(part)
     return normalized
+
+
+def _normalize_hub_file_info(part: dict) -> dict:
+    file_payload = part.get("file") if isinstance(part.get("file"), dict) else {}
+    sources = [file_payload, part]
+    file_info = {}
+    raw_bytes = _first_hub_file_value(sources, "bytes", "raw")
+    if raw_bytes is not None:
+        file_info["bytes"] = raw_bytes
+    uri = _first_hub_file_value(sources, "uri", "url")
+    if uri is not None:
+        file_info["uri"] = uri
+    media_type = _first_hub_file_value(
+        sources,
+        "mime_type",
+        "mimeType",
+        "mediaType",
+    )
+    if media_type:
+        file_info["mimeType"] = media_type
+    filename = _first_hub_file_value(sources, "name", "filename")
+    if filename:
+        file_info["name"] = filename
+    return file_info
+
+
+def _first_hub_file_value(sources: list[dict], *keys: str):
+    for source in sources:
+        for key in keys:
+            if key in source:
+                return source[key]
+    return None
 
 
 def _normalize_task_status_payload(payload: dict) -> None:
