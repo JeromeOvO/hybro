@@ -1522,7 +1522,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id=None,
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         h._delivery.send_processing_status.assert_not_awaited()
@@ -1550,7 +1550,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id="cr-1",
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         h._delivery.send_processing_status.assert_not_awaited()
@@ -1598,7 +1598,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id="cr-processor",
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
@@ -1744,6 +1744,91 @@ class TestHandlerNotifyTaskUpdate:
 
         call_args = mock_impl.call_args
         assert call_args.kwargs["emit_processing_status"] is False
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_processing_status_terminal_completed_projects_public_output(self):
+        private_text = "PRIVATE_SENTINEL_hub_terminal_text"
+        private_bytes = "PRIVATE_SENTINEL_hub_terminal_bytes"
+        private_metadata = "PRIVATE_SENTINEL_hub_terminal_metadata"
+        mock_impl = AsyncMock(return_value=True)
+        slot_lifecycle = MagicMock(terminate_slot=AsyncMock())
+        h = _make_handler(
+            slot_lifecycle=slot_lifecycle,
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="processing_status",
+            **_base_event(turn_id="turn-001"),
+            lifecycle_message_id="umsg-001",
+            state="completed",
+            text=private_text,
+            details=private_text,
+            artifacts=[
+                {
+                    "artifactId": "hub-artifact",
+                    "name": "response",
+                    "metadata": {"private": private_metadata},
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Visible hub output",
+                            "metadata": {"private": private_metadata},
+                        },
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": private_bytes,
+                                "mime_type": "text/plain",
+                                "name": "private.txt",
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            await h.handle(event)
+
+        persisted_kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert persisted_kwargs["message_text"] == "Visible hub output"
+        result = service.ingest_agent_result.await_args.args[0]
+        payloads = [
+            persisted_kwargs["artifacts"],
+            slot_lifecycle.terminate_slot.await_args.kwargs["artifacts"],
+            result.artifacts,
+            emitter.await_args.kwargs["details"],
+            mock_impl.await_args.kwargs,
+            event.model_dump() if hasattr(event, "model_dump") else event.__dict__,
+        ]
+        combined = json.dumps(payloads, sort_keys=True, default=str)
+        assert "Visible hub output" in combined
+        assert private_text not in combined
+        assert private_bytes not in combined
+        assert private_metadata not in combined
+        assert result.text == "Visible hub output"
+        assert result.error is None
+        slot_lifecycle.terminate_slot.assert_awaited_once()
         emitter.assert_awaited_once_with(
             room_id="room-001",
             status="completed",

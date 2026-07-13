@@ -160,7 +160,7 @@ def test_ingest_preserves_a2a_routing_metadata():
 
     assert updated.agent_outputs[0].a2a_task_id == "task-1"
     assert updated.agent_outputs[0].a2a_context_id == "context-1"
-    assert updated.agent_outputs[0].status_message == "Awaiting confirmation"
+    assert updated.agent_outputs[0].status_message is None
 
 
 def test_ingest_preserves_structured_interactive_metadata():
@@ -206,7 +206,29 @@ def test_reingesting_updates_a2a_routing_metadata():
 
     assert updated_twice.agent_outputs[0].a2a_task_id == "task-2"
     assert updated_twice.agent_outputs[0].a2a_context_id == "context-2"
-    assert updated_twice.agent_outputs[0].status_message == "Replayed"
+    assert updated_twice.agent_outputs[0].status_message is None
+
+
+def test_ingest_does_not_persist_remote_status_message_as_output_or_observation():
+    private_prompt = "PRIVATE_SENTINEL_result_ingestor_status_message"
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="awaiting_input",
+        text=None,
+        status_message=private_prompt,
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+        interactive_state="input-required",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+    serialized = json.dumps(updated.model_dump(mode="json"), sort_keys=True)
+
+    assert updated.agent_outputs[0].status_message is None
+    assert updated.open_failures[0].error_message == "Agent requested additional input."
+    assert "Agent requested additional input." in serialized
+    assert private_prompt not in serialized
 
 
 def test_reingesting_same_result_is_idempotent_for_outputs_and_artifacts():
@@ -1095,6 +1117,7 @@ def test_input_required_result_creates_recoverable_open_failure():
         "retry_after_resource_projection",
         "ask_user_if_missing",
     ]
+    assert updated.open_failures[0].error_message == "Agent requested additional input."
 
 
 def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failures():

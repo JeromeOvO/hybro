@@ -514,6 +514,32 @@ class TestWebhookTransportNormalize:
         assert event.kind == "response"
         assert event.text == "done"
 
+    def test_completed_task_without_artifacts_does_not_promote_status_message(self):
+        private_text = "PRIVATE_SENTINEL_webhook_completed_status"
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(
+                state=TaskState.completed,
+                message=Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=private_text))],
+                    message_id="remote-completed-status",
+                ),
+            ),
+            artifacts=None,
+        )
+
+        event = wt._task_to_event(task, msg)
+
+        assert event.kind == "response"
+        assert event.text == ""
+        assert event.parts is None
+        assert event.artifacts is None
+        assert private_text not in repr(event)
+
     def test_failed_task(self):
         wt = _make_webhook_transport()
         msg = _make_tracked_message()

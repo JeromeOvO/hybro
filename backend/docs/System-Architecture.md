@@ -784,6 +784,9 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
 10. Agent responses flow into `AgentResponseHandler`, which:
     - public-projects remote A2A task/event payloads before persistence,
       Delivery/SSE, lifecycle emission, or orchestration ingestion,
+    - treats Hub terminal `processing_status` close-out as a terminal agent
+      result only after the same state-aware projection used by response/error
+      events; raw details are not persisted, emitted, or ingested,
     - broadcasts nonterminal artifact updates without persisting them,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
@@ -988,6 +991,12 @@ task/context ids, group metadata, and clears any stale HITL answer. It does not
 copy HITL lifecycle status into agent message metadata; the durable HITL request
 document remains the source of truth for pending, responded, canceled, and
 expired states.
+
+Remote agent input prompts may be used only for the immediate local HITL request
+creation call. Orchestration run state keeps request identity, source, agent, A2A
+task/context ids, and generic input-required summaries; it does not duplicate raw
+remote prompts into `open_questions`, `AgentOutputRecord.status_message`,
+observations, blockers, failures, or interrupted trajectory shadows.
 
 The frontend treats `hitl_request` and `hitl_response` as durable lifecycle
 events keyed by `room_id`, `request_id`, and `message_id`. `client_request_id` is

@@ -371,7 +371,10 @@ class AgentResponseHandler:
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
-    async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
+    async def _project_completed_output(  # noqa: C901
+        self,
+        e: AgentEvent,
+    ) -> tuple[str | None, list[dict] | None]:
         had_structured_output = bool(e.parts or e.artifacts)
         # Convert inline base64 file parts to S3 URIs before public projection.
         if had_structured_output:
@@ -429,13 +432,19 @@ class AgentResponseHandler:
             [part for artifact in artifacts_for_db or [] for part in artifact.get("parts") or []]
         )
         e.text = display_text or ""
+        e.error_text = None
+        e.details = None
+        return display_text, display_artifacts
+
+    async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
+        display_text, display_artifacts = await self._project_completed_output(e)
 
         if not e.skip_persist:
             _, resolved_text = await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 "completed",
                 message_text=display_text,
-                artifacts=artifacts_for_db,
+                artifacts=display_artifacts,
             )
             if resolved_text:
                 display_text = resolved_text
@@ -644,68 +653,22 @@ class AgentResponseHandler:
 
         # Hub relay streaming path: when the hub suppresses `agent_response`
         # (content was already streamed via artifact_update), it only emits
-        # processing_status(completed/failed/canceled).  In that case neither
+        # processing_status(completed/failed/canceled). In that case neither
         # _on_response nor _on_error ever runs, so the DB task state is never
-        # closed and no task_update SSE is emitted — leaving the agent card
-        # spinner indefinitely.  Detect terminal statuses here and close them
-        # out exactly as _on_response/_on_error would.
-        # The idempotency check in notify_task_update (update_last_notified_state)
-        # prevents duplicate SSE on paths where agent_response was already sent.
-        terminal_result_status: str | None = None
-        if e.state:
-            state_value = str(getattr(e.state, "value", e.state))
-            if state_value in settings.terminal_processing_statuses:
-                terminal_result_status = state_value
-            try:
-                from common.a2a_constants import TERMINAL_STATES
-
-                _state_enum = coerce_task_state(e.state)
-                if _state_enum in TERMINAL_STATES:
-                    terminal_result_status = getattr(
-                        _state_enum,
-                        "value",
-                        str(_state_enum),
-                    )
-                    try:
-                        await self._task_writer.update_task_state_on_message(
-                            e.message_id, e.state
-                        )
-                    except Exception:
-                        logger.warning(
-                            "_on_processing_status: update_task_state_on_message "
-                            "failed for %s",
-                            e.message_id,
-                            exc_info=True,
-                        )
-                    await self.notify_task_update(
-                        message_id=e.message_id,
-                        state=_state_enum,
-                        room_id=e.room_id,
-                        user_id=e.user_id or "",
-                        emit_processing_status=False,
-                    )
-            except (ValueError, KeyError):
-                # e.state is not a valid TaskState value — skip
-                pass
-            except Exception:
-                logger.warning(
-                    "_on_processing_status: terminal close-out failed for %s",
-                    e.message_id,
-                    exc_info=True,
-                )
-
-        emit_details = e.details
+        # closed and no task_update SSE is emitted. Detect terminal statuses here
+        # and close them out using the same public projection as terminal
+        # response/error paths before any persistence, notification, lifecycle,
+        # or orchestration-ingestion side effects run.
+        terminal_result_status, terminal_task_state = (
+            self._processing_terminal_status(e)
+        )
+        emit_details = None
         if terminal_result_status is not None:
-            error = self._terminal_result_error(e, terminal_result_status)
-            await self._ingest_orchestration_result(
+            emit_details = await self._close_processing_status_terminal(
                 e,
-                status=terminal_result_status,
-                text=None if error else e.text or None,
-                artifacts=[] if error else e.artifacts or [],
-                error=error,
+                terminal_result_status=terminal_result_status,
+                terminal_task_state=terminal_task_state,
             )
-            if error:
-                emit_details = error
 
         await self._emit_processing_status(
             room_id=e.room_id,
@@ -715,6 +678,161 @@ class AgentResponseHandler:
             record_lifecycle=True,
             client_request_id=await self._resolve_client_request_id(e),
             details=emit_details,
+        )
+
+    def _processing_terminal_status(self, e: AgentEvent) -> tuple[str | None, Any]:
+        if not e.state:
+            return None, None
+
+        terminal_result_status: str | None = None
+        terminal_task_state = None
+        state_value = str(getattr(e.state, "value", e.state))
+        if state_value in settings.terminal_processing_statuses:
+            terminal_result_status = state_value
+        try:
+            from common.a2a_constants import TERMINAL_STATES
+
+            state_enum = coerce_task_state(e.state)
+            if state_enum in TERMINAL_STATES:
+                terminal_result_status = getattr(
+                    state_enum,
+                    "value",
+                    str(state_enum),
+                )
+                terminal_task_state = state_enum
+        except (ValueError, KeyError):
+            pass
+        except Exception:
+            logger.warning(
+                "_on_processing_status: terminal close-out failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
+        return terminal_result_status, terminal_task_state
+
+    async def _close_processing_status_terminal(
+        self,
+        e: AgentEvent,
+        *,
+        terminal_result_status: str,
+        terminal_task_state,
+    ) -> str | None:
+        error = self._terminal_result_error(e, terminal_result_status)
+        if error:
+            await self._close_processing_status_error(
+                e,
+                terminal_result_status=terminal_result_status,
+                terminal_task_state=terminal_task_state,
+                error=error,
+            )
+            return error
+
+        await self._close_processing_status_completed(
+            e,
+            terminal_result_status=terminal_result_status,
+            terminal_task_state=terminal_task_state,
+        )
+        return None
+
+    async def _persist_processing_status_terminal(
+        self,
+        e: AgentEvent,
+        *,
+        status: str,
+        message_text: str | None,
+        artifacts: list[dict] | None,
+    ) -> str | None:
+        if e.skip_persist:
+            return None
+        try:
+            _, resolved_text = await self._task_writer.update_task_state_on_message(
+                e.message_id,
+                status,
+                message_text=message_text,
+                artifacts=artifacts,
+            )
+            return resolved_text
+        except Exception:
+            logger.warning(
+                "_on_processing_status: update_task_state_on_message failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _close_processing_status_error(
+        self,
+        e: AgentEvent,
+        *,
+        terminal_result_status: str,
+        terminal_task_state,
+        error: str,
+    ) -> None:
+        e.text = ""
+        e.error_text = error
+        e.parts = None
+        e.artifacts = None
+        e.details = None
+        if terminal_task_state is not None:
+            await self._persist_processing_status_terminal(
+                e,
+                status=terminal_result_status,
+                message_text=error,
+                artifacts=None,
+            )
+            await self._notify_terminal_best_effort(
+                e,
+                terminal_task_state,
+                error=error,
+                emit_processing_status=False,
+            )
+        await self._terminate_slot(
+            e,
+            "canceled" if terminal_result_status == "canceled" else "failed",
+            content=None,
+            error=error,
+        )
+        await self._ingest_orchestration_result(
+            e,
+            status=terminal_result_status,
+            text=None,
+            artifacts=[],
+            error=error,
+        )
+
+    async def _close_processing_status_completed(
+        self,
+        e: AgentEvent,
+        *,
+        terminal_result_status: str,
+        terminal_task_state,
+    ) -> None:
+        display_text, display_artifacts = await self._project_completed_output(e)
+        if terminal_task_state is not None:
+            resolved_text = await self._persist_processing_status_terminal(
+                e,
+                status=terminal_result_status,
+                message_text=display_text,
+                artifacts=display_artifacts,
+            )
+            if resolved_text:
+                display_text = resolved_text
+            await self._notify_terminal_best_effort(
+                e,
+                terminal_task_state,
+                emit_processing_status=False,
+            )
+        await self._terminate_slot(
+            e,
+            "completed",
+            content=display_text,
+            artifacts=display_artifacts,
+        )
+        await self._ingest_orchestration_result(
+            e,
+            status=terminal_result_status,
+            text=display_text,
+            artifacts=display_artifacts or [],
         )
 
     # --- Helpers ---
@@ -816,9 +934,21 @@ class AgentResponseHandler:
         state: Any,
         *,
         error: str | None = None,
+        emit_processing_status: bool = True,
     ) -> None:
         try:
-            await self._notify(e, state, error=error)
+            if emit_processing_status:
+                await self._notify(e, state, error=error)
+            else:
+                await self.notify_task_update(
+                    message_id=e.message_id,
+                    state=state,
+                    room_id=e.room_id,
+                    user_id=e.user_id or "",
+                    error=error,
+                    parts=e.parts,
+                    emit_processing_status=False,
+                )
         except Exception:
             logger.warning(
                 "AgentResponseHandler: terminal task notification failed for %s",

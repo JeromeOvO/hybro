@@ -210,8 +210,6 @@ class WebhookTransport(AgentTransport):
                 if extracted.has_non_text
                 else None
             )
-        if not text and task.status and task.status.message:
-            text = extract_error_message(task) or None
 
         state_value = normalize_task_state_value(state) or str(state)
 
@@ -235,7 +233,7 @@ class WebhookTransport(AgentTransport):
             return AgentEvent(
                 kind="interactive",
                 **base,
-                text=text or "",
+                text=text or extract_error_message(task) or "",
                 state=state_value,
             )
 
