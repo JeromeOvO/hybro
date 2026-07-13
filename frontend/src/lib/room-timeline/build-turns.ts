@@ -30,6 +30,67 @@ import { getStripSourceResults } from './turn-live-shell'
 
 const SYSTEM_TURN_ID = 'system-turn'
 
+type MessageEntityWithPublicStatus = MessageEntity & { statusMessage?: unknown }
+
+function publicAgentStatusText(entity: MessageEntity): string {
+  const statusMessage = (entity as MessageEntityWithPublicStatus).statusMessage
+  const status = typeof statusMessage === 'string' ? statusMessage.trim() : ''
+  if (status.length > 0) return status
+  return entity.taskStatus === 'working' ? 'Working' : ''
+}
+
+function publicTaskContentLabel(entity: MessageEntity): string {
+  const label = typeof entity.taskContent === 'string' ? entity.taskContent.trim() : ''
+  if (label.length === 0) return ''
+  if (label.length > 200 || label.includes('\n')) return ''
+
+  const normalized = label.toLowerCase()
+  if (
+    normalized.includes('internal dispatch task')
+    || normalized.includes('hidden planner context')
+  ) {
+    return ''
+  }
+
+  return label
+}
+
+function publicAgentStatusMessage(
+  entity: MessageEntity,
+  status: AgentResultViewModel['status'],
+): string | null | undefined {
+  const statusText = publicAgentStatusText(entity)
+  if (statusText.length > 0 && statusText !== 'Working') return statusText
+
+  const taskStatusMessage = typeof entity.taskStatusMessage === 'string'
+    ? entity.taskStatusMessage.trim()
+    : ''
+  if (taskStatusMessage.length > 0) return taskStatusMessage
+
+  if (status === 'working') {
+    const taskLabel = publicTaskContentLabel(entity)
+    if (taskLabel.length > 0) return taskLabel
+    if (entity.content.trim().length === 0 && entity.taskStatus === 'working') return statusText
+  }
+
+  return entity.taskStatusMessage
+}
+
+function publicSupervisorStageDetails(entity: MessageEntity): string | undefined {
+  const statusText = publicAgentStatusText(entity)
+  if (statusText.length > 0 && statusText !== 'Working') return statusText
+
+  const taskStatusMessage = typeof entity.taskStatusMessage === 'string'
+    ? entity.taskStatusMessage.trim()
+    : ''
+  if (taskStatusMessage.length > 0) return taskStatusMessage
+
+  const taskLabel = publicTaskContentLabel(entity)
+  if (taskLabel.length > 0) return taskLabel
+
+  return statusText || undefined
+}
+
 // ── Core turn construction ─────────────────────────────────────
 
 /**
@@ -227,11 +288,13 @@ function assembleTurn(
   if (isSupervisorTurn) {
     for (let i = scaffold.agentMessageIds.length - 1; i >= 0; i--) {
       const e = entities[scaffold.agentMessageIds[i]]
-      if (e && (e.stepNumber != null || e.totalSteps != null || e.taskContent)) {
+      if (!e) continue
+      const details = publicSupervisorStageDetails(e)
+      if (e.stepNumber != null || e.totalSteps != null || details) {
         supervisorStage = {
           stepNumber: e.stepNumber,
           totalSteps: e.totalSteps,
-          details: e.taskContent,
+          details,
         }
         break
       }
@@ -278,33 +341,35 @@ function buildAgentResult(
 
   // Empty placeholder mapping
   if (entity.id.startsWith('empty-placeholder-')) {
+    const status: AgentResultViewModel['status'] = 'working'
     return {
       agentId: entity.agentId ?? entity.id,
       agentName: entity.senderName,
       agentSource: entity.agentSource,
       messageId: entity.id,
       clientRequestId: entity.clientRequestId,
-      status: 'working',
+      status,
       content: '',
       artifacts: [],
       isSummaryAgent: isSummarySystemAgent(entity.agentId),
-      taskStatusMessage: entity.taskContent,
+      taskStatusMessage: publicAgentStatusMessage(entity, status),
       isEphemeral: true,
     }
   }
 
   if (entity.isEphemeral) {
+    const status: AgentResultViewModel['status'] = 'working'
     return {
       agentId: entity.agentId ?? entity.id,
       agentName: entity.senderName,
       agentSource: entity.agentSource,
       messageId: entity.id,
       clientRequestId: entity.clientRequestId,
-      status: 'working',
+      status,
       content: '',
       artifacts: [],
       isSummaryAgent: isSummarySystemAgent(entity.agentId),
-      taskStatusMessage: entity.taskContent,
+      taskStatusMessage: publicAgentStatusMessage(entity, status),
       isEphemeral: true,
     }
   }
@@ -365,7 +430,7 @@ function buildAgentResult(
     status,
     content: entity.content,
     artifacts: entity.artifacts ?? [],
-    taskStatusMessage: entity.taskStatusMessage,
+    taskStatusMessage: publicAgentStatusMessage(entity, status),
     hitlHistory: hitlHistory.length > 0 ? hitlHistory : undefined,
     isSummaryAgent: isSummarySystemAgent(entity.agentId),
     summaryOrigin: entity.summaryOrigin,

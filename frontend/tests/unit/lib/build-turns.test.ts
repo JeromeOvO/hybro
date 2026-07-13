@@ -10,7 +10,9 @@ import type { RoomMessage } from '@/lib/types/response'
 
 let counter = 0
 
-function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
+type MessageEntityTestOverrides = Partial<MessageEntity> & { statusMessage?: string }
+
+function makeEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
   counter++
   return {
     id: `msg-${counter}`,
@@ -29,7 +31,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   }
 }
 
-function makeUserEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
+function makeUserEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
   return makeEntity({
     messageType: 'user',
     senderName: 'User',
@@ -38,7 +40,7 @@ function makeUserEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   })
 }
 
-function makeAgentEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
+function makeAgentEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
   return makeEntity({
     messageType: 'agent',
     senderName: 'Test Agent',
@@ -375,6 +377,31 @@ describe('buildTurns – core construction', () => {
 
 describe('buildTurns – V2 data model', () => {
   // ── Ephemeral placeholder handling ───────────────────────
+
+  it('does not render internal dispatch task content as agent reply detail', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      content: 'Get a quote',
+    })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      relatedMessageId: 'u1',
+      agentId: 'agent-1',
+      senderName: 'Insurer Agent',
+      content: '',
+      taskStatus: 'working' as any,
+      taskContent: 'INTERNAL DISPATCH TASK: include hidden planner context',
+      statusMessage: 'Requesting Insurer Agent',
+    })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+
+    const serialized = JSON.stringify(turns[0])
+    expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+    expect(serialized).toContain('Requesting Insurer Agent')
+  })
 
   it('suppresses ephemeral placeholder when real agent shares clientRequestId', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z', clientRequestId: 'cr-1' })
