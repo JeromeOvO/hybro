@@ -1,7 +1,8 @@
 """AgentResponseHandler — single source of truth for processing agent results.
 
 Terminal events delegate to ``notify_task_update`` for SSE emission.
-Streaming events (artifact_update) use ``delivery port`` directly.
+Nonterminal ``artifact_update`` events are dropped before persistence, S3
+conversion, mutation, or public delivery.
 """
 
 from __future__ import annotations
@@ -164,7 +165,7 @@ class AgentResponseHandler:
     """Single source of truth for processing agent results.
 
     Terminal events delegate to notify_task_update for SSE emission.
-    Streaming events (artifact_update) use delivery directly.
+    Nonterminal artifact updates are not a public completed-output path.
     """
 
     def __init__(
@@ -304,76 +305,14 @@ class AgentResponseHandler:
             case "processing_status":
                 await self._on_processing_status(event)
 
-    # --- Streaming events (direct SSE, no terminal DB persist) ---
+    # --- Nonterminal artifacts (private, no public side effects) ---
 
     async def _on_artifact(self, e: AgentEvent) -> None:
-        artifact = e.artifacts[0] if e.artifacts else None
-
-        # Convert inline bytes to S3 before broadcasting.
-        # Skip if the transport already performed conversion (s3_converted=True).
-        if artifact and not e.s3_converted:
-            artifact_parts = artifact.get("parts", [])
-            if artifact_parts:
-                try:
-                    from common.utils.a2a_helpers import convert_inline_bytes_to_s3
-
-                    await convert_inline_bytes_to_s3(
-                        artifact_parts,
-                        e.room_id,
-                        e.message_id,
-                    )
-                except Exception:
-                    logger.warning(
-                        "S3 conversion failed for artifact on message %s; "
-                        "dropping unaddressable file bytes before broadcast",
-                        e.message_id,
-                        exc_info=True,
-                    )
-
-        if artifact:
-            sanitized_artifacts = _sanitize_public_artifacts(
-                [artifact],
-                keep_empty_artifacts=True,
-            )
-            artifact = sanitized_artifacts[0] if sanitized_artifacts else None
-            e.artifacts = sanitized_artifacts
-            e.parts = filter_non_text_parts(artifact.get("parts") if artifact else None)
-
-        # SSE emission: artifact_update for real artifacts or synthetic text-only fallback
-        sse_kw: dict = {}
-        if e.client_request_id:
-            sse_kw["client_request_id"] = e.client_request_id
-
-        if artifact:
-            logger.debug(
-                "Sending artifact_update SSE for message %s (append=%s, last_chunk=%s)",
-                e.message_id,
-                e.append,
-                e.last_chunk,
-            )
-            await self._delivery.send_artifact_update(
-                room_id=e.room_id,
-                message_id=e.message_id,
-                agent_id=e.agent_id,
-                artifact=artifact,
-                append=e.append,
-                last_chunk=e.last_chunk,
-                **sse_kw,
-            )
-        elif e.text:
-            fallback_artifact = {
-                "artifact_id": f"{e.message_id}-stream",
-                "parts": [{"kind": "text", "text": e.text}],
-            }
-            await self._delivery.send_artifact_update(
-                room_id=e.room_id,
-                message_id=e.message_id,
-                agent_id=e.agent_id,
-                artifact=fallback_artifact,
-                append=e.append,
-                last_chunk=e.last_chunk,
-                **sse_kw,
-            )
+        """Drop nonterminal artifact updates at the public boundary."""
+        logger.debug(
+            "Dropping nonterminal artifact_update for message %s",
+            e.message_id,
+        )
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
@@ -688,14 +627,10 @@ class AgentResponseHandler:
             )
             return
 
-        # Hub relay streaming path: when the hub suppresses `agent_response`
-        # (content was already streamed via artifact_update), it only emits
-        # processing_status(completed/failed/canceled). In that case neither
-        # _on_response nor _on_error ever runs, so the DB task state is never
-        # closed and no task_update SSE is emitted. Detect terminal statuses here
-        # and close them out using the same public projection as terminal
-        # response/error paths before any persistence, notification, lifecycle,
-        # or orchestration-ingestion side effects run.
+        # Status-only terminal callbacks can arrive without a response/error event.
+        # In that case neither _on_response nor _on_error ever runs, so close the
+        # task before any persistence, notification, lifecycle, or orchestration
+        # ingestion side effects run.
         terminal_result_status, terminal_task_state = (
             self._processing_terminal_status(e)
         )

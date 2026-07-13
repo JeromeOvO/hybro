@@ -2,12 +2,13 @@
 Integration tests for AgentResponseHandler — parity verification.
 
 Tests that feeding the same AgentEvent sequences through the handler
-produces identical DB writes and SSE emissions for each event kind,
+produces the expected persistence and public delivery effects for each event kind,
 and that flow-control flags (skip_persist) work.
 """
 
 import ast
 import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -147,146 +148,60 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
 
 class TestArtifactUpdateEvent:
     @pytest.mark.asyncio
-    async def test_broadcasts_sse_without_midstream_persist(self):
+    async def test_hub_artifact_update_drops_private_payload_without_public_side_effects_or_mutation(
+        self,
+    ):
+        """Nonterminal artifacts never cross the public response boundary."""
+        private_text = "PRIVATE_SENTINEL_stream_text"
+        private_bytes = "PRIVATE_SENTINEL_stream_file_bytes"
+        private_metadata = "PRIVATE_SENTINEL_stream_metadata"
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
         h = _make_handler()
+        parts = [
+            {
+                "kind": "file",
+                "file": {
+                    "bytes": private_bytes,
+                    "mime_type": "text/plain",
+                    "name": "private.txt",
+                },
+                "metadata": {"private": private_metadata},
+            }
+        ]
+        artifact = {
+            "artifactId": "a-private",
+            "name": "partial",
+            "metadata": {"private": private_metadata},
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": private_text,
+                    "metadata": {"private": private_metadata},
+                },
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": private_bytes,
+                        "mime_type": "text/plain",
+                        "name": "private.txt",
+                    },
+                    "metadata": {"private": private_metadata},
+                },
+            ],
+        }
+        original_parts = deepcopy(parts)
+        original_artifacts = deepcopy([artifact])
         event = AgentEvent(
             kind="artifact_update",
             **_base_event(),
-            text="chunk",
-            artifacts=[{"id": "a1"}],
-        )
-        await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_artifact_update.await_args.kwargs
-        assert call_kwargs["artifact"]["id"] == "a1"
-        assert call_kwargs["append"] is False
-        assert call_kwargs["last_chunk"] is False
-
-    @pytest.mark.asyncio
-    async def test_skip_persist_still_broadcasts(self):
-        h = _make_handler()
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            text="chunk",
-            artifacts=[{"id": "a1"}],
-            skip_persist=True,
-        )
-        await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_append_flag_passed(self):
-        h = _make_handler()
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            text="chunk",
-            artifacts=[{"id": "a1"}],
-            append=True,
-        )
-        await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
-        assert call_kwargs["append"] is True
-
-    @pytest.mark.asyncio
-    async def test_last_chunk_flag_passed(self):
-        h = _make_handler()
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            artifacts=[{"id": "a1"}],
+            text=private_text,
+            parts=parts,
+            artifacts=[artifact],
             append=True,
             last_chunk=True,
-        )
-        await h.handle(event)
-        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
-        assert call_kwargs["last_chunk"] is True
-
-    @pytest.mark.asyncio
-    async def test_no_artifacts_sends_artifact_update_for_text(self):
-        """Text-only artifact_update (no artifact object) wraps text as artifact."""
-        h = _make_handler()
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            text="chunk",
-            artifacts=None,
-            append=True,
-            last_chunk=False,
-        )
-        await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
-        assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
-        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
-
-    @pytest.mark.asyncio
-    async def test_no_artifacts_no_text_sends_nothing(self):
-        h = _make_handler()
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            text="",
-            artifacts=None,
-        )
-        await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_artifact_with_file_parts_broadcasts(self):
-        """Artifact with file parts is broadcast via send_artifact_update."""
-        h = _make_handler()
-        artifact = {
-            "artifactId": "a1",
-            "parts": [
-                {
-                    "kind": "file",
-                    "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"},
-                }
-            ],
-        }
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            artifacts=[artifact],
-        )
-
-        with pytest.MonkeyPatch.context() as mp:
-            # Patch S3 conversion to avoid actual S3 calls
-            mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
-                AsyncMock(return_value=1),
-            )
-            await h.handle(event)
-
-        h._delivery.send_artifact_update.assert_awaited_once()
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_s3_converted_flag_skips_conversion(self):
-        """When s3_converted=True, handler skips S3 conversion."""
-        h = _make_handler()
-        artifact = {
-            "artifactId": "a1",
-            "parts": [
-                {
-                    "kind": "file",
-                    "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"},
-                }
-            ],
-        }
-        event = AgentEvent(
-            kind="artifact_update",
-            **_base_event(),
-            artifacts=[artifact],
-            s3_converted=True,
+            client_request_id="client-private",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -297,14 +212,38 @@ class TestArtifactUpdateEvent:
             )
             await h.handle(event)
 
-        # S3 conversion should NOT be called (already done by transport)
         mock_convert.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
+        h._task_writer.update_task_state_on_message.assert_not_awaited()
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_not_awaited()
+        h._delivery.send_agent_response.assert_not_awaited()
+        h._delivery.send_task_update.assert_not_awaited()
+        h._rmc.resume_queue_from_continuation.assert_not_awaited()
+        service.ingest_agent_result.assert_not_awaited()
+        assert event.text == private_text
+        assert event.parts == original_parts
+        assert event.artifacts == original_artifacts
+        assert event.append is True
+        assert event.last_chunk is True
 
     @pytest.mark.asyncio
-    async def test_s3_conversion_failure_does_not_block_sse(self):
-        """S3 conversion failure should not prevent sanitized SSE broadcast."""
+    async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update",
+            **_base_event(),
+            text="chunk",
+            artifacts=None,
+            append=True,
+            last_chunk=True,
+        )
+        await h.handle(event)
+        h._task_writer.update_task_state_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_file_artifact_update_is_dropped_without_s3_conversion(self):
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
@@ -329,48 +268,9 @@ class TestArtifactUpdateEvent:
             )
             await h.handle(event)
 
-        # SSE should still be sent despite S3 failure
-        h._delivery.send_artifact_update.assert_awaited_once()
+        mock_convert.assert_not_awaited()
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_streaming_artifact_update_never_persists_and_drops_unconverted_bytes(self):
-        """Remote mid-stream artifacts are SSE-only and never persist raw inline bytes."""
-        private_bytes = "PRIVATE_SENTINEL_stream_file_bytes"
-        private_metadata = "PRIVATE_SENTINEL_stream_metadata"
-        h = _make_handler()
-        artifact = {
-            "artifactId": "a-private",
-            "name": "partial",
-            "metadata": {"private": private_metadata},
-            "parts": [
-                {
-                    "kind": "file",
-                    "file": {
-                        "bytes": private_bytes,
-                        "mime_type": "text/plain",
-                        "name": "private.txt",
-                    },
-                    "metadata": {"private": private_metadata},
-                }
-            ],
-        }
-        event = AgentEvent(kind="artifact_update", **_base_event(), artifacts=[artifact])
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
-                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
-            )
-            await h.handle(event)
-
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
-        h._delivery.send_artifact_update.assert_awaited_once()
-        delivered = h._delivery.send_artifact_update.await_args.kwargs["artifact"]
-        delivered_json = json.dumps(delivered, sort_keys=True)
-        assert private_bytes not in delivered_json
-        assert private_metadata not in delivered_json
-        assert delivered.get("parts") in ([], None)
+        h._delivery.send_artifact_update.assert_not_awaited()
 
 
 # =============================================================================
@@ -1704,10 +1604,10 @@ class TestResumeOrchestrationErrorHandling:
 
 
 class TestArtifactTextFallback:
-    """_on_artifact with text-only (no artifact) wraps text as artifact_update."""
+    """Text-only artifact_update is nonterminal and stays private."""
 
     @pytest.mark.asyncio
-    async def test_text_only_uses_artifact_update(self):
+    async def test_text_only_artifact_update_is_dropped(self):
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update",
@@ -1718,12 +1618,11 @@ class TestArtifactTextFallback:
             last_chunk=False,
         )
         await h.handle(event)
-        h._delivery.send_artifact_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
-        assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
-        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
-        assert call_kwargs["append"] is True
-        assert call_kwargs["last_chunk"] is False
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_not_awaited()
+        assert event.text == "chunk"
+        assert event.append is True
+        assert event.last_chunk is False
 
 
 class TestStatusUpdateSendsTaskUpdate:
