@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import re
 import uuid
 from dataclasses import dataclass
@@ -3960,6 +3961,68 @@ class RoomServices:
             message_list=messages, success=True, error=None, status_code=200
         )
 
+    async def _trusted_hitl_projection(
+        self,
+        agent_message: RoomAgentMessage,
+        task: Task,
+    ) -> tuple[dict[str, object] | None, str | None]:
+        metadata = task.metadata
+        request_id = (
+            metadata.get("hitl_request_id") if isinstance(metadata, dict) else None
+        )
+        if not isinstance(request_id, str) or not request_id:
+            return None, None
+
+        getter = getattr(getattr(self, "_store", None), "get_hitl_request", None)
+        if not callable(getter):
+            return None, None
+        try:
+            request = getter(request_id)
+            if inspect.isawaitable(request):
+                request = await request
+        except Exception:
+            logger.warning(
+                "Failed to verify HITL metadata for agent message %s",
+                agent_message.message_id,
+                exc_info=True,
+            )
+            return None, None
+
+        if not isinstance(request, dict):
+            return None, None
+        if (
+            request.get("request_id") != request_id
+            or request.get("room_id") != agent_message.room_id
+            or request.get("source") != "agent"
+        ):
+            return None, None
+        projected_message_id = request.get("display_message_id") or request.get(
+            "continuation_message_id"
+        )
+        if projected_message_id != agent_message.message_id:
+            return None, None
+
+        trusted: dict[str, object] = {
+            "hitl_request_id": request_id,
+            "hitl_prompt": request.get("prompt"),
+            "hitl_prompt_type": getattr(
+                request.get("prompt_type"), "value", request.get("prompt_type")
+            ),
+            "hitl_choices": request.get("choices"),
+        }
+        optional_fields = {
+            "hitl_a2a_task_id": request.get("a2a_task_id"),
+            "hitl_a2a_context_id": request.get("a2a_context_id"),
+            "hitl_group_id": request.get("group_id"),
+            "hitl_group_total": request.get("group_total"),
+            "hitl_group_index": request.get("group_index"),
+            "user_answer": request.get("user_input"),
+        }
+        trusted.update(
+            {key: value for key, value in optional_fields.items() if value is not None}
+        )
+        return trusted, request_id
+
     async def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest
     ) -> RoomCenterRoomMessageResponse:
@@ -4017,11 +4080,19 @@ class RoomServices:
                         if agent_msg.message_content
                         else None
                     )
-                    public_task = (
-                        Task.model_validate(public_persisted_task_data(stored_task))
-                        if stored_task is not None
-                        else None
-                    )
+                    trusted_hitl_metadata = None
+                    trusted_hitl_request_id = None
+                    if stored_task is not None:
+                        (
+                            trusted_hitl_metadata,
+                            trusted_hitl_request_id,
+                        ) = await self._trusted_hitl_projection(agent_msg, stored_task)
+                        public_task_data = public_persisted_task_data(stored_task)
+                        if trusted_hitl_metadata is not None:
+                            public_task_data["metadata"] = trusted_hitl_metadata
+                        public_task = Task.model_validate(public_task_data)
+                    else:
+                        public_task = None
                     agent_content = (
                         get_text_from_message(get_message_from_task(public_task))
                         if public_task is not None
@@ -4031,6 +4102,9 @@ class RoomServices:
                         agent_msg.extend_info,
                         agent_msg.agent_id or "agent",
                     )
+                    public_extend_info = {"public_task_label": public_task_label}
+                    if trusted_hitl_request_id is not None:
+                        public_extend_info["hitl_request_id"] = trusted_hitl_request_id
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
@@ -4048,7 +4122,7 @@ class RoomServices:
                         total_steps=agent_msg.total_steps,
                         task_updated_at=agent_msg.task_updated_at,
                         task_content=public_task_label,
-                        extend_info={"public_task_label": public_task_label},
+                        extend_info=public_extend_info,
                     )
                     combined_messages.append(room_message)
 

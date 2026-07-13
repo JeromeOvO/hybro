@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,11 +32,22 @@ from api.room_center import (
     verify_room_ownership,
 )
 from common.dto import ExecutionAck
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
 from models.room import MessageContent, RoomAgentMessage
+from room.compat.runtime import RoomServices
 from room.route_adapter import RoomRouteAdapter as RoomCenter
 
 # =============================================================================
@@ -870,45 +882,145 @@ class TestInquiryRoomMessages:
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
+        private_sentinel = "PRIVATE_SENTINEL_actual_room_runtime_boundary"
         public_label = "Requesting Insurer"
         client_request_id = "cr-insurer-001"
         patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
             sample_room
         )
-        patch_room_center_deps[
-            "room_center"
-        ].inquiry_room_messages_by_room_id.return_value = RoomCenterRoomMessageResponse(
-            success=True,
-            message_list=[
-                RoomAgentMessage(
-                    room_id=sample_room.room_id,
-                    message_id="agent-msg-insurer-001",
-                    agent_id="insurer-agent",
-                    related_message_id=sample_user_message.message_id,
-                    client_request_id=client_request_id,
-                    message_content=MessageContent(message_text=public_label),
-                    extend_info={"public_task_label": public_label},
-                )
-            ],
+        final_artifact = Artifact(
+            artifact_id="artifact-final",
+            name="response",
+            parts=[Part(root=TextPart(text="Public final result"))],
         )
+        remote_task = Task(
+            id="remote-task",
+            status=TaskStatus(
+                state=TaskState.completed,
+                message=Message(
+                    message_id="private-status",
+                    role=MessageRole.USER,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+            ),
+            history=[
+                Message(
+                    message_id="private-history",
+                    role=MessageRole.USER,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+                Message(
+                    message_id="public-history",
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text="Public final result"))],
+                ),
+            ],
+            artifacts=[final_artifact],
+            metadata={
+                "hitl_request_id": private_sentinel,
+                "prompt": private_sentinel,
+                "hitl_prompt": private_sentinel,
+                "choices": [private_sentinel],
+                "hitl_choices": [private_sentinel],
+            },
+        )
+        local_task = Task(
+            id="local-hitl-task",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[final_artifact],
+            metadata={
+                "hitl_request_id": "local-hitl-request",
+                "hitl_prompt": "Choose the approved option",
+                "hitl_prompt_type": "choice",
+                "hitl_choices": ["Approve", "Reject"],
+                "user_answer": "Approve",
+            },
+        )
+        remote_message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="agent-msg-remote-spoof",
+            agent_id="insurer-agent",
+            related_message_id=sample_user_message.message_id,
+            message_content=MessageContent(
+                message_text=private_sentinel,
+                message_task=remote_task,
+            ),
+            task_content=private_sentinel,
+        )
+        local_message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="agent-msg-insurer-001",
+            agent_id="insurer-agent",
+            related_message_id=sample_user_message.message_id,
+            client_request_id=client_request_id,
+            message_content=MessageContent(message_task=local_task),
+            extend_info={"public_task_label": public_label},
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[])
+        facade.get_agent_messages_for_room = AsyncMock(
+            return_value=[remote_message, local_message]
+        )
+        runtime = RoomServices()
+        runtime.bind_facade(facade)
+        runtime.bind_object_storage(
+            SimpleNamespace(get_presigned_url=AsyncMock(return_value="unused"))
+        )
+        runtime.bind_store(
+            SimpleNamespace(
+                get_hitl_request=AsyncMock(
+                    side_effect=lambda request_id: (
+                        {
+                            "request_id": "local-hitl-request",
+                            "room_id": sample_room.room_id,
+                            "source": "agent",
+                            "display_message_id": local_message.message_id,
+                            "continuation_message_id": local_message.message_id,
+                            "prompt": "Choose the approved option",
+                            "prompt_type": "choice",
+                            "choices": ["Approve", "Reject"],
+                            "a2a_task_id": "local-hitl-task",
+                            "a2a_context_id": "local-hitl-context",
+                            "status": "responded",
+                            "user_input": "Approve",
+                        }
+                        if request_id == "local-hitl-request"
+                        else None
+                    )
+                )
+            )
+        )
+        center = RoomCenter(room_services=runtime)
 
         response = await inquiry_room_messages(
             mock_request,
             mock_user,
             store=patch_room_center_deps["db_service"],
-            center=patch_room_center_deps["room_center"],
+            center=center,
         )
 
         assert response.success is True
         assert response.message_list is not None
-        assert response.message_list[0].message_content.message_text == public_label
-        assert response.message_list[0].client_request_id == client_request_id
-        assert response.message_list[0].extend_info == {
-            "public_task_label": public_label
+        by_id = {message.message_id: message for message in response.message_list}
+        remote_public = by_id[remote_message.message_id]
+        local_public = by_id[local_message.message_id]
+        assert remote_public.message_content.message_text == "Public final result"
+        assert remote_public.message_content.message_task.metadata is None
+        assert local_public.client_request_id == client_request_id
+        assert local_public.message_content.message_task.metadata == {
+            "hitl_request_id": "local-hitl-request",
+            "hitl_prompt": "Choose the approved option",
+            "hitl_prompt_type": "choice",
+            "hitl_choices": ["Approve", "Reject"],
+            "hitl_a2a_task_id": "local-hitl-task",
+            "hitl_a2a_context_id": "local-hitl-context",
+            "user_answer": "Approve",
         }
-        assert "INTERNAL DISPATCH TASK" not in json.dumps(
-            response.model_dump(mode="json")
-        )
+        assert local_public.extend_info == {
+            "public_task_label": public_label,
+            "hitl_request_id": "local-hitl-request",
+        }
+        assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
 
 
 class TestSendMessage:

@@ -110,10 +110,6 @@ export async function convertApiMessageToIncoming(
 
   // ── Extract persisted HITL user answer ───────────────────
   let hitlUserAnswer: string | undefined
-  const maybeUserAnswer = messageTask?.metadata?.user_answer
-  if (typeof maybeUserAnswer === 'string') {
-    hitlUserAnswer = maybeUserAnswer
-  }
 
   // ── Extract persisted HITL request metadata ─────────────
   let hitlRequestId: string | undefined
@@ -126,11 +122,19 @@ export async function convertApiMessageToIncoming(
   let hitlGroupTotal: number | undefined
   let hitlGroupIndex: number | undefined
   const meta = messageTask?.metadata
+  const trustedHitlRequestId = extendInfo?.hitl_request_id
+  const hasTrustedHitlMetadata = typeof trustedHitlRequestId === 'string'
+    && trustedHitlRequestId.length > 0
+    && meta?.hitl_request_id === trustedHitlRequestId
   if (meta) {
+    const maybeUserAnswer = meta.user_answer
+    if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
     if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
     if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
     if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
+  }
 
+  if (meta && hasTrustedHitlMetadata) {
     const rid = meta.hitl_request_id ?? meta.request_id
     if (typeof rid === 'string') hitlRequestId = rid
     const hp = meta.hitl_prompt ?? meta.prompt

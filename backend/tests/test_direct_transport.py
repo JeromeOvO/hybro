@@ -326,6 +326,134 @@ async def test_emit_terminal_uses_public_task_output_not_legacy_message_text():
 
 
 @pytest.mark.asyncio
+async def test_streaming_exception_uses_generic_public_failure_everywhere():
+    private_sentinel = "PRIVATE_SENTINEL_streaming_exception_dispatch_task"
+    message = _make_room_agent_message()
+    response_handler = MagicMock(handle=AsyncMock())
+    tsm = MagicMock(transition_task=AsyncMock())
+    delivery = MagicMock(send_error=AsyncMock())
+    capability_issues = MagicMock(record_issue=AsyncMock())
+    transport = _make_processor(
+        response_handler=response_handler,
+        tsm=tsm,
+        delivery=delivery,
+    )
+    transport.capability_issue_service = capability_issues
+    transport.a2a_transport.has_streaming_capability.return_value = True
+    transport.handle_streaming_response = AsyncMock(
+        side_effect=RuntimeError(private_sentinel)
+    )
+    agent = MagicMock()
+    agent.agent_card.name = "Claims Agent"
+    ctx = DispatchContext(
+        agent=agent,
+        room_agent_message=message,
+        room_id=message.room_id,
+        user_message_id=message.related_message_id,
+        prepared_message=MagicMock(),
+    )
+
+    result = await transport.dispatch(ctx, message)
+
+    transition = tsm.transition_task.await_args
+    assert transition.args[1] == CommonTaskState.FAILED
+    assert transition.kwargs["error"] == "Agent processing failed"
+    emitted_event = response_handler.handle.await_args.args[0]
+    assert emitted_event.error_text == "Agent processing failed"
+    delivery.send_error.assert_awaited_once_with(
+        message.room_id,
+        "Agent processing failed",
+        message_id=message.message_id,
+    )
+    assert result.status == ProcessingStatus.FAILED
+    assert result.response_text == "Agent processing failed"
+    assert result.status_message == "agent_execution_failed"
+    capability_issues.record_issue.assert_awaited_once()
+    assert private_sentinel in capability_issues.record_issue.await_args.kwargs[
+        "error_message"
+    ]
+    public_payload = json.dumps(
+        {
+            "transition": transition.kwargs,
+            "event": emitted_event.__dict__,
+            "delivery": delivery.send_error.await_args.kwargs,
+            "result": result.__dict__,
+        },
+        default=str,
+    )
+    assert private_sentinel not in public_payload
+
+
+@pytest.mark.asyncio
+async def test_sync_exception_uses_generic_public_failure_everywhere():
+    private_sentinel = "PRIVATE_SENTINEL_sync_exception_dispatch_task"
+    message = _make_room_agent_message()
+    response_handler = MagicMock(handle=AsyncMock())
+    tsm = MagicMock(transition_task=AsyncMock())
+    delivery = MagicMock(send_error=AsyncMock())
+    capability_issues = MagicMock(record_issue=AsyncMock())
+    transport = _make_processor(
+        response_handler=response_handler,
+        tsm=tsm,
+        delivery=delivery,
+    )
+    transport.capability_issue_service = capability_issues
+    transport.a2a_transport.has_streaming_capability.return_value = False
+    transport.a2a_transport.send_message_to_tracked_agent = AsyncMock(
+        side_effect=RuntimeError(private_sentinel)
+    )
+    agent = MagicMock()
+    agent.agent_card.name = "Claims Agent"
+    processing_ctx = ProcessingContext(
+        room_id=message.room_id,
+        current_message=message,
+        agent_card=agent.agent_card,
+        user_message_id=message.related_message_id,
+        task_info={"webhook_token": "token", "context_id": "context"},
+    )
+    transport._setup_tracking_context = AsyncMock(
+        return_value=(processing_ctx.task_info, processing_ctx)
+    )
+    ctx = DispatchContext(
+        agent=agent,
+        room_agent_message=message,
+        room_id=message.room_id,
+        user_message_id=message.related_message_id,
+        prepared_message=MagicMock(),
+    )
+
+    result = await transport.dispatch(ctx, message)
+
+    transition = tsm.transition_task.await_args
+    assert transition.args[1] == CommonTaskState.FAILED
+    assert transition.kwargs["error"] == "Agent processing failed"
+    emitted_event = response_handler.handle.await_args.args[0]
+    assert emitted_event.error_text == "Agent processing failed"
+    delivery.send_error.assert_awaited_once_with(
+        message.room_id,
+        "Agent processing failed",
+        message_id=message.message_id,
+    )
+    assert result.status == ProcessingStatus.FAILED
+    assert result.response_text == "Agent processing failed"
+    assert result.status_message == "agent_execution_failed"
+    capability_issues.record_issue.assert_awaited_once()
+    assert capability_issues.record_issue.await_args.kwargs["error_message"] == (
+        private_sentinel
+    )
+    public_payload = json.dumps(
+        {
+            "transition": transition.kwargs,
+            "event": emitted_event.__dict__,
+            "delivery": delivery.send_error.await_args.kwargs,
+            "result": result.__dict__,
+        },
+        default=str,
+    )
+    assert private_sentinel not in public_payload
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("extend_info", "message_text", "expected_public_label"),
     [
@@ -1135,6 +1263,7 @@ class TestProcessSyncResponseRespectsStatus:
     async def test_failed_status_uses_failed_state(self):
         """Response with status=failed should transition to TaskState.failed,
         not TaskState.completed."""
+        private_sentinel = "PRIVATE_SENTINEL_normalized_sync_error"
         proc = _make_processor()
         proc.tsm.transition_task = AsyncMock()
         proc.response_handler.handle = AsyncMock()
@@ -1149,7 +1278,7 @@ class TestProcessSyncResponseRespectsStatus:
             "type": "message",
             "content": None,
             "status": "failed",
-            "error": "Apify actor timed out",
+            "error": private_sentinel,
             "persisted": True,
         }
 
@@ -1171,10 +1300,11 @@ class TestProcessSyncResponseRespectsStatus:
         # _emit_terminal should receive state=failed and error text
         handle_call = proc.response_handler.handle.call_args[0][0]
         assert handle_call.kind == "error"
-        assert handle_call.error_text == "Apify actor timed out"
+        assert handle_call.error_text == "Agent processing failed"
 
-        # Return text should be the error message
-        assert text == "Apify actor timed out"
+        # Public results must not echo the remote error payload.
+        assert text == "Agent processing failed"
+        assert private_sentinel not in json.dumps(handle_call.__dict__)
 
         # Failed dispatch must return success=False
         assert success is False

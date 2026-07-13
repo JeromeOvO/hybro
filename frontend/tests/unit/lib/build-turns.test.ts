@@ -1384,7 +1384,14 @@ describe('primaryStreamMessageId', () => {
         message_text: privateSentinel,
         message_task: {
           status: { state: 'working' },
-          metadata: { task_content: privateSentinel },
+          metadata: {
+            task_content: privateSentinel,
+            hitl_request_id: privateSentinel,
+            hitl_prompt: privateSentinel,
+            prompt: privateSentinel,
+            hitl_choices: [privateSentinel],
+            choices: [privateSentinel],
+          },
         } as RoomMessage['message_content']['message_task'],
       },
     } as RoomMessage, {

@@ -26,12 +26,8 @@ RecordCall = Callable[[str | None], Awaitable[None]]
 SendMessageCall = Callable[..., Awaitable[dict[str, Any]]]
 SendHitlReplyCall = Callable[..., Awaitable[dict[str, Any]]]
 
-_PUBLIC_TASK_METADATA_KEYS = frozenset(
+_TRUSTED_LOCAL_HITL_METADATA_KEYS = frozenset(
     {
-        "agent_id",
-        "preflight_failure_code",
-        "requires_policy",
-        "policy_required",
         "hitl_request_id",
         "hitl_prompt",
         "hitl_prompt_type",
@@ -42,11 +38,6 @@ _PUBLIC_TASK_METADATA_KEYS = frozenset(
         "hitl_group_total",
         "hitl_group_index",
         "user_answer",
-        # Legacy aliases still consumed by the frontend HITL projection.
-        "request_id",
-        "prompt",
-        "prompt_type",
-        "choices",
     }
 )
 
@@ -288,9 +279,18 @@ class A2ATaskTrackingService:
         response_text = _extract_reply_response_text(task_result)
 
         if task_obj:
+            existing_task = (
+                msg.message_content.message_task if msg.message_content else None
+            )
+            trusted_local_hitl_metadata = (
+                existing_task.metadata if existing_task is not None else None
+            )
             await self._tracking_store.update_task_on_message(
                 message_id,
-                public_persisted_task_data(task_obj),
+                public_persisted_task_data(
+                    task_obj,
+                    trusted_local_hitl_metadata=trusted_local_hitl_metadata,
+                ),
                 message_text=response_text,
             )
 
@@ -582,7 +582,11 @@ def _extract_reply_response_text(task_result) -> str | None:
     return None
 
 
-def public_persisted_task_data(task: Task) -> dict[str, Any]:
+def public_persisted_task_data(
+    task: Task,
+    *,
+    trusted_local_hitl_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     task_data = task.model_dump(mode="json")
     history = task_data.get("history")
     if isinstance(history, list):
@@ -597,15 +601,21 @@ def public_persisted_task_data(task: Task) -> dict[str, Any]:
 
     status = task_data.get("status")
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
-        status["message"] = {**status["message"], "metadata": None}
+        status_message = status["message"]
+        if status_message.get("role") != Role.AGENT.value:
+            status["message"] = None
+        else:
+            status["message"] = {**status_message, "metadata": None}
 
-    metadata = task_data.get("metadata")
-    if isinstance(metadata, dict):
-        task_data["metadata"] = {
+    if isinstance(trusted_local_hitl_metadata, dict):
+        trusted_metadata = {
             key: value
-            for key, value in metadata.items()
-            if key in _PUBLIC_TASK_METADATA_KEYS
+            for key, value in trusted_local_hitl_metadata.items()
+            if key in _TRUSTED_LOCAL_HITL_METADATA_KEYS
         }
+        task_data["metadata"] = trusted_metadata or None
+    else:
+        task_data["metadata"] = None
     return task_data
 
 

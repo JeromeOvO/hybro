@@ -60,6 +60,9 @@ from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
+_PUBLIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
+_PUBLIC_AGENT_FAILURE_CODE = "agent_execution_failed"
+
 
 if TYPE_CHECKING:
     from execution.ports import (
@@ -256,6 +259,7 @@ class DirectTransport(AgentTransport):
                     total_steps=total_steps,
                 )
             except Exception as exc:
+                internal_error = f"Agent streaming failed: {exc}"
                 logger.error(
                     "DirectTransport.dispatch: Unhandled exception in streaming for message %s: %s",
                     message.message_id,
@@ -264,7 +268,7 @@ class DirectTransport(AgentTransport):
                 )
                 await self.tsm.transition_task(
                     message, CommonTaskState.FAILED,
-                    error=f"Agent streaming failed: {exc}",
+                    error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                     persist=True,
                 )
                 fallback_ctx = ProcessingContext(
@@ -275,7 +279,12 @@ class DirectTransport(AgentTransport):
                 )
                 await self._emit_terminal(
                     fallback_ctx, CommonTaskState.FAILED,
-                    error=f"Agent streaming failed: {exc}",
+                    error=_PUBLIC_AGENT_FAILURE_MESSAGE,
+                )
+                await self.delivery.send_error(
+                    room_id,
+                    _PUBLIC_AGENT_FAILURE_MESSAGE,
+                    message_id=message.message_id,
                 )
 
                 # Record capability issue for the agent
@@ -283,7 +292,7 @@ class DirectTransport(AgentTransport):
                     try:
                         await self.capability_issue_service.record_issue(
                             agent_id=message.agent_id,
-                            error_message=f"Agent streaming failed: {exc}",
+                            error_message=internal_error,
                             query_text=(
                                 message.task_content
                                 or (message.message_content.message_text or "")
@@ -297,8 +306,18 @@ class DirectTransport(AgentTransport):
                             rec_exc,
                         )
 
-                return ProcessingResult(ProcessingStatus.FAILED, "")
+                return ProcessingResult(
+                    ProcessingStatus.FAILED,
+                    _PUBLIC_AGENT_FAILURE_MESSAGE,
+                    status_message=_PUBLIC_AGENT_FAILURE_CODE,
+                )
             if status != ProcessingStatus.SUCCESS:
+                if status == ProcessingStatus.FAILED:
+                    return ProcessingResult(
+                        status,
+                        _PUBLIC_AGENT_FAILURE_MESSAGE,
+                        status_message=_PUBLIC_AGENT_FAILURE_CODE,
+                    )
                 return ProcessingResult(status, full_response_text)
         else:
             (
@@ -325,7 +344,11 @@ class DirectTransport(AgentTransport):
                 )
                 if was_canceled:
                     return ProcessingResult(ProcessingStatus.CANCELED)
-                return ProcessingResult(ProcessingStatus.FAILED)
+                return ProcessingResult(
+                    ProcessingStatus.FAILED,
+                    _PUBLIC_AGENT_FAILURE_MESSAGE,
+                    status_message=_PUBLIC_AGENT_FAILURE_CODE,
+                )
 
         if full_response_text is None and paused_message_id:
             task = get_task(message)
@@ -836,13 +859,23 @@ class DirectTransport(AgentTransport):
         """Handle JSON-RPC error during streaming."""
         logger.error("DirectTransport: Agent error: %s", error_message)
         await self.tsm.transition_task(
-            ctx.current_message, CommonTaskState.FAILED, error=error_message,
+            ctx.current_message,
+            CommonTaskState.FAILED,
+            error=_PUBLIC_AGENT_FAILURE_MESSAGE,
             persist=True,
         )
         if ctx.task_info:
-            await self._emit_terminal(ctx, CommonTaskState.FAILED, error=error_message)
+            await self._emit_terminal(
+                ctx,
+                CommonTaskState.FAILED,
+                error=_PUBLIC_AGENT_FAILURE_MESSAGE,
+            )
         if ctx.send_sse:
-            await self.delivery.send_error(ctx.room_id, error_message)
+            await self.delivery.send_error(
+                ctx.room_id,
+                _PUBLIC_AGENT_FAILURE_MESSAGE,
+                message_id=ctx.current_message.message_id,
+            )
 
         # Record capability issue for the agent
         if self.capability_issue_service is not None:
@@ -863,7 +896,7 @@ class DirectTransport(AgentTransport):
                     rec_exc,
                 )
 
-        return ProcessingStatus.FAILED, streaming_state.full_response_text
+        return ProcessingStatus.FAILED, _PUBLIC_AGENT_FAILURE_MESSAGE
 
     async def _handle_stream_message_chunk(
         self,
@@ -1516,13 +1549,20 @@ class DirectTransport(AgentTransport):
             await self.tsm.transition_task(
                 current_message,
                 CommonTaskState.FAILED,
-                error=str(exc),
+                error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                 persist=True,
             )
             if task_info:
-                await self._emit_terminal(ctx, CommonTaskState.FAILED, error=str(exc),
+                await self._emit_terminal(
+                    ctx,
+                    CommonTaskState.FAILED,
+                    error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                 )
-            await self.delivery.send_error(room_id, str(exc))
+            await self.delivery.send_error(
+                room_id,
+                _PUBLIC_AGENT_FAILURE_MESSAGE,
+                message_id=current_message.message_id,
+            )
 
             # Record capability issue for the agent
             if self.capability_issue_service is not None:
@@ -1543,7 +1583,7 @@ class DirectTransport(AgentTransport):
                         rec_exc,
                     )
 
-            return False, "", None, None
+            return False, _PUBLIC_AGENT_FAILURE_MESSAGE, None, None
 
         # Post-call cancellation check
         if token and token.is_cancelled:
@@ -1605,11 +1645,18 @@ class DirectTransport(AgentTransport):
                 actual_state = CommonTaskState(actual_state_str)
             else:
                 actual_state = CommonTaskState.COMPLETED
+            public_error_text = error_text
+            if error_text and is_failure_state(actual_state):
+                logger.error(
+                    "DirectTransport: Agent returned failed sync response: %s",
+                    error_text,
+                )
+                public_error_text = _PUBLIC_AGENT_FAILURE_MESSAGE
 
             if full_response_text:
                 current_message.message_content.message_text = full_response_text
-            elif error_text:
-                current_message.message_content.message_text = error_text
+            elif public_error_text:
+                current_message.message_content.message_text = public_error_text
 
             # Convert inline base64 file parts to S3 URIs
             if non_text_parts:
@@ -1650,7 +1697,7 @@ class DirectTransport(AgentTransport):
             )
             await self._emit_terminal(
                 ctx, actual_state,
-                error=error_text,
+                error=public_error_text,
                 parts=non_text_parts if non_text_parts else None,
             )
 
@@ -1666,9 +1713,9 @@ class DirectTransport(AgentTransport):
                     content=(
                         full_response_text
                         if actual_state == CommonTaskState.COMPLETED
-                        else (full_response_text or error_text)
+                        else (full_response_text or public_error_text)
                     ),
-                    error=error_text,
+                    error=public_error_text,
                     agent_name=agent_card.name if agent_card else None,
                     agent_id=current_message.agent_id,
                     step_number=step_number,
@@ -1680,7 +1727,7 @@ class DirectTransport(AgentTransport):
             # P1: Non-completed terminal states are dispatch failures so
             # QueueExecutor / SupervisorExecutor treat them correctly.
             is_success = actual_state == CommonTaskState.COMPLETED
-            return is_success, full_response_text or error_text, None, None
+            return is_success, full_response_text or public_error_text, None, None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":
