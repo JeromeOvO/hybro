@@ -266,7 +266,7 @@ class A2ATaskTrackingService:
         if task_obj:
             await self._tracking_store.update_task_on_message(
                 message_id,
-                _public_persisted_task_data(task_obj),
+                public_persisted_task_data(task_obj),
                 message_text=response_text,
             )
 
@@ -383,7 +383,7 @@ class A2ATaskTrackingService:
         task_text = _extract_text_from_task(task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            _public_persisted_task_data(task),
+            public_persisted_task_data(task),
             message_text=task_text or None,
         )
 
@@ -558,7 +558,7 @@ def _extract_reply_response_text(task_result) -> str | None:
     return None
 
 
-def _public_persisted_task_data(task: Task) -> dict[str, Any]:
+def public_persisted_task_data(task: Task) -> dict[str, Any]:
     task_data = task.model_dump(mode="json")
     history = task_data.get("history")
     if isinstance(history, list):
@@ -579,4 +579,4 @@ def _non_text_parts(artifacts) -> list[dict] | None:
     return None
 
 
-__all__ = ["A2ATaskTrackingService"]
+__all__ = ["A2ATaskTrackingService", "public_persisted_task_data"]

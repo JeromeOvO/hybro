@@ -50,6 +50,7 @@ from execution.state.task_state_manager import (
     get_task,
     state_str,
 )
+from execution.task_tracking import public_persisted_task_data
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
@@ -316,7 +317,11 @@ class DirectTransport(AgentTransport):
                     task.status.state,
                     paused_message_id,
                 )
-                task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
+                task_data = (
+                    public_persisted_task_data(Task.model_validate(task))
+                    if hasattr(task, "model_dump")
+                    else {}
+                )
                 status_msg = get_text_from_message(task.status.message) or None
                 if (
                     not status_msg
@@ -423,6 +428,18 @@ class DirectTransport(AgentTransport):
         materialize_non_text_parts_as_artifact(task, non_text_parts)
 
     @staticmethod
+    def _public_task_model(task: Any) -> Task:
+        """Return a Task safe to persist or retain for later persistence."""
+        return Task.model_validate(
+            public_persisted_task_data(Task.model_validate(task))
+        )
+
+    @staticmethod
+    def _is_agent_message(message: Any) -> bool:
+        role = getattr(message, "role", None)
+        return role == MessageRole.AGENT or role == MessageRole.AGENT.value
+
+    @staticmethod
     def _public_task_label(
         current_message: RoomAgentMessage,
         agent_name: str,
@@ -432,13 +449,6 @@ class DirectTransport(AgentTransport):
             public_task_label = extend_info.get("public_task_label")
             if isinstance(public_task_label, str) and public_task_label.strip():
                 return public_task_label
-
-        message_content = current_message.message_content
-        public_message_text = (
-            message_content.message_text if message_content is not None else None
-        )
-        if isinstance(public_message_text, str) and public_message_text.strip():
-            return public_message_text
 
         return f"Requesting {agent_name}"
 
@@ -1237,17 +1247,20 @@ class DirectTransport(AgentTransport):
                         state_str(incoming_state),
                         room_agent_message.message_id,
                     )
-                    converted = Task.model_validate(message_data)
+                    converted = self._public_task_model(message_data)
                     if converted.artifacts:
                         existing_task.artifacts = converted.artifacts
                     if converted.history:
                         existing_task.history = converted.history
+                    room_agent_message.message_content.message_task = (
+                        self._public_task_model(existing_task)
+                    )
                 else:
-                    room_agent_message.message_content.message_task = Task.model_validate(
+                    room_agent_message.message_content.message_task = self._public_task_model(
                         message_data
                     )
             else:
-                room_agent_message.message_content.message_task = Task.model_validate(
+                room_agent_message.message_content.message_task = self._public_task_model(
                     message_data
                 )
             return await self.tsm.persist_message(room_agent_message)
@@ -1255,9 +1268,12 @@ class DirectTransport(AgentTransport):
         if getattr(message_data, "kind", None) == "message":
             task = get_task(room_agent_message)
             if task:
-                if task.history is None:
-                    task.history = []
-                task.history.append(message_data)
+                public_task = self._public_task_model(task)
+                room_agent_message.message_content.message_task = public_task
+                if self._is_agent_message(message_data):
+                    if public_task.history is None:
+                        public_task.history = []
+                    public_task.history.append(message_data)
             return await self.tsm.persist_message(room_agent_message)
 
         logger.error(
@@ -1780,15 +1796,14 @@ class DirectTransport(AgentTransport):
         # and return paused_message_id so the dispatch method detects it
         # and triggers HITL.
         if state in INTERACTIVE_STATES:
+            public_task = self._public_task_model(completed_task)
             # Update in-memory task so get_task(message) sees the new state.
             if current_message.message_content:
-                current_message.message_content.message_task = Task.model_validate(
-                    completed_task
-                )
+                current_message.message_content.message_task = public_task
             if task_info:
                 await self._task_updater.update_task_on_message(
                     message_id,
-                    completed_task.model_dump(mode="json"),
+                    public_persisted_task_data(public_task),
                 )
             logger.info(
                 "DirectTransport: Polled task %s reached interactive state %s — "
@@ -1810,9 +1825,10 @@ class DirectTransport(AgentTransport):
             # This is the last caller of the full-document update_task_on_message;
             # the polled task has a complete Task model that doesn't yet fit the
             # incremental pattern.
+            public_task = self._public_task_model(completed_task)
             await self._task_updater.update_task_on_message(
                 message_id,
-                completed_task.model_dump(mode="json"),
+                public_persisted_task_data(public_task),
                 message_text=final_content or None,
             )
 

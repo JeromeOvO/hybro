@@ -6,6 +6,7 @@ Tests cover:
   normalized error, and default fallback
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -292,13 +293,13 @@ def _make_room_agent_message(**overrides):
     [
         (
             {"public_task_label": "Public label from extend_info"},
-            "Public label from message",
+            "PRIVATE_SENTINEL_message_text_explicit_label",
             "Public label from extend_info",
         ),
         (
             None,
-            "Public label from message",
-            "Public label from message",
+            "PRIVATE_SENTINEL_message_text_generic_label",
+            "Requesting Insurer",
         ),
         (
             None,
@@ -312,7 +313,7 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
     message_text,
     expected_public_label,
 ):
-    private_task = "private internal prompt"
+    private_task = "PRIVATE_SENTINEL_task_content"
     delivery = MagicMock()
     delivery.send_task_submitted = AsyncMock()
     delivery.send_task_update = AsyncMock()
@@ -355,8 +356,9 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
     update_kwargs = delivery.send_task_update.await_args.kwargs
     assert submitted_kwargs["task_content"] == expected_public_label
     assert update_kwargs["status_message"] == expected_public_label
-    assert private_task not in str(submitted_kwargs)
-    assert private_task not in str(update_kwargs)
+    delivered_payload = f"{submitted_kwargs} {update_kwargs}"
+    assert private_task not in delivered_payload
+    assert "PRIVATE_SENTINEL_message_text" not in delivered_payload
 
 
 class TestHandleSyncResponseSuccess:
@@ -1583,3 +1585,134 @@ class TestDispatchInteractive:
         task = message.message_content.message_task
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
+
+
+class TestFinalizePolledTaskPrivacy:
+    def _make_completed_task_with_private_history(self, private_text: str) -> Task:
+        return Task(
+            id="remote-task-1",
+            contextId="ctx-1",
+            status=TaskStatus(state=TaskState.completed),
+            history=[
+                Message(
+                    role=MessageRole.USER,
+                    message_id="private-user-history",
+                    parts=[TextPart(kind="text", text=private_text)],
+                ),
+                Message(
+                    role=MessageRole.AGENT,
+                    message_id="agent-history",
+                    parts=[TextPart(kind="text", text="Visible agent answer")],
+                ),
+            ],
+            kind="task",
+        )
+
+    def _make_interactive_task_with_private_history(self, private_text: str) -> Task:
+        return Task(
+            id="remote-task-1",
+            contextId="ctx-1",
+            status=TaskStatus(
+                state=TaskState.input_required,
+                message=Message(
+                    role=MessageRole.AGENT,
+                    message_id="status-message",
+                    parts=[TextPart(kind="text", text="Need approval")],
+                ),
+            ),
+            history=[
+                Message(
+                    role=MessageRole.USER,
+                    message_id="private-user-history",
+                    parts=[TextPart(kind="text", text=private_text)],
+                ),
+                Message(
+                    role=MessageRole.AGENT,
+                    message_id="agent-history",
+                    parts=[TextPart(kind="text", text="Visible prompt")],
+                ),
+            ],
+            kind="task",
+        )
+
+    def _make_ctx(self, current_message, agent_card):
+        return ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="user-msg-1",
+            task_info={"webhook_token": "tok"},
+            send_sse=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminal_polled_task_persists_public_history_only(self):
+        private_text = "PRIVATE_SENTINEL_polled_terminal_history"
+        proc = _make_processor()
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+
+        await proc._finalize_polled_task(
+            self._make_completed_task_with_private_history(private_text),
+            current_message,
+            agent_card,
+            room_id="room-1",
+            message_id="agent-msg-1",
+            task_info={"webhook_token": "tok"},
+            ctx=self._make_ctx(current_message, agent_card),
+        )
+
+        persisted_task = (
+            proc._task_updater.update_task_on_message.await_args.args[1]
+        )
+        persisted_json = json.dumps(persisted_task, sort_keys=True)
+        assert private_text not in persisted_json
+        assert "Visible agent answer" in persisted_json
+
+    @pytest.mark.asyncio
+    async def test_interactive_polled_task_keeps_in_memory_and_persisted_history_public(self):
+        private_text = "PRIVATE_SENTINEL_polled_interactive_history"
+        proc = _make_processor()
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+
+        await proc._finalize_polled_task(
+            self._make_interactive_task_with_private_history(private_text),
+            current_message,
+            agent_card,
+            room_id="room-1",
+            message_id="agent-msg-1",
+            task_info={"webhook_token": "tok"},
+            ctx=self._make_ctx(current_message, agent_card),
+        )
+
+        persisted_task = (
+            proc._task_updater.update_task_on_message.await_args.args[1]
+        )
+        persisted_json = json.dumps(persisted_task, sort_keys=True)
+        in_memory_json = current_message.message_content.message_task.model_dump_json()
+        assert private_text not in persisted_json
+        assert private_text not in in_memory_json
+        assert "Visible prompt" in persisted_json
+        assert "Visible prompt" in in_memory_json
+
+    @pytest.mark.asyncio
+    async def test_room_task_persistence_sanitizes_returned_task_history(self):
+        private_text = "PRIVATE_SENTINEL_room_task_persistence_history"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        message = _make_room_agent_message()
+        returned_task = self._make_completed_task_with_private_history(private_text)
+
+        result = await proc._handle_a2a_response_for_room(message, returned_task)
+
+        assert result is True
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        persisted_json = persisted_message.message_content.message_task.model_dump_json()
+        assert private_text not in persisted_json
+        assert "Visible agent answer" in persisted_json
