@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -15,9 +16,16 @@ from common.dto import (
     SavedAgentGroupSnapshot,
     UserMessageInput,
 )
+from common.types import Task, TaskState, TaskStatus
 from models.quote import QuoteSourceKind
 from models.request import RoomCenterUserMessageRequest
-from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
+from models.room import (
+    MessageContent,
+    Room,
+    RoomAgentMessage,
+    RoomUserMessage,
+    UserAttachment,
+)
 from room import RoomFacade
 
 NOW = datetime(2026, 5, 11, tzinfo=UTC)
@@ -469,6 +477,50 @@ async def test_status_and_history_methods_delegate_and_translate_results():
     assert [message.message_id for message in history] == ["u1", "a1"]
     assert [message.message_id for message in by_ids] == ["a1", "u1"]
     assert [message.message_id for message in thread] == ["a1"]
+
+
+@pytest.mark.asyncio
+async def test_update_agent_message_does_not_rehydrate_existing_task_metadata():
+    private_sentinel = "PRIVATE_SENTINEL_facade_existing_task_metadata"
+    facade, _, messages, _, _ = _facade()
+    messages.agent_messages["a1"] = {
+        "room_id": "r1",
+        "message_id": "a1",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "u1",
+        "message_content": {
+            "message_text": "old",
+            "message_task": {
+                "id": "task-1",
+                "contextId": "ctx-1",
+                "status": {"state": "working"},
+                "metadata": {"remote_private": private_sentinel},
+            },
+        },
+        "message_created_at": NOW,
+    }
+    incoming = RoomAgentMessage(
+        room_id="r1",
+        message_id="a1",
+        agent_id="agent",
+        related_message_id="u1",
+        message_content=MessageContent(
+            message_text="updated",
+            message_task=Task(
+                id="task-1",
+                contextId="ctx-1",
+                status=TaskStatus(state=TaskState.completed),
+                metadata=None,
+            ),
+        ),
+    )
+
+    assert await facade.update_agent_message("a1", incoming)
+
+    stored_task = messages.agent_messages["a1"]["message_content"]["message_task"]
+    assert stored_task.get("metadata") is None
+    assert private_sentinel not in json.dumps(messages.agent_messages["a1"], default=str)
 
 
 @pytest.mark.asyncio

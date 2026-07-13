@@ -458,7 +458,6 @@ class A2ATaskTrackingService:
         message_id: str,
         room_id: str | None,
     ) -> dict[str, Any]:
-        state = task.status.state
         if task.artifacts:
             await _best_effort_convert_pydantic_artifacts_to_s3(
                 task.artifacts,
@@ -467,10 +466,13 @@ class A2ATaskTrackingService:
                 context="terminal_task",
             )
 
-        task_text = _extract_text_from_task(task)
+        projected_data = public_persisted_task_data(task)
+        projected_task = Task.model_validate(projected_data)
+        state = projected_task.status.state
+        task_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            public_persisted_task_data(task),
+            projected_data,
             message_text=task_text or None,
         )
 
@@ -481,11 +483,11 @@ class A2ATaskTrackingService:
             "status": _state_value(state),
             "persisted": persisted,
         }
-        non_text_parts = _non_text_parts(task.artifacts)
+        non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
         if state != TaskState.completed:
-            error_text = _extract_status_message(task)
+            error_text = _extract_status_message(projected_task)
             if error_text:
                 resp["error"] = error_text
             elif not task_text:

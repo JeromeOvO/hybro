@@ -179,7 +179,9 @@ export async function convertApiMessageToIncoming(
 
   // ── Extract multimodal artifacts from task ───────────────
   let artifacts: ArtifactData[] | undefined
-  const rawArtifacts = messageTask?.artifacts as Record<string, unknown>[] | undefined
+  const rawArtifacts = taskStatus === TASK_STATE.COMPLETED
+    ? messageTask?.artifacts as Record<string, unknown>[] | undefined
+    : undefined
   if (Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
     const mapped = rawArtifacts
       .map((a) => {
@@ -192,15 +194,15 @@ export async function convertApiMessageToIncoming(
             const kind = (root.kind as string) || 'text'
             if (kind === 'text') return null
             const fileData = root.file as Record<string, unknown> | undefined
+            const safeFile = fileData ? {
+              uri: fileData.uri as string | undefined,
+              mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
+              name: fileData.name as string | undefined,
+            } : undefined
             return {
               kind: kind as ArtifactPart['kind'],
               text: root.text as string | undefined,
-              file: fileData ? {
-                uri: fileData.uri as string | undefined,
-                bytes: fileData.bytes as string | undefined,
-                mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
-                name: fileData.name as string | undefined,
-              } : undefined,
+              file: safeFile,
               data: root.data as Record<string, unknown> | undefined,
             }
           })

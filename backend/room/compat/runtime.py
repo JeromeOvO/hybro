@@ -4002,6 +4002,15 @@ class RoomServices:
         )
         if projected_message_id != agent_message.message_id:
             return None, None
+        request_agent_id = request.get("agent_id")
+        if request_agent_id is not None and request_agent_id != agent_message.agent_id:
+            return None, None
+        request_task_id = request.get("a2a_task_id")
+        if request_task_id is not None and request_task_id != task.id:
+            return None, None
+        request_context_id = request.get("a2a_context_id")
+        if request_context_id is not None and request_context_id != task.context_id:
+            return None, None
 
         trusted: dict[str, object] = {
             "hitl_request_id": request_id,

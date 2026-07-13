@@ -100,6 +100,94 @@ class TestParseSyncFallbackResponse:
         assert result["task_id"] == "task-001"
         assert result["status"] == "completed"
 
+    def test_terminal_failed_task_with_artifacts_uses_projected_public_error(self):
+        private_sentinel = "PRIVATE_SENTINEL_sync_terminal_failed_artifact"
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {
+                    "state": "failed",
+                    "message": {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-status",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    },
+                },
+                "history": [
+                    {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-history",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "artifactId": "partial-artifact",
+                        "name": "partial",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    }
+                ],
+                "metadata": {"remote_error": private_sentinel},
+            },
+            "error": None,
+        }
+
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
+
+        assert result == {
+            "type": "message",
+            "message_id": "msg-1",
+            "content": None,
+            "status": "failed",
+            "error": "Task failed",
+        }
+        assert private_sentinel not in json.dumps(result)
+
+    def test_terminal_completed_task_with_inline_file_bytes_drops_unaddressable_part(self):
+        private_sentinel = "PRIVATE_SENTINEL_sync_terminal_file_bytes"
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {"state": "completed"},
+                "artifacts": [
+                    {
+                        "artifactId": "file-artifact",
+                        "name": "result-file",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "bytes": private_sentinel,
+                                    "mimeType": "text/plain",
+                                    "name": "result.txt",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            "error": None,
+        }
+
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
+
+        assert result == {
+            "type": "message",
+            "message_id": "msg-1",
+            "task_id": "task-001",
+            "status": "completed",
+            "content": None,
+        }
+        assert private_sentinel not in json.dumps(result)
+
     def test_parses_interactive_task_with_requires_flags(self):
         response = {
             "kind": "task",
@@ -2140,6 +2228,36 @@ class TestFinalizePolledTaskPrivacy:
             kind="task",
         )
 
+    def _make_failed_task_with_private_terminal_data(self, private_text: str) -> Task:
+        return Task(
+            id="remote-task-1",
+            contextId="ctx-1",
+            status=TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-status",
+                    parts=[TextPart(kind="text", text=private_text)],
+                ),
+            ),
+            history=[
+                Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-history",
+                    parts=[TextPart(kind="text", text=private_text)],
+                )
+            ],
+            artifacts=[
+                Artifact(
+                    artifactId="partial-artifact",
+                    name="partial",
+                    parts=[TextPart(kind="text", text=private_text)],
+                )
+            ],
+            metadata={"remote_error": private_text},
+            kind="task",
+        )
+
     def _make_ctx(self, current_message, agent_card):
         return ProcessingContext(
             room_id="room-1",
@@ -2208,6 +2326,33 @@ class TestFinalizePolledTaskPrivacy:
         assert private_text not in in_memory_json
         assert "Visible prompt" not in persisted_json
         assert "Visible prompt" not in in_memory_json
+
+    @pytest.mark.asyncio
+    async def test_failed_polled_task_degraded_output_and_memory_use_public_projection(self):
+        private_text = "PRIVATE_SENTINEL_polled_failed_terminal"
+        proc = _make_processor()
+        proc.delivery.send_task_update = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+
+        result = await proc._finalize_polled_task(
+            self._make_failed_task_with_private_terminal_data(private_text),
+            current_message,
+            agent_card,
+            room_id="room-1",
+            message_id="agent-msg-1",
+            task_info=None,
+            ctx=self._make_ctx(current_message, agent_card),
+        )
+
+        assert result == (False, "Task failed", None, None)
+        delivery_payload = proc.delivery.send_task_update.await_args.kwargs
+        in_memory_json = current_message.message_content.message_task.model_dump_json()
+        assert delivery_payload["content"] is None
+        assert delivery_payload["error"] == "Task failed"
+        assert private_text not in json.dumps(delivery_payload)
+        assert private_text not in in_memory_json
 
     @pytest.mark.asyncio
     async def test_room_task_persistence_sanitizes_returned_task_history(self):

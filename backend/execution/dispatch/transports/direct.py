@@ -497,6 +497,52 @@ class DirectTransport(AgentTransport):
         )
 
     @staticmethod
+    def _public_terminal_output_task_model(task: Any) -> Task:
+        task_data = public_persisted_task_data(Task.model_validate(task))
+        try:
+            return Task.model_validate(task_data)
+        except ValueError:
+            return Task.model_validate(
+                DirectTransport._drop_unaddressable_public_file_parts(task_data)
+            )
+
+    @staticmethod
+    def _drop_unaddressable_public_file_parts(
+        task_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        artifacts = task_data.get("artifacts")
+        if not isinstance(artifacts, list):
+            return task_data
+
+        public_artifacts: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            parts = artifact.get("parts")
+            if not isinstance(parts, list):
+                continue
+
+            public_parts = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    public_parts.append(part)
+                    continue
+                payload = part.get("root") if isinstance(part.get("root"), dict) else part
+                file_payload = payload.get("file") if isinstance(payload, dict) else None
+                if isinstance(file_payload, dict) and not file_payload.get("uri"):
+                    continue
+                public_parts.append(part)
+
+            if public_parts:
+                public_artifact = dict(artifact)
+                public_artifact["parts"] = public_parts
+                public_artifacts.append(public_artifact)
+
+        sanitized = dict(task_data)
+        sanitized["artifacts"] = public_artifacts or None
+        return sanitized
+
+    @staticmethod
     def _is_agent_message(message: Any) -> bool:
         role = getattr(message, "role", None)
         return role == MessageRole.AGENT or role == MessageRole.AGENT.value
@@ -1511,12 +1557,28 @@ class DirectTransport(AgentTransport):
                     extract_parts_from_artifacts as _epfa,
                 )
 
-                extracted_task = _epfa(result.artifacts)
-                if extracted_task.text:
+                public_task = DirectTransport._public_terminal_output_task_model(result)
+                public_state = public_task.status.state
+                public_state_value = state_str(public_state)
+                if public_state_value == CommonTaskState.COMPLETED.value:
                     parsed["type"] = "message"
-                    parsed["content"] = extracted_task.text
-                if extracted_task.has_non_text:
-                    parsed["parts"] = extracted_task.file_parts + extracted_task.data_parts
+                    parsed["status"] = public_state_value
+                    parsed["content"] = None
+                    if public_task.artifacts:
+                        extracted_task = _epfa(public_task.artifacts)
+                        parsed["content"] = extracted_task.text or None
+                        if extracted_task.has_non_text:
+                            parsed["parts"] = (
+                                extracted_task.file_parts + extracted_task.data_parts
+                            )
+                elif is_failure_state(public_state):
+                    parsed = {
+                        "type": "message",
+                        "message_id": message_id,
+                        "content": None,
+                        "status": public_state_value,
+                        "error": _safe_terminal_error(public_state),
+                    }
             return parsed
 
         return {"type": "message", "message_id": message_id, "content": ""}
@@ -1734,11 +1796,16 @@ class DirectTransport(AgentTransport):
                 actual_state = CommonTaskState.COMPLETED
             public_error_text = error_text
             if error_text and is_failure_state(actual_state):
-                logger.error(
-                    "DirectTransport: Agent returned failed sync response: %s",
-                    error_text,
-                )
-                public_error_text = _PUBLIC_AGENT_FAILURE_MESSAGE
+                safe_errors = {
+                    _PUBLIC_AGENT_FAILURE_MESSAGE,
+                    *_PUBLIC_TASK_TERMINAL_ERRORS.values(),
+                }
+                if error_text not in safe_errors:
+                    logger.error(
+                        "DirectTransport: Agent returned failed sync response: %s",
+                        error_text,
+                    )
+                    public_error_text = _PUBLIC_AGENT_FAILURE_MESSAGE
 
             if full_response_text:
                 current_message.message_content.message_text = full_response_text
@@ -1946,9 +2013,6 @@ class DirectTransport(AgentTransport):
         interactive_status_context: dict[str, str | None] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
-        state = completed_task.status.state
-        state_value = state_str(state)
-
         if completed_task.artifacts:
             conversion_counter: list[int] = [0]
             for artifact in completed_task.artifacts:
@@ -1956,6 +2020,13 @@ class DirectTransport(AgentTransport):
                     artifact, room_id, message_id,
                     conversion_counter=conversion_counter,
                 )
+
+        projected_task_data = public_persisted_task_data(completed_task)
+        public_task = Task.model_validate(projected_task_data)
+        state = public_task.status.state
+        state_value = state_str(state)
+        if current_message.message_content:
+            current_message.message_content.message_task = public_task
 
         # --- Interactive states (input_required / auth_required) ---
         # The polled agent needs user interaction.  Persist the task state
@@ -1967,14 +2038,10 @@ class DirectTransport(AgentTransport):
                 raw_status_message = get_text_from_message(completed_task.status.message)
             if raw_status_message and interactive_status_context is not None:
                 interactive_status_context["status_message"] = raw_status_message
-            public_task = self._public_task_model(completed_task)
-            # Update in-memory task so get_task(message) sees the new state.
-            if current_message.message_content:
-                current_message.message_content.message_task = public_task
             if task_info:
                 await self._task_updater.update_task_on_message(
                     message_id,
-                    public_persisted_task_data(public_task),
+                    projected_task_data,
                 )
             logger.info(
                 "DirectTransport: Polled task %s reached interactive state %s — "
@@ -1982,12 +2049,12 @@ class DirectTransport(AgentTransport):
                 message_id,
                 state_value,
             )
-            return True, None, message_id, completed_task.id
+            return True, None, message_id, public_task.id
 
         final_content = None
         final_error = None
-        if state_str(state) == CommonTaskState.COMPLETED.value and completed_task.artifacts:
-            final_content = extract_text_from_artifacts(completed_task.artifacts)
+        if state_value == CommonTaskState.COMPLETED.value and public_task.artifacts:
+            final_content = extract_text_from_artifacts(public_task.artifacts)
         elif is_failure_state(state):
             raw_error = extract_error_message(completed_task)
             if raw_error:
@@ -2002,12 +2069,9 @@ class DirectTransport(AgentTransport):
             # This is the last caller of the full-document update_task_on_message;
             # the polled task has a complete Task model that doesn't yet fit the
             # incremental pattern.
-            public_task = self._public_task_model(completed_task)
-            if current_message.message_content:
-                current_message.message_content.message_task = public_task
             await self._task_updater.update_task_on_message(
                 message_id,
-                public_persisted_task_data(public_task),
+                projected_task_data,
                 message_text=final_content or None,
             )
 

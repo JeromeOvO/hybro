@@ -292,6 +292,57 @@ async def test_persist_failed_task_uses_safe_public_error_text():
 
 
 @pytest.mark.asyncio
+async def test_terminal_failed_task_result_projects_before_persisting_and_responding():
+    private_sentinel = "PRIVATE_SENTINEL_terminal_failed_result"
+    store = MagicMock()
+    store.update_task_on_message = AsyncMock(return_value=True)
+    service = A2ATaskTrackingService(store)
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(
+            state=TaskState.failed,
+            message=_message(MessageRole.AGENT, private_sentinel),
+        ),
+        history=[
+            _message(MessageRole.USER, private_sentinel),
+            _message(MessageRole.AGENT, private_sentinel),
+        ],
+        artifacts=[
+            Artifact(
+                artifact_id="partial-artifact",
+                name="partial",
+                parts=[Part(root=TextPart(text=private_sentinel))],
+                metadata={"private": private_sentinel},
+            )
+        ],
+        metadata={"remote_error": private_sentinel},
+    )
+
+    result = await service._handle_terminal_task_result(
+        task,
+        message_id="agent-message-1",
+        room_id="room-1",
+    )
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    update_kwargs = store.update_task_on_message.await_args.kwargs
+    assert persisted["status"]["state"] == "failed"
+    assert _status_text(persisted) == "Task failed"
+    assert persisted["artifacts"] is None
+    assert persisted["history"] is None
+    assert persisted["metadata"] is None
+    assert update_kwargs["message_text"] is None
+    assert result["status"] == "failed"
+    assert result["content"] is None
+    assert result["error"] == "Task failed"
+    assert "parts" not in result
+    assert private_sentinel not in json.dumps(persisted)
+    assert private_sentinel not in json.dumps(update_kwargs)
+    assert private_sentinel not in json.dumps(result)
+
+
+@pytest.mark.asyncio
 async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_request():
     private_sentinel = "PRIVATE_SENTINEL_remote_hitl_spoof"
     spoofed_task_metadata = {

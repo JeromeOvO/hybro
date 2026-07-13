@@ -410,6 +410,73 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
+    it('ignores non-completed artifacts and inline file bytes', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_noncompleted_file_bytes'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'failed' },
+            artifacts: [{
+              artifactId: 'partial-artifact',
+              name: 'partial',
+              parts: [{
+                kind: 'file',
+                file: {
+                  bytes: privateSentinel,
+                  mimeType: 'text/plain',
+                  name: 'partial.txt',
+                },
+              }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.FAILED)
+      expect(result.artifacts).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('drops inline file bytes from completed artifacts while keeping safe file fields', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_completed_file_bytes'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'completed' },
+            artifacts: [{
+              artifactId: 'file-artifact',
+              name: 'result-file',
+              parts: [{
+                kind: 'file',
+                file: {
+                  uri: 'https://storage.example/result.csv',
+                  bytes: privateSentinel,
+                  mimeType: 'text/csv',
+                  name: 'result.csv',
+                },
+              }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.artifacts?.[0]?.parts[0]?.file).toEqual({
+        uri: 'https://storage.example/result.csv',
+        mime_type: 'text/csv',
+        name: 'result.csv',
+      })
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
     it('has no taskStatus when message_task is absent', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',

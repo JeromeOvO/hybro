@@ -926,6 +926,7 @@ class TestInquiryRoomMessages:
         )
         local_task = Task(
             id="local-hitl-task",
+            contextId="local-hitl-context",
             status=TaskStatus(state=TaskState.completed),
             artifacts=[final_artifact],
             metadata={
@@ -988,6 +989,7 @@ class TestInquiryRoomMessages:
                             "request_id": "local-hitl-request",
                             "room_id": sample_room.room_id,
                             "source": "agent",
+                            "agent_id": "insurer-agent",
                             "display_message_id": local_message.message_id,
                             "continuation_message_id": local_message.message_id,
                             "prompt": "Choose the approved option",
@@ -1066,6 +1068,61 @@ class TestInquiryRoomMessages:
             "hitl_request_id": "local-supervisor-hitl-request",
         }
         assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_overrides",
+        [
+            {"agent_id": "other-agent"},
+            {"a2a_task_id": "other-task"},
+            {"a2a_context_id": "other-context"},
+        ],
+    )
+    async def test_trusted_hitl_projection_fails_closed_on_identity_mismatch(
+        self,
+        request_overrides,
+    ):
+        private_sentinel = "PRIVATE_SENTINEL_mismatched_hitl_request"
+        runtime = RoomServices()
+        runtime.bind_store(
+            SimpleNamespace(
+                get_hitl_request=AsyncMock(
+                    return_value={
+                        "request_id": "local-hitl-request",
+                        "room_id": "room-1",
+                        "source": "agent",
+                        "agent_id": "agent-1",
+                        "display_message_id": "agent-message-1",
+                        "a2a_task_id": "remote-task",
+                        "a2a_context_id": "remote-context",
+                        "prompt": private_sentinel,
+                        "prompt_type": "choice",
+                        "choices": [private_sentinel],
+                        **request_overrides,
+                    }
+                )
+            )
+        )
+        task = Task(
+            id="remote-task",
+            contextId="remote-context",
+            status=TaskStatus(state=TaskState.input_required),
+            metadata={"hitl_request_id": "local-hitl-request"},
+        )
+        agent_message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-message-1",
+            agent_id="agent-1",
+            message_content=MessageContent(message_task=task),
+        )
+
+        trusted_metadata, trusted_request_id = await runtime._trusted_hitl_projection(
+            agent_message,
+            task,
+        )
+
+        assert trusted_metadata is None
+        assert trusted_request_id is None
 
 
 class TestSendMessage:

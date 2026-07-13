@@ -271,22 +271,6 @@ class RoomFacade:
         self, message_id: str, message: RoomAgentMessage
     ) -> bool:
         try:
-            if (
-                message.message_content
-                and message.message_content.message_task
-                and message.message_content.message_task.metadata is None
-            ):
-                existing_message = await self.get_agent_message_model(message_id)
-                if (
-                    existing_message
-                    and existing_message.message_content
-                    and existing_message.message_content.message_task
-                    and existing_message.message_content.message_task.metadata
-                    is not None
-                ):
-                    message.message_content.message_task.metadata = (
-                        existing_message.message_content.message_task.metadata
-                    )
             update_data = _strip_unset_task_tracking_fields(
                 message.model_dump(exclude_unset=True, mode="json")
             )
