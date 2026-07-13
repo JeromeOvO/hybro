@@ -499,6 +499,30 @@ def _read_source(rel_path: Path) -> str:
     return (ROOT / rel_path).read_text()
 
 
+def _source_package_parts(rel_path: Path) -> list[str]:
+    return list(rel_path.with_suffix("").parts[:-1])
+
+
+def _resolve_import_from_module(node: ast.ImportFrom, rel_path: Path) -> str | None:
+    if node.level == 0:
+        return node.module
+
+    package_parts = _source_package_parts(rel_path)
+    keep = max(len(package_parts) - node.level + 1, 0)
+    resolved_parts = package_parts[:keep]
+    if node.module:
+        resolved_parts.extend(node.module.split("."))
+    if resolved_parts:
+        return ".".join(resolved_parts)
+    return node.module
+
+
+def _imported_name(module: str | None, name: str) -> str:
+    if module:
+        return f"{module}.{name}"
+    return name
+
+
 def _dotted_name(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
@@ -547,7 +571,7 @@ def _is_forbidden_target(
     )
 
 
-def _import_aliases(tree: ast.Module) -> dict[str, str]:
+def _import_aliases(tree: ast.Module, rel_path: Path) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -557,11 +581,15 @@ def _import_aliases(tree: ast.Module) -> dict[str, str]:
                 else:
                     root_name = alias.name.split(".", 1)[0]
                     aliases.setdefault(root_name, root_name)
-        elif isinstance(node, ast.ImportFrom) and node.module:
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from_module(node, rel_path)
             for alias in node.names:
                 if alias.name == "*":
                     continue
-                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+                aliases[alias.asname or alias.name] = _imported_name(
+                    module,
+                    alias.name,
+                )
     return aliases
 
 
@@ -584,23 +612,23 @@ def _import_violations(
                     violations.append(
                         f"{rel_path}:{node.lineno}: import {alias.name}"
                     )
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            if _is_forbidden_module(node.module, forbidden_modules):
-                violations.append(
-                    f"{rel_path}:{node.lineno}: from {node.module} import ..."
-                )
-                continue
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from_module(node, rel_path)
             for alias in node.names:
-                if alias.name == "*":
+                if alias.name == "*" and module:
+                    if _is_forbidden_module(module, forbidden_modules):
+                        violations.append(
+                            f"{rel_path}:{node.lineno}: from {module} import *"
+                        )
                     continue
-                imported = f"{node.module}.{alias.name}"
+                imported = _imported_name(module, alias.name)
                 if _is_forbidden_target(
                     imported,
                     forbidden_modules=forbidden_modules,
                     forbidden_symbols=forbidden_symbols,
                 ):
                     violations.append(
-                        f"{rel_path}:{node.lineno}: from {node.module} "
+                        f"{rel_path}:{node.lineno}: from {module or ''} "
                         f"import {alias.name}"
                     )
     return violations
@@ -642,7 +670,7 @@ def _control_plane_boundary_violations_for_source(
     forbidden_symbols: set[str] = FORBIDDEN_CONTROL_PLANE_SYMBOLS,
 ) -> list[str]:
     tree = _parse_source(source, rel_path)
-    aliases = _import_aliases(tree)
+    aliases = _import_aliases(tree, rel_path)
     bindings = {
         **aliases,
         **_constructor_bindings(
@@ -777,34 +805,59 @@ def _literal_subscript_key(node: ast.AST) -> str | None:
     return None
 
 
+def _expression_label(node: ast.AST) -> str:
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return _dotted_name(node) or type(node).__name__
+
+
+def _access_path_from_root(node: ast.AST) -> tuple[str, list[str | None]] | None:
+    parts: list[str | None] = []
+    current = node
+    while isinstance(current, (ast.Attribute, ast.Subscript)):
+        if isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        else:
+            parts.append(_literal_subscript_key(current.slice))
+            current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.reverse()
+    return current.id, parts
+
+
+def _run_state_control_field_access(
+    node: ast.AST,
+    run_state_names: set[str],
+) -> str | None:
+    access_path = _access_path_from_root(node)
+    if not access_path:
+        return None
+    root, parts = access_path
+    if (
+        not parts
+        or not _is_run_state_name(root, run_state_names)
+        or parts[0] not in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+    ):
+        return None
+    return parts[0]
+
+
 def _run_state_control_mutation_violations_for_source(
     source: str,
     *,
     rel_path: Path,
 ) -> list[str]:
     tree = _parse_source(source, rel_path)
-    aliases = _import_aliases(tree)
+    aliases = _import_aliases(tree, rel_path)
     run_state_names = _collect_run_state_names(tree, aliases)
     violations: list[str] = []
 
     def record_target(target: ast.AST, lineno: int) -> None:
-        if isinstance(target, ast.Attribute):
-            root = _root_name(target.value)
-            if (
-                target.attr in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
-                and _is_run_state_name(root, run_state_names)
-            ):
-                violations.append(
-                    f"{rel_path}:{lineno}: assign {_dotted_name(target)}"
-                )
-        elif isinstance(target, ast.Subscript):
-            root = _root_name(target.value)
-            field = _literal_subscript_key(target.slice)
-            if (
-                field in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
-                and _is_run_state_name(root, run_state_names)
-            ):
-                violations.append(f"{rel_path}:{lineno}: assign {root}[{field!r}]")
+        if _run_state_control_field_access(target, run_state_names):
+            violations.append(f"{rel_path}:{lineno}: assign {_expression_label(target)}")
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -823,16 +876,10 @@ def _run_state_control_mutation_violations_for_source(
             if node.func.attr not in MUTATING_COLLECTION_METHODS:
                 continue
             collection = node.func.value
-            if not isinstance(collection, ast.Attribute):
-                continue
-            root = _root_name(collection.value)
-            if (
-                collection.attr in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
-                and _is_run_state_name(root, run_state_names)
-            ):
+            if _run_state_control_field_access(collection, run_state_names):
                 violations.append(
                     f"{rel_path}:{node.lineno}: mutate "
-                    f"{_dotted_name(collection)}.{node.func.attr}()"
+                    f"{_expression_label(collection)}.{node.func.attr}()"
                 )
 
     return violations
@@ -899,6 +946,75 @@ def bad(state: RunState) -> None:
     assert any("OrchestrationRunState" in item for item in control_plane_violations)
     assert any(".validate" in item for item in control_plane_violations)
     assert any(".status" in item for item in mutation_violations)
+
+
+def test_boundary_ast_checks_reject_nested_run_state_control_field_mutations() -> None:
+    source = """
+from models.orchestration import OrchestrationRunState
+
+
+def bad(run_state: OrchestrationRunState, agent_id: str, value: object) -> None:
+    run_state.facts["x"] = value
+    run_state.dispatch_results[agent_id] = value
+    run_state.facts["x"]["nested"] = value
+    run_state["dispatch_results"][agent_id] = value
+    run_state.facts.update({"x": value})
+    run_state.dispatch_results[agent_id].update({"status": "done"})
+
+
+def ok(run_state: OrchestrationRunState, other: dict[str, object], value: object) -> None:
+    other["facts"]["x"] = value
+    run_state.metadata["facts"] = value
+    run_state.local_cache["dispatch_results"].update({"x": value})
+"""
+
+    violations = _run_state_control_mutation_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+
+    assert len(violations) == 6
+    assert any("facts" in item and "assign" in item for item in violations)
+    assert any(
+        "dispatch_results" in item and "assign" in item for item in violations
+    )
+    assert any("facts" in item and "mutate" in item for item in violations)
+    assert any(
+        "dispatch_results" in item and "mutate" in item for item in violations
+    )
+    assert not any("metadata" in item for item in violations)
+    assert not any("local_cache" in item for item in violations)
+
+
+def test_boundary_ast_checks_reject_relative_control_plane_imports() -> None:
+    queue_executor_source = """
+from . import run_reducer
+from .run_reducer import record_agent_dispatch
+"""
+    direct_transport_source = """
+from ...orchestration import run_reducer
+from ...orchestration.action_validator import PlannerActionValidator
+"""
+
+    queue_violations = _control_plane_boundary_violations_for_source(
+        queue_executor_source,
+        rel_path=Path("execution/orchestration/queue_executor.py"),
+    )
+    direct_violations = _control_plane_boundary_violations_for_source(
+        direct_transport_source,
+        rel_path=Path("execution/dispatch/transports/direct.py"),
+    )
+
+    assert any(
+        "execution.orchestration" in item and "run_reducer" in item
+        for item in queue_violations
+    )
+    assert any("record_agent_dispatch" in item for item in queue_violations)
+    assert any(
+        "execution.orchestration" in item and "run_reducer" in item
+        for item in direct_violations
+    )
+    assert any("PlannerActionValidator" in item for item in direct_violations)
 
 
 def test_direct_transport_and_queue_executor_do_not_use_supervisor_control_plane() -> None:
