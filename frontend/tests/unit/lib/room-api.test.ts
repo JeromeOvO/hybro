@@ -102,7 +102,7 @@ describe('Room API', () => {
           return HttpResponse.json({
             success: true,
             room_id: capturedBody.room_id,
-            active_runs: [{ run_id: 'run-1', state: 'processing', trigger_message_id: 'm1' }],
+            active_runs: [{ state: 'processing', trigger_message_id: 'm1' }],
           })
         })
       )

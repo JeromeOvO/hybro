@@ -194,7 +194,7 @@ describe('Room lifecycle characterization tests', () => {
         success: true,
         room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
         active_runs: [
-          { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+          { state: 'processing', trigger_message_id: 'msg-processing-1' },
         ],
       })
 
@@ -225,7 +225,7 @@ describe('Room lifecycle characterization tests', () => {
         success: true,
         room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
         active_runs: [
-          { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+          { state: 'processing', trigger_message_id: 'msg-processing-1' },
         ],
       })
 
@@ -261,7 +261,7 @@ describe('Room lifecycle characterization tests', () => {
         success: true,
         room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
         active_runs: [
-          { run_id: 'run-stale', state: 'processing', trigger_message_id: 'msg-stale' },
+          { state: 'processing', trigger_message_id: 'msg-stale' },
         ],
       })
 

@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -491,11 +492,9 @@ class TestInquiryRoomSetting:
         assert response.room_id == sample_room.room_id
         assert response.active_runs == [
             ActiveRunRef(
-                run_id="run-1",
                 state="processing",
                 trigger_message_id="m1",
                 agent_id="a1",
-                seq=1,
             )
         ]
         patch_room_center_deps[
@@ -574,7 +573,7 @@ class TestInquiryRoomSetting:
 
         assert response.success is True
         assert response.active_runs is not None
-        assert response.active_runs[0].run_id == "run-1"
+        assert response.active_runs[0].trigger_message_id == "m1"
         patch_room_center_deps[
             "execution_engine"
         ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
@@ -619,7 +618,7 @@ class TestInquiryRoomSetting:
 
         assert response.success is True
         assert response.active_runs is not None
-        assert response.active_runs[0].run_id == "run-1"
+        assert response.active_runs[0].trigger_message_id == "m1"
         patch_room_center_deps[
             "execution_engine"
         ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
@@ -653,6 +652,49 @@ class TestInquiryRoomSetting:
 
 class TestInquiryActiveRuns:
     """Tests for inquiry_active_runs endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_active_run_payload_does_not_expose_internal_run_id_or_seq(
+        self, mock_user, sample_room, patch_room_center_deps
+    ):
+        from common.dto import RunInfo
+
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
+
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].get_runs_for_room.return_value = [
+            RunInfo(
+                run_id="private-run-1",
+                room_id=sample_room.room_id,
+                state="processing",
+                trigger_message_id="msg-active",
+                agent_id="a1",
+                seq=41,
+                updated_at=datetime(2026, 7, 13, 12, 0, tzinfo=UTC),
+            )
+        ]
+
+        response = await inquiry_active_runs(
+            mock_request,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+            center=patch_room_center_deps["room_center"],
+        )
+
+        assert response.active_runs is not None
+        public_run = response.model_dump(mode="json")["active_runs"][0]
+        assert "run_id" not in public_run
+        assert "seq" not in public_run
+        assert public_run == {
+            "state": "processing",
+            "trigger_message_id": "msg-active",
+            "agent_id": "a1",
+            "updated_at": "2026-07-13T12:00:00Z",
+        }
 
     @pytest.mark.asyncio
     async def test_returns_active_runs_for_owner(
@@ -700,7 +742,7 @@ class TestInquiryActiveRuns:
         assert response.room_id == sample_room.room_id
         assert response.active_runs is not None
         assert len(response.active_runs) == 1
-        assert response.active_runs[0].run_id == "run-1"
+        assert response.active_runs[0].trigger_message_id == "msg-active"
         assert response.turn_completion_kind == "synthesis"
         patch_room_center_deps[
             "execution_engine"
@@ -740,7 +782,7 @@ class TestInquiryActiveRuns:
 
         assert response.success is True
         assert response.active_runs is not None
-        assert response.active_runs[0].run_id == "run-1"
+        assert response.active_runs[0].trigger_message_id == "msg-active"
         assert response.turn_completion_kind is None
         patch_room_center_deps["room_center"].inquiry_active_runs.assert_not_awaited()
         patch_room_center_deps[
@@ -824,7 +866,7 @@ class TestInquiryActiveRuns:
 
         assert response.success is True
         assert response.active_runs is not None
-        assert response.active_runs[0].run_id == "run-1"
+        assert response.active_runs[0].trigger_message_id == "msg-active"
         assert response.turn_completion_kind is None
 
     @pytest.mark.asyncio

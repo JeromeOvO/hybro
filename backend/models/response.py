@@ -179,11 +179,9 @@ class ScopeResolutionError(BaseModel):
 class ActiveRunRef(BaseModel):
     """Lightweight run shape for room setting reconcile payloads."""
 
-    run_id: str
     state: str
     trigger_message_id: str | None = None
     agent_id: str | None = None
-    seq: int = 0
     updated_at: datetime | None = None
 
 
