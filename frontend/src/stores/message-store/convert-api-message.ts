@@ -144,13 +144,6 @@ export async function convertApiMessageToIncoming(
   const hasTrustedHitlMetadata = typeof trustedHitlRequestId === 'string'
     && trustedHitlRequestId.length > 0
     && meta?.hitl_request_id === trustedHitlRequestId
-  if (meta) {
-    const maybeUserAnswer = meta.user_answer
-    if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
-    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
-    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
-    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
-  }
 
   if (meta && hasTrustedHitlMetadata) {
     const rid = meta.hitl_request_id ?? meta.request_id
@@ -161,6 +154,11 @@ export async function convertApiMessageToIncoming(
     if (typeof hpt === 'string') hitlPromptType = hpt as 'text' | 'choice' | 'confirmation'
     if (Array.isArray(meta.hitl_choices)) hitlChoices = meta.hitl_choices as string[]
     else if (Array.isArray(meta.choices)) hitlChoices = meta.choices as string[]
+    const maybeUserAnswer = meta.user_answer
+    if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
+    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
+    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
+    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
   }
 
   // ── Extract user attachments ────────────────────────────

@@ -581,6 +581,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.update_webhook_token_hash_on_message
                 ),
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                get_hitl_request=hitl_store.get_hitl_request,
                 update_task_on_message=task_store.update_task_on_message,
             )
             hitl_runtime_store = SimpleNamespace(

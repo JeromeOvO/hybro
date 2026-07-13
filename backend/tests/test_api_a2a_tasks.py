@@ -20,6 +20,8 @@ from api.a2a_tasks import (
 )
 from common.types import (
     Artifact,
+    FileContent,
+    FilePart,
     Message,
     MessageRole,
     Part,
@@ -119,6 +121,55 @@ class TestGetTaskStatus:
         assert task.get("artifacts") in (None, [])
         assert task.get("metadata") is None
         assert private_sentinel not in str(result)
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_drops_completed_inline_file_bytes(
+        self, mock_user, mock_db_service
+    ):
+        private_bytes = "PRIVATE_SENTINEL_api_inline_file_bytes"
+        task = Task(
+            id="remote-task-1",
+            context_id="remote-context-1",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[
+                Artifact(
+                    artifact_id="artifact-1",
+                    name="file-result",
+                    parts=[
+                        Part(
+                            root=FilePart(
+                                file=FileContent(
+                                    bytes=private_bytes,
+                                    mimeType="text/plain",
+                                    name="result.txt",
+                                )
+                            )
+                        )
+                    ],
+                )
+            ],
+        )
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-message-1",
+            user_id=mock_user.user_id,
+            agent_id="agent-1",
+            message_content=MessageContent(message_task=task),
+            has_task_tracking=True,
+        )
+        mock_db_service.get_room_agent_message_by_message_id.return_value = message
+
+        result = await get_task_status(
+            message.message_id, mock_user, db=mock_db_service
+        )
+
+        part = result["task"]["artifacts"][0]["parts"][0]
+        part_root = part.get("root", part)
+        assert part_root["file"] == {
+            "mimeType": "text/plain",
+            "name": "result.txt",
+        }
+        assert private_bytes not in str(result)
 
     @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):

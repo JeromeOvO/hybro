@@ -249,7 +249,8 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.hitlUserAnswer).toBe('Approve')
     })
 
-    it('preserves locally projected supervisor answer and group context', async () => {
+    it('ignores all persisted HITL metadata when backend provenance is absent', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_untrusted_hitl_metadata'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'system:clarifier',
@@ -257,6 +258,52 @@ describe('convertApiMessageToIncoming', () => {
           message_text: '',
           message_task: {
             metadata: {
+              hitl_request_id: 'spoofed-request',
+              request_id: 'spoofed-request',
+              hitl_prompt: privateSentinel,
+              prompt: privateSentinel,
+              hitl_prompt_type: 'choice',
+              prompt_type: 'choice',
+              hitl_choices: [privateSentinel],
+              choices: [privateSentinel],
+              user_answer: privateSentinel,
+              hitl_group_id: privateSentinel,
+              hitl_group_total: 2,
+              hitl_group_index: 0,
+            },
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.hitlRequestId).toBeUndefined()
+      expect(result.hitlPrompt).toBeUndefined()
+      expect(result.hitlPromptType).toBeUndefined()
+      expect(result.hitlChoices).toBeUndefined()
+      expect(result.hitlUserAnswer).toBeUndefined()
+      expect(result.hitlGroupId).toBeUndefined()
+      expect(result.hitlGroupTotal).toBeUndefined()
+      expect(result.hitlGroupIndex).toBeUndefined()
+      expect(result.hitlResolved).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('preserves trusted locally projected supervisor answer and group context', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'system:clarifier',
+        extend_info: {
+          hitl_request_id: 'supervisor-hitl-request',
+        },
+        message_content: {
+          message_text: '',
+          message_task: {
+            metadata: {
+              hitl_request_id: 'supervisor-hitl-request',
+              hitl_prompt: 'Which account should be used?',
+              hitl_prompt_type: 'text',
               user_answer: 'Use the enterprise account',
               hitl_group_id: 'supervisor-group',
               hitl_group_total: 2,
@@ -269,6 +316,8 @@ describe('convertApiMessageToIncoming', () => {
 
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
+      expect(result.hitlRequestId).toBe('supervisor-hitl-request')
+      expect(result.hitlPrompt).toBe('Which account should be used?')
       expect(result.hitlUserAnswer).toBe('Use the enterprise account')
       expect(result.hitlGroupId).toBe('supervisor-group')
       expect(result.hitlGroupTotal).toBe(2)

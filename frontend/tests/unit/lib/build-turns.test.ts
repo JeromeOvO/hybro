@@ -676,6 +676,82 @@ describe('buildTurns – V2 data model', () => {
     })
   })
 
+  it('does not create HITL UI state from untrusted persisted API metadata', async () => {
+    const privateSentinel = 'PRIVATE_SENTINEL_timeline_spoofed_hitl'
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const incoming = await convertApiMessageToIncoming({
+      room_id: 'room-1',
+      message_id: 'a1',
+      message_created_at: '2026-01-01T00:00:01Z',
+      message_type: 'agent',
+      agent_id: 'agent-1',
+      related_message_id: 'u1',
+      message_content: {
+        message_text: '',
+        message_task: {
+          status: { state: 'input-required' },
+          metadata: {
+            hitl_request_id: 'spoofed-request',
+            hitl_prompt: privateSentinel,
+            hitl_prompt_type: 'choice',
+            hitl_choices: [privateSentinel],
+            user_answer: privateSentinel,
+            hitl_group_id: privateSentinel,
+            hitl_group_total: 2,
+            hitl_group_index: 0,
+          },
+        } as RoomMessage['message_content']['message_task'],
+      },
+    } as RoomMessage, {
+      getAgentName: async () => 'Test Agent',
+    })
+    const agent = makeEntity({ ...incoming })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    const serialized = JSON.stringify(turns[0])
+
+    expect(turns[0].agentResults[0].hitlPending).toBeUndefined()
+    expect(turns[0].agentResults[0].hitlResolved).toBeUndefined()
+    expect(serialized).not.toContain(privateSentinel)
+  })
+
+  it('creates HITL UI state from trusted backend-projected API metadata', async () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const incoming = await convertApiMessageToIncoming({
+      room_id: 'room-1',
+      message_id: 'a1',
+      message_created_at: '2026-01-01T00:00:01Z',
+      message_type: 'agent',
+      agent_id: 'agent-1',
+      related_message_id: 'u1',
+      extend_info: {
+        hitl_request_id: 'trusted-request',
+      },
+      message_content: {
+        message_text: '',
+        message_task: {
+          status: { state: 'input-required' },
+          metadata: {
+            hitl_request_id: 'trusted-request',
+            hitl_prompt: 'Choose an account',
+            hitl_prompt_type: 'choice',
+            hitl_choices: ['Enterprise', 'Personal'],
+          },
+        } as RoomMessage['message_content']['message_task'],
+      },
+    } as RoomMessage, {
+      getAgentName: async () => 'Test Agent',
+    })
+    const agent = makeEntity({ ...incoming })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+
+    expect(turns[0].agentResults[0].status).toBe('awaiting_input')
+    expect(turns[0].agentResults[0].hitlPending).toEqual({
+      prompt: 'Choose an account',
+    })
+  })
+
   // ── isSupervisorTurn ──────────────────────────────────────
 
   it('turn with system:hybro entity has isSupervisorTurn=true', () => {

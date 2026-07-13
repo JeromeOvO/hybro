@@ -407,12 +407,11 @@ class TestNotifyTaskUpdate:
             assert private_sentinel not in repr(emitter_payload)
 
     # --------------------------------------------------------------------- #
-    # 7b. Failed state with artifacts extracts content
+    # 7b. Failed state with artifacts suppresses partial content
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_failed_with_artifacts_extracts_content(self):
-        """A failed task that has artifacts (e.g. partial results) should
-        still extract text content from those artifacts for the SSE."""
+    async def test_failed_with_artifacts_suppresses_partial_content(self):
+        """Failed tasks expose the safe error, not partial artifact content."""
         task = _make_task(
             TaskState.failed,
             artifacts=[
@@ -447,10 +446,9 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            # Artifacts should be extracted regardless of state
-            mock_ep.assert_called_once()
+            mock_ep.assert_not_called()
             call_kw = notifier.send_task_update.call_args.kwargs
-            assert call_kw["content"] == "Partial result before failure"
+            assert call_kw["content"] is None
             assert call_kw["error"] == "Task failed"
 
     # --------------------------------------------------------------------- #

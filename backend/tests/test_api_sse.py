@@ -10,7 +10,7 @@ Tests cover:
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -218,6 +218,81 @@ class TestStreamRoomMessages:
         assert frame["data"]["client_request_id"] == client_request_id
         assert frame["data"]["error"] == "Task failed"
         assert private_sentinel not in second_event
+
+    @pytest.mark.asyncio
+    async def test_stream_task_update_drops_completed_inline_file_bytes(
+        self,
+        mock_user,
+        mock_db_service,
+        sample_room,
+    ):
+        private_bytes = "PRIVATE_SENTINEL_sse_inline_file_bytes"
+        task = Task(
+            id="task-file-001",
+            status=TaskStatus(state=TaskState.completed),
+        )
+        message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="agent-msg-file-001",
+            agent_id="file-agent",
+            user_id=mock_user.user_id,
+            has_task_tracking=True,
+            message_content=MessageContent(message_task=task),
+            extend_info={"public_task_label": "Requesting File Agent"},
+        )
+        notification_store = SimpleNamespace(
+            update_last_notified_state=AsyncMock(return_value=True),
+            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
+            get_room_by_room_id=AsyncMock(return_value=sample_room),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
+        )
+        delivery = make_delivery_facade()
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+
+        response = await stream_room_messages(
+            sample_room.room_id,
+            mock_user,
+            transport=delivery,
+            db=mock_db_service,
+        )
+
+        await anext(response.body_iterator)
+        with patch(
+            "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+            new_callable=AsyncMock,
+        ):
+            await _notify_task_update_impl(
+                notification_store,
+                TaskUpdateNotifier(delivery),
+                delivery,
+                message_id=message.message_id,
+                state=TaskState.completed,
+                room_id=sample_room.room_id,
+                user_id=mock_user.user_id,
+                parts=[
+                    {
+                        "kind": "file",
+                        "file": {
+                            "bytes": private_bytes,
+                            "uri": "https://storage.example/result.txt",
+                            "mimeType": "text/plain",
+                            "name": "result.txt",
+                        },
+                    }
+                ],
+            )
+        second_event = await anext(response.body_iterator)
+        frame = json.loads(second_event.removeprefix("data: ").strip())
+        await response.body_iterator.aclose()
+
+        assert frame["type"] == "task_update"
+        file_payload = frame["data"]["parts"][0]["file"]
+        assert file_payload == {
+            "uri": "https://storage.example/result.txt",
+            "mimeType": "text/plain",
+            "name": "result.txt",
+        }
+        assert private_bytes not in second_event
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

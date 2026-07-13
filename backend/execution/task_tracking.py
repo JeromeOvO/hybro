@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -292,8 +293,11 @@ class A2ATaskTrackingService:
             existing_task = (
                 msg.message_content.message_task if msg.message_content else None
             )
-            trusted_local_hitl_metadata = (
-                existing_task.metadata if existing_task is not None else None
+            trusted_local_hitl_metadata = await self._trusted_local_hitl_metadata(
+                msg,
+                existing_task,
+                task_id=task_id,
+                context_id=context_id,
             )
             projected_task_data = public_persisted_task_data(
                 task_obj,
@@ -327,6 +331,49 @@ class A2ATaskTrackingService:
             "task_state": task_state,
             "response_text": response_text,
         }
+
+    async def _trusted_local_hitl_metadata(
+        self,
+        msg,
+        existing_task: Task | None,
+        *,
+        task_id: str,
+        context_id: str,
+    ) -> dict[str, Any] | None:
+        metadata = existing_task.metadata if existing_task is not None else None
+        request_id = (
+            metadata.get("hitl_request_id") if isinstance(metadata, dict) else None
+        )
+        if not isinstance(request_id, str) or not request_id:
+            return None
+
+        getter = getattr(self._tracking_store, "get_hitl_request", None)
+        if not callable(getter):
+            return None
+
+        try:
+            request = getter(request_id)
+            if inspect.isawaitable(request):
+                request = await request
+        except Exception:
+            logger.warning(
+                "Failed to verify local HITL metadata for agent message %s",
+                msg.message_id,
+                exc_info=True,
+            )
+            return None
+
+        if not _is_trusted_local_hitl_request(
+            request,
+            request_id=request_id,
+            room_id=msg.room_id,
+            message_id=msg.message_id,
+            agent_id=msg.agent_id,
+            task_id=task_id,
+            context_id=context_id,
+        ):
+            return None
+        return _trusted_metadata_from_hitl_request(request)
 
     async def _handle_message_result(
         self,
@@ -491,6 +538,65 @@ def _agent_card_url(agent_card: Any) -> str | None:
     return url or None
 
 
+def _is_trusted_local_hitl_request(
+    request: Any,
+    *,
+    request_id: str,
+    room_id: str,
+    message_id: str,
+    agent_id: str | None,
+    task_id: str,
+    context_id: str,
+) -> bool:
+    if not isinstance(request, dict):
+        return False
+    if (
+        request.get("request_id") != request_id
+        or request.get("room_id") != room_id
+        or request.get("source") != "agent"
+    ):
+        return False
+    projected_message_id = request.get("display_message_id") or request.get(
+        "continuation_message_id"
+    )
+    if projected_message_id != message_id:
+        return False
+    request_agent_id = request.get("agent_id")
+    if request_agent_id is not None and request_agent_id != agent_id:
+        return False
+    request_task_id = request.get("a2a_task_id")
+    if request_task_id is not None and request_task_id != task_id:
+        return False
+    request_context_id = request.get("a2a_context_id")
+    if request_context_id is not None and request_context_id != context_id:
+        return False
+    return True
+
+
+def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, Any]:
+    request_id = request["request_id"]
+    trusted: dict[str, Any] = {
+        "hitl_request_id": request_id,
+        "hitl_prompt": request.get("prompt"),
+        "hitl_prompt_type": getattr(
+            request.get("prompt_type"), "value", request.get("prompt_type")
+        ),
+    }
+    optional_fields = {
+        "hitl_choices": request.get("choices"),
+        "hitl_a2a_task_id": request.get("a2a_task_id"),
+        "hitl_a2a_context_id": request.get("a2a_context_id"),
+        "hitl_group_id": request.get("group_id"),
+        "hitl_group_total": request.get("group_total"),
+        "hitl_group_index": request.get("group_index"),
+        "user_answer": request.get("user_input"),
+    }
+    trusted.update(
+        {key: value for key, value in optional_fields.items() if value is not None}
+    )
+    return {key: value for key, value in trusted.items() if value is not None}
+
+
 async def _best_effort_convert_pydantic_artifacts_to_s3(
     artifacts: list,
     *,
@@ -648,7 +754,7 @@ def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     file_payload = public_payload.get("file")
     if isinstance(file_payload, dict):
-        allowed_file_keys = {"uri", "mimeType", "mime_type", "name", "bytes"}
+        allowed_file_keys = {"uri", "mimeType", "mime_type", "name"}
         public_payload["file"] = {
             key: value
             for key, value in file_payload.items()

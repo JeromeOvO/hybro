@@ -40,6 +40,7 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from execution.task_tracking import (
+    public_part_data,
     public_persisted_task_data,
     resolve_public_task_label,
 )
@@ -447,6 +448,9 @@ async def _notify_task_update_impl(
         is_terminal_task_state_value,
         resolve_terminal_sse_content,
     )
+
+    if parts:
+        parts = [public_part_data(part) for part in parts]
 
     if is_terminal_task_state_value(state):
         content = resolve_terminal_sse_content(
