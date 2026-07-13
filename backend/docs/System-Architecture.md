@@ -782,7 +782,9 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - Terminal status is emitted after synthesis or final failure/cancellation.
 
 10. Agent responses flow into `AgentResponseHandler`, which:
-    - persists artifact updates,
+    - public-projects remote A2A task/event payloads before persistence,
+      Delivery/SSE, lifecycle emission, or orchestration ingestion,
+    - broadcasts nonterminal artifact updates without persisting them,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
     - emits SSE updates through Delivery,
@@ -850,7 +852,10 @@ the idempotency update plus message, room, and client-request-id reads needed by
 `Task.history`; completed output is represented only by sanitized completed
 artifacts, public labels, or safe terminal errors. Streaming text that should
 survive reconnect is materialized as a completed `response` artifact before
-terminal persistence and delivery. List/section markdown repair runs only in the
+terminal persistence and delivery. Remote status messages, failure details,
+interactive prompts, noncompleted artifact/message content, and inline
+`file.bytes` are not persisted or emitted; file artifacts must be converted to
+addressable URIs or dropped from public projection. List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
 render time. Hybro-controlled LLM paths (supervisor synthesis,

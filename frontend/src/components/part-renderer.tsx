@@ -70,7 +70,7 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
   const isImage = mime.startsWith('image/')
   const isAudio = mime.startsWith('audio/')
   const isVideo = mime.startsWith('video/')
-  const src = file.uri || (file.bytes ? `data:${mime || 'application/octet-stream'};base64,${file.bytes}` : null)
+  const src = file.uri || null
   const displayName = isDisplayableName(file.name) ? file.name : undefined
 
   if (isImage && src) {

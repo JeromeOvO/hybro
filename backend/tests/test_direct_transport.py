@@ -1302,8 +1302,115 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert private_sentinel not in payload
 
     @pytest.mark.asyncio
-    async def test_artifact_chunk_no_sse_uses_atomic_persist(self):
-        """When send_sse=False, persists via accumulate_artifact_on_message (atomic)."""
+    async def test_artifact_chunk_sse_is_sanitized_only_and_not_persisted_midstream(self):
+        private_bytes = "PRIVATE_SENTINEL_direct_stream_bytes"
+        private_metadata = "PRIVATE_SENTINEL_direct_stream_metadata"
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        streaming_state = MessageStreamingState()
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            name="partial-file",
+            parts=[
+                Part(
+                    root=FilePart(
+                        file=FileContent(
+                            bytes=private_bytes,
+                            mimeType="text/plain",
+                            name="private.txt",
+                        ),
+                        metadata={"private": private_metadata},
+                    )
+                )
+            ],
+            metadata={"private": private_metadata},
+        )
+        result = MagicMock(artifact=artifact, append=False, last_chunk=False)
+        proc._convert_inline_bytes_to_s3 = AsyncMock(
+            side_effect=RuntimeError("S3 unavailable")
+        )
+
+        await proc._handle_stream_artifact_update(result, ctx, streaming_state)
+
+        proc.tsm.persist_message.assert_not_awaited()
+        proc._artifact_store.accumulate_artifact_on_message.assert_not_awaited()
+        task = current_message.message_content.message_task
+        assert task.artifacts in (None, [])
+        assert streaming_state.non_text_parts
+        assert private_bytes in json.dumps(streaming_state.non_text_parts)
+        event = proc.response_handler.handle.await_args.args[0]
+        event_json = json.dumps(event.artifacts, sort_keys=True)
+        assert private_bytes not in event_json
+        assert private_metadata not in event_json
+        assert event.artifacts[0]["parts"] == []
+        assert event.artifacts[0]["name"] == "partial-file"
+
+    @pytest.mark.asyncio
+    async def test_later_empty_artifact_chunk_does_not_erase_accumulated_final_parts(self):
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        streaming_state = MessageStreamingState()
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        first = MagicMock(
+            artifact=Artifact(
+                artifact_id="artifact-1",
+                parts=[
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                uri="https://storage.example/result.txt",
+                                mimeType="text/plain",
+                                name="result.txt",
+                            )
+                        )
+                    )
+                ],
+            ),
+            append=False,
+            last_chunk=False,
+        )
+        second = MagicMock(
+            artifact=Artifact(artifact_id="artifact-1", parts=[]),
+            append=True,
+            last_chunk=True,
+        )
+
+        await proc._handle_stream_artifact_update(first, ctx, streaming_state)
+        await proc._handle_stream_artifact_update(second, ctx, streaming_state)
+
+        assert len(streaming_state.non_text_parts) == 1
+        retained = streaming_state.non_text_parts[0]
+        assert retained["kind"] == "file"
+        assert retained["file"]["uri"] == "https://storage.example/result.txt"
+        assert retained["file"]["name"] == "result.txt"
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_no_sse_waits_for_finalization(self):
+        """When send_sse=False, mid-stream artifacts are retained only in memory."""
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
@@ -1343,12 +1450,50 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc.response_handler.handle.assert_not_awaited()
         # Old persist_message NOT called
         proc.tsm.persist_message.assert_not_awaited()
-        # Instead uses atomic accumulate
-        proc._artifact_store.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-1",
-            {"artifact_id": "art-1", "parts": [], "metadata": None},
-            append=False,
+        proc._artifact_store.accumulate_artifact_on_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_no_sse_does_not_persist_midstream(self):
+        """No-SSE direct streaming still waits until completed finalization to persist."""
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=False,
         )
+        streaming_state = MessageStreamingState()
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            parts=[
+                Part(
+                    root=FilePart(
+                        file=FileContent(
+                            uri="https://storage.example/result.txt",
+                            mimeType="text/plain",
+                            name="result.txt",
+                        )
+                    )
+                )
+            ],
+        )
+        result = MagicMock(artifact=artifact, append=False, last_chunk=False)
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+
+        await proc._handle_stream_artifact_update(result, ctx, streaming_state)
+
+        proc.response_handler.handle.assert_not_awaited()
+        proc.tsm.persist_message.assert_not_awaited()
+        proc._artifact_store.accumulate_artifact_on_message.assert_not_awaited()
+        assert streaming_state.non_text_parts
 
 
 class TestFinalizeStreamingEmitsLastChunk:
@@ -1481,6 +1626,9 @@ class TestProcessSyncResponsePersistGating:
         proc.tsm.transition_task.assert_awaited_once()
         call_kwargs = proc.tsm.transition_task.call_args[1]
         assert call_kwargs["persist"] is True
+        artifacts = current_message.message_content.message_task.artifacts
+        assert artifacts is not None
+        assert artifacts[0].parts[0].root.text == "Agent result"
 
     @pytest.mark.asyncio
     async def test_degraded_path_persists(self):
@@ -1514,6 +1662,9 @@ class TestProcessSyncResponsePersistGating:
         proc.tsm.transition_task.assert_awaited_once()
         call_kwargs = proc.tsm.transition_task.call_args[1]
         assert call_kwargs["persist"] is True
+        artifacts = current_message.message_content.message_task.artifacts
+        assert artifacts is not None
+        assert artifacts[0].parts[0].root.text == "Fallback response"
 
 
 class TestProcessSyncResponseRespectsStatus:
