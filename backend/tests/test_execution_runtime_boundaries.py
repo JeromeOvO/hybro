@@ -393,31 +393,552 @@ def test_execution_modules_do_not_store_legacy_runtime_fields() -> None:
     )
 
 
-def _source(path: str) -> str:
-    return (ROOT / path).read_text()
+FORBIDDEN_CONTROL_PLANE_MODULES = {
+    "execution.orchestration.action_validator",
+    "execution.orchestration.blocker_resolver",
+    "execution.orchestration.outcome_evaluator",
+    "execution.orchestration.outcome_policy",
+    "execution.orchestration.planner_recovery",
+    "execution.orchestration.recovery_policy",
+    "execution.orchestration.run_reducer",
+    "execution.orchestration.run_store",
+    "execution.orchestration.supervisor_executor",
+    "execution.orchestration.terminal_summary",
+    "models.orchestration",
+}
+
+FORBIDDEN_CONTROL_PLANE_SYMBOLS = {
+    "BlockerPolicyValidator",
+    "DelegationOutcomeEvaluator",
+    "OrchestrationRunState",
+    "OrchestrationStatus",
+    "PlannerAction",
+    "PlannerActionType",
+    "PlannerActionValidator",
+    "PlannerActionValidationError",
+    "SupervisorExecutor",
+    "apply_recoverable_planner_rejection",
+    "build_terminal_summary",
+    "mark_terminal",
+    "record_agent_dispatch",
+    "record_agent_observation",
+    "record_planner_action",
+    "resolve_agent_observed_blockers",
+    "validate_hitl_answered_blockers",
+}
+
+ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_MODULES = {
+    "execution.orchestration.action_validator",
+    "execution.orchestration.blocker_resolver",
+    "execution.orchestration.outcome_evaluator",
+    "execution.orchestration.outcome_policy",
+    "execution.orchestration.planner_recovery",
+    "execution.orchestration.recovery_policy",
+    "execution.orchestration.run_reducer",
+    "execution.orchestration.terminal_summary",
+}
+
+ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_SYMBOLS = {
+    "BlockerPolicyValidator",
+    "DelegationOutcomeEvaluator",
+    "PlannerActionValidator",
+    "PlannerActionValidationError",
+    "apply_recoverable_planner_rejection",
+    "build_terminal_summary",
+    "mark_terminal",
+    "record_agent_dispatch",
+    "record_agent_observation",
+    "record_planner_action",
+    "resolve_agent_observed_blockers",
+    "validate_hitl_answered_blockers",
+}
+
+ORCHESTRATION_RUN_STATE_CONTROL_FIELDS = {
+    "agent_outputs",
+    "blockers",
+    "candidate_agent_ids",
+    "candidate_scope",
+    "current_step_id",
+    "delegation_outcomes",
+    "dispatch_intents",
+    "dispatch_results",
+    "facts",
+    "interrupted_state",
+    "open_failures",
+    "planner_actions",
+    "status",
+    "step_budget",
+    "steps_used",
+    "terminal_reason",
+    "terminal_summary",
+    "unknowns",
+}
+
+MUTATING_COLLECTION_METHODS = {
+    "add",
+    "append",
+    "clear",
+    "discard",
+    "extend",
+    "insert",
+    "pop",
+    "popitem",
+    "remove",
+    "reverse",
+    "setdefault",
+    "sort",
+    "update",
+}
 
 
-def test_direct_transport_does_not_import_orchestration_state():
-    source = _source("execution/dispatch/transports/direct.py")
-    assert "OrchestrationRunState" not in source
-    assert "PlannerAction" not in source
-    assert "OrchestrationStatus" not in source
+def _parse_source(source: str, rel_path: Path) -> ast.Module:
+    return ast.parse(source, filename=str(rel_path))
 
 
-def test_room_message_center_only_selects_execution_entrypoint_not_next_step_policy():
-    source = _source("execution/orchestration/room_message_center.py")
-    forbidden = [
-        "PlannerActionValidator.validate",
-        "DelegationOutcomeEvaluator",
-        "resolve_agent_observed_blockers",
-        "build_terminal_summary(",
-    ]
-    for needle in forbidden:
-        assert needle not in source
+def _read_source(rel_path: Path) -> str:
+    return (ROOT / rel_path).read_text()
 
 
-def test_queue_executor_hitl_path_remains_non_supervisor_only():
-    source = _source("execution/orchestration/queue_executor.py")
-    assert "SupervisorExecutor" not in source
-    assert "orchestration_run_store" not in source
-    assert "OrchestrationRunState" not in source
+def _dotted_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        if prefix:
+            return f"{prefix}.{node.attr}"
+        return node.attr
+    return None
+
+
+def _resolve_dotted_name(name: str | None, aliases: dict[str, str]) -> str | None:
+    if not name:
+        return None
+    parts = name.split(".")
+    for length in range(len(parts), 0, -1):
+        prefix = ".".join(parts[:length])
+        if prefix in aliases:
+            return ".".join([aliases[prefix], *parts[length:]])
+    return name
+
+
+def _is_forbidden_module(target: str, forbidden_modules: set[str]) -> bool:
+    return any(
+        target == module or target.startswith(f"{module}.")
+        for module in forbidden_modules
+    )
+
+
+def _is_forbidden_symbol(target: str, forbidden_symbols: set[str]) -> bool:
+    parts = target.split(".")
+    return any(symbol in parts for symbol in forbidden_symbols)
+
+
+def _is_forbidden_target(
+    target: str | None,
+    *,
+    forbidden_modules: set[str],
+    forbidden_symbols: set[str],
+) -> bool:
+    if not target:
+        return False
+    return _is_forbidden_module(target, forbidden_modules) or _is_forbidden_symbol(
+        target,
+        forbidden_symbols,
+    )
+
+
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    root_name = alias.name.split(".", 1)[0]
+                    aliases.setdefault(root_name, root_name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _import_violations(
+    tree: ast.Module,
+    *,
+    rel_path: Path,
+    forbidden_modules: set[str],
+    forbidden_symbols: set[str],
+) -> list[str]:
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_forbidden_target(
+                    alias.name,
+                    forbidden_modules=forbidden_modules,
+                    forbidden_symbols=forbidden_symbols,
+                ):
+                    violations.append(
+                        f"{rel_path}:{node.lineno}: import {alias.name}"
+                    )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if _is_forbidden_module(node.module, forbidden_modules):
+                violations.append(
+                    f"{rel_path}:{node.lineno}: from {node.module} import ..."
+                )
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                imported = f"{node.module}.{alias.name}"
+                if _is_forbidden_target(
+                    imported,
+                    forbidden_modules=forbidden_modules,
+                    forbidden_symbols=forbidden_symbols,
+                ):
+                    violations.append(
+                        f"{rel_path}:{node.lineno}: from {node.module} "
+                        f"import {alias.name}"
+                    )
+    return violations
+
+
+def _constructor_bindings(
+    tree: ast.Module,
+    aliases: dict[str, str],
+    *,
+    forbidden_modules: set[str],
+    forbidden_symbols: set[str],
+) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call):
+            continue
+        resolved = _resolve_dotted_name(_dotted_name(value.func), aliases)
+        if not _is_forbidden_target(
+            resolved,
+            forbidden_modules=forbidden_modules,
+            forbidden_symbols=forbidden_symbols,
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                bindings[target.id] = resolved or target.id
+    return bindings
+
+
+def _control_plane_boundary_violations_for_source(
+    source: str,
+    *,
+    rel_path: Path,
+    forbidden_modules: set[str] = FORBIDDEN_CONTROL_PLANE_MODULES,
+    forbidden_symbols: set[str] = FORBIDDEN_CONTROL_PLANE_SYMBOLS,
+) -> list[str]:
+    tree = _parse_source(source, rel_path)
+    aliases = _import_aliases(tree)
+    bindings = {
+        **aliases,
+        **_constructor_bindings(
+            tree,
+            aliases,
+            forbidden_modules=forbidden_modules,
+            forbidden_symbols=forbidden_symbols,
+        ),
+    }
+    violations = _import_violations(
+        tree,
+        rel_path=rel_path,
+        forbidden_modules=forbidden_modules,
+        forbidden_symbols=forbidden_symbols,
+    )
+    seen = set(violations)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            kind = "call"
+            raw = _dotted_name(node.func)
+        elif isinstance(node, ast.Attribute):
+            kind = "use"
+            raw = _dotted_name(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            kind = "use"
+            raw = node.id
+        else:
+            continue
+
+        resolved = _resolve_dotted_name(raw, bindings)
+        if not _is_forbidden_target(
+            resolved,
+            forbidden_modules=forbidden_modules,
+            forbidden_symbols=forbidden_symbols,
+        ):
+            continue
+        message = f"{rel_path}:{node.lineno}: {kind} {resolved}"
+        if message not in seen:
+            violations.append(message)
+            seen.add(message)
+
+    return violations
+
+
+def _control_plane_boundary_violations(rel_path: Path) -> list[str]:
+    return _control_plane_boundary_violations_for_source(
+        _read_source(rel_path),
+        rel_path=rel_path,
+    )
+
+
+def _annotation_mentions_run_state(
+    annotation: ast.AST | None,
+    aliases: dict[str, str],
+) -> bool:
+    if annotation is None:
+        return False
+    for node in ast.walk(annotation):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "OrchestrationRunState" in node.value:
+                return True
+        raw = _dotted_name(node)
+        resolved = _resolve_dotted_name(raw, aliases)
+        if resolved and "OrchestrationRunState" in resolved.split("."):
+            return True
+    return False
+
+
+def _collect_run_state_names(tree: ast.Module, aliases: dict[str, str]) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parameters = [
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            ]
+            for parameter in parameters:
+                if _annotation_mentions_run_state(parameter.annotation, aliases):
+                    names.add(parameter.arg)
+            if node.args.vararg and _annotation_mentions_run_state(
+                node.args.vararg.annotation,
+                aliases,
+            ):
+                names.add(node.args.vararg.arg)
+            if node.args.kwarg and _annotation_mentions_run_state(
+                node.args.kwarg.annotation,
+                aliases,
+            ):
+                names.add(node.args.kwarg.arg)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and _annotation_mentions_run_state(
+                node.annotation,
+                aliases,
+            ):
+                names.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            value_name = _dotted_name(node.value)
+            if value_name and value_name.endswith(".run_state"):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+    return names
+
+
+def _root_name(node: ast.AST | None) -> str | None:
+    current = node
+    while isinstance(current, (ast.Attribute, ast.Subscript)):
+        current = current.value
+    if isinstance(current, ast.Name):
+        return current.id
+    return None
+
+
+def _is_run_state_name(name: str | None, run_state_names: set[str]) -> bool:
+    return bool(
+        name
+        and (
+            name in run_state_names
+            or name == "run_state"
+            or name.endswith("_run_state")
+            or name == "orchestration_state"
+            or name.endswith("_orchestration_state")
+        )
+    )
+
+
+def _literal_subscript_key(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _run_state_control_mutation_violations_for_source(
+    source: str,
+    *,
+    rel_path: Path,
+) -> list[str]:
+    tree = _parse_source(source, rel_path)
+    aliases = _import_aliases(tree)
+    run_state_names = _collect_run_state_names(tree, aliases)
+    violations: list[str] = []
+
+    def record_target(target: ast.AST, lineno: int) -> None:
+        if isinstance(target, ast.Attribute):
+            root = _root_name(target.value)
+            if (
+                target.attr in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+                and _is_run_state_name(root, run_state_names)
+            ):
+                violations.append(
+                    f"{rel_path}:{lineno}: assign {_dotted_name(target)}"
+                )
+        elif isinstance(target, ast.Subscript):
+            root = _root_name(target.value)
+            field = _literal_subscript_key(target.slice)
+            if (
+                field in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+                and _is_run_state_name(root, run_state_names)
+            ):
+                violations.append(f"{rel_path}:{lineno}: assign {root}[{field!r}]")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                record_target(target, node.lineno)
+        elif isinstance(node, ast.AnnAssign):
+            record_target(node.target, node.lineno)
+        elif isinstance(node, ast.AugAssign):
+            record_target(node.target, node.lineno)
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                record_target(target, node.lineno)
+        elif isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in MUTATING_COLLECTION_METHODS:
+                continue
+            collection = node.func.value
+            if not isinstance(collection, ast.Attribute):
+                continue
+            root = _root_name(collection.value)
+            if (
+                collection.attr in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+                and _is_run_state_name(root, run_state_names)
+            ):
+                violations.append(
+                    f"{rel_path}:{node.lineno}: mutate "
+                    f"{_dotted_name(collection)}.{node.func.attr}()"
+                )
+
+    return violations
+
+
+def _run_state_control_mutation_violations(rel_path: Path) -> list[str]:
+    return _run_state_control_mutation_violations_for_source(
+        _read_source(rel_path),
+        rel_path=rel_path,
+    )
+
+
+def _room_message_center_policy_helper_violations(rel_path: Path) -> list[str]:
+    return _control_plane_boundary_violations_for_source(
+        _read_source(rel_path),
+        rel_path=rel_path,
+        forbidden_modules=ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_MODULES,
+        forbidden_symbols=ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_SYMBOLS,
+    )
+
+
+def test_boundary_ast_checks_ignore_comments_docstrings_and_string_literals() -> None:
+    source = '''
+"""SupervisorExecutor, OrchestrationRunState, and build_terminal_summary are prose."""
+
+# PlannerActionValidator.validate and resolve_agent_observed_blockers are comments.
+
+def harmless() -> str:
+    return "OrchestrationStatus and DelegationOutcomeEvaluator are literal text"
+'''
+
+    assert not _control_plane_boundary_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+    assert not _run_state_control_mutation_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+
+
+def test_boundary_ast_checks_reject_aliases_calls_and_state_mutations() -> None:
+    source = """
+from execution.orchestration.action_validator import PlannerActionValidator as Validator
+from models.orchestration import OrchestrationRunState as RunState
+
+
+def bad(state: RunState) -> None:
+    validator = Validator()
+    validator.validate(None, run_state=state)
+    state.status = "failed"
+"""
+
+    control_plane_violations = _control_plane_boundary_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+    mutation_violations = _run_state_control_mutation_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+
+    assert any("PlannerActionValidator" in item for item in control_plane_violations)
+    assert any("OrchestrationRunState" in item for item in control_plane_violations)
+    assert any(".validate" in item for item in control_plane_violations)
+    assert any(".status" in item for item in mutation_violations)
+
+
+def test_direct_transport_and_queue_executor_do_not_use_supervisor_control_plane() -> None:
+    violations: list[str] = []
+    for rel_path in (
+        Path("execution/dispatch/transports/direct.py"),
+        Path("execution/orchestration/queue_executor.py"),
+    ):
+        violations.extend(_control_plane_boundary_violations(rel_path))
+
+    assert not violations, (
+        "DirectTransport and QueueExecutor must not import or call "
+        "orchestration run-state / next-step policy helpers:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_runtime_boundary_modules_do_not_mutate_run_state_control_fields() -> None:
+    violations: list[str] = []
+    for rel_path in (
+        Path("execution/dispatch/transports/direct.py"),
+        Path("execution/orchestration/queue_executor.py"),
+        Path("execution/orchestration/room_message_center.py"),
+    ):
+        violations.extend(_run_state_control_mutation_violations(rel_path))
+
+    assert not violations, (
+        "Runtime boundary modules must not mutate orchestration run-state "
+        "control fields outside supervisor paths:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_room_message_center_only_wires_supervisor_entrypoint_not_policy_helpers() -> None:
+    violations = _room_message_center_policy_helper_violations(
+        Path("execution/orchestration/room_message_center.py")
+    )
+
+    assert not violations, (
+        "RoomMessageCenter may select and invoke SupervisorExecutor, but must "
+        "not call planner/outcome/blocker/terminal policy helpers directly:\n"
+        + "\n".join(violations)
+    )
