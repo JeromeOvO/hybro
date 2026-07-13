@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import re
 from typing import Any
 from uuid import uuid4
 
@@ -74,7 +73,9 @@ _SAFE_STATUS_MESSAGE_CODES = {
 _FAILURE_STATUSES = {"failed", "error", "canceled", "rejected"}
 _GENERIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
 _GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
-_SAFE_ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,80}$")
+_SAFE_RESULT_ERROR_CODES = _SAFE_STATUS_MESSAGE_CODES | {
+    "resource_payload_too_large",
+}
 _SAFE_LOCAL_FAILURE_CODES_BY_MESSAGE = {
     "Agent ID not in registry (hallucinated)": "agent_unavailable",
     "Agent not found or inactive": "agent_unavailable",
@@ -145,7 +146,7 @@ def _structured_error_code(value: str | None) -> str | None:
     normalized = value.strip()
     if not normalized:
         return None
-    if _SAFE_ERROR_CODE_PATTERN.fullmatch(normalized) is None:
+    if normalized not in _SAFE_RESULT_ERROR_CODES:
         return None
     return normalized
 

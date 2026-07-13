@@ -263,6 +263,25 @@ def test_ingest_failed_runtime_error_sanitizes_output_and_failure_shadow():
     assert "PRIVATE_TASK_SENTINEL_dispatch_body" not in serialized
 
 
+def test_ingest_failed_result_rejects_remote_error_code_from_public_state():
+    private_error_code = "private_customer_denied"
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        error="Remote agent denied the request.",
+        error_code=private_error_code,
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+    serialized = json.dumps(updated.model_dump(mode="json"), sort_keys=True)
+
+    output = updated.agent_outputs[0]
+    assert output.error == "Agent processing failed"
+    assert updated.open_failures[0].error_code == "agent_execution_failed"
+    assert private_error_code not in serialized
+
+
 def test_reingesting_same_result_is_idempotent_for_outputs_and_artifacts():
     result = AgentResultRead(
         agent_message_id="agent-msg-1",
