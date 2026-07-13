@@ -29,7 +29,7 @@ from common.types import (
     MessageRole as Role,
 )
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
-from common.utils.a2a_helpers import extract_agent_text_from_room_message
+from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
     build_context_for_agent,
@@ -44,6 +44,10 @@ from execution.orchestration.candidate_scope import (
     normalize_candidate_scope,
 )
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
+from execution.task_tracking import (
+    public_persisted_task_data,
+    resolve_public_task_label,
+)
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import MemoryContent, RoomMemory
@@ -98,6 +102,29 @@ from room.compat.unbound import (
 )
 
 logger = get_logger(__name__)
+
+_PUBLIC_ATTACHMENT_PREFLIGHT_MESSAGES = {
+    "agent_does_not_accept_file_type": "The agent does not accept an attached file type.",
+    "agent_card_unavailable": "Agent card unavailable for attachment preflight.",
+    "file_too_large": "An attached file exceeds the maximum size.",
+    "message_too_large": "The attached files exceed the maximum message size.",
+    "file_unavailable": "An attached file is unavailable.",
+    "storage_unavailable": "Attachment content is temporarily unavailable.",
+    "empty_file": "An attached file is empty.",
+    "encoding_failed": "An attached file could not be encoded.",
+}
+
+
+def _public_attachment_preflight_failure(
+    failure: AttachmentPreflightFailure,
+) -> dict[str, str]:
+    return {
+        "code": failure.code,
+        "message": _PUBLIC_ATTACHMENT_PREFLIGHT_MESSAGES.get(
+            failure.code,
+            "Attachment preflight failed.",
+        ),
+    }
 
 
 @dataclass(slots=True)
@@ -3705,43 +3732,23 @@ class RoomServices:
                     message.extend_info, dict
                 ):
                     message.extend_info = {}
-                message.extend_info["attachment_preflight_failure"] = {
-                    "code": failure.code,
-                    "message": failure.message,
-                    "file_names": list(failure.file_names),
-                }
+                public_failure = _public_attachment_preflight_failure(failure)
+                message.extend_info["attachment_preflight_failure"] = public_failure
                 return RoomCenterAgentMessageResponse(
                     message_id=message.message_id,
                     message=message,
                     a2a_message=None,
                     success=False,
-                    error=failure.message,
+                    error=public_failure["message"],
                     status_code=422,
                 )
 
             if forwarding_policy == "compatible_only":
                 accepted_modes = agent_input_modes(agent_card_obj)
                 supported_attachments: list[UserAttachment] = []
-                skipped_attachments: list[dict[str, str]] = []
                 for attachment in user_attachments:
                     if mime_type_is_accepted(attachment.mime_type, accepted_modes):
                         supported_attachments.append(attachment)
-                    else:
-                        skipped_attachments.append(
-                            {
-                                "file_name": attachment.file_name,
-                                "mime_type": attachment.mime_type,
-                                "reason": "unsupported_by_agent",
-                            }
-                        )
-                if skipped_attachments:
-                    if message.extend_info is None or not isinstance(
-                        message.extend_info, dict
-                    ):
-                        message.extend_info = {}
-                    message.extend_info["skipped_user_attachments"] = (
-                        skipped_attachments
-                    )
                 user_attachments = supported_attachments
 
             file_parts = await self._build_message_parts(
@@ -3759,17 +3766,14 @@ class RoomServices:
                     message.extend_info, dict
                 ):
                     message.extend_info = {}
-                message.extend_info["attachment_preflight_failure"] = {
-                    "code": file_parts.code,
-                    "message": file_parts.message,
-                    "file_names": list(file_parts.file_names),
-                }
+                public_failure = _public_attachment_preflight_failure(file_parts)
+                message.extend_info["attachment_preflight_failure"] = public_failure
                 return RoomCenterAgentMessageResponse(
                     message_id=message.message_id,
                     message=message,
                     a2a_message=None,
                     success=False,
-                    error=file_parts.message,
+                    error=public_failure["message"],
                     status_code=422,
                 )
             for p in file_parts:
@@ -4008,7 +4012,25 @@ class RoomServices:
             # Process agent messages
             if agent_messages_response.success and agent_messages_response.message_list:
                 for agent_msg in agent_messages_response.message_list:
-                    agent_content = extract_agent_text_from_room_message(agent_msg) or ""
+                    stored_task = (
+                        agent_msg.message_content.message_task
+                        if agent_msg.message_content
+                        else None
+                    )
+                    public_task = (
+                        Task.model_validate(public_persisted_task_data(stored_task))
+                        if stored_task is not None
+                        else None
+                    )
+                    agent_content = (
+                        get_text_from_message(get_message_from_task(public_task))
+                        if public_task is not None
+                        else ""
+                    )
+                    public_task_label = resolve_public_task_label(
+                        agent_msg.extend_info,
+                        agent_msg.agent_id or "agent",
+                    )
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
@@ -4017,11 +4039,7 @@ class RoomServices:
                         message_type="agent",
                         message_content=MessageContent(
                             message_text=agent_content,
-                            message_task=(
-                                agent_msg.message_content.message_task
-                                if agent_msg.message_content
-                                else None
-                            ),
+                            message_task=public_task,
                         ),
                         message_created_at=agent_msg.message_created_at,
                         agent_id=agent_msg.agent_id,
@@ -4029,7 +4047,8 @@ class RoomServices:
                         step_number=agent_msg.step_number,
                         total_steps=agent_msg.total_steps,
                         task_updated_at=agent_msg.task_updated_at,
-                        task_content=agent_msg.task_content,
+                        task_content=public_task_label,
+                        extend_info={"public_task_label": public_task_label},
                     )
                     combined_messages.append(room_message)
 

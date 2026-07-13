@@ -15,6 +15,7 @@ from common.a2a_constants import CommonTaskState
 from common.types import (
     Message,
     MessageRole,
+    Part,
     Task,
     TaskArtifactUpdateEvent,
     TaskState,
@@ -285,6 +286,43 @@ def _make_room_agent_message(**overrides):
     )
     defaults.update(overrides)
     return RoomAgentMessage(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_emit_terminal_uses_public_task_output_not_legacy_message_text():
+    private_sentinel = "PRIVATE_SENTINEL_terminal_message_text"
+    public_output = "Final public terminal output"
+    task = Task(
+        id="task-terminal",
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            {
+                "artifactId": "artifact-terminal",
+                "parts": [{"kind": "text", "text": public_output}],
+            }
+        ],
+    )
+    message = _make_room_agent_message(
+        message_content=MessageContent(
+            message_text=private_sentinel,
+            message_task=task,
+        ),
+        extend_info={"public_task_label": "Requesting Insurer"},
+    )
+    response_handler = MagicMock(handle=AsyncMock())
+    transport = _make_processor(response_handler=response_handler)
+    ctx = ProcessingContext(
+        room_id="room-1",
+        current_message=message,
+        agent_card=MagicMock(name="Insurer"),
+        user_message_id="user-msg-1",
+    )
+
+    await transport._emit_terminal(ctx, CommonTaskState.COMPLETED)
+
+    emitted_event = response_handler.handle.await_args.args[0]
+    assert emitted_event.text == public_output
+    assert private_sentinel not in json.dumps(emitted_event.__dict__)
 
 
 @pytest.mark.asyncio
@@ -773,6 +811,43 @@ class TestMessageChunkEmitsArtifactUpdate:
         monkeypatch.undo()
 
         proc.delivery.send_artifact_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_role_message_chunk_is_ignored_before_persistence_or_sse():
+    private_sentinel = "PRIVATE_SENTINEL_user_stream_chunk"
+    proc = _make_processor()
+    proc.delivery.send_artifact_update = AsyncMock()
+    proc.tsm.persist_message = AsyncMock(return_value=True)
+
+    current_message = _make_room_agent_message()
+    original_task = current_message.message_content.message_task.model_dump(mode="json")
+    agent_card = MagicMock(spec_set=["name"])
+    agent_card.name = "test-agent"
+    ctx = ProcessingContext(
+        room_id="room-1",
+        current_message=current_message,
+        agent_card=agent_card,
+        user_message_id="msg-1",
+        task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+        send_sse=True,
+    )
+    streaming_state = MessageStreamingState()
+    result = Message(
+        role=MessageRole.USER,
+        message_id="user-stream-message",
+        parts=[Part(root=TextPart(text=private_sentinel))],
+    )
+
+    await proc._handle_stream_message_chunk(result, ctx, streaming_state)
+
+    assert streaming_state == MessageStreamingState()
+    assert (
+        current_message.message_content.message_task.model_dump(mode="json")
+        == original_task
+    )
+    proc.tsm.persist_message.assert_not_awaited()
+    proc.delivery.send_artifact_update.assert_not_awaited()
 
 
 class TestArtifactUpdateRoutedThroughHandler:
@@ -1671,6 +1746,9 @@ class TestFinalizePolledTaskPrivacy:
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         assert private_text not in persisted_json
         assert "Visible agent answer" in persisted_json
+        emitted_event = proc.response_handler.handle.await_args.args[0]
+        assert emitted_event.text == "Visible agent answer"
+        assert private_text not in json.dumps(emitted_event.__dict__)
 
     @pytest.mark.asyncio
     async def test_interactive_polled_task_keeps_in_memory_and_persisted_history_public(self):

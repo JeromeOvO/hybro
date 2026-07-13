@@ -6,9 +6,18 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
 from common.a2a_constants import SSEProcessingStatus
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from execution.dispatch.task_notifications import notify_task_update
 from models.room import MessageContent, Room, RoomAgentMessage
 
@@ -264,12 +273,19 @@ class TestNotifyTaskUpdate:
             assert call_kw["content"] == "Hello world"
 
     # --------------------------------------------------------------------- #
-    # 6. Completed backfills artifacts from message_text
+    # 6. Completed backfills artifacts from agent task history
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_completed_backfills_artifacts_from_message_text(self):
+    async def test_completed_backfills_artifacts_from_agent_history(self):
+        private_sentinel = "PRIVATE_SENTINEL_backfill_message_text"
         task = _make_task(TaskState.completed, artifacts=[])
-        msg = _make_message(task=task, message_text="Backfilled answer")
+        task.history = [
+            Message(
+                role=MessageRole.AGENT,
+                parts=[Part(root=TextPart(text="Backfilled public answer"))],
+            )
+        ]
+        msg = _make_message(task=task, message_text=private_sentinel)
 
         with (
             patch(PATCH_DB) as db,
@@ -291,6 +307,13 @@ class TestNotifyTaskUpdate:
             assert backfilled_task.artifacts is not None
             assert len(backfilled_task.artifacts) == 1
             assert backfilled_task.artifacts[0].name == "response"
+            assert (
+                backfilled_task.artifacts[0].parts[0].root.text
+                == "Backfilled public answer"
+            )
+            payload = notifier.send_task_update.await_args.kwargs
+            assert payload["content"] == "Backfilled public answer"
+            assert private_sentinel not in repr(payload)
 
     # --------------------------------------------------------------------- #
     # 7. Failed state extracts error
@@ -595,3 +618,60 @@ class TestNotifyTaskUpdate:
             db.get_room_by_room_id.assert_awaited_once_with("room-1")
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["agent_name"] == "SuperAgent"
+
+    @pytest.mark.asyncio
+    async def test_legacy_notification_never_emits_private_persisted_dispatch_text(
+        self,
+    ):
+        private_sentinel = "PRIVATE_SENTINEL_legacy_notification"
+        task = _make_task(
+            TaskState.completed,
+            artifacts=[
+                Artifact(
+                    artifactId="a-public",
+                    name="response",
+                    parts=[Part(root=TextPart(text="Final public result"))],
+                )
+            ],
+        )
+        task.history = [
+            Message(
+                role=MessageRole.USER,
+                parts=[Part(root=TextPart(text=private_sentinel))],
+            ),
+            Message(
+                role=MessageRole.AGENT,
+                parts=[Part(root=TextPart(text="Final public result"))],
+            ),
+        ]
+        task.metadata = {
+            "task_content": private_sentinel,
+            "internal_task_payload": private_sentinel,
+        }
+        msg = _make_message(task=task, message_text=private_sentinel)
+        msg.task_content = private_sentinel
+        room = _make_room(agent_name="Claims Agent")
+
+        with (
+            patch(PATCH_DB) as db,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
+            patch(PATCH_SLEEP, new_callable=AsyncMock),
+            patch(
+                PATCH_EXTRACT_PARTS,
+                return_value=_extracted_parts_mock(text="Final public result"),
+            ),
+            patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
+        ):
+            _setup_db_mock(db, msg=msg)
+            db.get_room_by_room_id = AsyncMock(return_value=room)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
+
+            result = await notify_task_update(**CALL_KWARGS)
+
+            assert result is True
+            payload = notifier.send_task_update.await_args.kwargs
+            assert payload["content"] == "Final public result"
+            assert payload["task_content"] == "Requesting Claims Agent"
+            assert private_sentinel not in repr(payload)

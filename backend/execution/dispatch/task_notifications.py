@@ -34,9 +34,15 @@ from common.utils.a2a_helpers import (
     extract_error_message,
     extract_status_message,
     extract_text_from_artifacts,
+    get_message_from_task,
+    get_text_from_message,
     task_has_visible_content,
 )
 from common.utils.logger import get_logger
+from execution.task_tracking import (
+    public_persisted_task_data,
+    resolve_public_task_label,
+)
 
 if TYPE_CHECKING:
     from execution.ports import (
@@ -204,6 +210,9 @@ async def _notify_task_update_impl(
         if room_agent_message.message_content
         else None
     )
+    if task is not None:
+        task = Task.model_validate(public_persisted_task_data(task))
+        room_agent_message.message_content.message_task = task
 
     # --- Diagnostic: log what we read from DB ---
     def _summarize_kinds(parts):
@@ -224,14 +233,16 @@ async def _notify_task_update_impl(
             )
         logger.info(
             "notify_task_update: DB task for %s: id=%s, db_state=%s, "
-            "artifacts=%d (%s), message_text=%s",
+            "artifacts=%d (%s), has_message_text=%s",
             message_id,
             task.id[:30] if task.id else "None",
             _task_state,
             _art_count,
             _parts_detail or "none",
-            repr((room_agent_message.message_content.message_text or "")[:80])
-            if room_agent_message.message_content else "no-mc",
+            bool(
+                room_agent_message.message_content
+                and room_agent_message.message_content.message_text
+            ),
         )
     else:
         logger.warning(
@@ -314,6 +325,10 @@ async def _notify_task_update_impl(
             if not task_has_visible_content(task):
                 status_message = extract_status_message(task)
 
+    public_agent_text = content
+    if task is not None and not public_agent_text:
+        public_agent_text = get_text_from_message(get_message_from_task(task)) or None
+
     # --- Write-side: artifact backfill + message_text backfill ------------
     # Only write back to DB when a backfill actually modifies the message.
     # An unconditional full-document write here can overwrite real task data
@@ -322,10 +337,9 @@ async def _notify_task_update_impl(
     # loses fields from the a2a Task schema.
     needs_write = False
     if room_agent_message.message_content and task:
-        existing_text = room_agent_message.message_content.message_text
         if (
             state == TaskState.completed
-            and existing_text
+            and public_agent_text
             and (not task.artifacts or len(task.artifacts) == 0)
         ):
             task = Task(
@@ -338,7 +352,7 @@ async def _notify_task_update_impl(
                     Artifact(
                         artifact_id=str(uuid.uuid4()),
                         name="response",
-                        parts=[Part(root=TextPart(text=existing_text))],
+                        parts=[Part(root=TextPart(text=public_agent_text))],
                     )
                 ],
             )
@@ -346,7 +360,7 @@ async def _notify_task_update_impl(
             content = extract_text_from_artifacts(task.artifacts)
             needs_write = True
             logger.info(
-                "Task %s: Populated artifacts from message_text for A2A compliance",
+                "Task %s: Populated artifacts from public agent output",
                 message_id,
             )
 
@@ -391,7 +405,6 @@ async def _notify_task_update_impl(
     if room_agent_message.task_created_at:
         created_at = room_agent_message.task_created_at.isoformat()
 
-    task_content = room_agent_message.task_content
     client_request_id = room_agent_message.client_request_id
     if not client_request_id:
         resolver = getattr(notification_store, "resolve_client_request_id_for_agent_message", None)
@@ -410,20 +423,20 @@ async def _notify_task_update_impl(
         resolve_terminal_sse_content,
     )
 
-    stored_text = (
-        room_agent_message.message_content.message_text
-        if room_agent_message.message_content
-        else None
-    )
     if is_terminal_task_state_value(state):
         content = resolve_terminal_sse_content(
             state,
-            message_text=stored_text,
+            message_text=public_agent_text,
             artifact_text=content,
         )
         # SSE text lives in ``content``; strip any text parts so ``parts`` is
         # file/data only and cannot drift from the resolved terminal body.
         parts = filter_non_text_parts(parts)
+
+    task_content = resolve_public_task_label(
+        room_agent_message.extend_info,
+        agent_name or agent_id or "agent",
+    )
 
     # Convert any inline base64 file bytes to S3 URIs before broadcasting
     if parts:

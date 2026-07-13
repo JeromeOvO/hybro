@@ -50,7 +50,10 @@ from execution.state.task_state_manager import (
     get_task,
     state_str,
 )
-from execution.task_tracking import public_persisted_task_data
+from execution.task_tracking import (
+    public_persisted_task_data,
+    resolve_public_task_label,
+)
 from models.error import A2AServiceError
 from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
@@ -177,20 +180,35 @@ class DirectTransport(AgentTransport):
         else:
             kind = "response"
 
-        await self.response_handler.handle(AgentEvent(
-            kind=kind,
-            message_id=msg.message_id,
-            room_id=ctx.room_id,
-            agent_id=msg.agent_id or "",
-            text=(error or (msg.message_content.message_text if hasattr(msg, 'message_content') and msg.message_content else "")),
-            error_text=error if kind == "error" else None,
-            state=state.value if hasattr(state, 'value') else str(state),
-            related_message_id=msg.related_message_id,
-            user_id=msg.user_id or "",
-            client_request_id=msg.client_request_id,
-            parts=parts,
-            skip_persist=True,
-        ))
+        public_text = error or ""
+        if not public_text:
+            task = get_task(msg)
+            if task is not None:
+                public_task = Task.model_validate(public_persisted_task_data(task))
+                public_text = get_text_from_message(get_message_from_task(public_task))
+        if not public_text:
+            agent_name = getattr(ctx.agent_card, "name", None)
+            public_text = resolve_public_task_label(
+                msg.extend_info,
+                agent_name if isinstance(agent_name, str) else msg.agent_id or "agent",
+            )
+
+        await self.response_handler.handle(
+            AgentEvent(
+                kind=kind,
+                message_id=msg.message_id,
+                room_id=ctx.room_id,
+                agent_id=msg.agent_id or "",
+                text=public_text,
+                error_text=error if kind == "error" else None,
+                state=state.value if hasattr(state, "value") else str(state),
+                related_message_id=msg.related_message_id,
+                user_id=msg.user_id or "",
+                client_request_id=msg.client_request_id,
+                parts=parts,
+                skip_persist=True,
+            )
+        )
 
     # ------------------------------------------------------------------
     # dispatch — unified entry point for AgentMessageProcessor router
@@ -444,13 +462,7 @@ class DirectTransport(AgentTransport):
         current_message: RoomAgentMessage,
         agent_name: str,
     ) -> str:
-        extend_info = current_message.extend_info
-        if isinstance(extend_info, dict):
-            public_task_label = extend_info.get("public_task_label")
-            if isinstance(public_task_label, str) and public_task_label.strip():
-                return public_task_label
-
-        return f"Requesting {agent_name}"
+        return resolve_public_task_label(current_message.extend_info, agent_name)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -860,6 +872,13 @@ class DirectTransport(AgentTransport):
         streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'message' event during streaming."""
+        if not self._is_agent_message(result):
+            logger.warning(
+                "DirectTransport: Ignoring non-agent stream message for %s",
+                ctx.current_message.message_id,
+            )
+            return
+
         from common.utils.a2a_helpers import extract_parts
 
         message_list = self._coerce_parts(result.parts)
@@ -1826,6 +1845,8 @@ class DirectTransport(AgentTransport):
             # the polled task has a complete Task model that doesn't yet fit the
             # incremental pattern.
             public_task = self._public_task_model(completed_task)
+            if current_message.message_content:
+                current_message.message_content.message_task = public_task
             await self._task_updater.update_task_on_message(
                 message_id,
                 public_persisted_task_data(public_task),

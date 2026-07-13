@@ -175,26 +175,27 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.taskStatus).toBe(TASK_STATE.WORKING)
     })
 
-    it('extracts task_content from top-level field', async () => {
+    it('ignores legacy top-level task_content without a public label', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
-        task_content: 'Researching your question...',
+        task_content: 'PRIVATE_SENTINEL_top_level_task_content',
         message_content: { message_text: '' },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
-      expect(result.taskContent).toBe('Researching your question...')
+      expect(result.taskContent).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
-    it('extracts task_content from metadata fallback', async () => {
+    it('ignores legacy task metadata task_content without a public label', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
         message_content: {
           message_text: '',
           message_task: {
-            metadata: { task_content: 'From metadata' },
+            metadata: { task_content: 'PRIVATE_SENTINEL_task_metadata' },
             status: { state: 'working' },
             kind: 'task',
             contextId: 'ctx-1',
@@ -204,7 +205,8 @@ describe('convertApiMessageToIncoming', () => {
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
-      expect(result.taskContent).toBe('From metadata')
+      expect(result.taskContent).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
     it('does not promote status message to content for non-terminal tasks', async () => {
@@ -245,14 +247,19 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.content).toBe('')
     })
 
-    it('uses message_text for completed agent tasks', async () => {
+    it('ignores legacy message_text for completed agent tasks', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
         message_content: {
-          message_text: 'Here is the final answer.',
+          message_text: 'PRIVATE_SENTINEL_completed_message_text',
           message_task: {
             status: { state: 'completed' },
+            artifacts: [{
+              artifactId: 'artifact-1',
+              name: 'response',
+              parts: [{ text: 'Here is the final answer.' }],
+            }],
           } as RoomMessage['message_content']['message_task'],
         },
       })
@@ -260,6 +267,7 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
       expect(result.content).toBe('Here is the final answer.')
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
     it('promotes status message to content for terminal failed tasks', async () => {
@@ -374,13 +382,19 @@ describe('convertApiMessageToIncoming', () => {
         agent_id: 'agent-1',
         message_created_at: '2026-02-17T10:00:00Z',
         task_updated_at: '2026-02-17T10:05:00Z',
-        task_content: 'Analyzing data...',
+        task_content: 'PRIVATE_SENTINEL_complete_entity_task_content',
+        extend_info: { public_task_label: 'Analyzing data...' },
         step_number: 3,
         total_steps: 7,
         message_content: {
           message_text: 'Here are the results',
           message_task: {
             status: { state: 'completed' },
+            artifacts: [{
+              artifactId: 'artifact-complete',
+              name: 'response',
+              parts: [{ text: 'Here are the results' }],
+            }],
           } as RoomMessage['message_content']['message_task'],
         },
       })
@@ -403,17 +417,19 @@ describe('convertApiMessageToIncoming', () => {
     })
 
     it('serializes the public task label without leaking internal dispatch instructions', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_frontend_entity'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
-        task_content: 'Requesting Insurer',
+        task_content: privateSentinel,
+        extend_info: { public_task_label: 'Requesting Insurer' },
         message_content: {
-          message_text: 'Requesting Insurer',
+          message_text: privateSentinel,
           message_task: {
             status: { state: 'working' },
             metadata: {
-              public_task_label: 'Requesting Insurer',
-              internal_task_payload: { redacted: true },
+              task_content: privateSentinel,
+              internal_task_payload: { instructions: privateSentinel },
             },
           } as RoomMessage['message_content']['message_task'],
         },
@@ -424,7 +440,7 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.content).toBe('')
       expect(result.taskContent).toBe('Requesting Insurer')
       expect(serialized).toContain('Requesting Insurer')
-      expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+      expect(serialized).not.toContain(privateSentinel)
     })
   })
 })
