@@ -1657,7 +1657,7 @@ async def test_attachment_preflight_failure_update_uses_public_task_label(
         }
         return ProcessingResult(
             ProcessingStatus.FAILED,
-            response_text="Agent does not accept the uploaded file type.",
+            response_text="Processor reported an attachment failure.",
         )
 
     executor.room_runtime.create_agent_message = MagicMock(
@@ -1694,9 +1694,22 @@ async def test_attachment_preflight_failure_update_uses_public_task_label(
     )
 
     assert result[0].status == StepStatus.FAILED
+    assert result[0].error_message == "Agent does not accept the uploaded file type."
+    assert result[0].status_message == "Agent does not accept the uploaded file type."
+    assert result[0].error_code == "agent_does_not_accept_file_type"
+    executor.tsm.fail_pre_dispatch_task.assert_awaited_once()
+    fail_message = executor.tsm.fail_pre_dispatch_task.await_args.args[0]
+    assert fail_message.extend_info == {"public_task_label": public_task_label}
+    assert executor.tsm.fail_pre_dispatch_task.await_args.kwargs == {
+        "error": "Agent does not accept the uploaded file type.",
+        "error_code": "agent_does_not_accept_file_type",
+    }
     update_kwargs = executor.delivery.send_task_update.await_args.kwargs
     assert update_kwargs["task_content"] == public_task_label
+    assert update_kwargs["error"] == "Agent does not accept the uploaded file type."
     assert private_task_sentinel not in str(update_kwargs)
+    persisted_message = executor.message_writer.add_room_agent_message.await_args.args[0]
+    assert persisted_message.extend_info == {"public_task_label": public_task_label}
 
 
 def test_v2_dispatch_intent_preserves_dispatch_metadata():

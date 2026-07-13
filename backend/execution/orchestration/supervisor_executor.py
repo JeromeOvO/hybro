@@ -180,6 +180,19 @@ def _short_text_hash(value: str | None) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
+def _normalize_attachment_preflight_failure(
+    raw_preflight_failure: Any,
+) -> dict[str, str | None] | None:
+    if not isinstance(raw_preflight_failure, Mapping):
+        return None
+    preflight_code = raw_preflight_failure.get("code")
+    preflight_message = raw_preflight_failure.get("message")
+    return {
+        "code": str(preflight_code) if preflight_code else None,
+        "message": str(preflight_message) if preflight_message else None,
+    }
+
+
 def _fingerprint_prefix(value: str | None) -> str:
     return value[:12] if value else "-"
 
@@ -7337,20 +7350,10 @@ class SupervisorExecutor:
                     ),
                 )
                 preflight_failure: dict[str, str | None] | None = None
-                raw_preflight_failure = (
-                    message.extend_info.get("attachment_preflight_failure")
-                    if isinstance(message.extend_info, dict)
-                    else None
-                )
-                if isinstance(raw_preflight_failure, dict):
-                    preflight_code = raw_preflight_failure.get("code")
-                    preflight_message = raw_preflight_failure.get("message")
-                    preflight_failure = {
-                        "code": str(preflight_code) if preflight_code else None,
-                        "message": (
-                            str(preflight_message) if preflight_message else None
-                        ),
-                    }
+                if isinstance(message.extend_info, Mapping):
+                    preflight_failure = _normalize_attachment_preflight_failure(
+                        message.extend_info.get("attachment_preflight_failure")
+                    )
                 message.extend_info = {"public_task_label": public_task_label}
                 if planned_message_id:
                     message.message_id = planned_message_id
@@ -7454,6 +7457,14 @@ class SupervisorExecutor:
                         "a2a_context_id": getattr(result, "a2a_context_id", None),
                     },
                 )
+                if isinstance(message.extend_info, Mapping):
+                    preflight_failure = (
+                        _normalize_attachment_preflight_failure(
+                            message.extend_info.get("attachment_preflight_failure")
+                        )
+                        or preflight_failure
+                    )
+                message.extend_info = {"public_task_label": public_task_label}
 
                 if result.status in (
                     ProcessingStatus.PAUSED,
