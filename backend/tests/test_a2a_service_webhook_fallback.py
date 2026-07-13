@@ -165,6 +165,68 @@ def _terminal_task_with_file_facade_response() -> dict:
     }
 
 
+def _terminal_task_with_private_request_history_response(private_sentinel: str) -> dict:
+    return {
+        "kind": "task",
+        "result": {
+            "kind": "task",
+            "id": "task-private-history-001",
+            "contextId": "ctx-private-history-001",
+            "status": {
+                "state": "completed",
+                "message": {
+                    "kind": "message",
+                    "role": "agent",
+                    "messageId": "status-msg-001",
+                    "parts": [
+                        {"kind": "text", "text": "Agent status is complete"},
+                    ],
+                },
+            },
+            "artifacts": [
+                {
+                    "artifactId": "artifact-private-history-001",
+                    "name": "agent-result",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Public final answer from agent",
+                        },
+                    ],
+                }
+            ],
+            "history": [
+                {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "private-request-msg-001",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": (
+                                f"Original dispatch included private data: "
+                                f"{private_sentinel}"
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "kind": "message",
+                    "role": "agent",
+                    "messageId": "agent-history-msg-001",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Agent-generated history is public",
+                        }
+                    ],
+                },
+            ],
+        },
+        "error": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -626,6 +688,55 @@ class TestReplyToTaskWebhookFallback:
         assert captured_request["push_notification_config"] is None
         assert captured_request["blocking"] is True
 
+    @pytest.mark.asyncio
+    async def test_hitl_task_persistence_drops_private_request_history(self):
+        from a2a_adapter.runtime_service import A2AService
+
+        private_sentinel = "PRIVATE_HITL_SENTINEL_TASK6_31851"
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message()
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-private")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(
+            return_value=_make_agent_record(push_capable=False)
+        )
+        mock_db.update_task_on_message = AsyncMock(return_value=True)
+        service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
+
+        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
+            return _terminal_task_with_private_request_history_response(private_sentinel)
+
+        with (
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_hitl_reply",
+                fake_send_hitl_reply,
+            ),
+        ):
+            result = await service.reply_to_task(
+                message_id="msg-hitl-private-history",
+                task_id="task-hitl-private-history",
+                context_id="ctx-hitl-private-history",
+                user_input="private approval text",
+            )
+
+        persisted_task = mock_db.update_task_on_message.await_args.args[1]
+        assert private_sentinel not in repr(persisted_task)
+        assert len(persisted_task["history"]) == 1
+        assert persisted_task["history"][0]["role"] == "agent"
+        assert (
+            persisted_task["artifacts"][0]["parts"][0]["text"]
+            == "Public final answer from agent"
+        )
+        assert result["status"] == "sent"
+        assert result["task_state"] == "completed"
+        assert result["response_text"] == "Public final answer from agent"
+
 
 # ---------------------------------------------------------------------------
 # Tests for persisted flag propagation
@@ -790,4 +901,58 @@ class TestSendMessageTrackedAgentPersistedFlag:
         converter.assert_awaited_once()
         mock_db.update_task_on_message.assert_awaited_once()
         assert result["type"] == "message"
+        assert result["persisted"] is True
+
+    @pytest.mark.asyncio
+    async def test_terminal_task_persistence_drops_private_request_history(self):
+        from a2a_adapter.runtime_service import A2AService
+
+        private_sentinel = "PRIVATE_DISPATCH_SENTINEL_TASK6_74207"
+        service = A2AService.__new__(A2AService)
+        mock_db = MagicMock()
+        mock_db.update_task_on_message = AsyncMock(return_value=True)
+        service.bind_task_db(mock_db)
+        _bind_webhook_base_url(service, "")
+
+        with (
+            patch.object(
+                service, "has_push_notification_capability", return_value=False
+            ),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message",
+                AsyncMock(
+                    return_value=_terminal_task_with_private_request_history_response(
+                        private_sentinel
+                    )
+                ),
+            ),
+            patch.object(service, "_record_call", new_callable=AsyncMock),
+        ):
+            result = await service.send_message_to_tracked_agent(
+                agent_card=_make_agent_card(push_capable=False),
+                message=_make_message(),
+                message_id="msg-private-history-001",
+                webhook_token="tok-private-history",
+                context_id="ctx-private-history",
+                room_id="room-private-history",
+            )
+
+        persisted_task = mock_db.update_task_on_message.await_args.args[1]
+        assert private_sentinel not in repr(persisted_task)
+        assert persisted_task["id"] == "task-private-history-001"
+        assert persisted_task["status"]["state"] == "completed"
+        assert (
+            persisted_task["artifacts"][0]["parts"][0]["text"]
+            == "Public final answer from agent"
+        )
+        assert len(persisted_task["history"]) == 1
+        assert persisted_task["history"][0]["role"] == "agent"
+        assert persisted_task["history"][0]["messageId"] == "agent-history-msg-001"
+        assert (
+            persisted_task["history"][0]["parts"][0]["text"]
+            == "Agent-generated history is public"
+        )
+        assert result["type"] == "message"
+        assert result["content"] == "Public final answer from agent"
+        assert result["status"] == "completed"
         assert result["persisted"] is True

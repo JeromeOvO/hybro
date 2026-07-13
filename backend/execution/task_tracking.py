@@ -266,7 +266,7 @@ class A2ATaskTrackingService:
         if task_obj:
             await self._tracking_store.update_task_on_message(
                 message_id,
-                task_obj.model_dump(mode="json"),
+                _public_persisted_task_data(task_obj),
                 message_text=response_text,
             )
 
@@ -383,7 +383,7 @@ class A2ATaskTrackingService:
         task_text = _extract_text_from_task(task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            task.model_dump(mode="json"),
+            _public_persisted_task_data(task),
             message_text=task_text or None,
         )
 
@@ -556,6 +556,16 @@ def _extract_reply_response_text(task_result) -> str | None:
     if getattr(task_result, "kind", None) == "message":
         return _extract_text_from_message(task_result)
     return None
+
+
+def _public_persisted_task_data(task: Task) -> dict[str, Any]:
+    task_data = task.model_dump(mode="json")
+    history = task_data.get("history")
+    if isinstance(history, list):
+        task_data["history"] = [
+            message for message in history if message.get("role") == Role.AGENT.value
+        ]
+    return task_data
 
 
 def _state_value(state: TaskState) -> str:
