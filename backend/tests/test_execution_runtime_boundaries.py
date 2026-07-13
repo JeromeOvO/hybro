@@ -391,3 +391,33 @@ def test_execution_modules_do_not_store_legacy_runtime_fields() -> None:
     assert not bad, "Execution modules must use focused runtime ports:\n" + "\n".join(
         bad
     )
+
+
+def _source(path: str) -> str:
+    return (ROOT / path).read_text()
+
+
+def test_direct_transport_does_not_import_orchestration_state():
+    source = _source("execution/dispatch/transports/direct.py")
+    assert "OrchestrationRunState" not in source
+    assert "PlannerAction" not in source
+    assert "OrchestrationStatus" not in source
+
+
+def test_room_message_center_only_selects_execution_entrypoint_not_next_step_policy():
+    source = _source("execution/orchestration/room_message_center.py")
+    forbidden = [
+        "PlannerActionValidator.validate",
+        "DelegationOutcomeEvaluator",
+        "resolve_agent_observed_blockers",
+        "build_terminal_summary(",
+    ]
+    for needle in forbidden:
+        assert needle not in source
+
+
+def test_queue_executor_hitl_path_remains_non_supervisor_only():
+    source = _source("execution/orchestration/queue_executor.py")
+    assert "SupervisorExecutor" not in source
+    assert "orchestration_run_store" not in source
+    assert "OrchestrationRunState" not in source
