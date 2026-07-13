@@ -289,6 +289,75 @@ def test_hitl_status_translation_preserves_status_source_and_error():
     }
 
 
+def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
+    private_keys = {"orchestration_run_id", "orchestration_schema_version"}
+    for source in ("agent", "supervisor"):
+        request_event = HITLRequestEvent(
+            room_id="room-1",
+            request_id="hitl-1",
+            message_id="msg-1",
+            source=source,
+            prompt="PRIVATE_PROMPT_SENTINEL",
+            prompt_type="choice",
+            choices=["PRIVATE_CHOICE_SENTINEL"],
+            agent_id="agent-1",
+            agent_name="Agent",
+            source_step_id="step-1",
+            group_id="group-1",
+            group_total=1,
+            group_index=0,
+            related_message_id="user-msg-1",
+            client_request_id="client-req-1",
+            orchestration_run_id="PRIVATE_RUN_ID_SENTINEL",
+            orchestration_schema_version=987654321,
+            trace_id="trace-1",
+        )
+        resolved_event = HITLResolvedEvent(
+            room_id="room-1",
+            request_id="hitl-1",
+            message_id="msg-1",
+            source=source,
+            status="resolved",
+            related_message_id="user-msg-1",
+            client_request_id="client-req-1",
+            orchestration_run_id="PRIVATE_RUN_ID_SENTINEL",
+            orchestration_schema_version=987654321,
+            trace_id="trace-1",
+        )
+
+        request_frame = to_sse_frame(request_event, timestamp=NOW)
+        resolved_frame = to_sse_frame(resolved_event, timestamp=NOW)
+
+        assert request_frame["data"] == {
+            "request_id": "hitl-1",
+            "message_id": "msg-1",
+            "prompt": "PRIVATE_PROMPT_SENTINEL",
+            "prompt_type": "choice",
+            "source": source,
+            "choices": ["PRIVATE_CHOICE_SENTINEL"],
+            "agent_id": "agent-1",
+            "agent_name": "Agent",
+            "source_step_id": "step-1",
+            "group_id": "group-1",
+            "group_total": 1,
+            "group_index": 0,
+            "related_message_id": "user-msg-1",
+            "client_request_id": "client-req-1",
+            "trace_id": "trace-1",
+        }
+        assert resolved_frame["data"] == {
+            "request_id": "hitl-1",
+            "message_id": "msg-1",
+            "source": source,
+            "status": "resolved",
+            "related_message_id": "user-msg-1",
+            "client_request_id": "client-req-1",
+            "trace_id": "trace-1",
+        }
+        assert private_keys.isdisjoint(request_frame["data"])
+        assert private_keys.isdisjoint(resolved_frame["data"])
+
+
 def test_hub_agent_event_translation():
     event = HubAgentEvent(
         room_id="room-1",
