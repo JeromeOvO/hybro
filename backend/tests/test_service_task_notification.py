@@ -28,7 +28,6 @@ PATCH_NOTIFIER = "execution.dispatch.task_notifications._task_notifier"
 PATCH_DELIVERY = "execution.dispatch.task_notifications._delivery"
 PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"
 PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
-PATCH_HAS_VISIBLE = "execution.dispatch.task_notifications.task_has_visible_content"
 PATCH_SLEEP = "execution.dispatch.task_notifications.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
 PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
@@ -537,10 +536,11 @@ class TestNotifyTaskUpdate:
             assert call_kw["status_message"] == "Authentication required"
 
     # --------------------------------------------------------------------- #
-    # 10. completed-without-visible-content forwards status_message hint
+    # 10. completed-without-visible-content does not forward status_message
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_completed_without_visible_content_forwards_status_message(self):
+    async def test_completed_without_visible_content_drops_status_message(self):
+        private_sentinel = "PRIVATE_SENTINEL_completed_status_message"
         task = _make_task(TaskState.completed)
         msg = _make_message(task=task)
 
@@ -549,8 +549,7 @@ class TestNotifyTaskUpdate:
             patch(PATCH_NOTIFIER) as notifier,
             patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
-            patch(PATCH_HAS_VISIBLE, return_value=False),
-            patch(PATCH_EXTRACT_STATUS, return_value="No visible output from upstream agent"),
+            patch(PATCH_EXTRACT_STATUS, return_value=private_sentinel),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
@@ -566,7 +565,7 @@ class TestNotifyTaskUpdate:
 
             assert result is True
             call_kw = notifier.send_task_update.call_args.kwargs
-            assert call_kw["status_message"] == "No visible output from upstream agent"
+            assert call_kw["status_message"] is None
 
     # --------------------------------------------------------------------- #
     # 10. lifecycle processing_status mapping for task states
@@ -612,7 +611,7 @@ class TestNotifyTaskUpdate:
                 lifecycle_message_id="msg-1",
                 record_lifecycle=True,
                 client_request_id=None,
-                details={"message": "Need input"},
+                details=None,
                 error_message=None,
             )
 

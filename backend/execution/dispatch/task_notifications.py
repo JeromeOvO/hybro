@@ -36,7 +36,6 @@ from common.utils.a2a_helpers import (
     extract_text_from_artifacts,
     get_message_from_task,
     get_text_from_message,
-    task_has_visible_content,
 )
 from common.utils.logger import get_logger
 from execution.task_tracking import (
@@ -339,13 +338,6 @@ async def _notify_task_update_impl(
             status_message = (
                 extract_status_message(task) or "Authentication required"
             )
-
-        elif state == TaskState.completed:
-            # Surface diagnostic status messages for silent completions.
-            # This keeps terminal hints visible when an adapter finishes with
-            # no text/non-text payload but provides a status.message reason.
-            if not task_has_visible_content(task):
-                status_message = extract_status_message(task)
 
     public_agent_text = content
     if (

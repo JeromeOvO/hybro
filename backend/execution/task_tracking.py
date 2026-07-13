@@ -492,10 +492,6 @@ class A2ATaskTrackingService:
                 resp["error"] = error_text
             elif not task_text:
                 resp["error"] = f"Task {_state_value(state)}"
-        elif not task_text:
-            status_text = _extract_status_message(task)
-            if status_text:
-                resp["message"] = status_text
         return resp
 
     async def _persist_failed_task(
@@ -823,7 +819,7 @@ def public_persisted_task_data(
     status = task_data.get("status")
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
         if state_value == _COMPLETED_STATE:
-            status["message"] = public_message_data(status["message"])
+            status["message"] = None
         elif state_value in _PUBLIC_SAFE_STATUS_TEXT:
             status["message"] = _public_status_message(
                 _PUBLIC_SAFE_STATUS_TEXT[state_value]

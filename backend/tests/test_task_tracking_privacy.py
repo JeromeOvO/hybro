@@ -67,7 +67,8 @@ def test_remote_task_sanitizer_drops_non_agent_status_and_all_metadata():
     assert private_sentinel not in json.dumps(persisted)
 
 
-def test_remote_task_sanitizer_preserves_agent_status_without_message_metadata():
+def test_completed_remote_task_sanitizer_drops_status_message():
+    private_sentinel = "PRIVATE_SENTINEL_completed_status_message"
     task = Task(
         id="remote-task",
         context_id="remote-context",
@@ -76,7 +77,7 @@ def test_remote_task_sanitizer_preserves_agent_status_without_message_metadata()
             message=Message(
                 message_id="agent-status",
                 role=MessageRole.AGENT,
-                parts=[Part(root=TextPart(text="Public final status"))],
+                parts=[Part(root=TextPart(text=private_sentinel))],
                 metadata={"private": "do not persist"},
             ),
         ),
@@ -84,9 +85,8 @@ def test_remote_task_sanitizer_preserves_agent_status_without_message_metadata()
 
     persisted = public_persisted_task_data(task)
 
-    assert persisted["status"]["message"]["role"] == "agent"
-    assert persisted["status"]["message"]["metadata"] is None
-    assert "Public final status" in json.dumps(persisted)
+    assert persisted["status"]["message"] is None
+    assert private_sentinel not in json.dumps(persisted)
     assert "do not persist" not in json.dumps(persisted)
 
 
@@ -337,6 +337,39 @@ async def test_terminal_failed_task_result_projects_before_persisting_and_respon
     assert result["content"] is None
     assert result["error"] == "Task failed"
     assert "parts" not in result
+    assert private_sentinel not in json.dumps(persisted)
+    assert private_sentinel not in json.dumps(update_kwargs)
+    assert private_sentinel not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_terminal_completed_task_result_ignores_status_message_fallback():
+    private_sentinel = "PRIVATE_SENTINEL_terminal_completed_status"
+    store = MagicMock()
+    store.update_task_on_message = AsyncMock(return_value=True)
+    service = A2ATaskTrackingService(store)
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(
+            state=TaskState.completed,
+            message=_message(MessageRole.AGENT, private_sentinel),
+        ),
+    )
+
+    result = await service._handle_terminal_task_result(
+        task,
+        message_id="agent-message-1",
+        room_id="room-1",
+    )
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    update_kwargs = store.update_task_on_message.await_args.kwargs
+    assert persisted["status"]["message"] is None
+    assert update_kwargs["message_text"] is None
+    assert result["status"] == "completed"
+    assert result["content"] is None
+    assert "message" not in result
     assert private_sentinel not in json.dumps(persisted)
     assert private_sentinel not in json.dumps(update_kwargs)
     assert private_sentinel not in json.dumps(result)

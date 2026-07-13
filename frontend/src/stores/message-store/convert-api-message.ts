@@ -78,7 +78,9 @@ export async function convertApiMessageToIncoming(
   if (messageTask) {
     const messageTaskTyped = messageTask as A2ATaskStatus['task']
     const safeError = publicTaskError(taskStatus)
-    const extractedError = taskStatus === TASK_STATE.COMPLETED
+    const extractedError = taskStatus
+      && taskStatus !== TASK_STATE.COMPLETED
+      && isTerminalState(taskStatus)
       ? extractTaskError(messageTaskTyped)
       : undefined
     taskError = safeError ?? extractedError

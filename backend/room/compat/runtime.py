@@ -17,6 +17,7 @@ from common.dto import (
 from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
 from common.types import (
+    Artifact,
     Message,
     Part,
     Task,
@@ -46,6 +47,8 @@ from execution.orchestration.candidate_scope import (
 )
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from execution.task_tracking import (
+    public_artifact_data,
+    public_message_data,
     public_persisted_task_data,
     resolve_public_task_label,
 )
@@ -4172,6 +4175,53 @@ class RoomServices:
         | TaskStatusUpdateEvent
         | TaskArtifactUpdateEvent,
     ) -> bool:
+        def _ensure_message_content() -> MessageContent:
+            if room_agent_message.message_content is None:
+                room_agent_message.message_content = MessageContent()
+            return room_agent_message.message_content
+
+        def _state_value(task: Task) -> str | None:
+            status = task.status
+            if status is None:
+                return None
+            state = status.state
+            return state.value if hasattr(state, "value") else str(state)
+
+        def _public_task_model(
+            task: Task,
+            *,
+            trusted_local_hitl_metadata: dict | None = None,
+        ) -> Task:
+            return Task.model_validate(
+                public_persisted_task_data(
+                    Task.model_validate(task),
+                    trusted_local_hitl_metadata=trusted_local_hitl_metadata,
+                )
+            )
+
+        def _artifact_data_valid_for_task_model(
+            artifact: Artifact,
+        ) -> dict | None:
+            artifact_data = public_artifact_data(artifact)
+            parts = artifact_data.get("parts")
+            if not isinstance(parts, list):
+                return artifact_data
+
+            public_parts = []
+            for part in parts:
+                payload = part.get("root") if isinstance(part.get("root"), dict) else part
+                file_payload = (
+                    payload.get("file") if isinstance(payload, dict) else None
+                )
+                if isinstance(file_payload, dict) and not file_payload.get("uri"):
+                    continue
+                public_parts.append(part)
+
+            if not public_parts:
+                return None
+            artifact_data["parts"] = public_parts
+            return artifact_data
+
         # Add null check for process_response
         if message_data is None:
             logger.error(
@@ -4180,8 +4230,14 @@ class RoomServices:
             return False
 
         if message_data.kind == "task":
-            room_agent_message.message_content.message_task = Task.model_validate(
-                message_data
+            incoming_task = Task.model_validate(message_data)
+            trusted_hitl_metadata, _ = await self._trusted_hitl_projection(
+                room_agent_message,
+                incoming_task,
+            )
+            _ensure_message_content().message_task = _public_task_model(
+                incoming_task,
+                trusted_local_hitl_metadata=trusted_hitl_metadata,
             )
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
@@ -4197,15 +4253,17 @@ class RoomServices:
             return True
 
         elif message_data.kind == "message":
-            if (
-                room_agent_message.message_content
-                and room_agent_message.message_content.message_task
-            ):
-                if room_agent_message.message_content.message_task.history is None:
-                    room_agent_message.message_content.message_task.history = []
-                room_agent_message.message_content.message_task.history.append(
-                    message_data
-                )
+            message_content = _ensure_message_content()
+            task = message_content.message_task
+            if task is not None:
+                public_task = _public_task_model(task)
+                if _state_value(public_task) == TaskState.completed.value:
+                    public_message = public_message_data(Message.model_validate(message_data))
+                    if public_message is not None:
+                        if public_task.history is None:
+                            public_task.history = []
+                        public_task.history.append(Message.model_validate(public_message))
+                message_content.message_task = public_task
 
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
@@ -4223,38 +4281,20 @@ class RoomServices:
             return True
 
         elif message_data.kind == "status-update":
-            # Handle status update responses - update task status and potentially add message
             if hasattr(message_data, "status") and hasattr(
                 message_data.status, "state"
             ):
-                if (
-                    room_agent_message.message_content
-                    and room_agent_message.message_content.message_task
-                    and room_agent_message.message_content.message_task.status is None
-                ):
-                    room_agent_message.message_content.message_task.status = TaskStatus(
-                        state=TaskState.submitted
-                    )
-                if (
-                    room_agent_message.message_content
-                    and room_agent_message.message_content.message_task
-                ):
-                    room_agent_message.message_content.message_task.status.state = (
-                        message_data.status.state
-                    )
-
-                # If there's a message in the status update, add it to history
-                if (
-                    hasattr(message_data.status, "message")
-                    and message_data.status.message
-                    and room_agent_message.message_content
-                    and room_agent_message.message_content.message_task
-                ):
-                    if room_agent_message.message_content.message_task.history is None:
-                        room_agent_message.message_content.message_task.history = []
-                    room_agent_message.message_content.message_task.history.append(
-                        message_data.status.message
-                    )
+                message_content = _ensure_message_content()
+                existing_task = message_content.message_task
+                status_only_task = Task(
+                    id=getattr(existing_task, "id", None) or message_data.id,
+                    context_id=(
+                        getattr(existing_task, "context_id", None)
+                        or message_data.context_id
+                    ),
+                    status=TaskStatus(state=message_data.status.state),
+                )
+                message_content.message_task = _public_task_model(status_only_task)
 
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
@@ -4272,17 +4312,22 @@ class RoomServices:
             return True
 
         elif message_data.kind == "artifact-update":
-            # Handle artifact update responses - add artifacts to task
-            if (
-                hasattr(message_data, "artifact")
-                and room_agent_message.message_content
-                and room_agent_message.message_content.message_task
-            ):
-                if room_agent_message.message_content.message_task.artifacts is None:
-                    room_agent_message.message_content.message_task.artifacts = []
-                room_agent_message.message_content.message_task.artifacts.append(
-                    message_data.artifact
-                )
+            if hasattr(message_data, "artifact"):
+                message_content = _ensure_message_content()
+                task = message_content.message_task
+                if task is not None:
+                    public_task = _public_task_model(task)
+                    if _state_value(public_task) == TaskState.completed.value:
+                        artifact_data = _artifact_data_valid_for_task_model(
+                            message_data.artifact
+                        )
+                        if artifact_data is not None:
+                            if public_task.artifacts is None:
+                                public_task.artifacts = []
+                            public_task.artifacts.append(
+                                Artifact.model_validate(artifact_data)
+                            )
+                    message_content.message_task = public_task
 
             update_response = await self.update_agent_message_by_message_id(
                 RoomCenterAgentMessageRequest(
