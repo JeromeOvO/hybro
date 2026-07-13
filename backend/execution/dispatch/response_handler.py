@@ -19,7 +19,11 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.result_ingestor import AgentResultRead
-from execution.task_tracking import public_artifact_data, public_part_data
+from execution.task_tracking import (
+    public_artifact_data,
+    public_part_data,
+    resolve_public_task_label,
+)
 
 if TYPE_CHECKING:
     from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort
@@ -622,6 +626,7 @@ class AgentResponseHandler:
 
     async def _on_submitted(self, e: AgentEvent) -> None:
         client_request_id = await self._resolve_client_request_id(e)
+        task_content = await self._resolve_submitted_task_content(e)
         kw: dict = {}
         if client_request_id:
             kw["client_request_id"] = client_request_id
@@ -636,8 +641,38 @@ class AgentResponseHandler:
             created_at=e.created_at,
             step_number=e.step_number,
             total_steps=e.total_steps,
+            task_content=task_content,
             **kw,
         )
+
+    async def _resolve_submitted_task_content(self, e: AgentEvent) -> str:
+        msg = None
+        read_message = getattr(
+            self._client_request_resolver,
+            "get_room_agent_message_by_message_id",
+            None,
+        )
+        if callable(read_message):
+            try:
+                maybe_msg = read_message(e.message_id)
+                msg = await maybe_msg if inspect.isawaitable(maybe_msg) else maybe_msg
+            except Exception:
+                logger.debug(
+                    "AgentResponseHandler: task label message lookup failed for %s",
+                    e.message_id,
+                    exc_info=True,
+                )
+
+        agent_name = e.agent_name.strip() if isinstance(e.agent_name, str) else ""
+        if not agent_name and msg is not None:
+            msg_agent_id = getattr(msg, "agent_id", None)
+            if isinstance(msg_agent_id, str):
+                agent_name = msg_agent_id.strip()
+        if not agent_name:
+            agent_name = e.agent_id or "agent"
+
+        extend_info = getattr(msg, "extend_info", None) if msg is not None else None
+        return resolve_public_task_label(extend_info, agent_name)
 
     async def _on_status(self, e: AgentEvent) -> None:
         e.text = ""

@@ -1487,6 +1487,36 @@ class TestSubmittedEvent:
         assert call_kwargs["client_request_id"] == "cr-001"
         db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
 
+    @pytest.mark.asyncio
+    async def test_sends_sse_submitted_with_public_task_label(self):
+        private_task = "PRIVATE_SENTINEL_generic_submitted_task_content"
+        private_message = "PRIVATE_SENTINEL_generic_submitted_message_text"
+        public_label = "Requesting public broker analysis"
+        db = MagicMock()
+        db.resolve_client_request_id_for_message_id = AsyncMock(return_value=None)
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(
+                extend_info={"public_task_label": public_label},
+                task_content=private_task,
+                message_content=SimpleNamespace(message_text=private_message),
+            )
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="task_submitted",
+            **_base_event(),
+            task_id="t-1",
+            agent_name="Agent X",
+        )
+
+        await h.handle(event)
+
+        call_kwargs = h._delivery.send_task_submitted.call_args.kwargs
+        assert call_kwargs["task_content"] == public_label
+        delivered_payload = json.dumps(call_kwargs, default=str)
+        assert private_task not in delivered_payload
+        assert private_message not in delivered_payload
+
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
