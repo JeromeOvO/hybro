@@ -154,6 +154,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _GENERIC_AGENT_INPUT_REQUIRED_PROMPT = "The agent needs additional information."
+_GENERIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
+_GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
 
 
 DEFAULT_DEBATE_ROUNDS = 2
@@ -5516,6 +5518,7 @@ class SupervisorExecutor:
                         status=self._v2_result_status_to_agent_result_status(result),
                         text=result.response_text,
                         error=result.error_message,
+                        error_code=result.error_code,
                         artifacts=artifacts,
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
@@ -7564,7 +7567,8 @@ class SupervisorExecutor:
                     response_text="",
                     success=False,
                     status=StepStatus.FAILED,
-                    error_message=f"Unexpected error: {e}",
+                    error_message=_GENERIC_AGENT_FAILURE_MESSAGE,
+                    error_code=_GENERIC_AGENT_FAILURE_CODE,
                 )
 
         if len(targets) == 1:
@@ -7655,7 +7659,8 @@ class SupervisorExecutor:
                     response_text="",
                     success=False,
                     status=StepStatus.FAILED,
-                    error_message=f"Unexpected error: {r}",
+                    error_message=_GENERIC_AGENT_FAILURE_MESSAGE,
+                    error_code=_GENERIC_AGENT_FAILURE_CODE,
                 )
                 for i, r in enumerate(raw_results)
             ]

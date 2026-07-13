@@ -1105,6 +1105,47 @@ async def test_supervisor_generic_failed_result_does_not_create_preflight_task()
     se.delivery.send_task_update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(caplog):
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    private_task = "PRIVATE_TASK_SENTINEL_dispatch_body"
+    private_exception = (
+        "PRIVATE_EXCEPTION_SENTINEL_dispatch_failure includes "
+        f"{private_task}"
+    )
+    target = _make_dispatch_target().model_copy(update={"task": private_task})
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock()
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=RuntimeError(private_exception)
+    )
+
+    with caplog.at_level("ERROR"):
+        results = await se._dispatch_targets(
+            [target],
+            [_make_agent_profile()],
+            "room-1",
+            "umsg-1",
+            1,
+            None,
+            None,
+            None,
+        )
+
+    assert private_exception in caplog.text
+    assert len(results) == 1
+    assert results[0].status == StepStatus.FAILED
+    assert results[0].error_message == "Agent processing failed"
+    assert results[0].error_code == "agent_execution_failed"
+    serialized = results[0].model_dump_json()
+    assert "PRIVATE_EXCEPTION_SENTINEL_dispatch_failure" not in serialized
+
+
 def test_dispatch_targets_cancelled_error_handler_reraises():
     tree = ast.parse(
         (_ROOT / "execution" / "orchestration" / "supervisor_executor.py").read_text()

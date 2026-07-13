@@ -153,6 +153,7 @@ class StepResult(BaseModel):
     response_text: str
     success: bool = True
     error_message: str | None = None
+    error_code: str | None = None
     completed_at: datetime = Field(default_factory=utcnow)
 
     status: StepStatus = StepStatus.SUCCESS

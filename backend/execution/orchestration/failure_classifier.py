@@ -12,9 +12,10 @@ def classify_agent_failure(
     agent_message_id: str,
     error: str | None,
     status_message: str | None,
+    error_code: str | None = None,
     dispatch_intent_id: str | None = None,
 ) -> OpenFailureRecord | None:
-    code = _error_code(error=error, status_message=status_message)
+    code = error_code or _error_code(error=error, status_message=status_message)
     if code is None:
         return None
     message = error or status_message or code

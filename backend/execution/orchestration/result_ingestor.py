@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ class AgentResultRead(BaseModel):
     text: str | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+    error_code: str | None = None
     a2a_task_id: str | None = None
     a2a_context_id: str | None = None
     status_message: str | None = None
@@ -69,6 +71,16 @@ _SAFE_STATUS_MESSAGE_CODES = {
     "agent_card_unavailable",
 }
 
+_FAILURE_STATUSES = {"failed", "error", "canceled", "rejected"}
+_GENERIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
+_GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
+_SAFE_ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,80}$")
+_SAFE_LOCAL_FAILURE_CODES_BY_MESSAGE = {
+    "Agent ID not in registry (hallucinated)": "agent_unavailable",
+    "Agent not found or inactive": "agent_unavailable",
+    "Agent dispatch was cancelled": _GENERIC_AGENT_FAILURE_CODE,
+    "Failed to create agent message": _GENERIC_AGENT_FAILURE_CODE,
+}
 _GENERIC_AGENT_INPUT_REQUIRED = "Agent requested additional input."
 
 
@@ -84,6 +96,72 @@ def _safe_status_message_for_state(result: AgentResultRead) -> str | None:
     if normalized in _SAFE_STATUS_MESSAGE_CODES:
         return normalized
     return None
+
+
+def _safe_failure_projection(
+    result: AgentResultRead,
+    *,
+    safe_status_message: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    if result.status not in _FAILURE_STATUSES:
+        return result.text, result.error, result.error_code
+
+    safe_error_code = _safe_error_code_for_failure(result, safe_status_message)
+    safe_local_error = _safe_local_failure_message(result.error)
+    has_failure_detail = (
+        safe_local_error is not None
+        or _nonempty(result.error) is not None
+        or safe_error_code is not None
+        or safe_status_message is not None
+    )
+    safe_error = (
+        safe_local_error
+        if safe_local_error is not None
+        else _GENERIC_AGENT_FAILURE_MESSAGE if has_failure_detail else None
+    )
+    return None, safe_error, safe_error_code
+
+
+def _safe_error_code_for_failure(
+    result: AgentResultRead,
+    safe_status_message: str | None,
+) -> str | None:
+    structured_code = _structured_error_code(result.error_code)
+    if structured_code is not None:
+        return structured_code
+    safe_local_error = _safe_local_failure_message(result.error)
+    if safe_local_error is not None:
+        return _SAFE_LOCAL_FAILURE_CODES_BY_MESSAGE[safe_local_error]
+    if safe_status_message in _SAFE_STATUS_MESSAGE_CODES:
+        return safe_status_message
+    if _nonempty(result.error) is not None:
+        return _GENERIC_AGENT_FAILURE_CODE
+    return None
+
+
+def _structured_error_code(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if _SAFE_ERROR_CODE_PATTERN.fullmatch(normalized) is None:
+        return None
+    return normalized
+
+
+def _safe_local_failure_message(value: str | None) -> str | None:
+    normalized = _nonempty(value)
+    if normalized in _SAFE_LOCAL_FAILURE_CODES_BY_MESSAGE:
+        return normalized
+    return None
+
+
+def _nonempty(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _input_required_failure(result: AgentResultRead) -> OpenFailureRecord:
@@ -142,6 +220,10 @@ class AgentResultIngestor:
             result = AgentResultRead.model_validate(result)
 
         safe_status_message = _safe_status_message_for_state(result)
+        safe_text, safe_error, safe_error_code = _safe_failure_projection(
+            result,
+            safe_status_message=safe_status_message,
+        )
         updated = state.model_copy(deep=True)
         result_artifact_keys, artifacts_changed = self._merge_artifacts(
             updated,
@@ -151,18 +233,23 @@ class AgentResultIngestor:
             updated,
             result,
             result_artifact_keys,
+            safe_text,
             safe_status_message,
         )
         output_changed = self._merge_output(
             updated,
             result,
             result_artifact_keys,
+            safe_text,
+            safe_error,
             safe_status_message,
         )
         fact_changed = self._merge_fact(updated, result)
         failure_changed = self._merge_failures(
             updated,
             result,
+            safe_error,
+            safe_error_code,
             safe_status_message,
         )
 
@@ -286,6 +373,7 @@ class AgentResultIngestor:
         state: OrchestrationRunState,
         result: AgentResultRead,
         result_artifact_keys: list[str],
+        safe_text: str | None,
         safe_status_message: str | None,
     ) -> bool:
         existing_output = next(
@@ -310,7 +398,7 @@ class AgentResultIngestor:
             agent_message_id=result.agent_message_id,
             agent_id=result.agent_id,
             status=result.status,
-            text=result.text,
+            text=safe_text,
             status_message=safe_status_message,
             artifact_records=observation_artifacts,
         )
@@ -344,6 +432,8 @@ class AgentResultIngestor:
         state: OrchestrationRunState,
         result: AgentResultRead,
         result_artifact_keys: list[str],
+        safe_text: str | None,
+        safe_error: str | None,
         safe_status_message: str | None,
     ) -> bool:
         changed = False
@@ -361,9 +451,9 @@ class AgentResultIngestor:
                     agent_message_id=result.agent_message_id,
                     agent_id=result.agent_id,
                     status=result.status,
-                    text=result.text,
+                    text=safe_text,
                     artifact_keys=result_artifact_keys,
-                    error=result.error,
+                    error=safe_error,
                     a2a_task_id=result.a2a_task_id,
                     a2a_context_id=result.a2a_context_id,
                     status_message=safe_status_message,
@@ -391,11 +481,11 @@ class AgentResultIngestor:
                 if getattr(existing_output, field) != value:
                     setattr(existing_output, field, value)
                     changed = True
-            if result.text is not None and existing_output.text != result.text:
-                existing_output.text = result.text
+            if result.text is not None and existing_output.text != safe_text:
+                existing_output.text = safe_text
                 changed = True
-            if result.error is not None and existing_output.error != result.error:
-                existing_output.error = result.error
+            if result.error is not None and existing_output.error != safe_error:
+                existing_output.error = safe_error
                 changed = True
             if (
                 not preserve_sparse_replay
@@ -410,6 +500,8 @@ class AgentResultIngestor:
     def _merge_failures(
         state: OrchestrationRunState,
         result: AgentResultRead,
+        safe_error: str | None,
+        safe_error_code: str | None,
         safe_status_message: str | None,
     ) -> bool:
         matched_intent = next(
@@ -424,7 +516,8 @@ class AgentResultIngestor:
             failure = classify_agent_failure(
                 agent_id=result.agent_id,
                 agent_message_id=result.agent_message_id,
-                error=result.error,
+                error=safe_error,
+                error_code=safe_error_code,
                 status_message=safe_status_message,
                 dispatch_intent_id=(
                     matched_intent.dispatch_intent_id if matched_intent else None
