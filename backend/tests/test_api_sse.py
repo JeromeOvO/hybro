@@ -219,6 +219,80 @@ class TestStreamRoomMessages:
         assert frame["data"]["error"] == "Task failed"
         assert private_sentinel not in second_event
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("state", "safe_error"),
+        [
+            (TaskState.failed, "Task failed"),
+            (TaskState.rejected, "Task was rejected by the agent"),
+        ],
+    )
+    async def test_stream_hides_agent_role_failure_status_message(
+        self,
+        mock_user,
+        mock_db_service,
+        sample_room,
+        state,
+        safe_error,
+    ):
+        private_sentinel = f"PRIVATE_SENTINEL_sse_{state.value}_agent_status"
+        public_label = "Requesting Insurer"
+        task = Task(
+            id="task-insurer-002",
+            status=TaskStatus(
+                state=state,
+                message=Message(
+                    message_id="private-agent-status",
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+            ),
+        )
+        message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id=f"agent-msg-insurer-{state.value}",
+            agent_id="insurer-agent",
+            user_id=mock_user.user_id,
+            has_task_tracking=True,
+            message_content=MessageContent(message_task=task),
+            extend_info={"public_task_label": public_label},
+        )
+        notification_store = SimpleNamespace(
+            update_last_notified_state=AsyncMock(return_value=True),
+            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
+            get_room_by_room_id=AsyncMock(return_value=sample_room),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
+        )
+        delivery = make_delivery_facade()
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+
+        response = await stream_room_messages(
+            sample_room.room_id,
+            mock_user,
+            transport=delivery,
+            db=mock_db_service,
+        )
+
+        await anext(response.body_iterator)
+        await _notify_task_update_impl(
+            notification_store,
+            TaskUpdateNotifier(delivery),
+            delivery,
+            message_id=message.message_id,
+            state=state,
+            room_id=sample_room.room_id,
+            user_id=mock_user.user_id,
+        )
+        second_event = await anext(response.body_iterator)
+        frame = json.loads(second_event.removeprefix("data: ").strip())
+        await response.body_iterator.aclose()
+
+        assert frame["type"] == "task_update"
+        assert frame["data"]["task_content"] == public_label
+        assert frame["data"]["error"] == safe_error
+        assert frame["data"].get("status_message") is None
+        assert private_sentinel not in second_event
+
 
 # =============================================================================
 # Room SSE Status Tests

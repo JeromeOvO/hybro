@@ -292,15 +292,22 @@ async def _notify_task_update_impl(
             )
 
         if state == TaskState.failed:
-            if not resolved_error:
-                resolved_error = extract_error_message(task) or "Task failed"
+            raw_failure_detail = resolved_error or extract_error_message(task)
+            if raw_failure_detail:
+                logger.info(
+                    "notify_task_update: raw failed detail retained internally for %s",
+                    message_id,
+                )
+            resolved_error = "Task failed"
 
         elif state == TaskState.rejected:
-            if not resolved_error:
-                resolved_error = (
-                    extract_error_message(task)
-                    or "Task was rejected by the agent"
+            raw_rejection_detail = resolved_error or extract_error_message(task)
+            if raw_rejection_detail:
+                logger.info(
+                    "notify_task_update: raw rejected detail retained internally for %s",
+                    message_id,
                 )
+            resolved_error = "Task was rejected by the agent"
 
         elif state == TaskState.canceled:
             if not resolved_error:
@@ -326,7 +333,11 @@ async def _notify_task_update_impl(
                 status_message = extract_status_message(task)
 
     public_agent_text = content
-    if task is not None and not public_agent_text:
+    if (
+        task is not None
+        and not public_agent_text
+        and state not in {TaskState.failed, TaskState.rejected}
+    ):
         public_agent_text = get_text_from_message(get_message_from_task(task)) or None
 
     # --- Write-side: artifact backfill + message_text backfill ------------

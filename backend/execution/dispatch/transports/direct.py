@@ -8,7 +8,6 @@ Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
 """
 
 import asyncio
-import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -363,7 +362,11 @@ class DirectTransport(AgentTransport):
                     if hasattr(task, "model_dump")
                     else {}
                 )
-                status_msg = get_text_from_message(task.status.message) or None
+                status_msg = (
+                    self._pop_interactive_status_message(message.message_id)
+                    or get_text_from_message(task.status.message)
+                    or None
+                )
                 if (
                     not status_msg
                     and state_str(task.status.state) == CommonTaskState.AUTH_REQUIRED.value
@@ -486,6 +489,47 @@ class DirectTransport(AgentTransport):
         agent_name: str,
     ) -> str:
         return resolve_public_task_label(current_message.extend_info, agent_name)
+
+    def _public_interactive_status_message(self, ctx: ProcessingContext) -> str:
+        agent_name = getattr(ctx.agent_card, "name", None)
+        return self._public_task_label(
+            ctx.current_message,
+            agent_name
+            if isinstance(agent_name, str)
+            else ctx.current_message.agent_id or "agent",
+        )
+
+    def _remember_interactive_status_message(
+        self,
+        message_id: str,
+        status_message: str | None,
+    ) -> None:
+        if not status_message:
+            return
+        cache = getattr(self, "_internal_interactive_status_messages", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._internal_interactive_status_messages = cache
+        cache[message_id] = status_message
+
+    def _pop_interactive_status_message(self, message_id: str) -> str | None:
+        cache = getattr(self, "_internal_interactive_status_messages", None)
+        if not isinstance(cache, dict):
+            return None
+        value = cache.pop(message_id, None)
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _public_agent_message_model(message: Any) -> Message:
+        message_data = Message.model_validate(message).model_dump(mode="json")
+        message_data["metadata"] = None
+        for part in message_data.get("parts") or []:
+            part_root = part.get("root") if isinstance(part, dict) else None
+            if isinstance(part_root, dict):
+                part_root["metadata"] = None
+            elif isinstance(part, dict):
+                part["metadata"] = None
+        return Message.model_validate(message_data)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -1064,10 +1108,15 @@ class DirectTransport(AgentTransport):
 
         if ctx.send_sse:
             if a2a_status_message_text:
+                if is_interactive_state(state):
+                    self._remember_interactive_status_message(
+                        ctx.current_message.message_id,
+                        a2a_status_message_text,
+                    )
                 await self.tsm.notify_task(
                     ctx,
                     state,
-                    status_message=a2a_status_message_text,
+                    status_message=self._public_interactive_status_message(ctx),
                 )
 
     async def _handle_stream_artifact_update(
@@ -1325,7 +1374,9 @@ class DirectTransport(AgentTransport):
                 if self._is_agent_message(message_data):
                     if public_task.history is None:
                         public_task.history = []
-                    public_task.history.append(message_data)
+                    public_task.history.append(
+                        self._public_agent_message_model(message_data)
+                    )
             return await self.tsm.persist_message(room_agent_message)
 
         logger.error(
@@ -1732,6 +1783,12 @@ class DirectTransport(AgentTransport):
         # Handle "task" response (async path)
         if response.get("type") == "task":
             status = self._resolve_task_response_status(response)
+            raw_status_message = response.get("message")
+            if is_interactive_state(status):
+                self._remember_interactive_status_message(
+                    current_message.message_id,
+                    raw_status_message,
+                )
             if task_info:
                 await self.tsm.notify_task(
                     ctx,
@@ -1744,7 +1801,11 @@ class DirectTransport(AgentTransport):
                         response.get("requires_auth", False)
                         or status == CommonTaskState.AUTH_REQUIRED
                     ),
-                    status_message=response.get("message"),
+                    status_message=(
+                        self._public_interactive_status_message(ctx)
+                        if raw_status_message
+                        else None
+                    ),
                 )
 
             # Interactive states (input-required / auth-required) are already
@@ -1754,12 +1815,7 @@ class DirectTransport(AgentTransport):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
                     task_obj.status.state = coerce_task_state(status)
-                    if msg_text := response.get("message"):
-                        task_obj.status.message = Message(
-                            role=MessageRole.AGENT,
-                            parts=[Part(root=TextPart(text=msg_text))],
-                            message_id=uuid.uuid4().hex,
-                        )
+                    task_obj.status.message = None
                 if not task_info:
                     current_message.agent_url = (
                         current_message.agent_url
