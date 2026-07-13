@@ -295,12 +295,16 @@ class A2ATaskTrackingService:
             trusted_local_hitl_metadata = (
                 existing_task.metadata if existing_task is not None else None
             )
+            projected_task_data = public_persisted_task_data(
+                task_obj,
+                trusted_local_hitl_metadata=trusted_local_hitl_metadata,
+            )
+            response_text = _extract_reply_response_text(
+                Task.model_validate(projected_task_data)
+            )
             await self._tracking_store.update_task_on_message(
                 message_id,
-                public_persisted_task_data(
-                    task_obj,
-                    trusted_local_hitl_metadata=trusted_local_hitl_metadata,
-                ),
+                projected_task_data,
                 message_text=response_text,
             )
 
@@ -346,10 +350,12 @@ class A2ATaskTrackingService:
                 context="message",
             )
 
-        message_text = _extract_text_from_message(message)
+        projected_task_data = public_persisted_task_data(completed_task)
+        projected_task = Task.model_validate(projected_task_data)
+        message_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            completed_task.model_dump(mode="json"),
+            projected_task_data,
             message_text=message_text or None,
         )
         resp = {
@@ -358,7 +364,7 @@ class A2ATaskTrackingService:
             "content": message_text,
             "persisted": persisted,
         }
-        non_text_parts = _non_text_parts(completed_task.artifacts)
+        non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
         return resp
@@ -690,8 +696,10 @@ def public_persisted_task_data(
     state_value = _state_value_from_task_data(task_data)
 
     artifacts = task_data.get("artifacts")
-    if isinstance(artifacts, list):
+    if state_value == _COMPLETED_STATE and isinstance(artifacts, list):
         task_data["artifacts"] = [public_artifact_data(artifact) for artifact in artifacts]
+    else:
+        task_data["artifacts"] = None
 
     history = task_data.get("history")
     if state_value in _PUBLIC_HISTORY_STATES and isinstance(history, list):

@@ -2012,6 +2012,85 @@ class TestDispatchInteractive:
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
 
+    @pytest.mark.asyncio
+    async def test_dispatch_non_push_polled_interactive_keeps_raw_prompt_internal_only(self):
+        private_prompt = "PRIVATE_SENTINEL_polled_interactive_prompt"
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {
+            "webhook_token": "tok-123",
+            "context_id": "ctx-1",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        processing_ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=message,
+            agent_card=agent_card,
+            user_message_id="user-msg-1",
+            task_info=task_info,
+            send_sse=False,
+        )
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(task_info, processing_ctx)
+        )
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_push_notification_capability = MagicMock(
+            return_value=False
+        )
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
+            return_value={
+                "type": "task",
+                "task_id": "remote-task-42",
+                "status": TaskState.working,
+            }
+        )
+        proc._poll_task_until_complete = AsyncMock(
+            return_value=Task(
+                id="remote-task-42",
+                contextId="ctx-1",
+                status=TaskStatus(
+                    state=TaskState.input_required,
+                    message=Message(
+                        message_id="private-status-msg",
+                        role=MessageRole.AGENT,
+                        parts=[TextPart(kind="text", text=private_prompt)],
+                    ),
+                ),
+                artifacts=[
+                    {
+                        "artifactId": "private-artifact",
+                        "parts": [{"kind": "text", "text": private_prompt}],
+                    }
+                ],
+                kind="task",
+            )
+        )
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        proc.tsm.notify_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+        agent = MagicMock()
+        agent.agent_card = agent_card
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.status_message == private_prompt
+        persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
+        persisted_json = json.dumps(persisted_task, sort_keys=True)
+        in_memory_json = message.message_content.message_task.model_dump_json()
+        assert private_prompt not in persisted_json
+        assert private_prompt not in in_memory_json
+        assert proc.response_handler.handle.await_args is None
+
 
 class TestFinalizePolledTaskPrivacy:
     def _make_completed_task_with_private_history(self, private_text: str) -> Task:

@@ -1909,6 +1909,7 @@ class DirectTransport(AgentTransport):
                     ctx,
                     step_number=step_number,
                     total_steps=total_steps,
+                    interactive_status_context=interactive_status_context,
                 )
             else:
                 logger.warning(
@@ -1942,6 +1943,7 @@ class DirectTransport(AgentTransport):
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
+        interactive_status_context: dict[str, str | None] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
         state = completed_task.status.state
@@ -1960,6 +1962,11 @@ class DirectTransport(AgentTransport):
         # and return paused_message_id so the dispatch method detects it
         # and triggers HITL.
         if state in INTERACTIVE_STATES:
+            raw_status_message = None
+            if completed_task.status.message:
+                raw_status_message = get_text_from_message(completed_task.status.message)
+            if raw_status_message and interactive_status_context is not None:
+                interactive_status_context["status_message"] = raw_status_message
             public_task = self._public_task_model(completed_task)
             # Update in-memory task so get_task(message) sees the new state.
             if current_message.message_content:

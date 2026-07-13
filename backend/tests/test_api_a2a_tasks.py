@@ -18,6 +18,17 @@ from api.a2a_tasks import (
     list_room_tasks,
     list_user_pending_tasks,
 )
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
+from models.room import MessageContent, RoomAgentMessage
 
 # =============================================================================
 # Get Task Status Tests
@@ -43,6 +54,71 @@ class TestGetTaskStatus:
         assert result["message_id"] == sample_agent_message_with_task.message_id
         assert "status" in result
         assert "task" in result
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_projects_public_task_before_serialization(
+        self, mock_user, mock_db_service
+    ):
+        """Should not serialize raw remote task fields through the status endpoint."""
+        private_sentinel = "PRIVATE_SENTINEL_get_task_status_raw_task"
+        raw_task = Task(
+            id="remote-task-1",
+            context_id="remote-context-1",
+            status=TaskStatus(
+                state=TaskState.input_required,
+                message=Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-status",
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                    metadata={"private": private_sentinel},
+                ),
+            ),
+            history=[
+                Message(
+                    role=MessageRole.USER,
+                    message_id="private-user-history",
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+                Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-agent-history",
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+            ],
+            artifacts=[
+                Artifact(
+                    artifact_id="private-artifact",
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                    metadata={"private": private_sentinel},
+                )
+            ],
+            metadata={
+                "prompt": private_sentinel,
+                "hitl_prompt": private_sentinel,
+                "hitl_request_id": private_sentinel,
+            },
+        )
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-message-1",
+            user_id=mock_user.user_id,
+            agent_id="agent-1",
+            message_content=MessageContent(message_task=raw_task),
+            has_task_tracking=True,
+        )
+        mock_db_service.get_room_agent_message_by_message_id.return_value = message
+
+        result = await get_task_status(
+            message.message_id, mock_user, db=mock_db_service
+        )
+
+        task = result["task"]
+        assert task["status"]["state"] == "input-required"
+        assert task["status"]["message"] is None
+        assert task.get("history") in (None, [])
+        assert task.get("artifacts") in (None, [])
+        assert task.get("metadata") is None
+        assert private_sentinel not in str(result)
 
     @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):

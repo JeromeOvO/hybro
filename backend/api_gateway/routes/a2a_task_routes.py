@@ -18,6 +18,7 @@ from common.a2a_constants import (
 from common.auth import ClerkUser, get_current_user
 from common.protocols import A2ATaskStatusReader
 from common.utils.logger import get_logger
+from execution.task_tracking import public_persisted_task_data
 
 logger = get_logger(__name__)
 
@@ -58,7 +59,7 @@ async def get_task_status(
     return {
         "message_id": message_id,
         "status": state_value,
-        "task": task.model_dump(mode="json"),
+        "task": public_persisted_task_data(task),
         "agent_name": None,  # Can be looked up from agent_id if needed
         "agent_id": msg.agent_id,
         "related_message_id": msg.related_message_id,
