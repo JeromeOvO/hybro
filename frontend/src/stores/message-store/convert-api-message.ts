@@ -67,6 +67,7 @@ export async function convertApiMessageToIncoming(
   let content = ''
   let taskError: string | undefined
   let taskContent: string | undefined
+  let taskStatusMessage: string | undefined
 
   if (
     apiMessage.message_content?.message_text
@@ -99,7 +100,9 @@ export async function convertApiMessageToIncoming(
   // Only backend-labeled public text may become a visible task description.
   const publicTaskLabel = extendInfo?.public_task_label
   if (typeof publicTaskLabel === 'string' && publicTaskLabel.trim()) {
-    taskContent = publicTaskLabel.trim()
+    const publicLabel = publicTaskLabel.trim()
+    taskContent = publicLabel
+    taskStatusMessage = publicLabel
   }
 
   // ── Resolve sender name ──────────────────────────────────────
@@ -264,6 +267,7 @@ export async function convertApiMessageToIncoming(
 
     taskStatus,
     taskError: messageTask ? (taskError || null) : undefined,
+    taskStatusMessage,
     taskContent,
 
     stepNumber: apiMessage.step_number ?? undefined,

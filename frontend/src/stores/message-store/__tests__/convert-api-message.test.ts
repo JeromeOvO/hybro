@@ -642,6 +642,7 @@ describe('convertApiMessageToIncoming', () => {
         agentId: 'agent-1',
         taskStatus: TASK_STATE.COMPLETED,
         taskContent: 'Analyzing data...',
+        taskStatusMessage: 'Analyzing data...',
         stepNumber: 3,
         totalSteps: 7,
       }))
@@ -673,6 +674,7 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result.content).toBe('')
       expect(result.taskContent).toBe('Requesting Insurer')
+      expect(result.taskStatusMessage).toBe('Requesting Insurer')
       expect(serialized).toContain('Requesting Insurer')
       expect(serialized).not.toContain(privateSentinel)
     })

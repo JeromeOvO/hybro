@@ -29,7 +29,6 @@ export async function handleTaskSubmitted(
     agentId: sseMessage.data.agent_id ?? undefined,
     agentSource: ctx.getAgentSource(sseMessage.data.agent_id ?? undefined),
     taskStatus: (sseMessage.data.status as TaskState) || TASK_STATE.WORKING,
-    taskContent: sseMessage.data.task_content ?? undefined,
     stepNumber: sseMessage.data.step_number ?? undefined,
     totalSteps: sseMessage.data.total_steps ?? undefined,
     relatedMessageId: sseMessage.data.related_message_id ?? undefined,

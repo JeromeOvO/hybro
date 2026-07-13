@@ -30,65 +30,29 @@ import { getStripSourceResults } from './turn-live-shell'
 
 const SYSTEM_TURN_ID = 'system-turn'
 
-type MessageEntityWithPublicStatus = MessageEntity & { statusMessage?: unknown }
-
-function publicAgentStatusText(entity: MessageEntity): string {
-  const statusMessage = (entity as MessageEntityWithPublicStatus).statusMessage
-  const status = typeof statusMessage === 'string' ? statusMessage.trim() : ''
-  if (status.length > 0) return status
-  return entity.taskStatus === 'working' ? 'Working' : ''
-}
-
-function publicTaskContentLabel(entity: MessageEntity): string {
-  const label = typeof entity.taskContent === 'string' ? entity.taskContent.trim() : ''
-  if (label.length === 0) return ''
-  if (label.length > 200 || label.includes('\n')) return ''
-
-  const normalized = label.toLowerCase()
-  if (
-    normalized.includes('internal dispatch task')
-    || normalized.includes('hidden planner context')
-  ) {
-    return ''
-  }
-
-  return label
-}
-
 function publicAgentStatusMessage(
   entity: MessageEntity,
   status: AgentResultViewModel['status'],
 ): string | null | undefined {
-  const statusText = publicAgentStatusText(entity)
-  if (statusText.length > 0 && statusText !== 'Working') return statusText
-
   const taskStatusMessage = typeof entity.taskStatusMessage === 'string'
     ? entity.taskStatusMessage.trim()
     : ''
   if (taskStatusMessage.length > 0) return taskStatusMessage
 
   if (status === 'working') {
-    const taskLabel = publicTaskContentLabel(entity)
-    if (taskLabel.length > 0) return taskLabel
-    if (entity.content.trim().length === 0 && entity.taskStatus === 'working') return statusText
+    if (entity.content.trim().length === 0 && entity.taskStatus === 'working') return 'Working'
   }
 
   return entity.taskStatusMessage
 }
 
 function publicSupervisorStageDetails(entity: MessageEntity): string | undefined {
-  const statusText = publicAgentStatusText(entity)
-  if (statusText.length > 0 && statusText !== 'Working') return statusText
-
   const taskStatusMessage = typeof entity.taskStatusMessage === 'string'
     ? entity.taskStatusMessage.trim()
     : ''
   if (taskStatusMessage.length > 0) return taskStatusMessage
 
-  const taskLabel = publicTaskContentLabel(entity)
-  if (taskLabel.length > 0) return taskLabel
-
-  return statusText || undefined
+  return entity.taskStatus === 'working' ? 'Working' : undefined
 }
 
 // ── Core turn construction ─────────────────────────────────────
@@ -668,6 +632,8 @@ function deriveTurnStatus(
     processingStatusLogs?: TurnViewModel['processingStatusLogs']
   },
 ): TurnStatus {
+  if (opts.turnTerminalStatus === 'canceled') return 'failed'
+
   const substantive = agentResults.filter(r => !r.isEphemeral)
   const hasAwaitingInput = substantive.some((r) => r.status === 'awaiting_input')
   const hasFailed = substantive.some((r) => r.status === 'failed')

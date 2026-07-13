@@ -10,9 +10,7 @@ import type { RoomMessage } from '@/lib/types/response'
 
 let counter = 0
 
-type MessageEntityTestOverrides = Partial<MessageEntity> & { statusMessage?: string }
-
-function makeEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
+function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   counter++
   return {
     id: `msg-${counter}`,
@@ -31,7 +29,7 @@ function makeEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
   }
 }
 
-function makeUserEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
+function makeUserEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   return makeEntity({
     messageType: 'user',
     senderName: 'User',
@@ -40,7 +38,7 @@ function makeUserEntity(overrides: MessageEntityTestOverrides = {}): MessageEnti
   })
 }
 
-function makeAgentEntity(overrides: MessageEntityTestOverrides = {}): MessageEntity {
+function makeAgentEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   return makeEntity({
     messageType: 'agent',
     senderName: 'Test Agent',
@@ -378,7 +376,32 @@ describe('buildTurns – core construction', () => {
 describe('buildTurns – V2 data model', () => {
   // ── Ephemeral placeholder handling ───────────────────────
 
-  it('does not render internal dispatch task content as agent reply detail', () => {
+  it('does not render arbitrary taskContent as agent reply detail', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      content: 'Get a quote',
+    })
+    const privateTaskContent = 'Evaluate the confidential renewal file and include the internal premium ceiling'
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      relatedMessageId: 'u1',
+      agentId: 'agent-1',
+      senderName: 'Insurer Agent',
+      content: '',
+      taskStatus: 'working' as any,
+      taskContent: privateTaskContent,
+    })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+
+    const serialized = JSON.stringify(turns[0])
+    expect(serialized).not.toContain(privateTaskContent)
+    expect(turns[0].agentResults[0].taskStatusMessage).toBe('Working')
+  })
+
+  it('renders explicit public taskStatusMessage as active agent status', () => {
     const user = makeUserEntity({
       id: 'u1',
       timestamp: '2026-01-01T00:00:00Z',
@@ -392,15 +415,16 @@ describe('buildTurns – V2 data model', () => {
       senderName: 'Insurer Agent',
       content: '',
       taskStatus: 'working' as any,
-      taskContent: 'INTERNAL DISPATCH TASK: include hidden planner context',
-      statusMessage: 'Requesting Insurer Agent',
+      taskStatusMessage: 'Requesting Insurer Agent',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
     })
 
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
-
     const serialized = JSON.stringify(turns[0])
-    expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+
+    expect(turns[0].agentResults[0].taskStatusMessage).toBe('Requesting Insurer Agent')
     expect(serialized).toContain('Requesting Insurer Agent')
+    expect(serialized).not.toContain('confidential renewal file')
   })
 
   it('suppresses ephemeral placeholder when real agent shares clientRequestId', () => {
@@ -502,7 +526,8 @@ describe('buildTurns – V2 data model', () => {
       isEphemeral: true,
       clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
-      taskContent: 'Synthesizing responses...',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Synthesizing responses...',
       timestamp: '2026-01-01T00:00:03Z',
     })
     const realAgent = makeAgentEntity({
@@ -530,7 +555,8 @@ describe('buildTurns – V2 data model', () => {
       isEphemeral: true,
       clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
-      taskContent: 'Synthesizing responses...',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Synthesizing responses...',
       timestamp: '2026-01-01T00:00:03Z',
     })
     const realAgent = makeAgentEntity({
@@ -584,7 +610,8 @@ describe('buildTurns – V2 data model', () => {
       agentId: 'system:hybro',
       clientRequestId: 'cr-1',
       taskStatus: 'working' as any,
-      taskContent: 'Synthesizing responses...',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Synthesizing responses...',
       timestamp: '2026-01-01T00:00:03Z',
     })
     const turns = buildTurns(
@@ -604,7 +631,8 @@ describe('buildTurns – V2 data model', () => {
       isEphemeral: true,
       agentId: 'system:hybro',
       taskStatus: 'working' as any,
-      taskContent: 'Dispatching agents',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Dispatching agents',
       stepNumber: 2,
       totalSteps: 3,
       timestamp: '2026-01-01T00:00:01Z',
@@ -630,6 +658,7 @@ describe('buildTurns – V2 data model', () => {
     expect(turns[0].supervisorStage!.stepNumber).toBe(2)
     expect(turns[0].supervisorStage!.totalSteps).toBe(3)
     expect(turns[0].supervisorStage!.details).toBe('Dispatching agents')
+    expect(JSON.stringify(turns[0])).not.toContain('confidential renewal file')
   })
 
   // ── 'working' status ──────────────────────────────────────
@@ -1233,7 +1262,8 @@ describe('primaryStreamMessageId', () => {
       messageType: 'agent',
       senderName: 'HYBRO AI',
       isEphemeral: true,
-      taskContent: 'Synthesizing responses...',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Synthesizing responses...',
       taskStatus: 'working' as any,
     })
     const turns = buildTurns(
@@ -1342,7 +1372,8 @@ describe('primaryStreamMessageId', () => {
       senderName: 'HYBRO AI',
       isEphemeral: true,
       clientRequestId: 'cr-1',
-      taskContent: 'Synthesizing responses...',
+      taskContent: 'Evaluate the confidential renewal file and include the internal premium ceiling',
+      taskStatusMessage: 'Synthesizing responses...',
       taskStatus: 'working' as any,
     })
     const turns = buildTurns(
@@ -1352,6 +1383,58 @@ describe('primaryStreamMessageId', () => {
     )
     expect(turns[0].agentResults.some(r => r.isEphemeral)).toBe(false)
     expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+  })
+
+  it('keeps canceled turns terminal despite stale HYBRO and processing synthesis signals', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      turnTerminalStatus: 'canceled',
+      clientRequestId: 'cr-1',
+      processingStatusLogs: [
+        {
+          id: 'log-stale',
+          message: 'Synthesizing responses...',
+          timestamp: '2026-06-03T12:00:03.000Z',
+          turnPhase: 'synthesizing',
+        },
+      ],
+    })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'A',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'B',
+    })
+    const staleHybro = makeAgentEntity({
+      id: 'hybro-stale',
+      agentId: 'system:hybro',
+      senderName: 'HYBRO AI',
+      clientRequestId: 'cr-1',
+      taskStatus: 'working',
+      taskStatusMessage: 'Synthesizing responses...',
+      content: '',
+      timestamp: '2026-06-03T12:00:04.000Z',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, staleHybro]),
+      ['u1', 'a1', 'a2', 'hybro-stale'],
+      [],
+    )
+
+    expect(turns[0].turnTerminalStatus).toBe('canceled')
+    expect(turns[0].status).toBe('failed')
+    expect(turns[0].phase).toBe('completed')
+    expect(turns[0].finalAnswer.kind).toBe('canceled')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
   })
 
   it('returns undefined for hitl (question in primary, not agent stream)', () => {

@@ -32,7 +32,7 @@ describe('selectAgentResponseDetail', () => {
         relatedMessageId: 'user-1',
         agentId: 'researcher-1',
         senderName: 'Researcher Alex',
-        taskContent: 'Research a2a agents',
+        taskStatusMessage: 'Research a2a agents',
         taskStatus: TASK_STATE.COMPLETED,
         content: '# Report\n\nA2A findings.',
       }),
@@ -152,6 +152,33 @@ describe('selectAgentResponseDetail', () => {
     expect(detail?.content).toBe('Hermes final answer')
     expect(detail?.isStreaming).toBe(false)
     expect(detail?.display.label).not.toBe('Streaming')
+  })
+
+  it('uses public taskStatusMessage instead of raw taskContent for the detail description', () => {
+    const privateTaskContent = 'Evaluate the confidential renewal file and include the internal premium ceiling'
+    const { entities, orderedIds } = setup([
+      createUserMessage({
+        id: 'user-1',
+        roomId: 'room-1',
+        content: 'Get a quote',
+      }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        agentId: 'agent-1',
+        senderName: 'Insurer Agent',
+        taskStatus: TASK_STATE.WORKING,
+        taskContent: privateTaskContent,
+        taskStatusMessage: 'Requesting Insurer Agent',
+        content: '',
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail('room-1', 'agent-1', entities, orderedIds)
+
+    expect(detail?.taskDescription).toBe('Requesting Insurer Agent')
+    expect(JSON.stringify(detail)).not.toContain(privateTaskContent)
   })
 
   it('ignores live buffer when entity is canceled mid-stream', () => {

@@ -24,10 +24,7 @@ function safeTaskStatusMessage(
   const text = rawStatusMessage?.trim()
   if (!text) return null
   if (isTerminalState(status)) return undefined
-  if (status === TASK_STATE.AUTH_REQUIRED && text === 'Authentication required') {
-    return text
-  }
-  return undefined
+  return text
 }
 
 function maybeScheduleTurnTerminalRecovery(
@@ -73,7 +70,6 @@ export async function handleTaskUpdate(
     taskStatusMessage: safeTaskStatusMessage(status, sseMessage.data.status_message),
     taskRequiresInput: sseMessage.data.requires_input,
     taskRequiresAuth: sseMessage.data.requires_auth,
-    taskContent: sseMessage.data.task_content ?? undefined,
     stepNumber: sseMessage.data.step_number ?? undefined,
     totalSteps: sseMessage.data.total_steps ?? undefined,
     relatedMessageId: sseMessage.data.related_message_id ?? undefined,
