@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ class _FakeCollection:
         find_one_and_update_results: list[Any] | None = None,
         update_one_results: list[Any] | None = None,
         create_index_side_effect_by_name: dict[str | None, Exception] | None = None,
+        documents: list[dict[str, Any]] | None = None,
     ) -> None:
         self.insert_one_side_effect = insert_one_side_effect
         self.find_one_results = list(find_one_results or [])
@@ -34,6 +36,7 @@ class _FakeCollection:
         self.find_one_and_update_calls: list[tuple[dict[str, Any], dict, dict]] = []
         self.update_one_calls: list[tuple[dict[str, Any], dict, dict]] = []
         self.create_index_calls: list[tuple[list[tuple[str, int]], dict]] = []
+        self.documents = [deepcopy(document) for document in documents or []]
 
     async def insert_one(self, document: dict[str, Any]):
         self.insert_one_calls.append(deepcopy(document))
@@ -53,6 +56,13 @@ class _FakeCollection:
         )
         if self.find_one_and_update_results:
             return self.find_one_and_update_results.pop(0)
+        for document in self.documents:
+            if _matches_query(document, query):
+                before = deepcopy(document)
+                _apply_update(document, update)
+                if kwargs.get("return_document") == ReturnDocument.AFTER:
+                    return deepcopy(document)
+                return before
         return None
 
     async def update_one(self, query: dict[str, Any], update: dict, **kwargs):
@@ -82,6 +92,55 @@ def _store(
         room_agent_messages=room_agent_messages or _FakeCollection(),
         room_user_messages=_FakeCollection(),
     )
+
+
+_MISSING = object()
+
+
+def _get_dotted(document: dict[str, Any], path: str) -> Any:
+    current: Any = document
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return _MISSING
+        current = current[part]
+    return current
+
+
+def _set_dotted(document: dict[str, Any], path: str, value: Any) -> None:
+    current = document
+    parts = path.split(".")
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = deepcopy(value)
+
+
+def _unset_dotted(document: dict[str, Any], path: str) -> None:
+    current = document
+    parts = path.split(".")
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            return
+        current = child
+    current.pop(parts[-1], None)
+
+
+def _matches_query(document: dict[str, Any], query: dict[str, Any]) -> bool:
+    for path, expected in query.items():
+        if _get_dotted(document, path) != expected:
+            return False
+    return True
+
+
+def _apply_update(document: dict[str, Any], update: dict[str, Any]) -> None:
+    for path, value in update.get("$set", {}).items():
+        _set_dotted(document, path, value)
+    for path in update.get("$unset", {}):
+        _unset_dotted(document, path)
 
 
 @pytest.mark.asyncio
@@ -447,42 +506,99 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
     )
 
     assert result is True
-    assert room_agent_messages.update_one_calls == [
-        (
-            {
-                "message_id": "agent-msg-1",
-                "message_content.message_task.metadata": None,
-            },
-            {"$set": {"message_content.message_task.metadata": {}}},
-            {},
-        )
-    ]
+    assert room_agent_messages.update_one_calls == []
     assert len(room_agent_messages.find_one_and_update_calls) == 1
     query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
     assert query == {"message_id": "agent-msg-1"}
     assert kwargs == {"return_document": ReturnDocument.AFTER}
 
     sets = update["$set"]
-    unsets = update["$unset"]
     assert sets["message_content.message_task.status.state"] == "input-required"
-    assert sets["message_content.message_task.metadata.hitl_request_id"] == "req-1"
-    assert (
-        sets["message_content.message_task.metadata.hitl_prompt"]
-        == "Need policy effective date"
-    )
-    assert sets["message_content.message_task.metadata.hitl_prompt_type"] == "text"
-    assert sets["message_content.message_task.metadata.hitl_choices"] is None
-    assert sets["message_content.message_task.metadata.user_answer"] is None
-    assert "task_updated_at" in sets
-    assert unsets == {
-        "message_content.message_task.metadata.hitl_a2a_task_id": "",
-        "message_content.message_task.metadata.hitl_a2a_context_id": "",
-        "message_content.message_task.metadata.hitl_group_id": "",
-        "message_content.message_task.metadata.hitl_group_total": "",
-        "message_content.message_task.metadata.hitl_group_index": "",
+    assert sets["message_content.message_task.metadata"] == {
+        "hitl_request_id": "req-1",
+        "hitl_prompt": "Need policy effective date",
+        "hitl_prompt_type": "text",
+        "user_answer": None,
     }
+    assert "task_updated_at" in sets
+    assert all(".metadata." not in key for key in sets)
+    assert "$unset" not in update
     assert all("hitl_status" not in key for key in sets)
-    assert all("hitl_status" not in key for key in unsets)
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_hitl_replaces_stale_metadata_projection():
+    private_sentinel = "PRIVATE_SENTINEL_remote_hitl"
+    stale_document = {
+        "message_id": "agent-msg-1",
+        "message_content": {
+            "message_task": {
+                "status": {"state": "completed"},
+                "metadata": {
+                    "hitl_request_id": "remote-req",
+                    "hitl_prompt": private_sentinel,
+                    "hitl_prompt_type": "remote-choice",
+                    "hitl_choices": [private_sentinel],
+                    "hitl_status": private_sentinel,
+                    "hitl_resource_id": private_sentinel,
+                    "remote_metadata": {"secret": private_sentinel},
+                    "user_answer": private_sentinel,
+                    "untrusted_extra": private_sentinel,
+                },
+            }
+        },
+    }
+    room_agent_messages = _FakeCollection(documents=[stale_document])
+    store = _store(room_agent_messages=room_agent_messages)
+
+    result = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-1",
+        prompt="Choose the approved option",
+        prompt_type=HITLPromptType.CHOICE,
+        choices=["Approve", "Reject"],
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+        group_id="group-1",
+        group_total=2,
+        group_index=0,
+    )
+
+    assert result is True
+    assert room_agent_messages.update_one_calls == []
+    assert len(room_agent_messages.find_one_and_update_calls) == 1
+    query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
+    assert query == {"message_id": "agent-msg-1"}
+    assert kwargs == {"return_document": ReturnDocument.AFTER}
+
+    expected_metadata = {
+        "hitl_request_id": "req-1",
+        "hitl_prompt": "Choose the approved option",
+        "hitl_prompt_type": "choice",
+        "hitl_choices": ["Approve", "Reject"],
+        "user_answer": None,
+        "hitl_a2a_task_id": "task-1",
+        "hitl_a2a_context_id": "ctx-1",
+        "hitl_group_id": "group-1",
+        "hitl_group_total": 2,
+        "hitl_group_index": 0,
+    }
+    sets = update["$set"]
+    assert sets["message_content.message_task.status.state"] == "input-required"
+    assert sets["message_content.message_task.metadata"] == expected_metadata
+    assert "task_updated_at" in sets
+    assert all(".metadata." not in path for path in sets)
+    assert "$unset" not in update
+
+    projected = room_agent_messages.documents[0]
+    assert (
+        projected["message_content"]["message_task"]["status"]["state"]
+        == "input-required"
+    )
+    assert (
+        projected["message_content"]["message_task"]["metadata"] == expected_metadata
+    )
+    assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
 
 
 @pytest.mark.asyncio
