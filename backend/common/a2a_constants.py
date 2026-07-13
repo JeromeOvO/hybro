@@ -23,27 +23,32 @@ class CommonTaskState(str, Enum):
     WORKING = "working"
     INPUT_REQUIRED = "input-required"
     AUTH_REQUIRED = "auth-required"
+    POLICY_REQUIRED = "policy-required"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
     REJECTED = "rejected"
+    EXPIRED = "expired"
 
 
 PENDING_STATES = {CommonTaskState.SUBMITTED, CommonTaskState.WORKING}
 INTERACTIVE_STATES = {
     CommonTaskState.INPUT_REQUIRED,
     CommonTaskState.AUTH_REQUIRED,
+    CommonTaskState.POLICY_REQUIRED,
 }
 TERMINAL_STATES = {
     CommonTaskState.COMPLETED,
     CommonTaskState.FAILED,
     CommonTaskState.CANCELED,
     CommonTaskState.REJECTED,
+    CommonTaskState.EXPIRED,
 }
 FAILURE_STATES = {
     CommonTaskState.FAILED,
     CommonTaskState.CANCELED,
     CommonTaskState.REJECTED,
+    CommonTaskState.EXPIRED,
 }
 NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
 

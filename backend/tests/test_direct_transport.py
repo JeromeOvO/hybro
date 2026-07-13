@@ -13,6 +13,9 @@ import pytest
 
 from common.a2a_constants import CommonTaskState
 from common.types import (
+    Artifact,
+    FileContent,
+    FilePart,
     Message,
     MessageRole,
     Part,
@@ -1023,6 +1026,45 @@ async def test_user_role_message_chunk_is_ignored_before_persistence_or_sse():
     proc.delivery.send_artifact_update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_working_stream_message_chunk_does_not_persist_remote_metadata_or_history():
+    private_sentinel = "PRIVATE_SENTINEL_stream_message_part_metadata"
+    proc = _make_processor()
+    proc.delivery.send_artifact_update = AsyncMock()
+    proc.tsm.persist_message = AsyncMock(return_value=True)
+    current_message = _make_room_agent_message()
+    agent_card = MagicMock(spec_set=["name"])
+    agent_card.name = "test-agent"
+    ctx = ProcessingContext(
+        room_id="room-1",
+        current_message=current_message,
+        agent_card=agent_card,
+        user_message_id="msg-1",
+        task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+        send_sse=False,
+    )
+    result = Message(
+        role=MessageRole.AGENT,
+        message_id="remote-agent-message",
+        parts=[
+            Part(
+                root=TextPart(
+                    text="Visible streaming text",
+                    metadata={"private": private_sentinel},
+                )
+            )
+        ],
+        metadata={"private": private_sentinel},
+    )
+
+    await proc._handle_stream_message_chunk(result, ctx, MessageStreamingState())
+
+    persisted_message = proc.tsm.persist_message.await_args.args[0]
+    persisted_task = persisted_message.message_content.message_task
+    assert persisted_task.history in (None, [])
+    assert private_sentinel not in persisted_task.model_dump_json()
+
+
 class TestArtifactUpdateRoutedThroughHandler:
     """_handle_stream_artifact_update routes through response_handler.handle
     instead of using tsm.persist_message + delivery.send_artifact_update."""
@@ -1071,11 +1113,59 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert event.s3_converted is True
         assert event.append is True
         assert event.last_chunk is False
-        assert event.artifacts == [{"artifact_id": "art-1", "parts": []}]
+        assert event.artifacts == [
+            {"artifact_id": "art-1", "parts": [], "metadata": None}
+        ]
 
         # Old paths should NOT be called
         proc.tsm.persist_message.assert_not_awaited()
         proc.delivery.send_artifact_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_strips_remote_metadata_but_keeps_storage_key(self):
+        private_sentinel = "PRIVATE_SENTINEL_stream_artifact_metadata"
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            name="file-result",
+            parts=[
+                Part(
+                    root=FilePart(
+                        file=FileContent(
+                            uri="https://storage.example/result.csv",
+                            mimeType="text/csv",
+                            name="result.csv",
+                        ),
+                        metadata={
+                            "s3_key": "artifacts/room/msg/result.csv",
+                            "request": private_sentinel,
+                        },
+                    )
+                )
+            ],
+            metadata={"request": private_sentinel},
+        )
+        result = MagicMock(artifact=artifact, append=False, last_chunk=True)
+
+        await proc._handle_stream_artifact_update(result, ctx, MessageStreamingState())
+
+        event = proc.response_handler.handle.await_args.args[0]
+        payload = json.dumps(event.artifacts, sort_keys=True)
+        assert "artifacts/room/msg/result.csv" in payload
+        assert private_sentinel not in payload
 
     @pytest.mark.asyncio
     async def test_artifact_chunk_no_sse_uses_atomic_persist(self):
@@ -1121,7 +1211,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc.tsm.persist_message.assert_not_awaited()
         # Instead uses atomic accumulate
         proc._artifact_store.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-1", {"artifact_id": "art-1", "parts": []}, append=False,
+            "msg-1",
+            {"artifact_id": "art-1", "parts": [], "metadata": None},
+            append=False,
         )
 
 
@@ -1540,10 +1632,7 @@ class TestHandleSyncResponseInteractive:
         task = current_message.message_content.message_task
         assert task is not None
         assert task.status.message is None
-        assert (
-            proc._pop_interactive_status_message(current_message.message_id)
-            == "Please provide your API key."
-        )
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
     @pytest.mark.asyncio
     async def test_input_required_without_message_leaves_task_status_message_none(self):
@@ -1709,10 +1798,7 @@ class TestHandleSyncResponseInteractive:
         task = current_message.message_content.message_task
         assert task is not None
         assert task.status.message is None
-        assert (
-            proc._pop_interactive_status_message(current_message.message_id)
-            == "Which revenue period should I use?"
-        )
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
     @pytest.mark.asyncio
     async def test_requires_auth_without_status_sets_auth_required_state(self):
@@ -1763,10 +1849,7 @@ class TestHandleSyncResponseInteractive:
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
         assert task.status.message is None
-        assert (
-            proc._pop_interactive_status_message(current_message.message_id)
-            == "Please provide your OAuth token."
-        )
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
 
 class TestDispatchInteractive:
@@ -1805,7 +1888,7 @@ class TestDispatchInteractive:
         assert result.status == ProcessingStatus.AWAITING_INPUT
         assert result.message_id == message.message_id
         assert result.a2a_task_id == "agent-task-auth"
-        assert result.status_message == "Please provide your OAuth token."
+        assert result.status_message == "Authentication required"
 
     @pytest.mark.asyncio
     async def test_dispatch_auth_required_without_message_uses_default_prompt(self):
@@ -1886,6 +1969,7 @@ class TestDispatchInteractive:
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
         assert result.status_message == "Please provide your OAuth token."
+        assert not hasattr(proc, "_internal_interactive_status_messages")
         task = message.message_content.message_task
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
@@ -2005,8 +2089,8 @@ class TestFinalizePolledTaskPrivacy:
         in_memory_json = current_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
         assert private_text not in in_memory_json
-        assert "Visible prompt" in persisted_json
-        assert "Visible prompt" in in_memory_json
+        assert "Visible prompt" not in persisted_json
+        assert "Visible prompt" not in in_memory_json
 
     @pytest.mark.asyncio
     async def test_room_task_persistence_sanitizes_returned_task_history(self):

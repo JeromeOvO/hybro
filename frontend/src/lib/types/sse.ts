@@ -283,6 +283,9 @@ export const TASK_STATE = {
   UNKNOWN: "unknown",
 } as const satisfies Record<string, TaskState>
 
+const REMOTE_POLICY_REQUIRED_STATE = "policy-required"
+const REMOTE_EXPIRED_STATE = "expired"
+
 // States that are still in progress
 export const PENDING_STATES: TaskState[] = [TASK_STATE.SUBMITTED, TASK_STATE.WORKING]
 
@@ -296,15 +299,15 @@ export const TERMINAL_STATES: TaskState[] = [TASK_STATE.COMPLETED, TASK_STATE.FA
 export const FAILURE_STATES: TaskState[] = [TASK_STATE.FAILED, TASK_STATE.REJECTED, TASK_STATE.CANCELED]
 
 export function isTerminalState(state: TaskState): boolean {
-  return TERMINAL_STATES.includes(state)
+  return TERMINAL_STATES.includes(state) || (state as string) === REMOTE_EXPIRED_STATE
 }
 
 export function isFailureState(state: TaskState): boolean {
-  return FAILURE_STATES.includes(state)
+  return FAILURE_STATES.includes(state) || (state as string) === REMOTE_EXPIRED_STATE
 }
 
 export function isInteractiveState(state: TaskState): boolean {
-  return INTERACTIVE_STATES.includes(state)
+  return INTERACTIVE_STATES.includes(state) || (state as string) === REMOTE_POLICY_REQUIRED_STATE
 }
 
 export function isPendingState(state: TaskState): boolean {

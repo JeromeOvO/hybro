@@ -14,6 +14,21 @@ function parseTurnCompletionKind(raw: unknown): 'synthesis' | 'deterministic' | 
   return undefined
 }
 
+function publicTaskError(status: TaskState | undefined): string | undefined {
+  switch (status as string | undefined) {
+    case TASK_STATE.FAILED:
+      return 'Task failed'
+    case TASK_STATE.REJECTED:
+      return 'Task was rejected by the agent'
+    case TASK_STATE.CANCELED:
+      return 'Task was canceled'
+    case 'expired':
+      return 'Task expired'
+    default:
+      return undefined
+  }
+}
+
 /**
  * Parameters for converting API messages to IncomingMessage shape.
  */
@@ -62,16 +77,19 @@ export async function convertApiMessageToIncoming(
 
   if (messageTask) {
     const messageTaskTyped = messageTask as A2ATaskStatus['task']
-    const extractedError = extractTaskError(messageTaskTyped)
-    if (extractedError) {
-      taskError = extractedError
-    }
+    const safeError = publicTaskError(taskStatus)
+    const extractedError = taskStatus === TASK_STATE.COMPLETED
+      ? extractTaskError(messageTaskTyped)
+      : undefined
+    taskError = safeError ?? extractedError
     if (!content) {
-      const extractedContent = extractTaskContent(messageTaskTyped)
+      const extractedContent = taskStatus === TASK_STATE.COMPLETED
+        ? extractTaskContent(messageTaskTyped)
+        : undefined
       if (extractedContent) {
         content = extractedContent
-      } else if (extractedError && (!taskStatus || isTerminalState(taskStatus))) {
-        content = extractedError
+      } else if (taskError && (!taskStatus || isTerminalState(taskStatus))) {
+        content = taskError
       }
     }
   }

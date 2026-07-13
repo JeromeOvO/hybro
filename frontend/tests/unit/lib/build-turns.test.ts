@@ -1411,4 +1411,41 @@ describe('primaryStreamMessageId', () => {
     expect(serialized).toContain('Requesting Insurer')
     expect(serialized).not.toContain(privateSentinel)
   })
+
+  it('renders stable failed task errors without raw remote status history', async () => {
+    const privateSentinel = 'PRIVATE_SENTINEL_frontend_timeline_failed_status'
+    const user = makeUserEntity({ id: 'u1' })
+    const incoming = await convertApiMessageToIncoming({
+      room_id: 'room-1',
+      message_id: 'a1',
+      message_created_at: '2026-07-12T12:00:00Z',
+      message_type: 'agent',
+      agent_id: 'agent-1',
+      related_message_id: 'u1',
+      message_content: {
+        message_text: '',
+        message_task: {
+          status: {
+            state: 'failed',
+            message: { parts: [{ text: privateSentinel }] },
+          },
+          history: [{
+            role: 'agent',
+            parts: [{ text: privateSentinel }],
+          }],
+        } as RoomMessage['message_content']['message_task'],
+      },
+    } as RoomMessage, {
+      getAgentName: async () => 'Claims Agent',
+    })
+    const agent = makeEntity({ ...incoming, taskStatus: incoming.taskStatus ?? undefined })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    const serialized = JSON.stringify(turns[0])
+
+    expect(turns[0].agentResults[0].status).toBe('failed')
+    expect(turns[0].agentResults[0].content).toBe('Task failed')
+    expect(serialized).toContain('Task failed')
+    expect(serialized).not.toContain(privateSentinel)
+  })
 })

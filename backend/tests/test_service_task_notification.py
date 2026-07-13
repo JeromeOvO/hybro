@@ -458,7 +458,11 @@ class TestNotifyTaskUpdate:
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_input_required_sets_requires_input_flag(self):
-        task = _make_task(TaskState.input_required)
+        private_sentinel = "PRIVATE_SENTINEL_notification_input_prompt"
+        task = _make_task(
+            TaskState.input_required,
+            status_message_text=private_sentinel,
+        )
         msg = _make_message(task=task)
 
         with (
@@ -466,7 +470,6 @@ class TestNotifyTaskUpdate:
             patch(PATCH_NOTIFIER) as notifier,
             patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
-            patch(PATCH_EXTRACT_STATUS, return_value="Please provide input") as mock_st,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
@@ -488,10 +491,10 @@ class TestNotifyTaskUpdate:
                 )
 
             assert result is True
-            mock_st.assert_called_once()
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
-            assert call_kw["status_message"] == "Please provide input"
+            assert call_kw["status_message"] is None
+            assert private_sentinel not in repr(call_kw)
             emitter.assert_awaited_once_with(
                 room_id="room-1",
                 status=SSEProcessingStatus.AWAITING_INPUT,
@@ -499,7 +502,7 @@ class TestNotifyTaskUpdate:
                 lifecycle_message_id="msg-1",
                 record_lifecycle=True,
                 client_request_id=None,
-                details={"message": "Please provide input"},
+                details=None,
                 error_message=None,
             )
 
@@ -631,16 +634,16 @@ class TestNotifyTaskUpdate:
                     room_id="room-1",
                     user_id="user-1",
                 )
-            emitter.assert_awaited_once_with(
-                room_id="room-1",
-                status=SSEProcessingStatus.AWAITING_INPUT,
-                message_id="msg-1",
-                lifecycle_message_id="msg-1",
-                record_lifecycle=True,
-                client_request_id=None,
-                details={"message": "Need input"},
-                error_message=None,
-            )
+        emitter.assert_awaited_once_with(
+            room_id="room-1",
+            status=SSEProcessingStatus.AWAITING_INPUT,
+            message_id="msg-1",
+            lifecycle_message_id="msg-1",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
 
     # --------------------------------------------------------------------- #
     # 11. Agent name resolved from room

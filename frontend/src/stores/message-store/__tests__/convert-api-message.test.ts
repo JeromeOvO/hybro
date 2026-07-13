@@ -276,6 +276,7 @@ describe('convertApiMessageToIncoming', () => {
     })
 
     it('does not promote status message to content for non-terminal tasks', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_working_status_message'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
@@ -284,7 +285,7 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             status: {
               state: 'working',
-              message: { parts: [{ text: 'Processing your request' }] },
+              message: { parts: [{ text: privateSentinel }] },
             },
           } as RoomMessage['message_content']['message_task'],
         },
@@ -293,7 +294,8 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result.taskStatus).toBe(TASK_STATE.WORKING)
       expect(result.content).toBe('')
-      expect(result.taskError).toBe('Processing your request')
+      expect(result.taskError).toBeNull()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
     it('ignores message_text for non-terminal agent tasks (user prompt seed)', async () => {
@@ -336,7 +338,8 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
-    it('promotes status message to content for terminal failed tasks', async () => {
+    it('uses a stable public error for terminal failed tasks', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_failed_status_message'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
@@ -345,7 +348,7 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             status: {
               state: 'failed',
-              message: { parts: [{ text: 'Something went wrong' }] },
+              message: { parts: [{ text: privateSentinel }] },
             },
           } as RoomMessage['message_content']['message_task'],
         },
@@ -353,8 +356,9 @@ describe('convertApiMessageToIncoming', () => {
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.taskStatus).toBe(TASK_STATE.FAILED)
-      expect(result.content).toBe('Something went wrong')
-      expect(result.taskError).toBe('Something went wrong')
+      expect(result.content).toBe('Task failed')
+      expect(result.taskError).toBe('Task failed')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
     it('has no taskStatus when message_task is absent', async () => {

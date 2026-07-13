@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.types import (
+    Artifact,
+    FileContent,
+    FilePart,
     Message,
     MessageRole,
     Part,
@@ -27,6 +30,18 @@ def _message(role: MessageRole, text: str) -> Message:
     )
 
 
+def _status_text(task_data: dict) -> str | None:
+    status_message = task_data.get("status", {}).get("message")
+    if not isinstance(status_message, dict):
+        return None
+    parts = status_message.get("parts") or []
+    if not parts:
+        return None
+    first = parts[0]
+    root = first.get("root", first) if isinstance(first, dict) else {}
+    return root.get("text") if isinstance(root, dict) else None
+
+
 def test_remote_task_sanitizer_drops_non_agent_status_and_all_metadata():
     private_sentinel = "PRIVATE_SENTINEL_remote_task_metadata"
     task = Task(
@@ -47,7 +62,7 @@ def test_remote_task_sanitizer_drops_non_agent_status_and_all_metadata():
 
     persisted = public_persisted_task_data(task)
 
-    assert persisted["status"]["message"] is None
+    assert _status_text(persisted) == "Task failed"
     assert persisted["metadata"] is None
     assert private_sentinel not in json.dumps(persisted)
 
@@ -73,6 +88,164 @@ def test_remote_task_sanitizer_preserves_agent_status_without_message_metadata()
     assert persisted["status"]["message"]["metadata"] is None
     assert "Public final status" in json.dumps(persisted)
     assert "do not persist" not in json.dumps(persisted)
+
+
+@pytest.mark.parametrize(
+    ("state", "safe_status_text"),
+    [
+        (TaskState.working, None),
+        (TaskState.input_required, None),
+        (TaskState.auth_required, None),
+        (TaskState.failed, "Task failed"),
+        (TaskState.rejected, "Task was rejected by the agent"),
+        (TaskState.canceled, "Task was canceled"),
+    ],
+)
+def test_non_completed_public_projection_drops_remote_history_status_and_metadata(
+    state,
+    safe_status_text,
+):
+    private_sentinel = f"PRIVATE_SENTINEL_{state.value}_public_projection"
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(
+            state=state,
+            message=_message(MessageRole.AGENT, private_sentinel),
+        ),
+        history=[
+            _message(MessageRole.USER, private_sentinel),
+            _message(MessageRole.AGENT, private_sentinel),
+        ],
+        artifacts=[
+            Artifact(
+                artifact_id="artifact-1",
+                name="remote-output",
+                parts=[Part(root=TextPart(text="Public artifact text"))],
+                metadata={"private": private_sentinel},
+            )
+        ],
+        metadata={
+            "prompt": private_sentinel,
+            "hitl_prompt": private_sentinel,
+            "hitl_request_id": private_sentinel,
+        },
+    )
+
+    persisted = public_persisted_task_data(task)
+
+    assert persisted.get("metadata") is None
+    assert persisted.get("history") in (None, [])
+    assert _status_text(persisted) == safe_status_text
+    assert "Public artifact text" in json.dumps(persisted)
+    assert private_sentinel not in json.dumps(persisted)
+
+
+@pytest.mark.parametrize(
+    ("state", "safe_status_text"),
+    [
+        ("policy-required", None),
+        ("expired", "Task expired"),
+    ],
+)
+def test_raw_remote_policy_and_expired_states_use_public_projection(
+    state,
+    safe_status_text,
+):
+    private_sentinel = f"PRIVATE_SENTINEL_{state}_raw_projection"
+
+    class RawTask:
+        def model_dump(self, *_, **__):
+            return {
+                "id": "remote-task",
+                "kind": "task",
+                "contextId": "remote-context",
+                "status": {
+                    "state": state,
+                    "message": {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-status",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    },
+                },
+                "history": [
+                    {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-history",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    }
+                ],
+                "metadata": {"prompt": private_sentinel},
+            }
+
+    persisted = public_persisted_task_data(RawTask())
+
+    assert persisted.get("history") in (None, [])
+    assert _status_text(persisted) == safe_status_text
+    assert persisted.get("metadata") is None
+    assert private_sentinel not in json.dumps(persisted)
+
+
+def test_completed_projection_sanitizes_artifact_metadata_but_preserves_delivery_fields():
+    private_sentinel = "PRIVATE_SENTINEL_completed_artifact_metadata"
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id="artifact-1",
+                name="result-file",
+                parts=[
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                uri="https://storage.example/result.csv",
+                                mimeType="text/csv",
+                                name="result.csv",
+                            ),
+                            metadata={
+                                "s3_key": "artifacts/room/msg/result.csv",
+                                "private": private_sentinel,
+                            },
+                        )
+                    )
+                ],
+                metadata={"private": private_sentinel},
+            )
+        ],
+    )
+
+    persisted = public_persisted_task_data(task)
+    part = persisted["artifacts"][0]["parts"][0]
+    part_root = part.get("root", part)
+
+    assert persisted["artifacts"][0]["metadata"] is None
+    assert part_root["file"]["uri"] == "https://storage.example/result.csv"
+    assert part_root["file"]["mimeType"] == "text/csv"
+    assert part_root["file"]["name"] == "result.csv"
+    assert part_root["metadata"] == {"s3_key": "artifacts/room/msg/result.csv"}
+    assert private_sentinel not in json.dumps(persisted)
+
+
+@pytest.mark.asyncio
+async def test_persist_failed_task_uses_safe_public_error_text():
+    private_sentinel = "PRIVATE_SENTINEL_contact_agent_error"
+    store = MagicMock()
+    store.update_task_on_message = AsyncMock(return_value=True)
+    service = A2ATaskTrackingService(store)
+
+    await service._persist_failed_task(
+        "agent-message-1",
+        "context-1",
+        f"Failed to contact agent: {private_sentinel}",
+    )
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    assert _status_text(persisted) == "Task failed"
+    assert private_sentinel not in json.dumps(persisted)
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,16 @@ _TRUSTED_LOCAL_HITL_METADATA_KEYS = frozenset(
     }
 )
 
+_PUBLIC_SAFE_STATUS_TEXT = {
+    "failed": "Task failed",
+    "rejected": "Task was rejected by the agent",
+    "canceled": "Task was canceled",
+    "expired": "Task expired",
+}
+_COMPLETED_STATE = "completed"
+_PUBLIC_HISTORY_STATES = {_COMPLETED_STATE}
+_PUBLIC_METADATA_KEYS = frozenset({"s3_key"})
+
 if TYPE_CHECKING:
     from execution.ports import A2ATaskTrackingStorePort
 
@@ -439,6 +449,11 @@ class A2ATaskTrackingService:
         context_id: str,
         text: str,
     ) -> None:
+        logger.error(
+            "Persisting safe failed task for message %s; raw failure detail retained in logs",
+            message_id,
+            extra={"raw_failure_detail": text},
+        )
         failed_task = Task(
             id=SyntheticTaskId.FAILED,
             context_id=context_id,
@@ -446,14 +461,14 @@ class A2ATaskTrackingService:
                 state=TaskState.failed,
                 message=Message(
                     role=Role.AGENT,
-                    parts=[Part(root=TextPart(text=text))],
+                    parts=[Part(root=TextPart(text=_PUBLIC_SAFE_STATUS_TEXT["failed"]))],
                     message_id=str(uuid4()),
                 ),
             ),
         )
         await self._tracking_store.update_task_on_message(
             message_id,
-            failed_task.model_dump(mode="json"),
+            public_persisted_task_data(failed_task),
         )
 
 
@@ -582,30 +597,125 @@ def _extract_reply_response_text(task_result) -> str | None:
     return None
 
 
+def _plain_model_data(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return dict(value)
+
+
+def _state_value_from_task_data(task_data: dict[str, Any]) -> str | None:
+    status = task_data.get("status")
+    if not isinstance(status, dict):
+        return None
+    raw_state = status.get("state")
+    if raw_state is None:
+        return None
+    return raw_state.value if hasattr(raw_state, "value") else str(raw_state)
+
+
+def _public_metadata_subset(metadata: Any) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+    public = {
+        key: value
+        for key, value in metadata.items()
+        if key in _PUBLIC_METADATA_KEYS and value is not None
+    }
+    return public or None
+
+
+def public_part_data(part: Any) -> dict[str, Any]:
+    part_data = _plain_model_data(part)
+    root = part_data.get("root")
+    if isinstance(root, dict):
+        part_data["root"] = _public_part_payload(root)
+        return part_data
+    return _public_part_payload(part_data)
+
+
+def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    public_payload = dict(payload)
+    public_metadata = _public_metadata_subset(public_payload.get("metadata"))
+    public_payload["metadata"] = public_metadata
+
+    file_payload = public_payload.get("file")
+    if isinstance(file_payload, dict):
+        allowed_file_keys = {"uri", "mimeType", "mime_type", "name", "bytes"}
+        public_payload["file"] = {
+            key: value
+            for key, value in file_payload.items()
+            if key in allowed_file_keys and value is not None
+        }
+    return public_payload
+
+
+def public_message_data(message: Any) -> dict[str, Any] | None:
+    if message is None:
+        return None
+    message_data = _plain_model_data(message)
+    if message_data.get("role") != Role.AGENT.value:
+        return None
+    message_data["metadata"] = None
+    message_data["parts"] = [
+        public_part_data(part) for part in message_data.get("parts") or []
+    ]
+    return message_data
+
+
+def public_artifact_data(artifact: Any) -> dict[str, Any]:
+    artifact_data = _plain_model_data(artifact)
+    artifact_data["metadata"] = None
+    artifact_data["parts"] = [
+        public_part_data(part) for part in artifact_data.get("parts") or []
+    ]
+    return artifact_data
+
+
+def _public_status_message(text: str) -> dict[str, Any]:
+    return Message(
+        role=Role.AGENT,
+        parts=[Part(root=TextPart(text=text))],
+        message_id=str(uuid4()),
+    ).model_dump(mode="json")
+
+
 def public_persisted_task_data(
     task: Task,
     *,
     trusted_local_hitl_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    task_data = task.model_dump(mode="json")
+    task_data = _plain_model_data(task)
+    state_value = _state_value_from_task_data(task_data)
+
+    artifacts = task_data.get("artifacts")
+    if isinstance(artifacts, list):
+        task_data["artifacts"] = [public_artifact_data(artifact) for artifact in artifacts]
+
     history = task_data.get("history")
-    if isinstance(history, list):
+    if state_value in _PUBLIC_HISTORY_STATES and isinstance(history, list):
         public_history = []
         for message in history:
-            if message.get("role") != Role.AGENT.value:
-                continue
-            public_message = dict(message)
-            public_message["metadata"] = None
-            public_history.append(public_message)
+            public_message = public_message_data(message)
+            if public_message is not None:
+                public_history.append(public_message)
         task_data["history"] = public_history
+    else:
+        task_data["history"] = None
 
     status = task_data.get("status")
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
-        status_message = status["message"]
-        if status_message.get("role") != Role.AGENT.value:
-            status["message"] = None
+        if state_value == _COMPLETED_STATE:
+            status["message"] = public_message_data(status["message"])
+        elif state_value in _PUBLIC_SAFE_STATUS_TEXT:
+            status["message"] = _public_status_message(
+                _PUBLIC_SAFE_STATUS_TEXT[state_value]
+            )
         else:
-            status["message"] = {**status_message, "metadata": None}
+            status["message"] = None
+    elif isinstance(status, dict) and state_value in _PUBLIC_SAFE_STATUS_TEXT:
+        status["message"] = _public_status_message(_PUBLIC_SAFE_STATUS_TEXT[state_value])
 
     if isinstance(trusted_local_hitl_metadata, dict):
         trusted_metadata = {
@@ -640,6 +750,9 @@ def _non_text_parts(artifacts) -> list[dict] | None:
 
 __all__ = [
     "A2ATaskTrackingService",
+    "public_artifact_data",
+    "public_message_data",
+    "public_part_data",
     "public_persisted_task_data",
     "resolve_public_task_label",
 ]
