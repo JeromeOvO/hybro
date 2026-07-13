@@ -727,8 +727,7 @@ class TestReplyToTaskWebhookFallback:
 
         persisted_task = mock_db.update_task_on_message.await_args.args[1]
         assert private_sentinel not in repr(persisted_task)
-        assert len(persisted_task["history"]) == 1
-        assert persisted_task["history"][0]["role"] == "agent"
+        assert persisted_task["history"] is None
         assert (
             persisted_task["artifacts"][0]["parts"][0]["text"]
             == "Public final answer from agent"
@@ -945,13 +944,8 @@ class TestSendMessageTrackedAgentPersistedFlag:
             persisted_task["artifacts"][0]["parts"][0]["text"]
             == "Public final answer from agent"
         )
-        assert len(persisted_task["history"]) == 1
-        assert persisted_task["history"][0]["role"] == "agent"
-        assert persisted_task["history"][0]["messageId"] == "agent-history-msg-001"
-        assert (
-            persisted_task["history"][0]["parts"][0]["text"]
-            == "Agent-generated history is public"
-        )
+        assert persisted_task["history"] is None
+        assert "Agent-generated history is public" not in repr(persisted_task)
         assert result["type"] == "message"
         assert result["content"] == "Public final answer from agent"
         assert result["status"] == "completed"

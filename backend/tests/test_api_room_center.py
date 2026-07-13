@@ -134,10 +134,9 @@ async def test_legacy_runtime_task_branch_projects_before_persistence():
     assert persisted_task["status"]["state"] == "completed"
     assert persisted_task["status"]["message"] is None
     assert persisted_task["metadata"] is None
-    assert len(persisted_task["history"]) == 1
-    assert persisted_task["history"][0]["metadata"] is None
+    assert persisted_task["history"] is None
     assert persisted_task["artifacts"][0]["metadata"] is None
-    assert "Public final history" in json.dumps(persisted_task)
+    assert "Public final history" not in json.dumps(persisted_task)
     assert "Public artifact text" in json.dumps(persisted_task)
     assert private_sentinel not in json.dumps(persisted)
 
@@ -181,7 +180,8 @@ async def test_legacy_runtime_message_branch_sanitizes_completed_public_output()
     persisted = _persisted_runtime_message(runtime)
     persisted_task = persisted["message_content"]["message_task"]
     assert persisted_task["status"]["state"] == "completed"
-    assert persisted_task["history"][0]["metadata"] is None
+    assert persisted_task["history"] is None
+    assert persisted_task["artifacts"][0]["name"] == "response"
     assert "Public final message" in json.dumps(persisted_task)
     assert private_sentinel not in json.dumps(persisted)
 

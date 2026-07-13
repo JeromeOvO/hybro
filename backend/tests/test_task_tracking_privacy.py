@@ -90,6 +90,25 @@ def test_completed_remote_task_sanitizer_drops_status_message():
     assert "do not persist" not in json.dumps(persisted)
 
 
+def test_completed_remote_task_sanitizer_drops_all_history():
+    private_sentinel = "PRIVATE_SENTINEL_completed_history"
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(state=TaskState.completed),
+        history=[
+            _message(MessageRole.USER, private_sentinel),
+            _message(MessageRole.AGENT, "Completed agent-role history"),
+        ],
+    )
+
+    persisted = public_persisted_task_data(task)
+
+    assert persisted["history"] is None
+    assert "Completed agent-role history" not in json.dumps(persisted)
+    assert private_sentinel not in json.dumps(persisted)
+
+
 @pytest.mark.parametrize(
     ("state", "safe_status_text"),
     [

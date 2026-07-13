@@ -411,6 +411,30 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
+    it('does not use completed task history as output', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_completed_history'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'completed' },
+            history: [{
+              role: 'agent',
+              parts: [{ text: privateSentinel }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.content).toBe('')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
     it('uses a stable public error for terminal failed tasks', async () => {
       const privateSentinel = 'PRIVATE_SENTINEL_failed_status_message'
       const apiMsg = makeApiMessage({

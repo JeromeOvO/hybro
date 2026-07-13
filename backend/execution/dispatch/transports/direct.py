@@ -24,6 +24,7 @@ from common.a2a_constants import (
     is_terminal_state,
 )
 from common.types import (
+    Artifact,
     Message,
     MessageRole,
     Part,
@@ -36,7 +37,6 @@ from common.utils.a2a_helpers import (
     extract_error_message,
     extract_text_from_artifacts,
     get_message_from_task,
-    get_text_from_a2a_response,
     get_text_from_message,
 )
 from common.utils.cancellation import CancellationError, CancellationToken
@@ -105,8 +105,6 @@ class MessageStreamingState:
     accumulated_parts: list[Any] = field(default_factory=list)
     non_text_parts: list[dict] = field(default_factory=list)
     inline_conversion_count: int = 0
-    agent_message_id: str | None = None
-    message_added_to_history: bool = False
     stream_finalized: bool = False
     final_state: Any | None = None
 
@@ -490,6 +488,38 @@ class DirectTransport(AgentTransport):
         materialize_non_text_parts_as_artifact(task, non_text_parts)
 
     @staticmethod
+    def _materialize_text_as_response_artifact(
+        task: Task,
+        text: str,
+        *,
+        artifact_id: str,
+    ) -> None:
+        """Store completed text output as a sanitized artifact, never history."""
+        if not text:
+            return
+        artifact = Artifact(
+            artifact_id=artifact_id,
+            name="response",
+            parts=[Part(root=TextPart(text=text))],
+        )
+        public_artifact = Artifact.model_validate(public_artifact_data(artifact))
+        if task.artifacts is None:
+            task.artifacts = []
+        for index, existing in enumerate(task.artifacts):
+            if getattr(existing, "artifact_id", None) == artifact_id:
+                task.artifacts[index] = public_artifact
+                break
+        else:
+            task.artifacts.append(public_artifact)
+
+    @staticmethod
+    def _force_terminal_state_for_projection(task: Task, state: Any) -> None:
+        """Mirror transition_task's mutation when tests inject a bare mock."""
+        if task.status and is_terminal_state(task.status.state):
+            return
+        task.status = build_task_status(state)
+
+    @staticmethod
     def _public_task_model(task: Any) -> Task:
         """Return a Task safe to persist or retain for later persistence."""
         return Task.model_validate(
@@ -563,12 +593,29 @@ class DirectTransport(AgentTransport):
             else ctx.current_message.agent_id or "agent",
         )
 
-    @staticmethod
-    def _public_agent_message_model(message: Any) -> Message:
+    def _materialize_message_as_response_artifact(
+        self,
+        task: Task,
+        message: Any,
+        *,
+        artifact_id: str,
+    ) -> bool:
         message_data = public_message_data(Message.model_validate(message))
         if message_data is None:
-            raise ValueError("Expected an agent message for public projection")
-        return Message.model_validate(message_data)
+            return False
+        parts = [Part.model_validate(part) for part in message_data.get("parts") or []]
+        if not parts:
+            return False
+        artifact = Artifact(
+            artifact_id=artifact_id,
+            name="response",
+            parts=parts,
+        )
+        public_artifact = Artifact.model_validate(public_artifact_data(artifact))
+        if task.artifacts is None:
+            task.artifacts = []
+        task.artifacts.append(public_artifact)
+        return True
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -1004,9 +1051,6 @@ class DirectTransport(AgentTransport):
         message_list = self._coerce_parts(result.parts)
         streaming_state.accumulated_parts.extend(message_list)
 
-        if streaming_state.agent_message_id is None:
-            streaming_state.agent_message_id = result.message_id
-
         extracted = extract_parts(message_list)
         content = extracted.text
         streaming_state.full_response_text += content
@@ -1017,29 +1061,6 @@ class DirectTransport(AgentTransport):
 
         task = get_task(ctx.current_message)
         if task:
-            if task.history is None:
-                task.history = []
-
-            updated_message = Message(
-                kind="message",
-                role=result.role,
-                message_id=streaming_state.agent_message_id,
-                parts=streaming_state.accumulated_parts.copy(),
-            )
-            public_updated_message = self._public_agent_message_model(updated_message)
-
-            if not streaming_state.message_added_to_history:
-                task.history.append(public_updated_message)
-                streaming_state.message_added_to_history = True
-            else:
-                for i, msg in enumerate(task.history):
-                    if (
-                        hasattr(msg, "message_id")
-                        and msg.message_id == streaming_state.agent_message_id
-                    ):
-                        task.history[i] = public_updated_message
-                        break
-
             ctx.current_message.message_content.message_task = self._public_task_model(task)
             await self.tsm.persist_message(ctx.current_message)
 
@@ -1141,9 +1162,15 @@ class DirectTransport(AgentTransport):
                 ctx.agent_card, result.task_id
             )
             if fetched_task is not None:
-                message = get_message_from_task(fetched_task)
-                await self._handle_a2a_response_for_room(ctx.current_message, message)
-                fetched_text = get_text_from_a2a_response(message)
+                await self._handle_a2a_response_for_room(ctx.current_message, fetched_task)
+                public_fetched_task = self._public_terminal_output_task_model(
+                    fetched_task
+                )
+                fetched_text = (
+                    extract_text_from_artifacts(public_fetched_task.artifacts)
+                    if public_fetched_task.artifacts
+                    else None
+                )
                 if fetched_text:
                     if (
                         streaming_state.full_response_text
@@ -1331,22 +1358,44 @@ class DirectTransport(AgentTransport):
                     return ProcessingStatus.SUCCESS, streaming_state.full_response_text
                 else:
                     if streaming_state.full_response_text:
-                        ctx.current_message.message_content.message_text = (
-                            streaming_state.full_response_text
+                        self._materialize_text_as_response_artifact(
+                            task,
+                            streaming_state.full_response_text,
+                            artifact_id=f"{ctx.current_message.message_id}-final",
                         )
                     await self.tsm.transition_task(
-                        ctx.current_message, CommonTaskState.COMPLETED, persist=True
+                        ctx.current_message, CommonTaskState.COMPLETED, persist=False
                     )
+                    task = get_task(ctx.current_message)
+                    if task:
+                        self._force_terminal_state_for_projection(
+                            task, CommonTaskState.COMPLETED
+                        )
+                        ctx.current_message.message_content.message_task = (
+                            self._public_terminal_output_task_model(task)
+                        )
+                    await self.tsm.persist_message(ctx.current_message)
                     await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
             elif streaming_state.full_response_text:
-                ctx.current_message.message_content.message_text = (
-                    streaming_state.full_response_text
+                self._materialize_text_as_response_artifact(
+                    task,
+                    streaming_state.full_response_text,
+                    artifact_id=f"{ctx.current_message.message_id}-final",
                 )
                 await self.tsm.transition_task(
                     ctx.current_message,
                     CommonTaskState.COMPLETED,
-                    persist=True,
+                    persist=False,
                 )
+                task = get_task(ctx.current_message)
+                if task:
+                    self._force_terminal_state_for_projection(
+                        task, CommonTaskState.COMPLETED
+                    )
+                    ctx.current_message.message_content.message_task = (
+                        self._public_terminal_output_task_model(task)
+                    )
+                await self.tsm.persist_message(ctx.current_message)
                 await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
             else:
                 logger.warning(
@@ -1376,13 +1425,18 @@ class DirectTransport(AgentTransport):
                 ctx.current_message.message_content.message_text = (
                     final_error or _PUBLIC_AGENT_FAILURE_MESSAGE
                 )
-            elif streaming_state.full_response_text:
-                ctx.current_message.message_content.message_text = (
-                    streaming_state.full_response_text
+            elif (
+                state_str(final_state) == CommonTaskState.COMPLETED.value
+                and streaming_state.full_response_text
+            ):
+                self._materialize_text_as_response_artifact(
+                    task,
+                    streaming_state.full_response_text,
+                    artifact_id=f"{ctx.current_message.message_id}-final",
                 )
             if task:
                 ctx.current_message.message_content.message_task = (
-                    self._public_task_model(task)
+                    self._public_terminal_output_task_model(task)
                 )
             await self.tsm.persist_message(ctx.current_message)
             await self._emit_terminal(ctx, final_state, error=final_error)
@@ -1428,8 +1482,6 @@ class DirectTransport(AgentTransport):
                     converted = self._public_task_model(message_data)
                     if converted.artifacts:
                         existing_task.artifacts = converted.artifacts
-                    if converted.history:
-                        existing_task.history = converted.history
                     room_agent_message.message_content.message_task = (
                         self._public_task_model(existing_task)
                     )
@@ -1447,13 +1499,19 @@ class DirectTransport(AgentTransport):
             task = get_task(room_agent_message)
             if task:
                 public_task = self._public_task_model(task)
-                room_agent_message.message_content.message_task = public_task
-                if self._is_agent_message(message_data):
-                    if public_task.history is None:
-                        public_task.history = []
-                    public_task.history.append(
-                        self._public_agent_message_model(message_data)
+                if (
+                    self._is_agent_message(message_data)
+                    and public_task.status
+                    and state_str(public_task.status.state)
+                    == CommonTaskState.COMPLETED.value
+                ):
+                    self._materialize_message_as_response_artifact(
+                        public_task,
+                        message_data,
+                        artifact_id=f"{room_agent_message.message_id}-message",
                     )
+                    public_task = self._public_terminal_output_task_model(public_task)
+                room_agent_message.message_content.message_task = public_task
             return await self.tsm.persist_message(room_agent_message)
 
         logger.error(

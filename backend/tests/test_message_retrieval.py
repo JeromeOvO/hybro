@@ -250,9 +250,7 @@ class TestRoomMessageRetrieval:
         assert projected.task_content == expected_label
         assert projected.extend_info == {"public_task_label": expected_label}
         assert projected_task is not None
-        assert [message.role for message in projected_task.history] == [
-            MessageRole.AGENT
-        ]
+        assert projected_task.history is None
         assert projected_task.metadata is None
         assert private_sentinel not in json.dumps(result.model_dump(mode="json"))
 

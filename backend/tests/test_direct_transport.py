@@ -896,7 +896,15 @@ class TestFinalizeStreamingWritesArtifacts:
         event_arg = proc.response_handler.handle.call_args[0][0]
         assert event_arg.message_id == "msg-1"
         assert event_arg.room_id == "room-1"
-        assert current_message.message_content.message_text == "Final answer from agent."
+        assert event_arg.text == "Final answer from agent."
+        persisted_task = current_message.message_content.message_task
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is not None
+        assert persisted_task.artifacts[0].name == "response"
+        assert (
+            persisted_task.artifacts[0].parts[0].root.text
+            == "Final answer from agent."
+        )
 
     @pytest.mark.asyncio
     async def test_already_failed_task_persists_only_public_failure_text(self):
@@ -2269,7 +2277,7 @@ class TestFinalizePolledTaskPrivacy:
         )
 
     @pytest.mark.asyncio
-    async def test_terminal_polled_task_persists_public_history_only(self):
+    async def test_terminal_polled_task_does_not_use_history_as_public_output(self):
         private_text = "PRIVATE_SENTINEL_polled_terminal_history"
         proc = _make_processor()
         proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
@@ -2293,9 +2301,10 @@ class TestFinalizePolledTaskPrivacy:
         )
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         assert private_text not in persisted_json
-        assert "Visible agent answer" in persisted_json
+        assert persisted_task["history"] is None
+        assert "Visible agent answer" not in persisted_json
         emitted_event = proc.response_handler.handle.await_args.args[0]
-        assert emitted_event.text == "Visible agent answer"
+        assert emitted_event.text == "Requesting Agent One"
         assert private_text not in json.dumps(emitted_event.__dict__)
 
     @pytest.mark.asyncio
@@ -2355,12 +2364,19 @@ class TestFinalizePolledTaskPrivacy:
         assert private_text not in in_memory_json
 
     @pytest.mark.asyncio
-    async def test_room_task_persistence_sanitizes_returned_task_history(self):
+    async def test_room_task_persistence_drops_history_and_keeps_artifacts(self):
         private_text = "PRIVATE_SENTINEL_room_task_persistence_history"
         proc = _make_processor()
         proc.tsm.persist_message = AsyncMock(return_value=True)
         message = _make_room_agent_message()
         returned_task = self._make_completed_task_with_private_history(private_text)
+        returned_task.artifacts = [
+            Artifact(
+                artifact_id="artifact-answer",
+                name="response",
+                parts=[TextPart(kind="text", text="Visible artifact answer")],
+            )
+        ]
 
         result = await proc._handle_a2a_response_for_room(message, returned_task)
 
@@ -2368,16 +2384,50 @@ class TestFinalizePolledTaskPrivacy:
         persisted_message = proc.tsm.persist_message.await_args.args[0]
         persisted_json = persisted_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
-        assert "Visible agent answer" in persisted_json
+        assert "Visible agent answer" not in persisted_json
+        assert "Visible artifact answer" in persisted_json
+        assert persisted_message.message_content.message_task.history is None
 
     @pytest.mark.asyncio
-    async def test_room_message_append_sanitizes_agent_metadata(self):
+    async def test_room_message_response_for_noncompleted_task_is_discarded(self):
+        private_text = "PRIVATE_SENTINEL_noncompleted_message_response"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        message = _make_room_agent_message()
+        returned_message = Message(
+            role=MessageRole.AGENT,
+            message_id="agent-message",
+            parts=[Part(root=TextPart(text=private_text))],
+        )
+
+        result = await proc._handle_a2a_response_for_room(message, returned_message)
+
+        assert result is True
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        persisted_task = persisted_message.message_content.message_task
+        assert persisted_task.status.state == TaskState.working
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is None
+        assert private_text not in persisted_task.model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_completed_room_message_response_materializes_sanitized_artifact(self):
         message_metadata_sentinel = "PRIVATE_SENTINEL_agent_message_metadata"
         part_metadata_sentinel = "PRIVATE_SENTINEL_agent_part_metadata"
         public_text = "Visible agent answer"
         proc = _make_processor()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        message = _make_room_agent_message()
+        message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=Task(
+                    id="task-001",
+                    contextId="ctx-001",
+                    status=TaskStatus(state=TaskState.completed),
+                    kind="task",
+                ),
+            )
+        )
         returned_message = Message(
             role=MessageRole.AGENT,
             message_id="agent-message-with-private-metadata",
@@ -2401,8 +2451,7 @@ class TestFinalizePolledTaskPrivacy:
         assert message_metadata_sentinel not in persisted_json
         assert part_metadata_sentinel not in persisted_json
         assert public_text in persisted_json
-        agent_history = [
-            item for item in persisted_task.history if item.role == MessageRole.AGENT
-        ]
-        assert agent_history[-1].metadata is None
-        assert agent_history[-1].parts[0].root.text == public_text
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is not None
+        assert persisted_task.artifacts[0].name == "response"
+        assert persisted_task.artifacts[0].parts[0].root.text == public_text

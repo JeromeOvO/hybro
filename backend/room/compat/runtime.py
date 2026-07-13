@@ -4042,7 +4042,7 @@ class RoomServices:
         """
         Retrieve all messages in a room, including user messages and agent messages.
         For user messages: return message_text from message_content
-        For agent messages: return text part from the latest message with role "agent" in task.history
+        For agent messages: return text from sanitized completed artifacts.
         Sort by creation time and return
         """
         if request.room_id is None:
@@ -4222,6 +4222,30 @@ class RoomServices:
             artifact_data["parts"] = public_parts
             return artifact_data
 
+        def _materialize_message_artifact(
+            task: Task,
+            message: Message,
+        ) -> None:
+            public_message = public_message_data(Message.model_validate(message))
+            if public_message is None:
+                return
+            parts = [
+                Part.model_validate(part)
+                for part in public_message.get("parts") or []
+            ]
+            if not parts:
+                return
+            artifact_data = public_artifact_data(
+                Artifact(
+                    artifact_id=f"{room_agent_message.message_id}-message",
+                    name="response",
+                    parts=parts,
+                )
+            )
+            if task.artifacts is None:
+                task.artifacts = []
+            task.artifacts.append(Artifact.model_validate(artifact_data))
+
         # Add null check for process_response
         if message_data is None:
             logger.error(
@@ -4258,11 +4282,11 @@ class RoomServices:
             if task is not None:
                 public_task = _public_task_model(task)
                 if _state_value(public_task) == TaskState.completed.value:
-                    public_message = public_message_data(Message.model_validate(message_data))
-                    if public_message is not None:
-                        if public_task.history is None:
-                            public_task.history = []
-                        public_task.history.append(Message.model_validate(public_message))
+                    _materialize_message_artifact(
+                        public_task,
+                        Message.model_validate(message_data),
+                    )
+                    public_task = _public_task_model(public_task)
                 message_content.message_task = public_task
 
             update_response = await self.update_agent_message_by_message_id(

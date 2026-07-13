@@ -275,10 +275,10 @@ class TestNotifyTaskUpdate:
             assert call_kw["content"] == "Hello world"
 
     # --------------------------------------------------------------------- #
-    # 6. Completed backfills artifacts from agent task history
+    # 6. Completed tasks do not backfill artifacts from private history
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_completed_backfills_artifacts_from_agent_history(self):
+    async def test_completed_does_not_backfill_artifacts_from_agent_history(self):
         private_sentinel = "PRIVATE_SENTINEL_backfill_message_text"
         task = _make_task(TaskState.completed, artifacts=[])
         task.history = [
@@ -303,19 +303,11 @@ class TestNotifyTaskUpdate:
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
-            db.update_room_agent_message_by_message_id.assert_awaited_once()
-            updated_msg = db.update_room_agent_message_by_message_id.call_args[0][1]
-            backfilled_task = updated_msg.message_content.message_task
-            assert backfilled_task.artifacts is not None
-            assert len(backfilled_task.artifacts) == 1
-            assert backfilled_task.artifacts[0].name == "response"
-            assert (
-                backfilled_task.artifacts[0].parts[0].root.text
-                == "Backfilled public answer"
-            )
-            payload = notifier.send_task_update.await_args.kwargs
-            assert payload["content"] == "Backfilled public answer"
-            assert private_sentinel not in repr(payload)
+            db.update_room_agent_message_by_message_id.assert_not_awaited()
+            call_kw = notifier.send_task_update.call_args.kwargs
+            assert call_kw["content"] is None
+            assert "Backfilled public answer" not in repr(call_kw)
+            assert private_sentinel not in repr(call_kw)
 
     # --------------------------------------------------------------------- #
     # 7. Failed state extracts error

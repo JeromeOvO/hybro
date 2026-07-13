@@ -49,7 +49,6 @@ _PUBLIC_SAFE_STATUS_TEXT = {
     "expired": "Task expired",
 }
 _COMPLETED_STATE = "completed"
-_PUBLIC_HISTORY_STATES = {_COMPLETED_STATE}
 _PUBLIC_METADATA_KEYS = frozenset({"s3_key"})
 
 if TYPE_CHECKING:
@@ -304,7 +303,7 @@ class A2ATaskTrackingService:
                 trusted_local_hitl_metadata=trusted_local_hitl_metadata,
             )
             response_text = _extract_reply_response_text(
-                Task.model_validate(projected_task_data)
+                _task_model_for_internal_projection(projected_task_data)
             )
             await self._tracking_store.update_task_on_message(
                 message_id,
@@ -398,7 +397,7 @@ class A2ATaskTrackingService:
             )
 
         projected_task_data = public_persisted_task_data(completed_task)
-        projected_task = Task.model_validate(projected_task_data)
+        projected_task = _task_model_for_internal_projection(projected_task_data)
         message_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
@@ -467,7 +466,7 @@ class A2ATaskTrackingService:
             )
 
         projected_data = public_persisted_task_data(task)
-        projected_task = Task.model_validate(projected_data)
+        projected_task = _task_model_for_internal_projection(projected_data)
         state = projected_task.status.state
         task_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
@@ -686,6 +685,48 @@ def _extract_text_from_task(task: Task) -> str | None:
     return "".join(texts) if texts else None
 
 
+def _task_model_for_internal_projection(task_data: dict[str, Any]) -> Task:
+    try:
+        return Task.model_validate(task_data)
+    except ValueError:
+        return Task.model_validate(_drop_unaddressable_public_file_parts(task_data))
+
+
+def _drop_unaddressable_public_file_parts(
+    task_data: dict[str, Any]
+) -> dict[str, Any]:
+    artifacts = task_data.get("artifacts")
+    if not isinstance(artifacts, list):
+        return task_data
+
+    public_artifacts: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        parts = artifact.get("parts")
+        if not isinstance(parts, list):
+            continue
+
+        public_parts = []
+        for part in parts:
+            if not isinstance(part, dict):
+                public_parts.append(part)
+                continue
+            payload = part.get("root") if isinstance(part.get("root"), dict) else part
+            file_payload = payload.get("file") if isinstance(payload, dict) else None
+            if isinstance(file_payload, dict) and not file_payload.get("uri"):
+                continue
+            public_parts.append(part)
+
+        public_artifact = dict(artifact)
+        public_artifact["parts"] = public_parts
+        public_artifacts.append(public_artifact)
+
+    sanitized = dict(task_data)
+    sanitized["artifacts"] = public_artifacts or None
+    return sanitized
+
+
 def _extract_status_message(task: Task) -> str | None:
     if task.status.message and task.status.message.parts:
         for part in task.status.message.parts:
@@ -805,16 +846,7 @@ def public_persisted_task_data(
     else:
         task_data["artifacts"] = None
 
-    history = task_data.get("history")
-    if state_value in _PUBLIC_HISTORY_STATES and isinstance(history, list):
-        public_history = []
-        for message in history:
-            public_message = public_message_data(message)
-            if public_message is not None:
-                public_history.append(public_message)
-        task_data["history"] = public_history
-    else:
-        task_data["history"] = None
+    task_data["history"] = None
 
     status = task_data.get("status")
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
