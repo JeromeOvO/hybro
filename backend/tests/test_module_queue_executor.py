@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from a2a.types import TaskState
-from a2a_adapter.task_status import coerce_task_state
 
+from a2a_adapter.task_status import coerce_task_state
 from common.dto import MessageCommitted
 from common.utils.cancellation import CancellationToken
 from execution.orchestration.queue_executor import (
@@ -486,6 +486,7 @@ class TestProcessQueue:
         """HITL AWAITING_INPUT records before the frontend pause status."""
         qe = _make_queue_executor()
         order: list[str] = []
+        private_prompt = "PRIVATE_SENTINEL_queue_remote_prompt"
 
         msg = MagicMock(
             message_id="msg-1",
@@ -506,7 +507,7 @@ class TestProcessQueue:
             return_value=ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="paused-msg",
-                status_message="Need more input",
+                status_message=private_prompt,
             )
         )
         qe._queue_next_messages = AsyncMock()
@@ -523,6 +524,10 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.PAUSED
+        hitl_service.request_input.assert_awaited_once()
+        prompt = hitl_service.request_input.await_args.kwargs["prompt"]
+        assert prompt == "The agent needs additional information."
+        assert private_prompt not in repr(hitl_service.request_input.await_args.kwargs)
         emit.assert_awaited_once()
         qe.delivery.send_processing_status.assert_not_called()
         assert order == ["emit"]
