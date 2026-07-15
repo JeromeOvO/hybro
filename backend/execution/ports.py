@@ -21,6 +21,7 @@ from models.room import (
     RoomAgentMessage,
     RoomUserMessage,
 )
+from models.run import RunState
 
 ProcessingStatusLike = str | Enum
 
@@ -834,7 +835,7 @@ class RunLifecyclePort(Protocol):
         room_id: str,
         run_id: str,
         trigger_message_id: str,
-        target_state: Any,
+        target_state: RunState,
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,

@@ -160,15 +160,17 @@ class RunCommandHandler:
         room_id: str,
         run_id: str,
         trigger_message_id: str,
-        target_state: Any,
+        target_state: RunState,
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,
     ) -> dict[str, Any] | None:
         if not _feature_run_dual_write_enabled():
             return None
+        if not isinstance(target_state, RunState):
+            raise TypeError("target_state must be a public RunState")
 
-        state = RunState(self._normalize_status(target_state))
+        state = target_state
         existing = await self._find_existing_projection_event(
             run_id=run_id,
             state=state,
@@ -412,12 +414,12 @@ class RunCommandHandler:
             return None
 
         if awaiting_input:
-            if current_state == RunState.AWAITING_INPUT:
+            if current_state == RunState.AWAITING_INPUT and causation_id is None:
                 return None
             event_type = RunEventType.RUN_AWAITING_INPUT
             next_state = RunState.AWAITING_INPUT
         else:
-            if current_state == RunState.PROCESSING:
+            if current_state == RunState.PROCESSING and causation_id is None:
                 return None
             event_type = (
                 RunEventType.RUN_RESUMED

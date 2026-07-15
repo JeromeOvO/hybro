@@ -4,6 +4,7 @@ from typing import Any
 
 from common.utils.logger import get_logger
 from execution.ports import ProcessingStatusLike
+from models.run import RunState
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,7 @@ class RunLifecycleAdapter:
         room_id: str,
         run_id: str,
         trigger_message_id: str,
-        target_state: Any,
+        target_state: RunState,
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,

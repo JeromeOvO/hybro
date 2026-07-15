@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from common.a2a_constants import SSEProcessingStatus
 from models.run import RunEventType, RunState
 
 
@@ -198,6 +199,105 @@ async def test_project_run_state_skips_when_dual_write_is_disabled(monkeypatch):
     run_repo.update_one.assert_not_awaited()
     event_repo.find_one.assert_not_awaited()
     event_repo.insert_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_project_run_state_rejects_orchestration_status_before_repository_access(
+    monkeypatch,
+):
+    from common.config import settings
+    from execution.run_command_handler import RunCommandHandler
+    from models.orchestration import OrchestrationStatus
+
+    monkeypatch.setattr(settings, "feature_run_dual_write", True)
+
+    run_repo = AsyncMock()
+    event_repo = AsyncMock()
+    handler = RunCommandHandler(
+        run_repository=run_repo,
+        run_event_repository=event_repo,
+    )
+
+    with pytest.raises(TypeError, match="public RunState"):
+        await handler.project_run_state(
+            room_id="room-1",
+            run_id="run-1",
+            trigger_message_id="msg-1",
+            target_state=OrchestrationStatus.RUNNING,
+            terminal_reason=None,
+            causation_id="orch-event-1",
+            client_request_id="cr-1",
+        )
+
+    run_repo.find_one.assert_not_awaited()
+    event_repo.find_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("processing_status", "target_state", "expected_event_type"),
+    [
+        (
+            SSEProcessingStatus.PROCESSING,
+            RunState.PROCESSING,
+            RunEventType.RUN_STARTED,
+        ),
+        (
+            SSEProcessingStatus.AWAITING_INPUT,
+            RunState.AWAITING_INPUT,
+            RunEventType.RUN_AWAITING_INPUT,
+        ),
+    ],
+)
+async def test_project_run_state_binds_causation_when_head_is_already_at_target(
+    monkeypatch,
+    processing_status,
+    target_state,
+    expected_event_type,
+):
+    from common.config import settings
+    from execution.run_command_handler import RunCommandHandler
+
+    monkeypatch.setattr(settings, "feature_run_dual_write", True)
+
+    run_repo = InMemoryRunRepository()
+    event_repo = InMemoryRunEventRepository()
+    handler = RunCommandHandler(
+        run_repository=run_repo,
+        run_event_repository=event_repo,
+    )
+    await handler.record_processing_status(
+        room_id="room-1",
+        status=processing_status,
+        message_id="run-1",
+        client_request_id="cr-1",
+    )
+
+    first = await handler.project_run_state(
+        room_id="room-1",
+        run_id="run-1",
+        trigger_message_id="run-1",
+        target_state=target_state,
+        terminal_reason=None,
+        causation_id="orch-event-1",
+        client_request_id="cr-1",
+    )
+    second = await handler.project_run_state(
+        room_id="room-1",
+        run_id="run-1",
+        trigger_message_id="run-1",
+        target_state=target_state,
+        terminal_reason=None,
+        causation_id="orch-event-1",
+        client_request_id="cr-1",
+    )
+
+    assert first is not None
+    assert second == first
+    assert first["type"] == expected_event_type.value
+    assert event_repo.events[-1]["causation_id"] == "orch-event-1"
+    assert len(event_repo.events) == 3
+    assert run_repo.docs["run-1"]["seq"] == first["seq"] == 3
 
 
 @pytest.mark.asyncio
