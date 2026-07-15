@@ -1839,6 +1839,14 @@ async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
         "run_events",
+        [("run_id", 1), ("type", 1), ("causation_id", 1)],
+        name="run_type_causation_unique",
+        unique=True,
+        partialFilterExpression={"causation_id": {"$type": "string"}},
+    )
+    await _create_index(
+        mongo,
+        "run_events",
         [("room_id", 1), ("ts", -1)],
         name="room_ts",
     )

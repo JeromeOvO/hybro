@@ -267,3 +267,49 @@ def test_memory_conversion_preserves_summary_and_chat_context():
         runtime_to_chat_context(runtime_context).context_data.context_content
         == "summary"
     )
+
+
+def test_orchestration_run_document_conversion_round_trips_state_and_event():
+    from dal.runtime_store.contracts import (
+        orchestration_run_event_from_document,
+        orchestration_run_event_to_document,
+        orchestration_run_state_from_document,
+        orchestration_run_state_to_document,
+    )
+    from models.orchestration import (
+        OrchestrationEventType,
+        OrchestrationRunEvent,
+        OrchestrationRunState,
+        OrchestrationStatus,
+    )
+
+    created_at = datetime(2026, 7, 5, tzinfo=UTC)
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        goal="Summarize room history",
+        candidate_agent_ids=["agent-1"],
+        client_request_id="client-1",
+        status=OrchestrationStatus.RUNNING,
+        state_version=2,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    event = OrchestrationRunEvent(
+        event_id="event-1",
+        run_id="run-1",
+        room_id="room-1",
+        type=OrchestrationEventType.STATE_REDUCED,
+        state_version=2,
+        payload={"status": "running"},
+        created_at=created_at,
+    )
+
+    state_document = orchestration_run_state_to_document(state)
+    event_document = orchestration_run_event_to_document(event)
+
+    assert state_document["status"] == "running"
+    assert event_document["type"] == "state_reduced"
+    assert orchestration_run_state_from_document(state_document) == state
+    assert orchestration_run_event_from_document(event_document) == event

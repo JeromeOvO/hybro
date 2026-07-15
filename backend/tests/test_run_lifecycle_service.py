@@ -35,6 +35,30 @@ async def test_record_processing_status_skips_when_dual_write_disabled(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_project_run_state_skips_when_dual_write_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "feature_run_dual_write", False)
+    import execution.run_lifecycle_service as mod
+    from models.run import RunState
+
+    fake = AsyncMock()
+    fake.project_run_state = AsyncMock(return_value={"run_id": "run-1"})
+    mod.run_command_handler = fake
+
+    result = await mod.run_lifecycle_service.project_run_state(
+        room_id="room-1",
+        run_id="run-1",
+        trigger_message_id="msg-1",
+        target_state=RunState.PROCESSING,
+        terminal_reason=None,
+        causation_id="orch-event-1",
+        client_request_id="cr-1",
+    )
+
+    assert result is None
+    fake.project_run_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_record_processing_status_dual_write_default_allows_calls(monkeypatch):
     monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod

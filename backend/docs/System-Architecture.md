@@ -326,6 +326,15 @@ The main orchestration invariant is that `RoomMessageCenter` serializes
 processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
 mode this is supplemented by a Redis distributed lock configured at startup.
 
+Execution also defines a durable orchestration run-state foundation. The
+versioned `OrchestrationRunState` model, pure reducer transitions, and
+`OrchestrationRunStore` contract support optimistic state writes, append-only
+events, recovery queries, and envelope reconstruction. Public run lifecycle
+projection is idempotent by causation id and remains behind the existing run
+dual-write feature gate. This foundation does not replace or activate a new
+supervisor loop by itself; `RoomMessageCenter` and `SupervisorExecutor` retain
+their existing orchestration behavior until the state-driven loop is wired in.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,

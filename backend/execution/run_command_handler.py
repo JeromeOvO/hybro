@@ -154,6 +154,83 @@ class RunCommandHandler:
             )
         return None
 
+    async def project_run_state(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        target_state: Any,
+        terminal_reason: str | None,
+        causation_id: str,
+        client_request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not _feature_run_dual_write_enabled():
+            return None
+
+        state = RunState(self._normalize_status(target_state))
+        existing = await self._find_existing_projection_event(
+            run_id=run_id,
+            state=state,
+            causation_id=causation_id,
+        )
+        if existing:
+            await self._repair_head_from_existing_event(existing)
+            return self._event_payload_from_doc(existing)
+
+        if state == RunState.PROCESSING:
+            return await self._record_active(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                awaiting_input=False,
+                causation_id=causation_id,
+            )
+        if state == RunState.AWAITING_INPUT:
+            return await self._record_active(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                awaiting_input=True,
+                causation_id=causation_id,
+            )
+        if state == RunState.COMPLETED:
+            return await self._record_terminal(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                terminal_state=RunState.COMPLETED,
+                error_code=None,
+                error_message=terminal_reason,
+                causation_id=causation_id,
+            )
+        if state == RunState.CANCELED:
+            return await self._record_terminal(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                terminal_state=RunState.CANCELED,
+                error_code="CANCELED",
+                error_message=terminal_reason,
+                causation_id=causation_id,
+            )
+        if state == RunState.FAILED:
+            return await self._record_terminal(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                terminal_state=RunState.FAILED,
+                error_code="FAILED",
+                error_message=terminal_reason,
+                causation_id=causation_id,
+            )
+        return None
+
     async def heal_head_from_events(self, run_id: str) -> bool:
         """Check run_events for events ahead of runs head and project forward.
 
@@ -321,6 +398,7 @@ class RunCommandHandler:
         trigger_message_id: str,
         client_request_id: str | None,
         awaiting_input: bool,
+        causation_id: str | None = None,
     ) -> dict[str, Any] | None:
         run_doc = await self._ensure_run_exists(
             room_id=room_id,
@@ -353,6 +431,7 @@ class RunCommandHandler:
             event_type=event_type,
             next_state=next_state,
             payload={},
+            causation_id=causation_id,
         )
 
     async def _record_terminal(
@@ -365,6 +444,7 @@ class RunCommandHandler:
         terminal_state: RunState,
         error_code: str | None,
         error_message: str | None,
+        causation_id: str | None = None,
     ) -> dict[str, Any] | None:
         run_doc = await self._ensure_run_exists(
             room_id=room_id,
@@ -390,6 +470,7 @@ class RunCommandHandler:
                 "error_code": error_code,
                 "error_message": error_message,
             },
+            causation_id=causation_id,
         )
 
     async def _append_event_and_project(
@@ -399,6 +480,7 @@ class RunCommandHandler:
         event_type: RunEventType,
         next_state: RunState,
         payload: dict,
+        causation_id: str | None = None,
     ) -> dict[str, Any] | None:
         now = utcnow()
         current_seq = int(run_doc.get("seq", 0))
@@ -419,18 +501,36 @@ class RunCommandHandler:
             )
             raise
 
+        existing = await self._find_existing_event_by_causation_id(
+            run_id=run_id,
+            event_type=event_type,
+            causation_id=causation_id,
+        )
+        if existing:
+            await self._repair_head_from_existing_event(existing)
+            return self._event_payload_from_doc(existing)
+
         event = RunEvent(
             run_id=run_id,
             room_id=room_id,
             seq=next_seq,
             type=event_type,
             payload=payload,
+            causation_id=causation_id,
             ts=now,
         )
         dumped = event.model_dump(mode="json")
         try:
             await self._run_events.insert_one(dumped)
         except DuplicateKeyError:
+            existing = await self._find_existing_event_by_causation_id(
+                run_id=run_id,
+                event_type=event_type,
+                causation_id=causation_id,
+            )
+            if existing:
+                await self._repair_head_from_existing_event(existing)
+                return self._event_payload_from_doc(existing)
             return None
 
         updates: dict[str, Any] = {
@@ -464,6 +564,129 @@ class RunCommandHandler:
             "payload": payload,
             "ts": dumped.get("ts"),
         }
+
+    async def _find_existing_projection_event(
+        self,
+        *,
+        run_id: str,
+        state: RunState,
+        causation_id: str | None,
+    ) -> dict[str, Any] | None:
+        if state == RunState.PROCESSING:
+            event_types = (RunEventType.RUN_STARTED, RunEventType.RUN_RESUMED)
+        elif state == RunState.AWAITING_INPUT:
+            event_types = (RunEventType.RUN_AWAITING_INPUT,)
+        elif state == RunState.COMPLETED:
+            event_types = (RunEventType.RUN_COMPLETED,)
+        elif state == RunState.CANCELED:
+            event_types = (RunEventType.RUN_CANCELED,)
+        elif state == RunState.FAILED:
+            event_types = (RunEventType.RUN_FAILED,)
+        else:
+            return None
+
+        for event_type in event_types:
+            existing = await self._find_existing_event_by_causation_id(
+                run_id=run_id,
+                event_type=event_type,
+                causation_id=causation_id,
+            )
+            if existing:
+                return existing
+        return None
+
+    async def _find_existing_event_by_causation_id(
+        self,
+        *,
+        run_id: str,
+        event_type: RunEventType,
+        causation_id: str | None,
+    ) -> dict[str, Any] | None:
+        if causation_id is None:
+            return None
+        return await self._run_events.find_one(
+            {
+                "run_id": run_id,
+                "type": event_type.value,
+                "causation_id": causation_id,
+            }
+        )
+
+    def _event_payload_from_doc(self, event_doc: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "event_id": event_doc.get("event_id"),
+            "run_id": event_doc.get("run_id"),
+            "room_id": event_doc.get("room_id"),
+            "seq": event_doc.get("seq"),
+            "type": event_doc.get("type"),
+            "payload": event_doc.get("payload") or {},
+            "ts": event_doc.get("ts"),
+        }
+
+    async def _repair_head_from_existing_event(self, event_doc: dict[str, Any]) -> None:
+        run_id = str(event_doc.get("run_id") or "")
+        if not run_id:
+            return
+
+        run_doc = await self._runs.find_one({"run_id": run_id})
+        if not isinstance(run_doc, dict):
+            return
+
+        event_seq = int(event_doc.get("seq", 0))
+        head_seq = int(run_doc.get("seq", 0))
+        if event_seq <= head_seq:
+            return
+
+        event_type_str = str(event_doc.get("type", ""))
+        payload = event_doc.get("payload") or {}
+        terminal_type_map = {
+            RunEventType.RUN_COMPLETED.value: RunState.COMPLETED,
+            RunEventType.RUN_FAILED.value: RunState.FAILED,
+            RunEventType.RUN_CANCELED.value: RunState.CANCELED,
+        }
+        active_type_map = {
+            RunEventType.RUN_STARTED.value: RunState.PROCESSING,
+            RunEventType.RUN_RESUMED.value: RunState.PROCESSING,
+            RunEventType.RUN_AWAITING_INPUT.value: RunState.AWAITING_INPUT,
+            RunEventType.RUN_CREATED.value: RunState.QUEUED,
+        }
+        resolved_state: RunState | None = terminal_type_map.get(
+            event_type_str
+        ) or active_type_map.get(event_type_str)
+        if resolved_state is None:
+            logger.warning(
+                "project_run_state: unknown existing event type %s for run %s",
+                event_type_str,
+                run_id,
+            )
+            return
+
+        current_state = RunState(run_doc.get("state", RunState.QUEUED.value))
+        try:
+            ensure_transition_allowed(current_state, resolved_state)
+        except RunTransitionError:
+            logger.warning(
+                "project_run_state: repairing run %s through would-be-illegal "
+                "transition %s→%s from existing event %s",
+                run_id,
+                current_state.value,
+                resolved_state.value,
+                event_type_str,
+            )
+
+        updates: dict[str, Any] = {
+            "state": resolved_state.value,
+            "seq": event_seq,
+            "updated_at": event_doc.get("ts") or utcnow(),
+        }
+        if resolved_state == RunState.PROCESSING and not run_doc.get("started_at"):
+            updates["started_at"] = event_doc.get("ts") or utcnow()
+        if resolved_state in TERMINAL_RUN_STATES:
+            updates["ended_at"] = event_doc.get("ts") or utcnow()
+            updates["error_code"] = payload.get("error_code")
+            updates["error_message"] = payload.get("error_message")
+
+        await self._runs.update_one({"run_id": run_id}, {"$set": updates})
 
 
 def run_event_sse_enabled() -> bool:

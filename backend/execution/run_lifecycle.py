@@ -33,6 +33,27 @@ class RunLifecycleAdapter:
             details=error_message,
         )
 
+    async def project_run_state(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        target_state: Any,
+        terminal_reason: str | None,
+        causation_id: str,
+        client_request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._command_handler.project_run_state(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=trigger_message_id,
+            target_state=target_state,
+            terminal_reason=terminal_reason,
+            causation_id=causation_id,
+            client_request_id=client_request_id,
+        )
+
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         try:
             docs = await self._run_repository.get_diverged(limit=limit)
