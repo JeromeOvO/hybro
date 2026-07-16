@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -46,6 +46,36 @@ class OrchestrationEventType(StrEnum):
     RUN_TERMINAL = "run_terminal"
     RUN_RECOVERED = "run_recovered"
     PUBLIC_LIFECYCLE_PROJECTED = "public_lifecycle_projected"
+
+
+class PlannerActionType(StrEnum):
+    DELEGATE = "delegate"
+    ASK_USER = "ask_user"
+    SYNTHESIZE = "synthesize"
+    COMPLETE = "complete"
+    FAIL = "fail"
+
+
+class PlannedDelegateTarget(BaseModel):
+    agent_id: str
+    task: str
+    agent_name: str | None = None
+
+
+class PlannerQuestion(BaseModel):
+    prompt: str
+    prompt_type: Literal["text", "choice", "confirmation"] = "text"
+    choices: list[str] | None = None
+
+
+class PlannerAction(BaseModel):
+    planner_action_schema_version: int = 2
+    action: PlannerActionType
+    reasoning: str
+    targets: list[PlannedDelegateTarget] = Field(default_factory=list)
+    questions: list[PlannerQuestion] = Field(default_factory=list)
+    synthesis_instruction: str | None = None
+    failure_reason: str | None = None
 
 
 class DispatchIntent(BaseModel):

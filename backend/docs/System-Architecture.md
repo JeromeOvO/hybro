@@ -340,6 +340,13 @@ This foundation does not replace or activate a new supervisor loop by itself;
 `RoomMessageCenter` and `SupervisorExecutor` retain their existing orchestration
 behavior until the state-driven loop is wired in.
 
+Versioned supervisor requests can also carry an explicit candidate scope from
+the API boundary into a lightweight orchestration envelope. Scope normalization
+rejects unknown, inaccessible, or inconsistent agent selections before planner
+execution. The versioned planner action schema and pure action validator enforce
+candidate membership, step-budget, required-target, and prior-output rules while
+the existing supervisor loop remains the active runtime path.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,
