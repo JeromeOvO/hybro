@@ -101,6 +101,8 @@ class HITLRequest(FrozenDTO):
     continuation_message_id: str | None = None
     display_message_id: str | None = None
     client_request_id: str | None = None
+    orchestration_run_id: str | None = None
+    orchestration_schema_version: int | None = None
     prompt_type: Literal["text", "choice", "confirmation"] = "text"
     choices: list[str] | None = None
     group_id: str | None = None

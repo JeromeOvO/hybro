@@ -551,6 +551,67 @@ class TestProcessingStatusLifecycleOrder:
         se.delivery.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_agent_hitl_receives_v2_orchestration_run_link(self):
+        se = _make_supervisor_executor()
+        se.bind_execution_event_deps(AsyncMock())
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning="ask agent",
+                targets=[
+                    DelegateTarget(
+                        agent_id="agent-1",
+                        agent_name="Agent",
+                        task="ask",
+                    )
+                ],
+            )
+        )
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                StepResult(
+                    step_number=1,
+                    agent_id="agent-1",
+                    agent_name="Agent",
+                    task="ask",
+                    response_text="",
+                    success=False,
+                    status=StepStatus.AWAITING_INPUT,
+                    paused_message_id="agent-msg-1",
+                    agent_message_id="agent-msg-1",
+                    status_message="Need input",
+                )
+            ]
+        )
+        se._checkpoint_trajectory = AsyncMock(return_value=None)
+        se._save_interrupted_state = AsyncMock(return_value=True)
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(
+            return_value=SimpleNamespace(request_id="hitl-1")
+        )
+        se.hitl_coordinator = hitl_mock
+        user_message = SimpleNamespace(
+            client_request_id="cr-1",
+            extend_info={
+                "orchestration_run_id": "run-msg-1",
+                "orchestration_schema_version": 2,
+            },
+        )
+
+        await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent")],
+            room_config=RoomConfig(),
+            user_message=user_message,
+        )
+
+        call_kwargs = hitl_mock.request_input.await_args.kwargs
+        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
+        assert call_kwargs["orchestration_schema_version"] == 2
+
+    @pytest.mark.asyncio
     async def test_supervisor_hitl_records_before_awaiting_input_send(self):
         se = _make_supervisor_executor()
         order: list[str] = []
@@ -592,3 +653,48 @@ class TestProcessingStatusLifecycleOrder:
         assert result.status == RunStatus.AWAITING_INPUT
         assert order == ["emit"]
         se.delivery.send_processing_status.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_hitl_receives_v2_orchestration_run_link(self):
+        se = _make_supervisor_executor()
+        se.bind_execution_event_deps(AsyncMock())
+        se.supervisor_service.decide_next = AsyncMock(
+            return_value=SupervisorAction(
+                action=ActionType.CLARIFY,
+                reasoning="need details",
+                questions=[ClarifyQuestion(prompt="Which account?")],
+            )
+        )
+        se.room_runtime.create_agent_message.return_value = SimpleNamespace(
+            message_id="hitl-agent-msg"
+        )
+        se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-1"
+        )
+        se.message_writer.add_room_agent_message = AsyncMock()
+        se._save_interrupted_state = AsyncMock(return_value=True)
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(
+            return_value=SimpleNamespace(request_id="hitl-1")
+        )
+        se.hitl_coordinator = hitl_mock
+        user_message = SimpleNamespace(
+            client_request_id="cr-1",
+            extend_info={
+                "orchestration_run_id": "run-msg-1",
+                "orchestration_schema_version": 2,
+            },
+        )
+
+        await se.run(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            agent_registry=[],
+            room_config=RoomConfig(),
+            user_message=user_message,
+        )
+
+        call_kwargs = hitl_mock.request_input.await_args.kwargs
+        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
+        assert call_kwargs["orchestration_schema_version"] == 2

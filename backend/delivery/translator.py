@@ -154,6 +154,12 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "group_index", event.group_index)
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
+        _add_optional(data, "orchestration_run_id", event.orchestration_run_id)
+        _add_optional(
+            data,
+            "orchestration_schema_version",
+            event.orchestration_schema_version,
+        )
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "hitl_request", data, frame_timestamp)
 
@@ -167,6 +173,12 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "error_message", event.error_message)
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
+        _add_optional(data, "orchestration_run_id", event.orchestration_run_id)
+        _add_optional(
+            data,
+            "orchestration_schema_version",
+            event.orchestration_schema_version,
+        )
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "hitl_response", data, frame_timestamp)
 
