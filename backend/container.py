@@ -656,6 +656,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
                 touch_task_message=task_store.touch_task_message,
                 is_message_cancelled=task_store.is_message_cancelled,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
                 update_task_on_message=task_store.update_task_on_message,
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
