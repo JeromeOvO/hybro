@@ -2465,6 +2465,8 @@ class RoomServices:
             if isinstance(room.extend_info, dict)
             else None
         )
+        # Validated candidate scope is safe for the legacy supervisor; the
+        # feature flag gates only lightweight envelope/runtime activation.
         selected_scope_locked = (
             v2_orchestration_requested and pre_resolved_selected_scope is not None
         )

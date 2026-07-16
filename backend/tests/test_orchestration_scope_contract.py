@@ -675,6 +675,9 @@ async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
 
     assert response.success is True
     svc._prepare_for_supervisor.assert_awaited_once()
+    assert svc._prepare_for_supervisor.await_args.kwargs["selected_agent_set"] == {
+        "agent-1": "Agent One"
+    }
     svc._prepare_v2_orchestration_envelope.assert_not_awaited()
     svc._store.get_room_memory_by_room_id.assert_awaited_once_with("room-1")
 
