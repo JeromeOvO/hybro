@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from execution.orchestration.candidate_scope import (
     candidate_scope_from_legacy_envelope,
     normalize_candidate_scope,
@@ -182,3 +184,23 @@ def test_candidate_scope_from_legacy_envelope_filters_registry_to_candidate_ids(
     assert scope.agent_ids == ["agent-2", "agent-1"]
     assert [agent.name for agent in scope.agents] == ["Insurer", "Broker"]
     assert scope.group_id == "group-1"
+
+
+def test_normalize_candidate_scope_rejects_unknown_source():
+    with pytest.raises(ValueError, match="unsupported candidate scope source"):
+        normalize_candidate_scope(
+            room_id="room-1",
+            source="saved_groups",
+            selected_agent_set=["agent-1"],
+        )
+
+
+def test_legacy_candidate_scope_rejects_unknown_source():
+    with pytest.raises(ValueError, match="unsupported candidate scope source"):
+        candidate_scope_from_legacy_envelope(
+            room_id="room-1",
+            envelope={
+                "candidate_scope_mode": "saved_groups",
+                "candidate_agent_ids": ["agent-1"],
+            },
+        )

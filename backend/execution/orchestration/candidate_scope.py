@@ -15,6 +15,12 @@ from models.orchestration import (
 AuthorizationKind = Literal[
     "room_member", "saved_group_member", "explicit_selection", "mention"
 ]
+_AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
+    "room_default": "room_member",
+    "saved_group": "saved_group_member",
+    "explicit_selection": "explicit_selection",
+    "mention": "mention",
+}
 
 
 def normalize_candidate_scope(
@@ -439,13 +445,14 @@ def _status_from_health(value: Any) -> str | None:
 
 
 def _authorization_kind(source: str) -> AuthorizationKind:
-    if source == "saved_group":
-        return "saved_group_member"
-    if source == "room_default":
-        return "room_member"
-    if source == "mention":
-        return "mention"
-    return "explicit_selection"
+    try:
+        return _AUTHORIZATION_KIND_BY_SOURCE[source]
+    except KeyError as exc:
+        supported = ", ".join(sorted(_AUTHORIZATION_KIND_BY_SOURCE))
+        raise ValueError(
+            f"unsupported candidate scope source {source!r}; expected one of: "
+            f"{supported}"
+        ) from exc
 
 
 def _string_list(value: Any) -> list[str]:
