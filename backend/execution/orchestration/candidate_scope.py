@@ -270,6 +270,9 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
             capability_summary=_capability_summary_from_mapping(raw_item),
             status=_status_from_mapping(raw_item),
             source=_optional_str(_first_mapping_value(raw_item, "source")),
+            capabilities=_string_list(
+                _first_mapping_value(raw_item, "capabilities", "skills")
+            ),
             input_modes=_candidate_modes_from_mapping(
                 raw_item,
                 "input_modes",
@@ -290,6 +293,9 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
                     "supports_file_upload",
                     "supportsFileUpload",
                 )
+            ),
+            success_rate=_optional_float(
+                _first_mapping_value(raw_item, "success_rate")
             ),
         )
 
@@ -339,9 +345,13 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
         capability_summary=capability_summary or "",
         status=_status_from_object(raw_item),
         source=_optional_str(_first_attr_value(raw_item, "source")),
+        capabilities=_string_list(
+            _first_attr_value(raw_item, "capabilities", "skills")
+        ),
         input_modes=input_modes,
         output_modes=output_modes,
         supports_file_upload=bool(supports_file_upload),
+        success_rate=_optional_float(_first_attr_value(raw_item, "success_rate")),
     )
 
 
@@ -454,6 +464,12 @@ def _positive_int(value: Any) -> int | None:
     if isinstance(value, int) and value > 0:
         return value
     return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def _optional_str(value: Any) -> str | None:

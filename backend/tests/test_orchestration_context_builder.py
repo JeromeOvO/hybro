@@ -250,9 +250,11 @@ def test_candidate_scope_overlays_live_resource_capabilities_on_snapshot():
             AgentProfile(
                 agent_id="agent-2",
                 agent_name="Live Insurer",
+                capabilities=["quote", "risk"],
                 input_modes=["text", "application/pdf"],
                 output_modes=["application/json"],
                 supports_file_upload=True,
+                success_rate=0.85,
             ),
             _candidate("agent-1", "Out of Scope"),
         ],
@@ -265,9 +267,11 @@ def test_candidate_scope_overlays_live_resource_capabilities_on_snapshot():
     assert context.candidate_scope.agent_ids == ["agent-2"]
     candidate = context.candidate_scope.agents[0]
     assert candidate.agent_name == "Live Insurer"
+    assert candidate.capabilities == ["quote", "risk"]
     assert candidate.input_modes == ["text", "application/pdf"]
     assert candidate.output_modes == ["application/json"]
     assert candidate.supports_file_upload is True
+    assert candidate.success_rate == 0.85
 
 
 def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():

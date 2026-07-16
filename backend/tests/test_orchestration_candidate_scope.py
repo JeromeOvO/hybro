@@ -132,6 +132,7 @@ def test_normalize_candidate_scope_agent_profile_preserves_metadata():
             input_modes=["text", "application/pdf"],
             output_modes=["application/json"],
             supports_file_upload=True,
+            success_rate=0.8,
             is_healthy=False,
         ),
     )
@@ -140,9 +141,11 @@ def test_normalize_candidate_scope_agent_profile_preserves_metadata():
     assert scope.agents[0].name == "Broker"
     assert scope.agents[0].capability_summary == "Handles broker intake."
     assert scope.agents[0].status == "inactive"
+    assert scope.agents[0].capabilities == ["quotes", "risk"]
     assert scope.agents[0].input_modes == ["text", "application/pdf"]
     assert scope.agents[0].output_modes == ["application/json"]
     assert scope.agents[0].supports_file_upload is True
+    assert scope.agents[0].success_rate == 0.8
 
 
 def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():
