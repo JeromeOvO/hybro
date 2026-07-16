@@ -70,6 +70,9 @@ def test_normalize_candidate_scope_partial_mapping_preserves_all_agent_ids():
                     "name": "Broker",
                     "capability_summary": "Collects broker requirements.",
                     "status": "active",
+                    "input_modes": ["text", "application/pdf"],
+                    "output_modes": ["application/json"],
+                    "supports_file_upload": True,
                 }
             ],
         },
@@ -80,6 +83,9 @@ def test_normalize_candidate_scope_partial_mapping_preserves_all_agent_ids():
     assert scope.agents[0].name == "Broker"
     assert scope.agents[0].capability_summary == "Collects broker requirements."
     assert scope.agents[0].status == "active"
+    assert scope.agents[0].input_modes == ["text", "application/pdf"]
+    assert scope.agents[0].output_modes == ["application/json"]
+    assert scope.agents[0].supports_file_upload is True
     assert scope.agents[1].name is None
 
 
@@ -123,6 +129,9 @@ def test_normalize_candidate_scope_agent_profile_preserves_metadata():
             agent_name="Broker",
             description="Handles broker intake.",
             capabilities=["quotes", "risk"],
+            input_modes=["text", "application/pdf"],
+            output_modes=["application/json"],
+            supports_file_upload=True,
             is_healthy=False,
         ),
     )
@@ -131,6 +140,9 @@ def test_normalize_candidate_scope_agent_profile_preserves_metadata():
     assert scope.agents[0].name == "Broker"
     assert scope.agents[0].capability_summary == "Handles broker intake."
     assert scope.agents[0].status == "inactive"
+    assert scope.agents[0].input_modes == ["text", "application/pdf"]
+    assert scope.agents[0].output_modes == ["application/json"]
+    assert scope.agents[0].supports_file_upload is True
 
 
 def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():

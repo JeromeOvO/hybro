@@ -7,6 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from execution.orchestration.candidate_scope import (
+    candidate_scope_items,
+    enrich_candidate_scope_snapshot,
+)
 from execution.orchestration.resources import ResourceRef
 from models.orchestration import OrchestrationRunState
 
@@ -190,15 +194,19 @@ def build_orchestration_planner_context(
     if room_background is not None and not isinstance(room_background, str):
         raise TypeError("room_background must be a string when supplied")
 
-    scope_context = _build_candidate_scope_context(
-        run_state.candidate_scope
-        if run_state.candidate_scope is not None
-        else (
+    if run_state.candidate_scope is not None:
+        scope_source = (
+            enrich_candidate_scope_snapshot(run_state.candidate_scope, candidate_scope)
+            if candidate_scope is not None
+            else run_state.candidate_scope
+        )
+    else:
+        scope_source = (
             candidate_scope
             if candidate_scope is not None
             else run_state.candidate_agent_ids
         )
-    )
+    scope_context = _build_candidate_scope_context(scope_source)
     state_context = _build_state_context(run_state)
 
     return OrchestrationPlannerContext(
@@ -311,7 +319,6 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
             "candidate_scope_snapshot_version",
         )
         snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
-        raw_items = _candidate_items_from_mapping(candidate_scope)
     elif _looks_like_scope_object(candidate_scope):
         mode = _optional_str(
             _first_attr_value(candidate_scope, "source", "mode", "candidate_scope_mode")
@@ -326,11 +333,7 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
             "candidate_scope_snapshot_version",
         )
         snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
-        raw_items = _candidate_items_from_object(candidate_scope)
-    elif isinstance(candidate_scope, str):
-        raw_items = [candidate_scope]
-    else:
-        raw_items = list(candidate_scope)
+    raw_items = candidate_scope_items(candidate_scope)
 
     agents: list[CandidateAgentContext] = []
     seen_ids: set[str] = set()
@@ -348,70 +351,6 @@ def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContex
         agent_ids=[agent.agent_id for agent in agents],
         agents=agents,
     )
-
-
-def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[Any]:
-    raw_agents = _first_mapping_value(candidate_scope, "agents", "candidate_agents")
-    raw_ids = _first_mapping_value(candidate_scope, "agent_ids", "candidate_agent_ids")
-    if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
-        items = list(raw_agents)
-        if items:
-            if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-                return _candidate_items_ordered_by_ids(items, raw_ids)
-            return items
-
-    if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-        return list(raw_ids)
-
-    if _looks_like_agent_mapping(candidate_scope):
-        return [candidate_scope]
-
-    return []
-
-
-def _candidate_items_from_object(candidate_scope: Any) -> list[Any]:
-    raw_agents = _first_attr_value(candidate_scope, "agents", "candidate_agents")
-    raw_ids = _first_attr_value(candidate_scope, "agent_ids", "candidate_agent_ids")
-    if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
-        items = list(raw_agents)
-        if items:
-            if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-                return _candidate_items_ordered_by_ids(items, raw_ids)
-            return items
-
-    if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-        return list(raw_ids)
-
-    return []
-
-
-def _candidate_items_ordered_by_ids(
-    raw_items: Sequence[Any],
-    raw_ids: Sequence[Any],
-) -> list[Any]:
-    items_by_id: dict[str, Any] = {}
-    for item in raw_items:
-        agent_id = _candidate_item_id(item)
-        if agent_id is not None and agent_id not in items_by_id:
-            items_by_id[agent_id] = item
-
-    items: list[Any] = []
-    seen_ids: set[str] = set()
-    for raw_id in raw_ids:
-        agent_id = _optional_str(raw_id)
-        if agent_id is None or agent_id in seen_ids:
-            continue
-        seen_ids.add(agent_id)
-        items.append(items_by_id.get(agent_id) or agent_id)
-    return items
-
-
-def _candidate_item_id(raw_item: Any) -> str | None:
-    if isinstance(raw_item, str):
-        return _optional_str(raw_item)
-    if isinstance(raw_item, Mapping):
-        return _optional_str(_first_mapping_value(raw_item, "agent_id", "id"))
-    return _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
 
 
 def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:

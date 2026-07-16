@@ -84,6 +84,33 @@ def candidate_scope_from_legacy_envelope(
     return scope.model_copy(update={"revision": revision})
 
 
+def candidate_scope_items(candidate_scope: Any) -> list[Any]:
+    """Return canonical candidate items from legacy or snapshot scope shapes."""
+
+    return _raw_candidate_items(candidate_scope)
+
+
+def enrich_candidate_scope_snapshot(
+    scope: CandidateScopeSnapshot,
+    selected_agent_set: Mapping[str, Any] | Sequence[Any],
+) -> CandidateScopeSnapshot:
+    """Overlay live profile metadata without changing authoritative scope ids."""
+
+    persisted_by_id = {agent.agent_id: agent for agent in scope.agents}
+    live_by_id = {
+        agent.agent_id: agent
+        for item in candidate_scope_items(selected_agent_set)
+        if (agent := _candidate_agent_snapshot(item)) is not None
+    }
+    agents = [
+        live_by_id.get(agent_id)
+        or persisted_by_id.get(agent_id)
+        or CandidateAgentSnapshot(agent_id=agent_id)
+        for agent_id in scope.agent_ids
+    ]
+    return scope.model_copy(update={"agents": agents})
+
+
 def _selected_items_for_candidate_ids(
     *,
     candidate_ids: list[str],
@@ -152,6 +179,8 @@ def _raw_candidate_items_from_mapping(
         return scope_items
     if _looks_like_agent_mapping(selected_agent_set):
         return [selected_agent_set]
+    if _looks_like_scope_mapping(selected_agent_set):
+        return []
 
     items: list[Any] = []
     for agent_id, value in selected_agent_set.items():
@@ -241,6 +270,27 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
             capability_summary=_capability_summary_from_mapping(raw_item),
             status=_status_from_mapping(raw_item),
             source=_optional_str(_first_mapping_value(raw_item, "source")),
+            input_modes=_candidate_modes_from_mapping(
+                raw_item,
+                "input_modes",
+                "default_input_modes",
+                "defaultInputModes",
+                default=["text"],
+            ),
+            output_modes=_candidate_modes_from_mapping(
+                raw_item,
+                "output_modes",
+                "default_output_modes",
+                "defaultOutputModes",
+                default=[],
+            ),
+            supports_file_upload=bool(
+                _first_mapping_value(
+                    raw_item,
+                    "supports_file_upload",
+                    "supportsFileUpload",
+                )
+            ),
         )
 
     agent_id = _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
@@ -258,6 +308,30 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
             getattr(agent_card, "capability_summary", None)
         )
 
+    input_modes = _candidate_modes_from_object(
+        raw_item,
+        agent_card,
+        "input_modes",
+        "default_input_modes",
+        "defaultInputModes",
+        default=["text"],
+    )
+    output_modes = _candidate_modes_from_object(
+        raw_item,
+        agent_card,
+        "output_modes",
+        "default_output_modes",
+        "defaultOutputModes",
+        default=[],
+    )
+    supports_file_upload = _first_attr_value(
+        raw_item, "supports_file_upload", "supportsFileUpload"
+    )
+    if supports_file_upload is None and agent_card is not None:
+        supports_file_upload = _first_attr_value(
+            agent_card, "supports_file_upload", "supportsFileUpload"
+        )
+
     return CandidateAgentSnapshot(
         agent_id=agent_id,
         name=name,
@@ -265,7 +339,31 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
         capability_summary=capability_summary or "",
         status=_status_from_object(raw_item),
         source=_optional_str(_first_attr_value(raw_item, "source")),
+        input_modes=input_modes,
+        output_modes=output_modes,
+        supports_file_upload=bool(supports_file_upload),
     )
+
+
+def _candidate_modes_from_mapping(
+    raw_item: Mapping[str, Any],
+    *keys: str,
+    default: list[str],
+) -> list[str]:
+    value = _first_mapping_value(raw_item, *keys)
+    return list(default) if value is None else _string_list(value)
+
+
+def _candidate_modes_from_object(
+    raw_item: Any,
+    agent_card: Any | None,
+    *attrs: str,
+    default: list[str],
+) -> list[str]:
+    value = _first_attr_value(raw_item, *attrs)
+    if value is None and agent_card is not None:
+        value = _first_attr_value(agent_card, *attrs)
+    return list(default) if value is None else _string_list(value)
 
 
 def _capability_summary_from_mapping(raw_item: Mapping[str, Any]) -> str:
@@ -367,6 +465,22 @@ def _optional_str(value: Any) -> str | None:
 
 def _looks_like_agent_mapping(value: Mapping[str, Any]) -> bool:
     return any(key in value for key in ("agent_id", "id"))
+
+
+def _looks_like_scope_mapping(value: Mapping[str, Any]) -> bool:
+    return any(
+        key in value
+        for key in (
+            "source",
+            "mode",
+            "candidate_scope_mode",
+            "group_id",
+            "candidate_scope_group_id",
+            "revision",
+            "snapshot_version",
+            "candidate_scope_snapshot_version",
+        )
+    )
 
 
 def _looks_like_scope_object(value: Any) -> bool:

@@ -233,6 +233,43 @@ def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
     assert [agent.agent_name for agent in context.candidate_scope.agents] == ["Insurer"]
 
 
+def test_candidate_scope_overlays_live_resource_capabilities_on_snapshot():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=2,
+        source="saved_group",
+        room_id="room-1",
+        group_id="group-1",
+        agent_ids=["agent-2"],
+        agents=[CandidateAgentSnapshot(agent_id="agent-2", name="Stored Insurer")],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
+        candidate_scope=[
+            AgentProfile(
+                agent_id="agent-2",
+                agent_name="Live Insurer",
+                input_modes=["text", "application/pdf"],
+                output_modes=["application/json"],
+                supports_file_upload=True,
+            ),
+            _candidate("agent-1", "Out of Scope"),
+        ],
+        message_text="Use the saved scope",
+    )
+
+    assert context.candidate_scope.mode == "saved_group"
+    assert context.candidate_scope.group_id == "group-1"
+    assert context.candidate_scope.snapshot_version == 2
+    assert context.candidate_scope.agent_ids == ["agent-2"]
+    candidate = context.candidate_scope.agents[0]
+    assert candidate.agent_name == "Live Insurer"
+    assert candidate.input_modes == ["text", "application/pdf"]
+    assert candidate.output_modes == ["application/json"]
+    assert candidate.supports_file_upload is True
+
+
 def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
     snapshot = CandidateScopeSnapshot(
         snapshot_id="scope-1",
