@@ -345,7 +345,10 @@ the API boundary into a lightweight orchestration envelope. Scope normalization
 rejects unknown, inaccessible, or inconsistent agent selections before planner
 execution. The versioned planner action schema and pure action validator enforce
 candidate membership, step-budget, required-target, and prior-output rules while
-the existing supervisor loop remains the active runtime path.
+the existing supervisor loop remains the active runtime path. Lightweight v2
+envelope activation is disabled by default behind `FEATURE_ORCHESTRATION_V2`
+until the state-driven loop and its context assembly are wired; pending legacy
+clarifications always resume before a new v2 envelope can be created.
 
 ### `context_memory`
 

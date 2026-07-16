@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     feature_run_dual_write: bool = True
     feature_run_event_sse: bool = False
     feature_run_watchdog: bool = True
+    feature_orchestration_v2: bool = False
 
     # Execution Tuning
     supervisor_max_steps: int = 8
@@ -305,6 +306,15 @@ class Settings(BaseSettings):
     @field_validator("feature_run_event_sse", mode="before")
     @classmethod
     def normalize_feature_run_event_sse(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator("feature_orchestration_v2", mode="before")
+    @classmethod
+    def normalize_feature_orchestration_v2(cls, value):
         if value is None or str(value).strip() == "":
             return False
         if isinstance(value, bool):

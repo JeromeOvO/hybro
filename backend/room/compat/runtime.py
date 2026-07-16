@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from uuid import uuid4
 
+from common.config import settings
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -2282,6 +2283,32 @@ class RoomServices:
         pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
         selected_agent_ids = self._selected_agent_ids_from_request(request)
         v2_orchestration_requested = self._is_v2_orchestration_request(request)
+        orchestration_info = self._orchestration_request_info(request)
+        candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
+
+        if (
+            v2_orchestration_requested
+            and candidate_scope_mode == "saved_group"
+            and selected_agent_ids is None
+        ):
+            error_msg = (
+                "selected_agent_ids is required to snapshot a saved_group "
+                "candidate scope"
+            )
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=error_msg,
+                    scope_resolution_error=ScopeResolutionError(
+                        code="group_not_usable",
+                        message=error_msg,
+                    ),
+                    status_code=400,
+                ),
+                None,
+            )
 
         if v2_orchestration_requested and selected_agent_ids is not None:
             metadata_error = await self._validate_v2_candidate_scope_metadata(
@@ -2305,6 +2332,31 @@ class RoomServices:
                 if isinstance(mention_result, RoomCenterUserMessageResponse):
                     return mention_result, None
                 pre_resolved_mentions = mention_result
+                candidate_ids = set(pre_resolved_selected_scope[0])
+                out_of_scope_mentions = [
+                    mention["agent_id"]
+                    for mention in pre_resolved_mentions
+                    if mention["agent_id"] not in candidate_ids
+                ]
+                if out_of_scope_mentions:
+                    error_msg = (
+                        "Mentioned agents are outside the selected candidate scope: "
+                        f"{', '.join(out_of_scope_mentions)}"
+                    )
+                    return (
+                        RoomCenterUserMessageResponse(
+                            message_id=None,
+                            message=None,
+                            success=False,
+                            error=error_msg,
+                            scope_resolution_error=ScopeResolutionError(
+                                code="mention_outside_candidate_scope",
+                                message=error_msg,
+                            ),
+                            status_code=400,
+                        ),
+                        None,
+                    )
         elif mentioned_agent_ids:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids, sender_user_id=request.user_id,
@@ -2402,11 +2454,19 @@ class RoomServices:
         pre_resolved_scope = context.pre_resolved_scope
         pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
-        v2_orchestration_active = (
+        v2_orchestration_requested = (
             use_supervisor and self._is_v2_orchestration_request(request)
         )
+        v2_orchestration_active = (
+            v2_orchestration_requested and settings.feature_orchestration_v2
+        )
+        pending_clarify_msg_id = (
+            room.extend_info.get("pending_clarification_message_id")
+            if isinstance(room.extend_info, dict)
+            else None
+        )
         selected_scope_locked = (
-            v2_orchestration_active and pre_resolved_selected_scope is not None
+            v2_orchestration_requested and pre_resolved_selected_scope is not None
         )
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
@@ -2520,7 +2580,10 @@ class RoomServices:
         # Fetch room memory for legacy context assembly. V2 supervisor requests
         # persist only the lightweight orchestration envelope here.
         room_memory = None
-        if (use_supervisor and not v2_orchestration_active) or (
+        if (
+            use_supervisor
+            and (not v2_orchestration_active or pending_clarify_msg_id)
+        ) or (
             not use_supervisor and len(selected_agent_set) > 1
         ):
             room_memory = await self._store.get_room_memory_by_room_id(
@@ -2550,7 +2613,23 @@ class RoomServices:
 
         # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
-            if v2_orchestration_active:
+            clarify_resume_prepared = False
+            if pending_clarify_msg_id:
+                clarify_resume_prepared = await self._prepare_clarify_resume(
+                    room=room,
+                    user_message=user_message,
+                    message_text=message_text,
+                    pending_clarify_msg_id=pending_clarify_msg_id,
+                    agents=agents,
+                    selected_agent_set=selected_agent_set,
+                    is_debate_mode=is_debate_mode,
+                    room_memory=room_memory,
+                    explicit_mentions=pre_resolved_mentions,
+                )
+
+            if clarify_resume_prepared:
+                parse_result = ParseResult(success=True)
+            elif v2_orchestration_active:
                 parse_result = await self._prepare_v2_orchestration_envelope(
                     request=request,
                     user_message=user_message,
@@ -2559,40 +2638,17 @@ class RoomServices:
                     client_request_id=client_request_id,
                 )
             else:
-                # --- Clarify resume check (§7.4) ---
-                clarify_resume_prepared = False
-                pending_clarify_msg_id = (
-                    room.extend_info.get("pending_clarification_message_id")
-                    if isinstance(room.extend_info, dict)
-                    else None
+                parse_result = await self._prepare_for_supervisor(
+                    room=room,
+                    user_message=user_message,
+                    message_text=message_text,
+                    agents=agents,
+                    selected_agent_set=selected_agent_set,
+                    is_debate_mode=is_debate_mode,
+                    room_memory=room_memory,
+                    token=token,
+                    explicit_mentions=pre_resolved_mentions,
                 )
-                if pending_clarify_msg_id:
-                    clarify_resume_prepared = await self._prepare_clarify_resume(
-                        room=room,
-                        user_message=user_message,
-                        message_text=message_text,
-                        pending_clarify_msg_id=pending_clarify_msg_id,
-                        agents=agents,
-                        selected_agent_set=selected_agent_set,
-                        is_debate_mode=is_debate_mode,
-                        room_memory=room_memory,
-                        explicit_mentions=pre_resolved_mentions,
-                    )
-
-                if clarify_resume_prepared:
-                    parse_result = ParseResult(success=True)
-                else:
-                    parse_result = await self._prepare_for_supervisor(
-                        room=room,
-                        user_message=user_message,
-                        message_text=message_text,
-                        agents=agents,
-                        selected_agent_set=selected_agent_set,
-                        is_debate_mode=is_debate_mode,
-                        room_memory=room_memory,
-                        token=token,
-                        explicit_mentions=pre_resolved_mentions,
-                    )
         else:
             parse_result = await self.parse_user_message(
                 request.room_id,

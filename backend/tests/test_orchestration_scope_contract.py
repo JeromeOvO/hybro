@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from api.room_center import send_message
+from common.config import settings
 from common.dto import ExecutionAck, ExecutionRequest
 from execution.facade import ExecutionFacade
 from models.agent import AgentStatus
@@ -11,7 +12,8 @@ from models.agent_group import AgentGroup
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
 from models.room import MessageContent, Room, RoomUserMessage
-from room.compat.runtime import RoomServices
+from models.room_services_models import ParseResult
+from room.compat.runtime import RoomMessagePreflightContext, RoomServices
 
 
 def test_execution_request_accepts_candidate_scope_fields():
@@ -248,7 +250,12 @@ def _agent(agent_id: str, name: str, *, owner_id: str = "user-1"):
 
 
 @pytest.mark.asyncio
-async def test_v2_supervisor_preflight_persists_lightweight_orchestration_envelope():
+async def test_v2_supervisor_preflight_persists_lightweight_orchestration_envelope(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings, "feature_orchestration_v2", True, raising=False
+    )
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -332,7 +339,12 @@ async def test_v2_supervisor_preflight_persists_lightweight_orchestration_envelo
 
 
 @pytest.mark.asyncio
-async def test_v2_supervisor_preflight_reports_failure_when_envelope_update_fails():
+async def test_v2_supervisor_preflight_reports_failure_when_envelope_update_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        settings, "feature_orchestration_v2", True, raising=False
+    )
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -486,3 +498,208 @@ async def test_v2_saved_group_rejects_selected_agents_outside_group():
     assert "not members of the selected saved group" in (response.error or "")
     assert context is None
     svc._persist_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_saved_group_requires_selected_agent_snapshot():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="room-1",
+            room_name="Room",
+            room_owner_id="user-1",
+            room_owner_name="User",
+            room_agent_set={"agent-1": "Agent One"},
+            extend_info={"use_supervisor": True},
+        )
+    )
+    svc._store.get_agent_group_by_id = AsyncMock(
+        return_value=AgentGroup(
+            group_id="group-1",
+            name="Saved Group",
+            type="user",
+            owner_id="user-1",
+            agents=["agent-1"],
+        )
+    )
+    svc.delivery = SimpleNamespace(create_token=MagicMock(return_value=object()))
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    svc._persist_user_message = AsyncMock(return_value=True)
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="room-1",
+            user_id="user-1",
+            message=RoomUserMessage(
+                room_id="room-1",
+                message_id="message-1",
+                user_id="user-1",
+                message_content=MessageContent(message_text="Coordinate this"),
+            ),
+            extend_info={
+                "mode": "supervisor",
+                "candidate_scope_mode": "saved_group",
+                "candidate_scope_group_id": "group-1",
+                "orchestration_schema_version": 2,
+            },
+        )
+    )
+
+    assert response.success is False
+    assert response.status_code == 400
+    assert "selected_agent_ids" in (response.error or "")
+    assert context is None
+    svc._persist_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_mentions_must_be_subset_of_selected_candidates():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="room-1",
+            room_name="Room",
+            room_owner_id="user-1",
+            room_owner_name="User",
+            room_agent_set={"agent-1": "Agent One", "agent-2": "Agent Two"},
+            extend_info={"use_supervisor": True},
+        )
+    )
+    agents = {
+        "agent-1": _agent("agent-1", "Agent One"),
+        "agent-2": _agent("agent-2", "Agent Two"),
+    }
+    svc._store.get_agent_by_agent_id = AsyncMock(
+        side_effect=lambda agent_id: agents.get(agent_id)
+    )
+    svc.delivery = SimpleNamespace(create_token=MagicMock(return_value=object()))
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    svc._persist_user_message = AsyncMock(return_value=True)
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="room-1",
+            user_id="user-1",
+            message=RoomUserMessage(
+                room_id="room-1",
+                message_id="message-1",
+                user_id="user-1",
+                message_content=MessageContent(message_text="Ask agent two"),
+            ),
+            extend_info={
+                "mode": "supervisor",
+                "selected_agent_ids": ["agent-1"],
+                "candidate_scope_mode": "explicit_selection",
+                "orchestration_schema_version": 2,
+            },
+        ),
+        mentioned_agent_ids=["agent-2"],
+    )
+
+    assert response.success is False
+    assert response.status_code == 400
+    assert "candidate scope" in (response.error or "")
+    assert context is None
+    svc._persist_user_message.assert_not_awaited()
+
+
+def _v2_preflight_context(*, pending_clarification: bool = False):
+    room_extend_info = {"use_supervisor": True, "debateMode": False}
+    if pending_clarification:
+        room_extend_info["pending_clarification_message_id"] = "clarify-1"
+    room = Room(
+        room_id="room-1",
+        room_name="Room",
+        room_owner_id="user-1",
+        room_owner_name="User",
+        room_agent_set={"agent-1": "Agent One"},
+        extend_info=room_extend_info,
+    )
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    request = RoomCenterUserMessageRequest(
+        room_id="room-1",
+        user_id="user-1",
+        message=user_message,
+        extend_info={
+            "mode": "supervisor",
+            "selected_agent_ids": ["agent-1"],
+            "candidate_scope_mode": "explicit_selection",
+            "orchestration_schema_version": 2,
+        },
+    )
+    agent = _agent("agent-1", "Agent One")
+    return RoomMessagePreflightContext(
+        request=request,
+        target_group="room_team",
+        mentioned_agent_ids=None,
+        user_message=user_message,
+        client_request_id=None,
+        room=room,
+        is_debate_mode=False,
+        use_supervisor=True,
+        message_text="Coordinate this",
+        pre_resolved_mentions=None,
+        pre_resolved_scope=None,
+        pre_resolved_selected_scope=({"agent-1": "Agent One"}, False, [agent]),
+        token=SimpleNamespace(is_cancelled=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
+    monkeypatch.setattr(
+        settings, "feature_orchestration_v2", False, raising=False
+    )
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_memory_by_room_id = AsyncMock(return_value=None)
+    svc._prepare_for_supervisor = AsyncMock(
+        return_value=ParseResult(success=True)
+    )
+    svc._prepare_v2_orchestration_envelope = AsyncMock(
+        return_value=ParseResult(success=True)
+    )
+
+    response = await svc.run_message_preflight_to_room(_v2_preflight_context())
+
+    assert response.success is True
+    svc._prepare_for_supervisor.assert_awaited_once()
+    svc._prepare_v2_orchestration_envelope.assert_not_awaited()
+    svc._store.get_room_memory_by_room_id.assert_awaited_once_with("room-1")
+
+
+@pytest.mark.asyncio
+async def test_v2_pending_clarification_resumes_before_new_envelope(monkeypatch):
+    monkeypatch.setattr(
+        settings, "feature_orchestration_v2", True, raising=False
+    )
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_memory_by_room_id = AsyncMock(return_value=None)
+    svc._prepare_clarify_resume = AsyncMock(return_value=True)
+    svc._prepare_for_supervisor = AsyncMock(
+        return_value=ParseResult(success=True)
+    )
+    svc._prepare_v2_orchestration_envelope = AsyncMock(
+        return_value=ParseResult(success=True)
+    )
+
+    response = await svc.run_message_preflight_to_room(
+        _v2_preflight_context(pending_clarification=True)
+    )
+
+    assert response.success is True
+    svc._prepare_clarify_resume.assert_awaited_once()
+    svc._prepare_v2_orchestration_envelope.assert_not_awaited()
+    svc._prepare_for_supervisor.assert_not_awaited()
