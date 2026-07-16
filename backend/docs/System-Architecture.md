@@ -348,7 +348,9 @@ the existing supervisor loop remains the default runtime path. Lightweight v2
 envelope activation and state-driven execution are disabled by default behind
 `EXECUTION_ORCHESTRATION_V2`; candidate-scope validation still applies before
 the feature gate so disabled requests safely retain the legacy runtime path.
-Pending legacy clarifications resume before a new v2 envelope can be created.
+`FEATURE_ORCHESTRATION_V2` remains accepted as a deployment migration alias,
+with the new environment variable taking precedence. Pending legacy
+clarifications resume before a new v2 envelope can be created.
 
 The orchestration boundary also defines deterministic planner context and agent
 result ingestion. `build_orchestration_planner_context` projects quoted content,
@@ -376,8 +378,11 @@ versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
 Durable run-store queries and the stale-task checker can claim and resume stale
-sidecar runs after process interruption; legacy supervisor requests continue to
-use the existing loop.
+sidecar runs after process interruption. A processing-claim heartbeat prevents
+recovery from preempting live turns, optimistic write conflicts exit cleanly for
+the winning writer to continue, and deterministic supervisor HITL artifacts can
+finish materializing from an `INGESTING` checkpoint without re-planning. Legacy
+supervisor requests continue to use the existing loop.
 
 ### `context_memory`
 

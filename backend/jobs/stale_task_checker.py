@@ -947,6 +947,36 @@ class StaleTaskChecker:
                 )
                 continue
 
+            get_user_message = getattr(
+                self._store,
+                "get_room_user_message_by_message_id",
+                None,
+            )
+            if callable(get_user_message):
+                try:
+                    user_message = await get_user_message(state.user_message_id)
+                    processing_claimed_at = (
+                        user_message.get("processing_claimed_at")
+                        if isinstance(user_message, dict)
+                        else getattr(user_message, "processing_claimed_at", None)
+                    )
+                    if (
+                        processing_claimed_at is not None
+                        and ensure_utc(processing_claimed_at) > cutoff
+                    ):
+                        logger.info(
+                            "orchestration_v2_recovery: skipping live run %s",
+                            state.run_id,
+                        )
+                        continue
+                except Exception:
+                    logger.warning(
+                        "orchestration_v2_recovery: failed to inspect processing "
+                        "claim for %s",
+                        state.run_id,
+                        exc_info=True,
+                    )
+
             expected_version = state.state_version
             claimed = state.model_copy(deep=True)
             claimed.state_version = expected_version + 1

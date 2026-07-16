@@ -9,7 +9,10 @@ from common.config.settings import Settings
 from common.utils.time import utcnow
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.room_message_center import RoomMessageCenter
-from execution.orchestration.run_store import InMemoryOrchestrationRunStore
+from execution.orchestration.run_store import (
+    InMemoryOrchestrationRunStore,
+    OrchestrationStoreConflict,
+)
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.orchestration import (
@@ -34,6 +37,7 @@ from models.supervisor import (
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
+    TrajectoryStatus,
 )
 
 
@@ -89,6 +93,8 @@ def _executor(
         ),
         message_writer=SimpleNamespace(
             add_room_agent_message=AsyncMock(),
+            upsert_room_agent_message=AsyncMock(),
+            delete_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_user_message_by_message_id=AsyncMock(return_value=True),
             update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(),
         ),
@@ -476,6 +482,123 @@ async def test_run_v2_ask_user_marks_sidecar_recoverable_before_hitl_request():
     state = await store.get_run("run-message-1")
     assert state is not None
     assert state.pending_hitl_request_ids == ["hitl-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_v2_resumes_ingesting_hitl_without_replanning_or_duplicates():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="need user choice",
+        questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.INGESTING
+    state.steps_used = 1
+    state.pending_hitl_request_ids = [
+        "run-message-1:step-1:supervisor-hitl-1"
+    ]
+    state.decision_log = [
+        {
+            "action": PlannerActionType.ASK_USER.value,
+            "reasoning": action.reasoning,
+            "targets": [],
+            "planner_action": action.model_dump(mode="json"),
+        }
+    ]
+    await store.create_run(state)
+    planner = RecordingPlanner()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(
+            return_value=SimpleNamespace(
+                request_id="run-message-1:step-1:supervisor-hitl-1"
+            )
+        )
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    assert planner.contexts == []
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    request_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert request_kwargs["request_id"] == (
+        "run-message-1:step-1:supervisor-hitl-1"
+    )
+    upserted = executor.message_writer.upsert_room_agent_message.await_args.args[0]
+    assert upserted.message_id == (
+        "run-message-1:step-1:supervisor-hitl-1:message"
+    )
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.steps_used == 1
+    assert state.status == OrchestrationStatus.AWAITING_USER
+
+
+@pytest.mark.asyncio
+async def test_run_v2_returns_paused_when_sidecar_write_is_superseded():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope={},
+        goal="Coordinate this",
+    )
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._run_v2 = AsyncMock(side_effect=OrchestrationStoreConflict("lost race"))
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.PAUSED
+    assert result.trajectory.status == TrajectoryStatus.RUNNING
 
 
 @pytest.mark.asyncio

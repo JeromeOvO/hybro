@@ -263,6 +263,70 @@ class SupervisorExecutor:
         resumed_trajectory: SupervisorTrajectory | None = None,
         user_message=None,
     ) -> SupervisorRunResult:
+        """Run v2 and exit cleanly when another writer wins the sidecar race."""
+
+        try:
+            return await self._run_v2(
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                resumed_trajectory=resumed_trajectory,
+                user_message=user_message,
+            )
+        except OrchestrationStoreConflict:
+            logger.info(
+                "v2 orchestration write superseded for run attached to message %s",
+                user_message_id,
+            )
+            trajectory = resumed_trajectory or SupervisorTrajectory()
+            latest = await self.orchestration_run_store.get_latest_by_user_message_id(
+                user_message_id
+            )
+            if latest is not None:
+                terminal_result = await self._v2_terminal_result_if_done(
+                    room_id,
+                    latest,
+                )
+                if terminal_result is not None:
+                    return terminal_result
+                if (
+                    latest.status == OrchestrationStatus.AWAITING_USER
+                    and latest.pending_hitl_request_ids
+                ):
+                    trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                    status = RunStatus.AWAITING_INPUT
+                else:
+                    trajectory.status = TrajectoryStatus.RUNNING
+                    status = RunStatus.PAUSED
+            else:
+                trajectory.status = TrajectoryStatus.RUNNING
+                status = RunStatus.PAUSED
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(status=status, trajectory=trajectory),
+            )
+
+    async def _run_v2(
+        self,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None = None,
+        token: CancellationToken | None = None,
+        request_user_id: str | None = None,
+        quoted_text: str | None = None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
+        user_message=None,
+    ) -> SupervisorRunResult:
         """Execute the schema-v2 supervisor loop using sidecar run state."""
 
         trajectory = resumed_trajectory or SupervisorTrajectory()
@@ -276,8 +340,43 @@ class SupervisorExecutor:
         terminal_result = await self._v2_terminal_result_if_done(room_id, state)
         if terminal_result is not None:
             return terminal_result
-        if state.status == OrchestrationStatus.AWAITING_USER and state.pending_hitl_request_ids and not (
+        has_hitl_reply = bool(
             trajectory.hitl_user_reply or trajectory.clarify_user_reply
+        )
+        if (
+            state.status == OrchestrationStatus.INGESTING
+            and state.pending_hitl_request_ids
+            and not has_hitl_reply
+        ):
+            pending_action = self._v2_pending_hitl_planner_action(state)
+            if pending_action is not None:
+                return await self._run_v2_ask_user_action(
+                    state=state,
+                    planner_action=pending_action,
+                    trajectory=trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                    resume_pending_artifacts=True,
+                )
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.AWAITING_INPUT,
+                    trajectory=trajectory,
+                ),
+            )
+        if (
+            state.status == OrchestrationStatus.AWAITING_USER
+            and state.pending_hitl_request_ids
+            and not has_hitl_reply
         ):
             trajectory.status = TrajectoryStatus.AWAITING_INPUT
             return await self._log_and_return(
@@ -693,6 +792,7 @@ class SupervisorExecutor:
                         target.model_dump(mode="json")
                         for target in planner_action.targets
                     ],
+                    "planner_action": planner_action.model_dump(mode="json"),
                 }
             )
 
@@ -703,6 +803,23 @@ class SupervisorExecutor:
             mutate=mutate,
         )
         return saved
+
+    @staticmethod
+    def _v2_pending_hitl_planner_action(
+        state: OrchestrationRunState,
+    ) -> PlannerAction | None:
+        for decision in reversed(state.decision_log):
+            if decision.get("action") != PlannerActionType.ASK_USER.value:
+                continue
+            raw_action = decision.get("planner_action")
+            if not isinstance(raw_action, dict):
+                return None
+            try:
+                action = PlannerAction.model_validate(raw_action)
+            except (TypeError, ValueError):
+                return None
+            return action if action.action == PlannerActionType.ASK_USER else None
+        return None
 
     async def _run_v2_delegate_action(
         self,
@@ -1553,12 +1670,15 @@ class SupervisorExecutor:
         conversation_context: str | None,
         request_user_id: str | None,
         quoted_text: str | None,
+        resume_pending_artifacts: bool = False,
     ) -> SupervisorRunResult:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
         action = self._v2_supervisor_action(planner_action, agent_registry)
-        step_number = state.steps_used + 1
+        step_number = (
+            state.steps_used if resume_pending_artifacts else state.steps_used + 1
+        )
         entry = TrajectoryEntry(
             step_number=step_number,
             action=action,
@@ -1578,7 +1698,11 @@ class SupervisorExecutor:
                 choices=action.choices,
             )
         ]
-        group_id = uuid4().hex if len(questions) > 1 else None
+        group_id = (
+            f"{state.run_id}:step-{step_number}:supervisor-hitl-group"
+            if len(questions) > 1
+            else None
+        )
         created_messages: list[str] = []
         created_request_ids: list[str] = []
         pending_request_ids = [
@@ -1599,16 +1723,17 @@ class SupervisorExecutor:
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
 
-        state = await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_REQUESTED,
-            payload={
-                "status": OrchestrationStatus.INGESTING.value,
-                "request_ids": pending_request_ids,
-                "pending_artifacts": True,
-            },
-            mutate=mark_pending_hitl,
-        )
+        if not resume_pending_artifacts:
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.HITL_REQUESTED,
+                payload={
+                    "status": OrchestrationStatus.INGESTING.value,
+                    "request_ids": pending_request_ids,
+                    "pending_artifacts": True,
+                },
+                mutate=mark_pending_hitl,
+            )
 
         async def cleanup_created_artifacts() -> None:
             cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
@@ -1655,7 +1780,8 @@ class SupervisorExecutor:
                 task_content=question.prompt,
                 client_request_id=client_req_id,
             )
-            await self.message_writer.add_room_agent_message(hitl_agent_message)
+            hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
+            await self.message_writer.upsert_room_agent_message(hitl_agent_message)
             created_messages.append(hitl_agent_message.message_id)
 
             request = await self.hitl_coordinator.request_input(
@@ -1663,6 +1789,7 @@ class SupervisorExecutor:
                 user_message_id=user_message_id,
                 source="supervisor",
                 prompt=question.prompt,
+                request_id=pending_request_ids[qi],
                 prompt_type=prompt_type,
                 choices=question.choices,
                 agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,

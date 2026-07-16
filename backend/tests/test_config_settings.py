@@ -12,6 +12,7 @@ RUNTIME_CONFIG_ENV_VARS = (
     "FEATURE_RUN_DUAL_WRITE",
     "FEATURE_RUN_EVENT_SSE",
     "FEATURE_RUN_WATCHDOG",
+    "FEATURE_ORCHESTRATION_V2",
     "EXECUTION_ORCHESTRATION_V2",
     "SUPERVISOR_MAX_STEPS",
     "RUN_WATCHDOG_STALE_MINUTES",
@@ -51,6 +52,29 @@ def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.compaction_concurrency == 5
     assert settings.pinecone_index_name == PINECONE_INDEX_NAME_DEFAULT
     assert settings.memory_search_index_name == MEMORY_SEARCH_INDEX_NAME_DEFAULT
+
+
+def test_execution_orchestration_v2_accepts_legacy_env_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_runtime_config_env(monkeypatch)
+    monkeypatch.setenv("FEATURE_ORCHESTRATION_V2", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.execution_orchestration_v2 is True
+
+
+def test_execution_orchestration_v2_prefers_new_env_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_runtime_config_env(monkeypatch)
+    monkeypatch.setenv("FEATURE_ORCHESTRATION_V2", "true")
+    monkeypatch.setenv("EXECUTION_ORCHESTRATION_V2", "false")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.execution_orchestration_v2 is False
 
 
 @pytest.mark.parametrize(

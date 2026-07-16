@@ -1,7 +1,7 @@
 import math
 import os
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
@@ -62,7 +62,14 @@ class Settings(BaseSettings):
     feature_run_dual_write: bool = True
     feature_run_event_sse: bool = False
     feature_run_watchdog: bool = True
-    execution_orchestration_v2: bool = False
+    execution_orchestration_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "execution_orchestration_v2",
+            "EXECUTION_ORCHESTRATION_V2",
+            "FEATURE_ORCHESTRATION_V2",
+        ),
+    )
 
     # Execution Tuning
     supervisor_max_steps: int = 8

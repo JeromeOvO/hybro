@@ -35,6 +35,26 @@ from models.supervisor import (
     TrajectoryEntry,
 )
 
+
+@pytest.mark.asyncio
+async def test_processing_claim_heartbeat_refreshes_until_cancelled(monkeypatch):
+    from execution.orchestration import room_message_center as module
+
+    rmc = object.__new__(RoomMessageCenter)
+    rmc.orphan_threshold_minutes = 2
+    rmc.message_writer = SimpleNamespace(
+        refresh_processing_claim=AsyncMock(return_value=True)
+    )
+    sleep = AsyncMock(side_effect=[None, asyncio.CancelledError])
+    monkeypatch.setattr(module.asyncio, "sleep", sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await rmc._heartbeat_processing_claim("message-1")
+
+    rmc.message_writer.refresh_processing_claim.assert_awaited_once_with(
+        "message-1"
+    )
+
 # =============================================================================
 # _validate_room_message_request Tests
 # =============================================================================

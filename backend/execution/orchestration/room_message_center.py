@@ -689,6 +689,31 @@ class RoomMessageCenter:
             self._room_locks[room_id] = lock
         return lock
 
+    async def _heartbeat_processing_claim(self, message_id: str) -> None:
+        """Keep a live turn newer than the orphan-recovery cutoff."""
+
+        interval_seconds = max(1.0, self.orphan_threshold_minutes * 30.0)
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                refreshed = await self.message_writer.refresh_processing_claim(
+                    message_id
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to heartbeat processing claim for message %s",
+                    message_id,
+                    exc_info=True,
+                )
+                continue
+            if not refreshed:
+                logger.warning(
+                    "Processing-claim heartbeat did not refresh message %s",
+                    message_id,
+                )
+
     # ------------------------------------------------------------------
 
     async def process_room_user_message(
@@ -801,6 +826,10 @@ class RoomMessageCenter:
         await self.message_writer.refresh_processing_claim(
             room_user_message_id
         )
+        claim_heartbeat = asyncio.create_task(
+            self._heartbeat_processing_claim(room_user_message_id),
+            name=f"processing-claim-heartbeat:{room_user_message_id}",
+        )
 
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
@@ -832,6 +861,11 @@ class RoomMessageCenter:
             self.delivery.clear_cancellation(room_user_message_id)
             raise
         finally:
+            claim_heartbeat.cancel()
+            try:
+                await claim_heartbeat
+            except asyncio.CancelledError:
+                pass
             await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
 
     async def _process_room_user_message_locked(
