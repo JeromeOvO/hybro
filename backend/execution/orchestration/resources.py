@@ -188,13 +188,13 @@ class OrchestrationResourceProvider:
         ref_id: str,
         *,
         attachments: Sequence[UserAttachment],
-    ) -> ResourcePayload:
+    ) -> ResourcePayload | None:
         payload = self._payloads_by_ref.get(ref_id)
         if payload is not None:
             return payload
         attachment = self._attachment_by_resource_ref(ref_id, attachments)
         if attachment is None:
-            raise KeyError(ref_id)
+            return None
         return ResourcePayload(
             ref_id=ref_id,
             kind="attachment",

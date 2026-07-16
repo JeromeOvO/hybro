@@ -81,6 +81,18 @@ async def test_resource_provider_resolves_raw_attachment_metadata_payload():
     )
 
 
+@pytest.mark.asyncio
+async def test_resource_provider_returns_none_for_unknown_ref():
+    provider = OrchestrationResourceProvider()
+
+    payload = await provider.resolve_ref(
+        "file:missing",
+        attachments=[_pdf_attachment()],
+    )
+
+    assert payload is None
+
+
 def test_resource_ref_helpers_are_deterministic():
     assert attachment_resource_ref_id("file-1") == "file:file-1"
     assert text_projection_ref_id("file-1") == "ctx:file-file-1:text"
