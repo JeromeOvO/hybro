@@ -93,6 +93,27 @@ def test_context_builder_exposes_available_resources():
     assert available[0]["projections"][0]["status"] == "ready"
 
 
+def test_context_builder_exposes_candidate_resource_capabilities():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="PDF Agent",
+                input_modes=["text", "application/pdf"],
+                output_modes=["application/json"],
+                supports_file_upload=True,
+            )
+        ],
+        message_text="Review the submission",
+    )
+
+    candidate = context.prompt_payload()["candidate_scope"]["agents"][0]
+    assert candidate["input_modes"] == ["text", "application/pdf"]
+    assert candidate["output_modes"] == ["application/json"]
+    assert candidate["supports_file_upload"] is True
+
+
 def test_quote_text_is_preserved_verbatim():
     quote = "  First line\n\nSecond\tline with trailing spaces  "
 

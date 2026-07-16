@@ -13,6 +13,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
+from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
 
 if TYPE_CHECKING:
     from models.agent import Agent
@@ -33,6 +34,9 @@ class AgentProfile(BaseModel):
     agent_name: str
     description: str = ""
     capabilities: list[str] = Field(default_factory=list)
+    input_modes: list[str] = Field(default_factory=lambda: ["text"])
+    output_modes: list[str] = Field(default_factory=list)
+    supports_file_upload: bool = False
     success_rate: float = 1.0
     is_healthy: bool = True
 
@@ -49,6 +53,13 @@ class AgentProfile(BaseModel):
             agent_name=card.name,
             description=card.description or "",
             capabilities=[s.id for s in (card.skills or [])],
+            input_modes=sorted(agent_input_modes(card)),
+            output_modes=[
+                str(mode)
+                for mode in (getattr(card, "default_output_modes", None) or [])
+                if str(mode)
+            ],
+            supports_file_upload=agent_supports_any_file(card),
             success_rate=max(0.0, min(1.0, raw_rate)),
             is_healthy=agent.agent_status == AgentStatus.active,
         )
