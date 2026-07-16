@@ -9,6 +9,7 @@ from models.orchestration import (
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
+    PlannerAction,
 )
 
 
@@ -40,6 +41,14 @@ def test_event_types_cover_recovery_and_terminal_projection():
     assert OrchestrationEventType.PUBLIC_LIFECYCLE_PROJECTED.value == (
         "public_lifecycle_projected"
     )
+
+
+def test_planner_action_schema_rejects_unknown_actions():
+    with pytest.raises(ValueError, match="action"):
+        PlannerAction(
+            action="done",
+            reasoning="legacy terminal",
+        )
 
 
 def test_mark_running_returns_updated_copy_without_mutating_input():

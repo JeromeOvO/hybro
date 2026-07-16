@@ -490,6 +490,29 @@ class ExecutionFacade:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _room_request_extend_info(request: ExecutionRequest) -> dict[str, Any] | None:
+        extend_info: dict[str, Any] = {}
+        if (
+            request.mode != "direct"
+            or request.selected_agent_ids is not None
+            or request.candidate_scope_mode is not None
+            or request.candidate_scope_group_id is not None
+            or request.orchestration_schema_version is not None
+        ):
+            extend_info["mode"] = request.mode
+        if request.selected_agent_ids is not None:
+            extend_info["selected_agent_ids"] = list(request.selected_agent_ids)
+        if request.candidate_scope_mode is not None:
+            extend_info["candidate_scope_mode"] = request.candidate_scope_mode
+        if request.candidate_scope_group_id is not None:
+            extend_info["candidate_scope_group_id"] = request.candidate_scope_group_id
+        if request.orchestration_schema_version is not None:
+            extend_info["orchestration_schema_version"] = (
+                request.orchestration_schema_version
+            )
+        return extend_info or None
+
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
         hitl_rejection = await self._reject_if_hitl_pending(request)
         if hitl_rejection is not None:
@@ -507,6 +530,7 @@ class ExecutionFacade:
             attachments=request.attachments,
             inline_file_ids=request.inline_file_ids,
             client_request_id=request.client_request_id,
+            extend_info=self._room_request_extend_info(request),
         )
         persisted_response, preflight_context = await self._room_center.persist_message_to_room(
             room_request,

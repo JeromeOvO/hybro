@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
 from common.utils.logger import get_logger
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from models.orchestration import PlannerAction, PlannerActionType
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -808,6 +809,92 @@ class RoomSupervisorService:
             prompt_type=prompt_type,
             choices=choices,
             questions=parsed_questions,
+        )
+
+    @staticmethod
+    def _parse_legacy_action_as_planner_action(
+        response_json: dict,
+    ) -> PlannerAction:
+        """Adapt legacy supervisor JSON action names to a strict v2 action.
+
+        Unlike ``_parse_supervisor_action``, this v2 path raises for unknown or
+        malformed action values instead of coercing them to DONE.
+        """
+
+        if not isinstance(response_json, dict):
+            raise ValueError("planner action response must be a JSON object")
+        if "action" not in response_json:
+            raise ValueError("planner action response missing action")
+
+        raw_action = response_json["action"]
+        if not isinstance(raw_action, str) or not raw_action.strip():
+            raise ValueError("planner action must be a non-empty string")
+
+        action_key = raw_action.strip().lower()
+        legacy_action_mapping = {
+            "clarify": PlannerActionType.ASK_USER,
+            "done": PlannerActionType.COMPLETE,
+            "delegate": PlannerActionType.DELEGATE,
+            "synthesize": PlannerActionType.SYNTHESIZE,
+        }
+        try:
+            planner_action_type = legacy_action_mapping.get(
+                action_key
+            ) or PlannerActionType(action_key)
+        except ValueError as exc:
+            raise ValueError(f"unknown planner action: {raw_action}") from exc
+
+        raw_targets = response_json["targets"] if "targets" in response_json else []
+        if not isinstance(raw_targets, list):
+            raise ValueError("planner action targets must be a list")
+        targets = []
+        for target in raw_targets:
+            if not isinstance(target, dict):
+                raise ValueError("planner action target must be an object")
+            agent_id = target.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("planner action target requires agent_id")
+            task = target.get("task", "")
+            if planner_action_type == PlannerActionType.DELEGATE and (
+                not isinstance(task, str) or not task.strip()
+            ):
+                raise ValueError("delegate planner action target requires task")
+            targets.append(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": target.get("agent_name"),
+                    "task": task,
+                }
+            )
+
+        raw_questions = response_json.get("questions")
+        if raw_questions is None and isinstance(
+            response_json.get("clarification_question"), str
+        ):
+            raw_questions = [
+                {
+                    "prompt": response_json["clarification_question"],
+                    "prompt_type": response_json.get("prompt_type", "text"),
+                    "choices": response_json.get("choices"),
+                }
+            ]
+        elif raw_questions is None:
+            raw_questions = []
+        if not isinstance(raw_questions, list):
+            raise ValueError("planner action questions must be a list")
+        questions = []
+        for question in raw_questions:
+            if not isinstance(question, dict):
+                raise ValueError("planner action question must be an object")
+            questions.append(question)
+
+        return PlannerAction(
+            action=planner_action_type,
+            reasoning=response_json.get("reasoning", ""),
+            targets=targets,
+            questions=questions,
+            synthesis_instruction=response_json.get("synthesis_instruction"),
+            failure_reason=response_json.get("failure_reason"),
         )
 
     @staticmethod

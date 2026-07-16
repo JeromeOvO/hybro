@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from uuid import uuid4
 
+from common.config import settings
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -107,6 +108,7 @@ class RoomMessagePreflightContext:
     message_text: str
     pre_resolved_mentions: list[dict] | None
     pre_resolved_scope: tuple[dict, bool, list] | None
+    pre_resolved_selected_scope: tuple[dict, bool, list] | None
     token: CancellationToken
 
 
@@ -1622,6 +1624,254 @@ class RoomServices:
                 )
         return registry
 
+    @staticmethod
+    def _orchestration_request_info(
+        request: RoomCenterUserMessageRequest,
+    ) -> dict:
+        info = request.extend_info if isinstance(request.extend_info, dict) else {}
+        return dict(info)
+
+    @classmethod
+    def _is_v2_orchestration_request(
+        cls,
+        request: RoomCenterUserMessageRequest,
+    ) -> bool:
+        info = cls._orchestration_request_info(request)
+        return (
+            info.get("mode") == "supervisor"
+            and info.get("orchestration_schema_version") == 2
+        )
+
+    @classmethod
+    def _selected_agent_ids_from_request(
+        cls,
+        request: RoomCenterUserMessageRequest,
+    ) -> list[str] | None:
+        value = cls._orchestration_request_info(request).get("selected_agent_ids")
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            return None
+        selected_agent_ids: list[str] = []
+        for agent_id in value:
+            if isinstance(agent_id, str) and agent_id.strip():
+                selected_agent_ids.append(agent_id.strip())
+        return selected_agent_ids
+
+    async def _resolve_selected_candidate_scope(
+        self,
+        selected_agent_ids: list[str],
+        sender_user_id: str | None,
+    ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
+        selected_agent_set: dict[str, str] = {}
+        agents: list = []
+        invalid_ids: list[str] = []
+
+        for agent_id in selected_agent_ids:
+            if agent_id in selected_agent_set:
+                continue
+            agent = await self._store.get_agent_by_agent_id(agent_id)
+            if not agent or agent.agent_status != AgentStatus.active:
+                invalid_ids.append(agent_id)
+                continue
+            if (
+                not agent.is_public
+                and getattr(agent, "provider_id", None) != sender_user_id
+            ):
+                invalid_ids.append(agent_id)
+                continue
+            selected_agent_set[agent_id] = agent.agent_card.name
+            agents.append(agent)
+
+        if invalid_ids:
+            error_msg = (
+                "Invalid or unauthorized selected candidate targets: "
+                f"{', '.join(invalid_ids)}"
+            )
+            logger.warning(
+                "Selected candidate targets rejected (invalid/unauthorized): %s",
+                invalid_ids,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="unauthorized_candidate_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        if not selected_agent_set:
+            error_msg = "Selected candidate scope is empty."
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="empty_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        return selected_agent_set, False, agents
+
+    async def _validate_v2_candidate_scope_metadata(
+        self,
+        request: RoomCenterUserMessageRequest,
+        selected_agent_ids: list[str],
+        sender_user_id: str | None,
+    ) -> RoomCenterUserMessageResponse | None:
+        info = self._orchestration_request_info(request)
+        candidate_scope_mode = info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
+
+        if candidate_scope_mode != "saved_group":
+            return None
+
+        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        if (
+            not isinstance(candidate_scope_group_id, str)
+            or not candidate_scope_group_id.strip()
+        ):
+            error_msg = (
+                "candidate_scope_group_id is required for saved_group candidate scope"
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        group_id = candidate_scope_group_id.strip()
+        group = await self._store.get_agent_group_by_id(group_id)
+        if not group:
+            error_msg = (
+                "The selected agent group no longer exists. "
+                "Please choose a different group."
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=404,
+            )
+
+        if group.type != "builtin" and group.owner_id != sender_user_id:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="You do not have permission to use this saved group",
+                status_code=403,
+            )
+
+        group_agent_ids = {str(agent_id) for agent_id in (group.agents or [])}
+        if not group_agent_ids:
+            error_msg = f"The selected agent group '{group.name}' has no members."
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="empty_scope",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        out_of_group_ids = [
+            agent_id
+            for agent_id in selected_agent_ids
+            if agent_id not in group_agent_ids
+        ]
+        if out_of_group_ids:
+            error_msg = (
+                "Selected candidate agents are not members of the selected saved group: "
+                f"{', '.join(out_of_group_ids)}"
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable",
+                    message=error_msg,
+                ),
+                status_code=400,
+            )
+
+        return None
+
+    async def _prepare_v2_orchestration_envelope(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        selected_agent_set: dict,
+        explicit_mentions: list[dict] | None,
+        client_request_id: str | None,
+    ) -> ParseResult:
+        info = self._orchestration_request_info(request)
+        candidate_scope_mode = info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
+
+        envelope = {
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": user_message.message_id,
+            "candidate_scope_mode": candidate_scope_mode,
+            "candidate_agent_ids": list(selected_agent_set.keys()),
+            "candidate_scope_snapshot_version": 1,
+            "mentioned_agent_ids": [
+                mention["agent_id"] for mention in (explicit_mentions or [])
+            ],
+            "client_request_id": client_request_id,
+        }
+        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        if (
+            candidate_scope_mode == "saved_group"
+            and isinstance(candidate_scope_group_id, str)
+            and candidate_scope_group_id.strip()
+        ):
+            envelope["candidate_scope_group_id"] = candidate_scope_group_id.strip()
+
+        user_message.extend_info = envelope
+        persisted = await self._store.update_room_user_message_by_message_id(
+            user_message.message_id,
+            user_message,
+        )
+        if not persisted:
+            logger.warning(
+                "RoomServices: failed to persist v2 orchestration envelope for message %s",
+                user_message.message_id,
+            )
+            return ParseResult(success=False)
+        logger.info(
+            "RoomServices: v2 orchestration envelope prepared for message %s (%d candidates)",
+            user_message.message_id,
+            len(selected_agent_set),
+        )
+        return ParseResult(success=True)
+
     async def _prepare_for_supervisor(
         self,
         room: Room,
@@ -2030,8 +2280,84 @@ class RoomServices:
         # - inline text mentions: best-effort, not covered (persists first)
         pre_resolved_mentions: list[dict] | None = None
         pre_resolved_scope: tuple[dict, bool, list] | None = None
+        pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
+        selected_agent_ids = self._selected_agent_ids_from_request(request)
+        v2_orchestration_requested = self._is_v2_orchestration_request(request)
+        orchestration_info = self._orchestration_request_info(request)
+        candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
 
-        if mentioned_agent_ids:
+        if (
+            v2_orchestration_requested
+            and candidate_scope_mode == "saved_group"
+            and selected_agent_ids is None
+        ):
+            error_msg = (
+                "selected_agent_ids is required to snapshot a saved_group "
+                "candidate scope"
+            )
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=error_msg,
+                    scope_resolution_error=ScopeResolutionError(
+                        code="group_not_usable",
+                        message=error_msg,
+                    ),
+                    status_code=400,
+                ),
+                None,
+            )
+
+        if v2_orchestration_requested and selected_agent_ids is not None:
+            metadata_error = await self._validate_v2_candidate_scope_metadata(
+                request,
+                selected_agent_ids,
+                sender_user_id=request.user_id,
+            )
+            if metadata_error is not None:
+                return metadata_error, None
+            scope_result = await self._resolve_selected_candidate_scope(
+                selected_agent_ids,
+                sender_user_id=request.user_id,
+            )
+            if isinstance(scope_result, RoomCenterUserMessageResponse):
+                return scope_result, None
+            pre_resolved_selected_scope = scope_result
+            if mentioned_agent_ids:
+                mention_result = await self._validate_canonical_mentions(
+                    mentioned_agent_ids, sender_user_id=request.user_id,
+                )
+                if isinstance(mention_result, RoomCenterUserMessageResponse):
+                    return mention_result, None
+                pre_resolved_mentions = mention_result
+                candidate_ids = set(pre_resolved_selected_scope[0])
+                out_of_scope_mentions = [
+                    mention["agent_id"]
+                    for mention in pre_resolved_mentions
+                    if mention["agent_id"] not in candidate_ids
+                ]
+                if out_of_scope_mentions:
+                    error_msg = (
+                        "Mentioned agents are outside the selected candidate scope: "
+                        f"{', '.join(out_of_scope_mentions)}"
+                    )
+                    return (
+                        RoomCenterUserMessageResponse(
+                            message_id=None,
+                            message=None,
+                            success=False,
+                            error=error_msg,
+                            scope_resolution_error=ScopeResolutionError(
+                                code="mention_outside_candidate_scope",
+                                message=error_msg,
+                            ),
+                            status_code=400,
+                        ),
+                        None,
+                    )
+        elif mentioned_agent_ids:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids, sender_user_id=request.user_id,
             )
@@ -2107,6 +2433,7 @@ class RoomServices:
                 message_text=message_text,
                 pre_resolved_mentions=pre_resolved_mentions,
                 pre_resolved_scope=pre_resolved_scope,
+                pre_resolved_selected_scope=pre_resolved_selected_scope,
                 token=token,
             ),
         )
@@ -2125,12 +2452,31 @@ class RoomServices:
         message_text = context.message_text
         pre_resolved_mentions = context.pre_resolved_mentions
         pre_resolved_scope = context.pre_resolved_scope
+        pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
+        v2_orchestration_requested = (
+            use_supervisor and self._is_v2_orchestration_request(request)
+        )
+        v2_orchestration_active = (
+            v2_orchestration_requested and settings.feature_orchestration_v2
+        )
+        pending_clarify_msg_id = (
+            room.extend_info.get("pending_clarification_message_id")
+            if isinstance(room.extend_info, dict)
+            else None
+        )
+        # Validated candidate scope is safe for the legacy supervisor; the
+        # feature flag gates only lightweight envelope/runtime activation.
+        selected_scope_locked = (
+            v2_orchestration_requested and pre_resolved_selected_scope is not None
+        )
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
         # In non-supervisor rooms, explicit mentions are hard routing. In
         # supervisor rooms, mentions are strong intent signals for the planner.
-        if pre_resolved_mentions:
+        if selected_scope_locked:
+            selected_agent_set, auto_assign, agents = pre_resolved_selected_scope
+        elif pre_resolved_mentions:
             if use_supervisor:
                 selected_agent_set = {
                     mention["agent_id"]: mention["agent_name"]
@@ -2174,25 +2520,28 @@ class RoomServices:
             if mentions:
                 if use_supervisor:
                     pre_resolved_mentions = mentions
-                    selected_agent_set = {
-                        mention["agent_id"]: mention["agent_name"]
-                        for mention in mentions
-                    }
-                    agents = []
-                    for mention in mentions:
-                        agent = await self._store.get_agent_by_agent_id(
-                            mention["agent_id"]
-                        )
-                        if agent is not None:
-                            agents.append(agent)
-                    auto_assign = False
+                    if not selected_scope_locked:
+                        selected_agent_set = {
+                            mention["agent_id"]: mention["agent_name"]
+                            for mention in mentions
+                        }
+                        agents = []
+                        for mention in mentions:
+                            agent = await self._store.get_agent_by_agent_id(
+                                mention["agent_id"]
+                            )
+                            if agent is not None:
+                                agents.append(agent)
+                        auto_assign = False
                 else:
                     return await self._handle_mentions_flow(
                         request, user_message, mentions
                     )
 
         # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
-        if pre_resolved_mentions and use_supervisor:
+        if selected_scope_locked:
+            pass
+        elif pre_resolved_mentions and use_supervisor:
             pass
         elif target_group == "all_agents":
             required_modes = self._derive_required_input_modes(user_message)
@@ -2230,11 +2579,15 @@ class RoomServices:
             "dispatch_strategy": dispatch_strategy.value,
         }
 
-        # Fetch room memory for context assembly.
-        # supervisor always needs room_memory for ContextAssemblyService (§11.1).
-        # Non-supervisor multi-agent paths need it for build_minimal_context.
+        # Fetch room memory for legacy context assembly. V2 supervisor requests
+        # persist only the lightweight orchestration envelope here.
         room_memory = None
-        if use_supervisor or len(selected_agent_set) > 1:
+        if (
+            use_supervisor
+            and (not v2_orchestration_active or pending_clarify_msg_id)
+        ) or (
+            not use_supervisor and len(selected_agent_set) > 1
+        ):
             room_memory = await self._store.get_room_memory_by_room_id(
                 request.room_id
             )
@@ -2262,13 +2615,7 @@ class RoomServices:
 
         # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
-            # --- Clarify resume check (§7.4) ---
             clarify_resume_prepared = False
-            pending_clarify_msg_id = (
-                room.extend_info.get("pending_clarification_message_id")
-                if isinstance(room.extend_info, dict)
-                else None
-            )
             if pending_clarify_msg_id:
                 clarify_resume_prepared = await self._prepare_clarify_resume(
                     room=room,
@@ -2284,6 +2631,14 @@ class RoomServices:
 
             if clarify_resume_prepared:
                 parse_result = ParseResult(success=True)
+            elif v2_orchestration_active:
+                parse_result = await self._prepare_v2_orchestration_envelope(
+                    request=request,
+                    user_message=user_message,
+                    selected_agent_set=selected_agent_set,
+                    explicit_mentions=pre_resolved_mentions,
+                    client_request_id=client_request_id,
+                )
             else:
                 parse_result = await self._prepare_for_supervisor(
                     room=room,

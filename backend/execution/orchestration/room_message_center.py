@@ -897,7 +897,10 @@ class RoomMessageCenter:
         is_supervisor = (
             user_message
             and isinstance(user_message.extend_info, dict)
-            and user_message.extend_info.get("supervisor", False)
+            and (
+                user_message.extend_info.get("supervisor", False)
+                or self._is_v2_supervisor_envelope(user_message.extend_info)
+            )
         )
         if is_supervisor:
             return await self._process_supervisor(
@@ -1213,6 +1216,75 @@ class RoomMessageCenter:
     # Supervisor adaptive loop
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_v2_supervisor_envelope(extend_info: Any) -> bool:
+        return (
+            isinstance(extend_info, dict)
+            and extend_info.get("orchestration") is True
+            and extend_info.get("orchestration_schema_version") == 2
+        )
+
+    async def _build_v2_supervisor_inputs(
+        self,
+        extend: dict[str, Any],
+        room_id: str,
+    ) -> tuple[list[AgentProfile], RoomConfig, str | None]:
+        candidate_agent_ids = extend.get("candidate_agent_ids")
+        if not isinstance(candidate_agent_ids, list) or not candidate_agent_ids:
+            raise ValueError("v2 orchestration envelope missing candidate_agent_ids")
+
+        agent_registry: list[AgentProfile] = []
+        profiles_by_id: dict[str, AgentProfile] = {}
+        for raw_agent_id in candidate_agent_ids:
+            if not isinstance(raw_agent_id, str) or not raw_agent_id.strip():
+                raise ValueError(
+                    "v2 orchestration envelope has invalid candidate_agent_ids"
+                )
+            agent_id = raw_agent_id.strip()
+            if agent_id in profiles_by_id:
+                continue
+            agent = await self.agent_lookup.get_agent_by_agent_id(agent_id)
+            if agent is None:
+                raise ValueError(
+                    f"v2 orchestration candidate agent not found: {agent_id}"
+                )
+            profile = AgentProfile.from_agent(agent)
+            profiles_by_id[agent_id] = profile
+            agent_registry.append(profile)
+
+        room = await self.room_reader.get_room_by_room_id(room_id)
+        is_debate_mode = (
+            room is not None
+            and isinstance(room.extend_info, dict)
+            and room.extend_info.get("debateMode", False)
+        )
+        mentioned_agent_ids = extend.get("mentioned_agent_ids")
+        explicit_mentions: list[dict[str, str]] = []
+        if isinstance(mentioned_agent_ids, list):
+            for raw_agent_id in mentioned_agent_ids:
+                if not isinstance(raw_agent_id, str):
+                    continue
+                agent_id = raw_agent_id.strip()
+                profile = profiles_by_id.get(agent_id)
+                if profile is None:
+                    continue
+                explicit_mentions.append(
+                    {
+                        "agent_id": profile.agent_id,
+                        "agent_name": profile.agent_name,
+                        "mention_text": f"<@{profile.agent_id}|{profile.agent_name}>",
+                    }
+                )
+
+        room_config = RoomConfig(
+            is_debate_mode=bool(is_debate_mode),
+            room_agent_set={
+                profile.agent_id: profile.agent_name for profile in agent_registry
+            },
+            explicit_mentions=explicit_mentions,
+        )
+        return agent_registry, room_config, None
+
     async def _process_supervisor(
         self,
         user_message,
@@ -1224,9 +1296,8 @@ class RoomMessageCenter:
     ) -> OrchestrationResponse:
         """Execute the supervisor adaptive loop for a user message.
 
-        Deserializes ``agent_registry``, ``room_config``, and
-        ``conversation_context`` from the user message's ``extend_info``
-        (prepared by the room runtime), then
+        Deserializes legacy supervisor context or reconstructs v2 lightweight
+        orchestration context from the user message's ``extend_info``, then
         delegates to ``SupervisorExecutor.run()``.
 
         Also handles clarify-resume: when the user message was prepared by
@@ -1238,11 +1309,19 @@ class RoomMessageCenter:
         """
         extend = user_message.extend_info
         try:
-            agent_registry = [
-                AgentProfile(**p) for p in extend["agent_registry"]
-            ]
-            room_config = RoomConfig(**extend["room_config"])
-        except (KeyError, TypeError) as e:
+            if self._is_v2_supervisor_envelope(extend):
+                (
+                    agent_registry,
+                    room_config,
+                    conversation_context,
+                ) = await self._build_v2_supervisor_inputs(extend, room_id)
+            else:
+                agent_registry = [
+                    AgentProfile(**p) for p in extend["agent_registry"]
+                ]
+                room_config = RoomConfig(**extend["room_config"])
+                conversation_context = extend.get("conversation_context")
+        except (KeyError, TypeError, ValueError) as e:
             logger.error(
                 "RoomMessageCenter: supervisor extend_info missing required keys: %s",
                 e,
@@ -1263,7 +1342,6 @@ class RoomMessageCenter:
                 error=f"supervisor data corrupted: {e}",
                 status_code=500,
             )
-        conversation_context = extend.get("conversation_context")
 
         # Clarify-resume: deserialize the trajectory from the previous run
         resumed_trajectory = None
