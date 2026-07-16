@@ -17,6 +17,9 @@ from execution.orchestration.resources import ResourceProjectionRef, ResourceRef
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import (
     AgentOutputRecord,
+    AuthorizationBasis,
+    CandidateAgentSnapshot,
+    CandidateScopeSnapshot,
     DispatchIntent,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -168,6 +171,256 @@ def test_metadata_only_candidate_scope_does_not_invent_agent_ids(candidate_scope
     assert context.candidate_scope.group_id == "group-1"
     assert context.candidate_scope.agent_ids == []
     assert context.candidate_scope.agents == []
+
+
+def test_candidate_scope_falls_back_to_run_state_candidate_ids_when_scope_absent():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_legacy_string_is_single_agent_id():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope="agent-1",
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=3,
+        source="saved_group",
+        room_id="room-1",
+        group_id="group-1",
+        agent_ids=["agent-2"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-2",
+                name="Insurer",
+                role="insurer",
+                capability_summary="Produces quote options.",
+                status="active",
+                source="saved_group",
+            )
+        ],
+        authorization_basis=AuthorizationBasis(
+            kind="saved_group_member",
+            room_id="room-1",
+            group_id="group-1",
+            selected_by_user_id="user-1",
+        ),
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
+        candidate_scope=[_candidate("agent-1", "Legacy Agent")],
+        message_text="Use the saved scope",
+    )
+
+    assert context.candidate_scope.mode == "saved_group"
+    assert context.candidate_scope.group_id == "group-1"
+    assert context.candidate_scope.snapshot_version == 3
+    assert context.candidate_scope.agent_ids == ["agent-2"]
+    assert [agent.agent_name for agent in context.candidate_scope.agents] == ["Insurer"]
+
+
+def test_candidate_scope_overlays_live_resource_capabilities_on_snapshot():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=2,
+        source="saved_group",
+        room_id="room-1",
+        group_id="group-1",
+        agent_ids=["agent-2"],
+        agents=[CandidateAgentSnapshot(agent_id="agent-2", name="Stored Insurer")],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
+        candidate_scope=[
+            AgentProfile(
+                agent_id="agent-2",
+                agent_name="Live Insurer",
+                capabilities=["quote", "risk"],
+                input_modes=["text", "application/pdf"],
+                output_modes=["application/json"],
+                supports_file_upload=True,
+                success_rate=0.85,
+            ),
+            _candidate("agent-1", "Out of Scope"),
+        ],
+        message_text="Use the saved scope",
+    )
+
+    assert context.candidate_scope.mode == "saved_group"
+    assert context.candidate_scope.group_id == "group-1"
+    assert context.candidate_scope.snapshot_version == 2
+    assert context.candidate_scope.agent_ids == ["agent-2"]
+    candidate = context.candidate_scope.agents[0]
+    assert candidate.agent_name == "Live Insurer"
+    assert candidate.capabilities == ["quote", "risk"]
+    assert candidate.input_modes == ["text", "application/pdf"]
+    assert candidate.output_modes == ["application/json"]
+    assert candidate.supports_file_upload is True
+    assert candidate.success_rate == 0.85
+
+
+def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
+        candidate_scope=[_candidate("agent-2", "Legacy Agent")],
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_partial_snapshot_preserves_all_agent_ids_in_order():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-a", "agent-b"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-a",
+                name="Broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(
+            candidate_agent_ids=["agent-a", "agent-b"],
+            candidate_scope=snapshot,
+        ),
+        message_text="Use the selected agents",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == [
+        "agent-a",
+        "agent-b",
+    ]
+    assert context.candidate_scope.agents[0].agent_name == "Broker"
+    assert context.candidate_scope.agents[0].description == (
+        "Collects broker requirements."
+    )
+    assert context.candidate_scope.agents[1].agent_name is None
+
+
+def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope={"agents": [], "agent_ids": ["agent-1"]},
+        message_text="Use the selected agent",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-1"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
+
+
+def test_candidate_scope_partial_mapping_preserves_all_agent_ids_in_order():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-a", "agent-b"]),
+        candidate_scope={
+            "source": "explicit_selection",
+            "agent_ids": ["agent-a", "agent-b"],
+            "agents": [
+                {
+                    "agent_id": "agent-a",
+                    "name": "Broker",
+                    "capability_summary": "Collects broker requirements.",
+                    "status": "active",
+                }
+            ],
+        },
+        message_text="Use the selected agents",
+    )
+
+    assert context.candidate_scope.agent_ids == ["agent-a", "agent-b"]
+    assert [agent.agent_id for agent in context.candidate_scope.agents] == [
+        "agent-a",
+        "agent-b",
+    ]
+    assert context.candidate_scope.agents[0].agent_name == "Broker"
+    assert context.candidate_scope.agents[0].description == (
+        "Collects broker requirements."
+    )
+    assert context.candidate_scope.agents[1].agent_name is None
+
+
+def test_candidate_scope_snapshot_agent_summary_and_status_are_visible():
+    snapshot = CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="saved_group",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
+        message_text="Use the selected agent",
+    )
+
+    agent = context.candidate_scope.agents[0]
+    assert agent.description == "Collects broker requirements."
+    assert agent.capabilities == ["Collects broker requirements."]
+    assert agent.is_healthy is True
+
+
+def test_candidate_scope_dict_agent_summary_and_status_are_visible():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope={
+            "source": "saved_group",
+            "agent_ids": ["agent-1"],
+            "agents": [
+                {
+                    "agent_id": "agent-1",
+                    "name": "Broker",
+                    "capability_summary": "Collects broker requirements.",
+                    "status": "active",
+                }
+            ],
+        },
+        message_text="Use the selected agent",
+    )
+
+    agent = context.candidate_scope.agents[0]
+    assert agent.description == "Collects broker requirements."
+    assert agent.capabilities == ["Collects broker requirements."]
+    assert agent.is_healthy is True
 
 
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():

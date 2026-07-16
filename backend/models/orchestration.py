@@ -111,9 +111,11 @@ class CandidateAgentSnapshot(BaseModel):
     capability_summary: str = ""
     status: str | None = None
     source: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
     input_modes: list[str] = Field(default_factory=lambda: ["text"])
     output_modes: list[str] = Field(default_factory=list)
     supports_file_upload: bool = False
+    success_rate: float | None = None
 
 
 class CandidateScopeSnapshot(BaseModel):

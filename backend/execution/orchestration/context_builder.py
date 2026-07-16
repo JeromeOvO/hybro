@@ -7,6 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from execution.orchestration.candidate_scope import (
+    candidate_scope_items,
+    enrich_candidate_scope_snapshot,
+)
 from execution.orchestration.resources import ResourceRef
 from models.orchestration import OrchestrationRunState
 
@@ -173,7 +177,7 @@ def build_orchestration_planner_context(
     *,
     run_state: OrchestrationRunState,
     message_text: str,
-    candidate_scope: Sequence[Any] | Mapping[str, Any] = (),
+    candidate_scope: Sequence[Any] | Mapping[str, Any] | None = None,
     quote: Any | None = None,
     quote_required: bool = False,
     room_background: str | None = None,
@@ -190,7 +194,19 @@ def build_orchestration_planner_context(
     if room_background is not None and not isinstance(room_background, str):
         raise TypeError("room_background must be a string when supplied")
 
-    scope_context = _build_candidate_scope_context(candidate_scope)
+    if run_state.candidate_scope is not None:
+        scope_source = (
+            enrich_candidate_scope_snapshot(run_state.candidate_scope, candidate_scope)
+            if candidate_scope is not None
+            else run_state.candidate_scope
+        )
+    else:
+        scope_source = (
+            candidate_scope
+            if candidate_scope is not None
+            else run_state.candidate_agent_ids
+        )
+    scope_context = _build_candidate_scope_context(scope_source)
     state_context = _build_state_context(run_state)
 
     return OrchestrationPlannerContext(
@@ -280,16 +296,16 @@ def _build_quote_context(quote: Any | None) -> OrchestrationQuoteContext | None:
     )
 
 
-def _build_candidate_scope_context(
-    candidate_scope: Sequence[Any] | Mapping[str, Any],
-) -> CandidateScopeContext:
+def _build_candidate_scope_context(candidate_scope: Any) -> CandidateScopeContext:
     mode = None
     group_id = None
     snapshot_version = None
 
     if isinstance(candidate_scope, Mapping):
         mode = _optional_str(
-            _first_mapping_value(candidate_scope, "mode", "candidate_scope_mode")
+            _first_mapping_value(
+                candidate_scope, "source", "mode", "candidate_scope_mode"
+            )
         )
         group_id = _optional_str(
             _first_mapping_value(
@@ -298,13 +314,26 @@ def _build_candidate_scope_context(
         )
         snapshot_value = _first_mapping_value(
             candidate_scope,
+            "revision",
             "snapshot_version",
             "candidate_scope_snapshot_version",
         )
         snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
-        raw_items = _candidate_items_from_mapping(candidate_scope)
-    else:
-        raw_items = list(candidate_scope)
+    elif _looks_like_scope_object(candidate_scope):
+        mode = _optional_str(
+            _first_attr_value(candidate_scope, "source", "mode", "candidate_scope_mode")
+        )
+        group_id = _optional_str(
+            _first_attr_value(candidate_scope, "group_id", "candidate_scope_group_id")
+        )
+        snapshot_value = _first_attr_value(
+            candidate_scope,
+            "revision",
+            "snapshot_version",
+            "candidate_scope_snapshot_version",
+        )
+        snapshot_version = snapshot_value if isinstance(snapshot_value, int) else None
+    raw_items = candidate_scope_items(candidate_scope)
 
     agents: list[CandidateAgentContext] = []
     seen_ids: set[str] = set()
@@ -324,21 +353,6 @@ def _build_candidate_scope_context(
     )
 
 
-def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[Any]:
-    raw_agents = _first_mapping_value(candidate_scope, "agents", "candidate_agents")
-    if isinstance(raw_agents, Sequence) and not isinstance(raw_agents, str | bytes):
-        return list(raw_agents)
-
-    raw_ids = _first_mapping_value(candidate_scope, "agent_ids", "candidate_agent_ids")
-    if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-        return list(raw_ids)
-
-    if _looks_like_agent_mapping(candidate_scope):
-        return [candidate_scope]
-
-    return []
-
-
 def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
     if isinstance(raw_item, str):
         agent_id = raw_item.strip()
@@ -350,16 +364,23 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
         agent_id = _optional_str(_first_mapping_value(raw_item, "agent_id", "id"))
         if agent_id is None:
             return None
+        capability_summary = _optional_str(
+            _first_mapping_value(raw_item, "capability_summary")
+        )
+        capabilities = _string_list(
+            _first_mapping_value(raw_item, "capabilities", "skills")
+        )
+        if not capabilities and capability_summary is not None:
+            capabilities = [capability_summary]
         return CandidateAgentContext(
             agent_id=agent_id,
             agent_name=_optional_str(
                 _first_mapping_value(raw_item, "agent_name", "name")
             ),
             description=_optional_str(_first_mapping_value(raw_item, "description"))
+            or capability_summary
             or "",
-            capabilities=_string_list(
-                _first_mapping_value(raw_item, "capabilities", "skills")
-            ),
+            capabilities=capabilities,
             input_modes=_string_list(
                 _first_mapping_value(raw_item, "input_modes", "default_input_modes")
             ),
@@ -372,9 +393,7 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
             success_rate=_optional_float(
                 _first_mapping_value(raw_item, "success_rate")
             ),
-            is_healthy=_optional_bool(
-                _first_mapping_value(raw_item, "is_healthy", "healthy")
-            ),
+            is_healthy=_candidate_mapping_health(raw_item),
         )
 
     agent_id = _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
@@ -383,8 +402,17 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
 
     agent_card = getattr(raw_item, "agent_card", None)
     agent_name = _optional_str(_first_attr_value(raw_item, "agent_name", "name"))
-    description = _optional_str(_first_attr_value(raw_item, "description")) or ""
+    capability_summary = _optional_str(
+        _first_attr_value(raw_item, "capability_summary")
+    )
+    description = (
+        _optional_str(_first_attr_value(raw_item, "description"))
+        or capability_summary
+        or ""
+    )
     capabilities = _string_list(_first_attr_value(raw_item, "capabilities", "skills"))
+    if not capabilities and capability_summary is not None:
+        capabilities = [capability_summary]
     if agent_card is not None:
         agent_name = agent_name or _optional_str(getattr(agent_card, "name", None))
         description = (
@@ -474,6 +502,18 @@ def _looks_like_agent_mapping(value: Mapping[str, Any]) -> bool:
     return any(key in value for key in ("agent_id", "id"))
 
 
+def _looks_like_scope_object(value: Any) -> bool:
+    return any(
+        hasattr(value, attr)
+        for attr in (
+            "agents",
+            "agent_ids",
+            "candidate_agents",
+            "candidate_agent_ids",
+        )
+    )
+
+
 def _first_mapping_value(mapping: Mapping[str, Any], *keys: str) -> Any | None:
     for key in keys:
         if key in mapping:
@@ -533,8 +573,32 @@ def _candidate_health(raw_item: Any) -> bool | None:
     direct = _optional_bool(_first_attr_value(raw_item, "is_healthy", "healthy"))
     if direct is not None:
         return direct
-    status = getattr(raw_item, "agent_status", None)
+    return _health_from_status_value(
+        _first_attr_value(raw_item, "agent_status", "status")
+    )
+
+
+def _candidate_mapping_health(raw_item: Mapping[str, Any]) -> bool | None:
+    direct = _optional_bool(_first_mapping_value(raw_item, "is_healthy", "healthy"))
+    if direct is not None:
+        return direct
+    return _health_from_status_value(
+        _first_mapping_value(raw_item, "agent_status", "status")
+    )
+
+
+def _health_from_status_value(status: Any) -> bool | None:
     status_value = getattr(status, "value", status)
     if isinstance(status_value, str):
-        return status_value == "active"
+        normalized_status = status_value.strip().lower()
+        if normalized_status in {"active", "available", "healthy", "online"}:
+            return True
+        if normalized_status in {
+            "inactive",
+            "unavailable",
+            "unhealthy",
+            "offline",
+            "disabled",
+        }:
+            return False
     return None
