@@ -187,6 +187,45 @@ class TestRequestInput:
         mock_hitl_db_service.create_hitl_request.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_supervisor_request_reuses_deterministic_request_id(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        existing = HITLRequest(
+            request_id="run-1:step-1:supervisor-hitl-1",
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Please clarify your request",
+            continuation_message_id="msg-456",
+            display_message_id="clarifier-1",
+        )
+        mock_hitl_db_service.create_hitl_request.return_value = False
+        mock_hitl_db_service.get_hitl_request.return_value = existing.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Please clarify your request",
+            request_id=existing.request_id,
+            continuation_message_id="msg-456",
+            display_message_id="clarifier-1",
+        )
+
+        assert result is not None
+        assert result.request_id == existing.request_id
+        mock_hitl_db_service.get_hitl_request.assert_awaited_once_with(
+            existing.request_id
+        )
+        mock_hitl_db_service.count_hitl_requests_for_message.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_legacy_request_omits_absent_v2_run_links_when_persisted(
         self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
     ):

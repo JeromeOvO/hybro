@@ -22,7 +22,9 @@ from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.direct import DirectTransport
+from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.queue_executor import QueueExecutor, QueueResult
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.ports import (
     A2ATransportPort,
@@ -84,6 +86,8 @@ coordinator = None
 summary_service = None
 room_runtime = None
 room_supervisor_service = None
+orchestration_run_store = InMemoryOrchestrationRunStore()
+orchestration_planner = None
 delivery = None
 event_publisher = None
 remote_task_reader = None
@@ -170,6 +174,8 @@ class RoomMessageCenter:
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
         debate_rounds: int = 2,
+        orchestration_run_store=None,
+        orchestration_planner=None,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
         event_publisher: EventPublisher | None = None,
@@ -206,6 +212,18 @@ class RoomMessageCenter:
             else orphan_threshold_minutes
         )
         self.debate_rounds = debate_rounds
+        self.orchestration_run_store = (
+            orchestration_run_store
+            if orchestration_run_store is not None
+            else InMemoryOrchestrationRunStore()
+        )
+        self.orchestration_planner = (
+            orchestration_planner
+            if orchestration_planner is not None
+            else RoomSupervisorPlannerAdapter(
+                supervisor_service=room_supervisor_service
+            )
+        )
         self.tsm = TaskStateManager(self.room_runtime, task_notifier)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
@@ -303,6 +321,8 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             hitl_coordinator=hitl_coordinator,
             debate_rounds=self.debate_rounds,
+            orchestration_run_store=self.orchestration_run_store,
+            orchestration_planner=self.orchestration_planner,
         )
         self._turn_event_appender = None
 
@@ -669,6 +689,31 @@ class RoomMessageCenter:
             self._room_locks[room_id] = lock
         return lock
 
+    async def _heartbeat_processing_claim(self, message_id: str) -> None:
+        """Keep a live turn newer than the orphan-recovery cutoff."""
+
+        interval_seconds = max(1.0, self.orphan_threshold_minutes * 30.0)
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                refreshed = await self.message_writer.refresh_processing_claim(
+                    message_id
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to heartbeat processing claim for message %s",
+                    message_id,
+                    exc_info=True,
+                )
+                continue
+            if not refreshed:
+                logger.warning(
+                    "Processing-claim heartbeat did not refresh message %s",
+                    message_id,
+                )
+
     # ------------------------------------------------------------------
 
     async def process_room_user_message(
@@ -781,6 +826,10 @@ class RoomMessageCenter:
         await self.message_writer.refresh_processing_claim(
             room_user_message_id
         )
+        claim_heartbeat = asyncio.create_task(
+            self._heartbeat_processing_claim(room_user_message_id),
+            name=f"processing-claim-heartbeat:{room_user_message_id}",
+        )
 
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
@@ -812,6 +861,11 @@ class RoomMessageCenter:
             self.delivery.clear_cancellation(room_user_message_id)
             raise
         finally:
+            claim_heartbeat.cancel()
+            try:
+                await claim_heartbeat
+            except asyncio.CancelledError:
+                pass
             await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
 
     async def _process_room_user_message_locked(
@@ -1218,16 +1272,28 @@ class RoomMessageCenter:
 
     @staticmethod
     def _is_v2_supervisor_envelope(extend_info: Any) -> bool:
+        if (
+            not isinstance(extend_info, dict)
+            or extend_info.get("orchestration_schema_version") != 2
+        ):
+            return False
+        run_id = extend_info.get("orchestration_run_id")
+        candidate_agent_ids = extend_info.get("candidate_agent_ids")
         return (
-            isinstance(extend_info, dict)
-            and extend_info.get("orchestration") is True
-            and extend_info.get("orchestration_schema_version") == 2
+            isinstance(run_id, str)
+            and bool(run_id.strip())
+            and isinstance(candidate_agent_ids, list)
+            and any(
+                isinstance(agent_id, str) and bool(agent_id.strip())
+                for agent_id in candidate_agent_ids
+            )
         )
 
     async def _build_v2_supervisor_inputs(
         self,
         extend: dict[str, Any],
         room_id: str,
+        message_text: str,
     ) -> tuple[list[AgentProfile], RoomConfig, str | None]:
         candidate_agent_ids = extend.get("candidate_agent_ids")
         if not isinstance(candidate_agent_ids, list) or not candidate_agent_ids:
@@ -1283,7 +1349,25 @@ class RoomMessageCenter:
             },
             explicit_mentions=explicit_mentions,
         )
-        return agent_registry, room_config, None
+        conversation_context = None
+        try:
+            room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
+            if room_memory and self.context_memory_runtime is not None:
+                conversation_context, _occupancy = (
+                    await self._refresh_supervisor_conversation_context(
+                        room_id=room_id,
+                        room_memory=room_memory,
+                        room_agent_set=room_config.room_agent_set,
+                        message_text=message_text,
+                    )
+                )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: failed to build v2 supervisor context for %s: %s",
+                room_id,
+                e,
+            )
+        return agent_registry, room_config, conversation_context
 
     async def _process_supervisor(
         self,
@@ -1308,13 +1392,25 @@ class RoomMessageCenter:
         Handles all 5 ``RunStatus`` variants.
         """
         extend = user_message.extend_info
+        is_v2_supervisor = self._is_v2_supervisor_envelope(extend)
+        build_turn_content = self.build_turn_content or (
+            lambda text, _attachments: text
+        )
+        message_text = build_turn_content(
+            user_message.message_content.message_text or "",
+            user_message.message_content.attachments,
+        )
         try:
-            if self._is_v2_supervisor_envelope(extend):
+            if is_v2_supervisor:
                 (
                     agent_registry,
                     room_config,
                     conversation_context,
-                ) = await self._build_v2_supervisor_inputs(extend, room_id)
+                ) = await self._build_v2_supervisor_inputs(
+                    extend,
+                    room_id,
+                    message_text,
+                )
             else:
                 agent_registry = [
                     AgentProfile(**p) for p in extend["agent_registry"]
@@ -1405,14 +1501,12 @@ class RoomMessageCenter:
                     )
 
         try:
-            build_turn_content = self.build_turn_content or (
-                lambda text, _attachments: text
+            run_supervisor = (
+                self.supervisor_executor.run_v2
+                if is_v2_supervisor
+                else self.supervisor_executor.run
             )
-            message_text = build_turn_content(
-                user_message.message_content.message_text or "",
-                user_message.message_content.attachments,
-            )
-            result = await self.supervisor_executor.run(
+            result = await run_supervisor(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
                 message_text=message_text,
@@ -1609,6 +1703,7 @@ class RoomMessageCenter:
         message_text = continuation.get("message_text", "")
         request_user_id = continuation.get("request_user_id")
         conversation_context = continuation.get("conversation_context")
+        original_user_message_for_resume = None
 
         # Reload quoted text from DB (QUOTE_REPLY: prefer TurnContext over continuation)
         quoted_text: str | None = None
@@ -1622,6 +1717,7 @@ class RoomMessageCenter:
                 user_message_id
             )
             if um:
+                original_user_message_for_resume = um
                 try:
                     _tc = await load_turn_context(self.message_reader, um)
                     quoted_text = _tc.quoted_text
@@ -1686,6 +1782,39 @@ class RoomMessageCenter:
                 "interrupt_kind": interrupt_kind.value,
             },
         )
+        is_v2_resume = continuation.get("orchestration_schema_version") == 2
+        if not is_v2_resume:
+            is_v2_resume = self._is_v2_supervisor_envelope(
+                getattr(original_user_message_for_resume, "extend_info", None)
+            )
+
+        def context_agent_set_for_resume(
+            fallback: dict[str, str] | None,
+        ) -> dict[str, str]:
+            if not is_v2_resume:
+                return fallback or {}
+            serialized_room_config = continuation.get("room_config", {})
+            if isinstance(serialized_room_config, dict):
+                serialized_room_agent_set = serialized_room_config.get(
+                    "room_agent_set"
+                )
+                if isinstance(serialized_room_agent_set, dict):
+                    return {
+                        str(agent_id): str(agent_name)
+                        for agent_id, agent_name in serialized_room_agent_set.items()
+                    }
+            serialized_registry = continuation.get("agent_registry", [])
+            if isinstance(serialized_registry, list):
+                registry_agent_set = {
+                    str(profile["agent_id"]): str(
+                        profile.get("agent_name") or profile["agent_id"]
+                    )
+                    for profile in serialized_registry
+                    if isinstance(profile, dict) and profile.get("agent_id")
+                }
+                if registry_agent_set:
+                    return registry_agent_set
+            return fallback or {}
 
         # 3. Branch on interrupt_kind
         if interrupt_kind in (
@@ -1729,9 +1858,9 @@ class RoomMessageCenter:
                         await self._refresh_supervisor_conversation_context(
                             room_id=room_id,
                             room_memory=room_memory,
-                            room_agent_set=(room_tmp.room_agent_set or {})
-                            if room_tmp
-                            else {},
+                            room_agent_set=context_agent_set_for_resume(
+                                room_tmp.room_agent_set if room_tmp else {}
+                            ),
                             message_text=message_text,
                         )
                     )
@@ -1758,7 +1887,9 @@ class RoomMessageCenter:
                     f"{conversation_context or ''}\n\n{hitl_block}"
                 ).strip()
 
-        # 5. Refresh agent registry from database (not serialized)
+        # 5. Refresh agent registry from database for legacy resumes. V2 resumes
+        # must preserve the serialized candidate snapshot because the selected
+        # scope may intentionally include agents outside current room membership.
         room = await self.room_reader.get_room_by_room_id(room_id)
         if not room:
             logger.error(
@@ -1776,6 +1907,8 @@ class RoomMessageCenter:
             )
             return RunStatus.FAILED
 
+        context_room_agent_set = context_agent_set_for_resume(room.room_agent_set)
+
         # 5b. Refresh conversation_context from room memory (§7.6).
         # The serialized context may be stale after a push-notification pause
         # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
@@ -1790,7 +1923,7 @@ class RoomMessageCenter:
                         await self._refresh_supervisor_conversation_context(
                             room_id=room_id,
                             room_memory=room_memory,
-                            room_agent_set=room.room_agent_set or {},
+                            room_agent_set=context_room_agent_set,
                             message_text=message_text,
                         )
                     )
@@ -1808,8 +1941,21 @@ class RoomMessageCenter:
                 )
 
         agent_registry: list[AgentProfile] = []
+        serialized_registry = continuation.get("agent_registry", [])
+        if is_v2_resume and serialized_registry:
+            try:
+                agent_registry = [
+                    AgentProfile(**profile)
+                    for profile in serialized_registry
+                    if isinstance(profile, dict)
+                ]
+            except (TypeError, KeyError) as e:
+                logger.warning(
+                    "RoomMessageCenter: Supervisor v2 resume registry failed: %s", e
+                )
+
         room_agent_items = list((room.room_agent_set or {}).items())
-        if room_agent_items:
+        if not agent_registry and room_agent_items:
             agents = await asyncio.gather(
                 *(
                     self.agent_lookup.get_agent_by_agent_id(aid)
@@ -1834,7 +1980,7 @@ class RoomMessageCenter:
             try:
                 agent_registry = [
                     AgentProfile(**p)
-                    for p in continuation.get("agent_registry", [])
+                    for p in serialized_registry
                 ]
             except (TypeError, KeyError) as e:
                 logger.warning(
@@ -1853,7 +1999,14 @@ class RoomMessageCenter:
             if isinstance(room.extend_info, dict)
             else False
         )
-        room_config.room_agent_set = room.room_agent_set or {}
+        if is_v2_resume:
+            if not room_config.room_agent_set:
+                room_config.room_agent_set = {
+                    profile.agent_id: profile.agent_name
+                    for profile in agent_registry
+                }
+        else:
+            room_config.room_agent_set = room.room_agent_set or {}
 
         # --- Debate participant preservation ---
         # If this is a debate resume, ensure all original debate participants
@@ -1925,7 +2078,12 @@ class RoomMessageCenter:
 
         # 7. Resume the supervisor loop
         try:
-            result = await self.supervisor_executor.run(
+            run_supervisor = (
+                self.supervisor_executor.run_v2
+                if is_v2_resume
+                else self.supervisor_executor.run
+            )
+            result = await run_supervisor(
                 room_id=room_id,
                 user_message_id=user_message_id,
                 message_text=message_text,
@@ -1936,6 +2094,7 @@ class RoomMessageCenter:
                 request_user_id=request_user_id,
                 quoted_text=quoted_text,
                 resumed_trajectory=trajectory,
+                user_message=original_user_message_for_resume,
             )
         except Exception:
             logger.exception(
@@ -2144,9 +2303,15 @@ class RoomMessageCenter:
         ):
             if not isinstance(user_message.extend_info, dict):
                 user_message.extend_info = {}
-            user_message.extend_info["supervisor_trajectory"] = (
-                result.trajectory.model_dump(mode="json")
-            )
+            if self._is_v2_supervisor_envelope(user_message.extend_info):
+                user_message.extend_info.pop("supervisor_trajectory", None)
+                user_message.extend_info["orchestration_status"] = (
+                    result.trajectory.status.value
+                )
+            else:
+                user_message.extend_info["supervisor_trajectory"] = (
+                    result.trajectory.model_dump(mode="json")
+                )
             await self.message_writer.update_room_user_message_by_message_id(
                 user_message_id, user_message
             )

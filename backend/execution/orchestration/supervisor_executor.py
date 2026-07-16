@@ -17,7 +17,9 @@ See docs/System-Architecture.md for design details.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import hashlib
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
@@ -26,14 +28,41 @@ from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.orchestration.action_validator import (
+    PlannerActionValidationError,
+    PlannerActionValidator,
+)
+from execution.orchestration.context_builder import build_orchestration_planner_context
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.orchestration.planner import (
+    OrchestrationPlanner,
+    RoomSupervisorPlannerAdapter,
+)
+from execution.orchestration.run_reducer import mark_running, mark_terminal
+from execution.orchestration.run_store import (
+    InMemoryOrchestrationRunStore,
+    OrchestrationRunStore,
+    OrchestrationStoreConflict,
+)
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
-from models.hitl import InterruptKind
+from models.hitl import HITLPromptType, InterruptKind
+from models.orchestration import (
+    TERMINAL_ORCHESTRATION_STATUSES,
+    AgentOutputRecord,
+    DispatchIntent,
+    OrchestrationEventType,
+    OrchestrationRunEvent,
+    OrchestrationRunState,
+    OrchestrationStatus,
+    PlannerAction,
+    PlannerActionType,
+)
 from models.processing import ProcessingStatus
 from models.room import CoordinatorAgentId
 from models.supervisor import (
     ActionType,
     AgentProfile,
+    ClarifyQuestion,
     DelegateTarget,
     RoomConfig,
     RunStatus,
@@ -96,6 +125,8 @@ class SupervisorExecutor:
         slot_lifecycle=None,
         hitl_coordinator: HITLCoordinator | None = None,
         debate_rounds: int = 2,
+        orchestration_run_store: OrchestrationRunStore | None = None,
+        orchestration_planner: OrchestrationPlanner | None = None,
     ) -> None:
         if event_publisher is None:
             raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
@@ -114,6 +145,12 @@ class SupervisorExecutor:
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
         self.debate_rounds = debate_rounds
+        self.orchestration_run_store = (
+            orchestration_run_store or InMemoryOrchestrationRunStore()
+        )
+        self.orchestration_planner = orchestration_planner or RoomSupervisorPlannerAdapter(
+            supervisor_service=supervisor_service
+        )
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -207,6 +244,1988 @@ class SupervisorExecutor:
             ),
             client_request_id=client_request_id,
         )
+
+    # ------------------------------------------------------------------
+    # V2 sidecar loop
+    # ------------------------------------------------------------------
+
+    async def run_v2(
+        self,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None = None,
+        token: CancellationToken | None = None,
+        request_user_id: str | None = None,
+        quoted_text: str | None = None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
+        user_message=None,
+    ) -> SupervisorRunResult:
+        """Run v2 and exit cleanly when another writer wins the sidecar race."""
+
+        try:
+            return await self._run_v2(
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                resumed_trajectory=resumed_trajectory,
+                user_message=user_message,
+            )
+        except OrchestrationStoreConflict:
+            logger.info(
+                "v2 orchestration write superseded for run attached to message %s",
+                user_message_id,
+            )
+            trajectory = resumed_trajectory or SupervisorTrajectory()
+            latest = await self.orchestration_run_store.get_latest_by_user_message_id(
+                user_message_id
+            )
+            if latest is not None:
+                terminal_result = await self._v2_terminal_result_if_done(
+                    room_id,
+                    latest,
+                )
+                if terminal_result is not None:
+                    return terminal_result
+                if (
+                    latest.status == OrchestrationStatus.AWAITING_USER
+                    and latest.pending_hitl_request_ids
+                ):
+                    trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                    status = RunStatus.AWAITING_INPUT
+                else:
+                    trajectory.status = TrajectoryStatus.RUNNING
+                    status = RunStatus.PAUSED
+            else:
+                trajectory.status = TrajectoryStatus.RUNNING
+                status = RunStatus.PAUSED
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(status=status, trajectory=trajectory),
+            )
+
+    async def _run_v2(
+        self,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None = None,
+        token: CancellationToken | None = None,
+        request_user_id: str | None = None,
+        quoted_text: str | None = None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
+        user_message=None,
+    ) -> SupervisorRunResult:
+        """Execute the schema-v2 supervisor loop using sidecar run state."""
+
+        trajectory = resumed_trajectory or SupervisorTrajectory()
+        state = await self._load_or_create_v2_run_state(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            user_message=user_message,
+        )
+        terminal_result = await self._v2_terminal_result_if_done(room_id, state)
+        if terminal_result is not None:
+            return terminal_result
+        has_hitl_reply = bool(
+            trajectory.hitl_user_reply or trajectory.clarify_user_reply
+        )
+        if (
+            state.status == OrchestrationStatus.INGESTING
+            and state.pending_hitl_request_ids
+            and not has_hitl_reply
+        ):
+            pending_action = self._v2_pending_hitl_planner_action(state)
+            if pending_action is not None:
+                return await self._run_v2_ask_user_action(
+                    state=state,
+                    planner_action=pending_action,
+                    trajectory=trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                    resume_pending_artifacts=True,
+                )
+            reason = (
+                "INGESTING checkpoint has pending HITL requests but no valid "
+                "ASK_USER planner action"
+            )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason=reason,
+            )
+            del state
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.FAILED,
+                    trajectory=trajectory,
+                ),
+            )
+        if (
+            state.status == OrchestrationStatus.AWAITING_USER
+            and state.pending_hitl_request_ids
+            and not has_hitl_reply
+        ):
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.AWAITING_INPUT,
+                    trajectory=trajectory,
+                ),
+            )
+        state = await self._ensure_v2_running_state(state)
+        state = await self._resolve_v2_hitl_if_answered(state, trajectory)
+        state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
+            state,
+            trajectory,
+        )
+        if blocking_resume_status is not None:
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=blocking_resume_status,
+                    trajectory=trajectory,
+                ),
+            )
+        await self._ensure_v2_system_task(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            request_user_id=request_user_id,
+            trajectory=trajectory,
+            state=state,
+        )
+        state, recovered_status = await self._recover_v2_inflight_dispatch(
+            state=state,
+            trajectory=trajectory,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            conversation_context=conversation_context,
+            token=token,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            user_message=user_message,
+        )
+        if recovered_status is not None:
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=recovered_status,
+                    trajectory=trajectory,
+                ),
+            )
+
+        while state.steps_used <= state.step_budget:
+            if token and token.is_cancelled:
+                trajectory.status = TrajectoryStatus.CANCELED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.CANCELED,
+                    reason="request canceled",
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.CANCELED,
+                        trajectory=trajectory,
+                    ),
+                )
+
+            context = build_orchestration_planner_context(
+                run_state=state,
+                candidate_scope=self._v2_candidate_scope(state, agent_registry),
+                message_text=message_text,
+                quote=quoted_text,
+                room_background=conversation_context,
+            )
+            await self._append_v2_event(
+                state,
+                OrchestrationEventType.PLANNER_CONTEXT_BUILT,
+                payload={
+                    "candidate_agent_ids": context.candidate_agent_ids,
+                    "steps_used": state.steps_used,
+                },
+            )
+
+            plan_coro = self.orchestration_planner.plan(context)
+            try:
+                planner_action = (
+                    await token.race(plan_coro) if token else await plan_coro
+                )
+            except CancellationError:
+                trajectory.status = TrajectoryStatus.CANCELED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.CANCELED,
+                    reason="request canceled",
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.CANCELED,
+                        trajectory=trajectory,
+                    ),
+                )
+            except (PlannerActionValidationError, ValueError) as exc:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason=str(exc),
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED,
+                        trajectory=trajectory,
+                    ),
+                )
+
+            try:
+                planner_action = PlannerActionValidator.validate(
+                    planner_action,
+                    candidate_agent_ids=context.candidate_agent_ids,
+                    steps_used=state.steps_used,
+                    step_budget=state.step_budget,
+                    has_agent_output=bool(state.agent_outputs),
+                )
+            except PlannerActionValidationError as exc:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason=str(exc),
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED,
+                        trajectory=trajectory,
+                    ),
+                )
+            state = await self._record_v2_planner_action(state, planner_action)
+
+            match planner_action.action:
+                case PlannerActionType.DELEGATE:
+                    state, paused_status = await self._run_v2_delegate_action(
+                        state=state,
+                        planner_action=planner_action,
+                        trajectory=trajectory,
+                        agent_registry=agent_registry,
+                        room_config=room_config,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        message_text=message_text,
+                        conversation_context=conversation_context,
+                        token=token,
+                        request_user_id=request_user_id,
+                        quoted_text=quoted_text,
+                        user_message=user_message,
+                    )
+                    if paused_status is not None:
+                        return await self._log_and_return(
+                            room_id,
+                            trajectory,
+                            SupervisorRunResult(
+                                status=paused_status,
+                                trajectory=trajectory,
+                            ),
+                        )
+
+                case PlannerActionType.SYNTHESIZE:
+                    return await self._run_v2_synthesis_action(
+                        state=state,
+                        planner_action=planner_action,
+                        trajectory=trajectory,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        token=token,
+                    )
+
+                case PlannerActionType.COMPLETE:
+                    entry = TrajectoryEntry(
+                        step_number=state.steps_used + 1,
+                        action=self._v2_supervisor_action(
+                            planner_action,
+                            agent_registry,
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                    )
+                    trajectory.entries.append(entry)
+                    trajectory.status = TrajectoryStatus.COMPLETED
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.COMPLETED,
+                        reason=planner_action.reasoning,
+                    )
+                    del state
+                    return await self._log_and_return(
+                        room_id,
+                        trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.COMPLETED,
+                            trajectory=trajectory,
+                        ),
+                    )
+
+                case PlannerActionType.ASK_USER:
+                    result = await self._run_v2_ask_user_action(
+                        state=state,
+                        planner_action=planner_action,
+                        trajectory=trajectory,
+                        agent_registry=agent_registry,
+                        room_config=room_config,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        message_text=message_text,
+                        conversation_context=conversation_context,
+                        request_user_id=request_user_id,
+                        quoted_text=quoted_text,
+                    )
+                    return result
+
+                case PlannerActionType.FAIL:
+                    trajectory.status = TrajectoryStatus.FAILED
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason=(
+                            planner_action.failure_reason
+                            or planner_action.reasoning
+                            or "planner failed the run"
+                        ),
+                    )
+                    del state
+                    return await self._log_and_return(
+                        room_id,
+                        trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.FAILED,
+                            trajectory=trajectory,
+                        ),
+                    )
+
+        trajectory.status = TrajectoryStatus.FAILED
+        state = await self._mark_v2_terminal(
+            state,
+            OrchestrationStatus.BUDGET_EXHAUSTED,
+            reason="step budget exhausted",
+        )
+        del state
+        return await self._log_and_return(
+            room_id,
+            trajectory,
+            SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
+        )
+
+    async def _load_or_create_v2_run_state(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        user_message,
+    ) -> OrchestrationRunState:
+        envelope = self._v2_envelope_from_user_message(user_message)
+        run_id = self._v2_envelope_str(envelope, "orchestration_run_id")
+
+        if run_id:
+            existing = await self.orchestration_run_store.get_run(run_id)
+            if existing is not None:
+                return existing
+
+        latest = await self.orchestration_run_store.get_latest_by_user_message_id(
+            user_message_id
+        )
+        if latest is not None:
+            return latest
+
+        if not run_id:
+            run_id = user_message_id
+
+        create_envelope = dict(envelope)
+        if "candidate_agent_ids" not in create_envelope:
+            create_envelope["candidate_agent_ids"] = [
+                agent.agent_id for agent in agent_registry
+            ]
+        client_request_id = getattr(user_message, "client_request_id", None)
+        if client_request_id and "client_request_id" not in create_envelope:
+            create_envelope["client_request_id"] = client_request_id
+
+        state = await self.orchestration_run_store.reconstruct_from_envelope(
+            run_id=run_id,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            envelope=create_envelope,
+            goal=message_text,
+        )
+        state.step_budget = self.MAX_STEPS
+
+        try:
+            created = await self.orchestration_run_store.create_run(state)
+        except OrchestrationStoreConflict:
+            existing = await self.orchestration_run_store.get_run(run_id)
+            if existing is not None:
+                return existing
+            raise
+
+        await self._append_v2_event(
+            created,
+            OrchestrationEventType.RUN_CREATED,
+            payload={
+                "schema_version": created.schema_version,
+                "candidate_agent_ids": created.candidate_agent_ids,
+            },
+        )
+        return created
+
+    async def _ensure_v2_running_state(
+        self,
+        state: OrchestrationRunState,
+    ) -> OrchestrationRunState:
+        needs_update = (
+            state.status != OrchestrationStatus.RUNNING
+            or not state.summary_intent_id
+            or not state.summary_message_id
+        )
+        if not needs_update:
+            return state
+
+        expected_version = state.state_version
+        updated = mark_running(state)
+        if not updated.summary_intent_id:
+            updated.summary_intent_id = f"{updated.run_id}:summary"
+        if not updated.summary_message_id:
+            updated.summary_message_id = f"sys-{updated.user_message_id}"
+        saved = await self.orchestration_run_store.save_state(
+            updated,
+            expected_version=expected_version,
+        )
+        await self._append_v2_event(
+            saved,
+            OrchestrationEventType.STATE_REDUCED,
+            payload={"status": saved.status.value},
+        )
+        return saved
+
+    async def _ensure_v2_system_task(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        request_user_id: str | None,
+        trajectory: SupervisorTrajectory,
+        state: OrchestrationRunState,
+    ) -> None:
+        if trajectory.system_agent_message_id:
+            return
+
+        sys_message_id = state.summary_message_id or f"sys-{user_message_id}"
+        trajectory.system_agent_message_id = sys_message_id
+        try:
+            sys_msg = self.room_runtime.create_agent_message(
+                room_id=room_id,
+                related_message_id=user_message_id,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                content="",
+                user_id=request_user_id,
+                step_number=0,
+                task_content="Orchestrating workflow...",
+                client_request_id=state.client_request_id,
+            )
+            sys_msg.message_id = sys_message_id
+            await self.message_writer.add_room_agent_message(sys_msg)
+            await self.delivery.send_task_submitted(
+                room_id=room_id,
+                message_id=sys_message_id,
+                task_id=sys_message_id,
+                agent_name="HYBRO AI",
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                status="working",
+                related_message_id=user_message_id,
+                created_at=utcnow().isoformat(),
+                task_content="Orchestrating workflow...",
+                client_request_id=state.client_request_id,
+            )
+        except Exception:
+            logger.warning("Failed to emit v2 system:hybro task", exc_info=True)
+
+    async def _record_v2_planner_action(
+        self,
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+    ) -> OrchestrationRunState:
+        def mutate(updated: OrchestrationRunState) -> None:
+            updated.decision_log.append(
+                {
+                    "action": planner_action.action.value,
+                    "reasoning": planner_action.reasoning,
+                    "targets": [
+                        target.model_dump(mode="json")
+                        for target in planner_action.targets
+                    ],
+                    "planner_action": planner_action.model_dump(mode="json"),
+                }
+            )
+
+        saved = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.PLANNER_ACTION_PROPOSED,
+            payload=planner_action.model_dump(mode="json"),
+            mutate=mutate,
+        )
+        return saved
+
+    @staticmethod
+    def _v2_pending_hitl_planner_action(
+        state: OrchestrationRunState,
+    ) -> PlannerAction | None:
+        for decision in reversed(state.decision_log):
+            if decision.get("action") != PlannerActionType.ASK_USER.value:
+                continue
+            raw_action = decision.get("planner_action")
+            if not isinstance(raw_action, dict):
+                return None
+            try:
+                action = PlannerAction.model_validate(raw_action)
+            except (TypeError, ValueError):
+                return None
+            return action if action.action == PlannerActionType.ASK_USER else None
+        return None
+
+    async def _run_v2_delegate_action(
+        self,
+        *,
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        token: CancellationToken | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+        user_message,
+    ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        action = self._v2_supervisor_action(planner_action, agent_registry)
+        step_number = state.steps_used + 1
+        entry = TrajectoryEntry(
+            step_number=step_number,
+            action=action,
+            started_at=utcnow(),
+        )
+        trajectory.entries.append(entry)
+        await self._checkpoint_trajectory(
+            user_message_id,
+            trajectory,
+            cached_user_message=user_message,
+        )
+
+        intents = [
+            self._v2_dispatch_intent(
+                run_id=state.run_id,
+                step_number=step_number,
+                target_index=index,
+                target=target,
+            )
+            for index, target in enumerate(action.targets, start=1)
+        ]
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.DISPATCH_INTENT_RECORDED,
+            payload={"dispatch_intent_ids": [intent.dispatch_intent_id for intent in intents]},
+            mutate=lambda updated: self._apply_v2_dispatch_intents(updated, intents),
+        )
+
+        results = await self._dispatch_targets(
+            targets=action.targets,
+            agent_registry=agent_registry,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            step_number=step_number,
+            token=token,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            planned_message_ids=[
+                intent.planned_agent_message_id for intent in intents
+            ],
+        )
+        entry.results = results
+        entry.completed_at = utcnow()
+
+        for result in results:
+            if result.status == StepStatus.SUCCESS and result.success:
+                await self._publish_agent_message_committed(
+                    room_id=room_id,
+                    agent_id=result.agent_id,
+                    agent_name=result.agent_name or "Agent",
+                    was_successful=True,
+                    message_id=result.agent_message_id,
+                )
+
+        paused = [result for result in results if result.status == StepStatus.PAUSED]
+        awaiting = [
+            result for result in results if result.status == StepStatus.AWAITING_INPUT
+        ]
+        if paused:
+            await self._reconcile_paused_results(paused, trajectory, room_id)
+            results = entry.results
+            paused = [
+                result for result in results if result.status == StepStatus.PAUSED
+            ]
+            awaiting = [
+                result
+                for result in results
+                if result.status == StepStatus.AWAITING_INPUT
+            ]
+
+        if awaiting:
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            if paused:
+                saved = await self._save_interrupted_state(
+                    kind=InterruptKind.PUSH_NOTIFICATION,
+                    trajectory=trajectory,
+                    paused_results=paused,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    request_user_id=request_user_id,
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    conversation_context=conversation_context,
+                    quoted_text=quoted_text,
+                )
+                if not saved:
+                    trajectory.status = TrajectoryStatus.FAILED
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason="failed to save paused v2 continuation",
+                    )
+                    return state, RunStatus.FAILED
+            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
+                state=state,
+                results=results,
+                awaiting=awaiting,
+                trajectory=trajectory,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+            )
+            return state, awaiting_status
+
+        if paused:
+            trajectory.status = TrajectoryStatus.RUNNING
+            saved = await self._save_interrupted_state(
+                kind=InterruptKind.PUSH_NOTIFICATION,
+                trajectory=trajectory,
+                paused_results=paused,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                request_user_id=request_user_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                quoted_text=quoted_text,
+            )
+            if not saved:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason="failed to save paused v2 continuation",
+                )
+                return state, RunStatus.FAILED
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.STATE_REDUCED,
+                payload={"status": OrchestrationStatus.WAITING_AGENT.value},
+                mutate=lambda updated: self._apply_v2_results(
+                    updated,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                ),
+            )
+            return state, RunStatus.PAUSED
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+            payload={"agent_message_ids": [result.agent_message_id for result in results]},
+            mutate=lambda updated: self._apply_v2_results(
+                updated,
+                results,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=True,
+            ),
+        )
+        await self._checkpoint_trajectory(
+            user_message_id,
+            trajectory,
+            cached_user_message=user_message,
+        )
+        return state, None
+
+    async def _recover_v2_inflight_dispatch(
+        self,
+        *,
+        state: OrchestrationRunState,
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        token: CancellationToken | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+        user_message,
+    ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        step_number = state.steps_used + 1
+        step_id = f"{state.run_id}:step-{step_number}"
+        terminal_statuses = {
+            StepStatus.SUCCESS.value,
+            StepStatus.FAILED.value,
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+        }
+        current_intents = [
+            intent
+            for intent in state.dispatch_intents
+            if intent.step_id == step_id and intent.status not in terminal_statuses
+        ]
+        if not current_intents:
+            return state, None
+
+        agent_names = {agent.agent_id: agent.agent_name for agent in agent_registry}
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        results: list[StepResult] = []
+        replay_intents: list[DispatchIntent] = []
+        unresolved = False
+
+        for intent in current_intents:
+            result = self._v2_result_from_output_record(
+                intent,
+                outputs_by_message_id.get(intent.planned_agent_message_id),
+                agent_names,
+                step_number,
+            )
+            if result is None:
+                result = await self._v2_result_from_committed_agent_message(
+                    intent,
+                    agent_names,
+                    step_number,
+                )
+            if result is None:
+                msg = await self.message_reader.get_room_agent_message_by_message_id(
+                    intent.planned_agent_message_id
+                )
+                result = self._v2_result_from_agent_message(
+                    intent,
+                    msg,
+                    agent_names,
+                    step_number,
+                )
+                if msg is None and intent.status == "planned":
+                    replay_intents.append(intent)
+                elif result is not None:
+                    results.append(result)
+                else:
+                    unresolved = True
+            else:
+                results.append(result)
+
+        if replay_intents:
+            replay_targets = [
+                DelegateTarget(
+                    agent_id=intent.agent_id,
+                    agent_name=agent_names.get(intent.agent_id) or intent.agent_id,
+                    task=intent.task,
+                )
+                for intent in replay_intents
+            ]
+            replay_results = await self._dispatch_targets(
+                targets=replay_targets,
+                agent_registry=agent_registry,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                step_number=step_number,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                planned_message_ids=[
+                    intent.planned_agent_message_id for intent in replay_intents
+                ],
+            )
+            results.extend(replay_results)
+
+        if unresolved:
+            if results:
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+                    payload={
+                        "agent_message_ids": [
+                            result.agent_message_id for result in results
+                        ]
+                    },
+                    mutate=lambda updated: self._apply_v2_results(
+                        updated,
+                        results,
+                        status=OrchestrationStatus.WAITING_AGENT,
+                        advance_step=False,
+                    ),
+                )
+            if state.status != OrchestrationStatus.WAITING_AGENT:
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.STATE_REDUCED,
+                    payload={"status": OrchestrationStatus.WAITING_AGENT.value},
+                    mutate=lambda updated: setattr(
+                        updated,
+                        "status",
+                        OrchestrationStatus.WAITING_AGENT,
+                    ),
+                )
+            return state, RunStatus.PAUSED
+
+        if not results:
+            return state, None
+
+        paused = [result for result in results if result.status == StepStatus.PAUSED]
+        awaiting = [
+            result for result in results if result.status == StepStatus.AWAITING_INPUT
+        ]
+        if awaiting:
+            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            state, awaiting_status = await self._run_v2_agent_awaiting_input_action(
+                state=state,
+                results=results,
+                awaiting=awaiting,
+                trajectory=trajectory,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+            )
+            return state, awaiting_status
+
+        if paused:
+            trajectory.status = TrajectoryStatus.RUNNING
+            saved = await self._save_interrupted_state(
+                kind=InterruptKind.PUSH_NOTIFICATION,
+                trajectory=trajectory,
+                paused_results=paused,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                request_user_id=request_user_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                quoted_text=quoted_text,
+            )
+            if not saved:
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason="failed to save paused v2 recovery continuation",
+                )
+                return state, RunStatus.FAILED
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.STATE_REDUCED,
+                payload={"status": OrchestrationStatus.WAITING_AGENT.value},
+                mutate=lambda updated: self._apply_v2_results(
+                    updated,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                ),
+            )
+            await self._checkpoint_trajectory(
+                user_message_id,
+                trajectory,
+                cached_user_message=user_message,
+            )
+            return state, RunStatus.PAUSED
+
+        entry = self._v2_recovered_trajectory_entry(
+            step_number=step_number,
+            intents=current_intents,
+            results=results,
+            agent_names=agent_names,
+        )
+        trajectory.entries.append(entry)
+
+        for result in results:
+            if result.status == StepStatus.SUCCESS and result.success:
+                await self._publish_agent_message_committed(
+                    room_id=room_id,
+                    agent_id=result.agent_id,
+                    agent_name=result.agent_name or "Agent",
+                    was_successful=True,
+                    message_id=result.agent_message_id,
+                )
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+            payload={"agent_message_ids": [result.agent_message_id for result in results]},
+            mutate=lambda updated: self._apply_v2_results(
+                updated,
+                results,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=True,
+            ),
+        )
+        return state, None
+
+    @staticmethod
+    def _v2_result_from_output_record(
+        intent: DispatchIntent,
+        output: AgentOutputRecord | None,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        if output is None or output.status not in {
+            StepStatus.SUCCESS.value,
+            StepStatus.FAILED.value,
+        }:
+            return None
+        status = StepStatus(output.status)
+        return StepResult(
+            step_number=step_number,
+            agent_id=output.agent_id or intent.agent_id,
+            agent_name=agent_names.get(output.agent_id or intent.agent_id),
+            task=intent.task,
+            response_text=output.text or "",
+            success=status == StepStatus.SUCCESS,
+            status=status,
+            error_message=output.error,
+            agent_message_id=output.agent_message_id,
+            completed_at=utcnow(),
+        )
+
+    async def _v2_result_from_committed_agent_message(
+        self,
+        intent: DispatchIntent,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        msg = await self.message_reader.get_room_agent_message_by_message_id(
+            intent.planned_agent_message_id
+        )
+        return self._v2_result_from_agent_message(
+            intent,
+            msg,
+            agent_names,
+            step_number,
+        )
+
+    @staticmethod
+    def _v2_result_from_agent_message(
+        intent: DispatchIntent,
+        msg,
+        agent_names: dict[str, str],
+        step_number: int,
+    ) -> StepResult | None:
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        if not msg or getattr(msg, "last_notified_state", None) not in terminal_states:
+            return None
+
+        last_state = msg.last_notified_state
+        is_success = last_state == "completed"
+        response_text = ""
+        message_content = getattr(msg, "message_content", None)
+        if message_content and getattr(message_content, "message_text", None):
+            response_text = message_content.message_text
+
+        return StepResult(
+            step_number=step_number,
+            agent_id=intent.agent_id,
+            agent_name=agent_names.get(intent.agent_id),
+            task=intent.task,
+            response_text=response_text,
+            success=is_success,
+            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+            error_message=None if is_success else "Agent task failed",
+            agent_message_id=intent.planned_agent_message_id,
+            completed_at=utcnow(),
+        )
+
+    @staticmethod
+    def _v2_recovered_trajectory_entry(
+        *,
+        step_number: int,
+        intents: list[DispatchIntent],
+        results: list[StepResult],
+        agent_names: dict[str, str],
+    ) -> TrajectoryEntry:
+        return TrajectoryEntry(
+            step_number=step_number,
+            action=SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning="Recovered in-flight v2 dispatch from committed agent messages",
+                targets=[
+                    DelegateTarget(
+                        agent_id=intent.agent_id,
+                        agent_name=agent_names.get(intent.agent_id)
+                        or intent.agent_id,
+                        task=intent.task,
+                    )
+                    for intent in intents
+                ],
+            ),
+            results=results,
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+
+    async def _run_v2_agent_awaiting_input_action(
+        self,
+        *,
+        state: OrchestrationRunState,
+        results: list[StepResult],
+        awaiting: list[StepResult],
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+    ) -> tuple[OrchestrationRunState, RunStatus]:
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
+
+        for extra in awaiting[1:]:
+            extra.status = StepStatus.FAILED
+            extra.success = False
+            extra.error_message = (
+                "Deferred: another agent is awaiting human input first. "
+                "Will be re-evaluated on resume."
+            )
+
+        awaiting_result = awaiting[0]
+        continuation_message_id = (
+            awaiting_result.paused_message_id
+            or awaiting_result.agent_message_id
+        )
+        display_message_id = (
+            awaiting_result.agent_message_id
+            or awaiting_result.paused_message_id
+        )
+        if not continuation_message_id:
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="v2 agent HITL result missing continuation message id",
+            )
+            return state, RunStatus.FAILED
+
+        request = await self.hitl_coordinator.request_input(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            source="agent",
+            prompt=(
+                awaiting_result.status_message
+                or "The agent needs additional information."
+            ),
+            agent_id=awaiting_result.agent_id,
+            agent_name=awaiting_result.agent_name,
+            a2a_task_id=awaiting_result.a2a_task_id,
+            a2a_context_id=awaiting_result.a2a_context_id,
+            continuation_message_id=continuation_message_id,
+            display_message_id=display_message_id,
+            orchestration_run_id=state.run_id,
+            orchestration_schema_version=state.schema_version,
+        )
+        if request is None:
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to create v2 agent HITL request",
+            )
+            return state, RunStatus.FAILED
+
+        saved = await self._save_interrupted_state(
+            kind=InterruptKind.HITL_AGENT,
+            trajectory=trajectory,
+            message_id=continuation_message_id,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            hitl_request_id=request.request_id,
+        )
+        if not saved:
+            cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
+            if cancel_request is not None:
+                try:
+                    await cancel_request(request.request_id, room_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to cancel orphaned v2 agent HITL request %s",
+                        request.request_id,
+                    )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 agent HITL continuation",
+            )
+            return state, RunStatus.FAILED
+
+        def mark_awaiting_user(updated: OrchestrationRunState) -> None:
+            self._apply_v2_results(
+                updated,
+                results,
+                status=OrchestrationStatus.AWAITING_USER,
+                advance_step=False,
+            )
+            if request.request_id not in updated.pending_hitl_request_ids:
+                updated.pending_hitl_request_ids.append(request.request_id)
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_REQUESTED,
+            payload={
+                "status": OrchestrationStatus.AWAITING_USER.value,
+                "request_ids": [request.request_id],
+            },
+            mutate=mark_awaiting_user,
+        )
+
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+            )
+        except Exception:
+            logger.debug("SSE v2 agent HITL notification failed", exc_info=True)
+
+        return state, RunStatus.AWAITING_INPUT
+
+    async def _resolve_v2_hitl_if_answered(
+        self,
+        state: OrchestrationRunState,
+        trajectory: SupervisorTrajectory,
+    ) -> OrchestrationRunState:
+        if not state.pending_hitl_request_ids:
+            return state
+        if not (trajectory.hitl_user_reply or trajectory.clarify_user_reply):
+            return state
+
+        resolved_request_ids = list(state.pending_hitl_request_ids)
+        resolved_state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_RESOLVED,
+            payload={"request_ids": resolved_request_ids},
+            mutate=lambda updated: updated.pending_hitl_request_ids.clear(),
+        )
+        trajectory.hitl_user_reply = None
+        trajectory.clarify_user_reply = None
+        return resolved_state
+
+    async def _v2_terminal_result_if_done(
+        self,
+        room_id: str,
+        state: OrchestrationRunState,
+    ) -> SupervisorRunResult | None:
+        if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
+            return None
+
+        trajectory = SupervisorTrajectory()
+        status = RunStatus.FAILED
+        if state.status == OrchestrationStatus.COMPLETED:
+            trajectory.status = TrajectoryStatus.COMPLETED
+            status = RunStatus.COMPLETED
+        elif state.status == OrchestrationStatus.CANCELED:
+            trajectory.status = TrajectoryStatus.CANCELED
+            status = RunStatus.CANCELED
+        else:
+            trajectory.status = TrajectoryStatus.FAILED
+        return await self._log_and_return(
+            room_id,
+            trajectory,
+            SupervisorRunResult(status=status, trajectory=trajectory),
+        )
+
+    async def _sync_v2_resumed_trajectory(
+        self,
+        state: OrchestrationRunState,
+        trajectory: SupervisorTrajectory,
+    ) -> tuple[OrchestrationRunState, RunStatus | None]:
+        """Ingest completed legacy resume entries into the sidecar run state."""
+        if not trajectory.entries:
+            return state, None
+
+        synced = state
+        for entry in sorted(trajectory.entries, key=lambda item: item.step_number):
+            if entry.action.action != ActionType.DELEGATE:
+                continue
+            if not entry.results:
+                continue
+            if entry.step_number <= synced.steps_used:
+                continue
+
+            self._resolve_v2_pending_results_from_outputs(synced, entry)
+            pending = [
+                result
+                for result in entry.results
+                if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+            ]
+            terminal_results = [
+                result
+                for result in entry.results
+                if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+            ]
+            if terminal_results:
+                next_status = (
+                    OrchestrationStatus.AWAITING_USER
+                    if any(
+                        result.status == StepStatus.AWAITING_INPUT
+                        for result in pending
+                    )
+                    else (
+                        OrchestrationStatus.WAITING_AGENT
+                        if pending
+                        else OrchestrationStatus.RUNNING
+                    )
+                )
+                should_advance = not pending
+
+                def ingest_terminal_results(
+                    updated: OrchestrationRunState,
+                    *,
+                    results: list[StepResult] = terminal_results,
+                    status: OrchestrationStatus = next_status,
+                    advance: bool = should_advance,
+                ) -> None:
+                    self._apply_v2_results(
+                        updated,
+                        results,
+                        status=status,
+                        advance_step=advance,
+                    )
+                    if advance:
+                        updated.pending_hitl_request_ids.clear()
+
+                synced = await self._save_v2_state(
+                    synced,
+                    event_type=OrchestrationEventType.AGENT_RESULT_INGESTED,
+                    payload={
+                        "resumed": True,
+                        "step_number": entry.step_number,
+                        "agent_message_ids": [
+                            result.agent_message_id
+                            for result in terminal_results
+                            if result.agent_message_id
+                        ],
+                    },
+                    mutate=ingest_terminal_results,
+                )
+
+            if pending:
+                pending_status = (
+                    OrchestrationStatus.AWAITING_USER
+                    if any(
+                        result.status == StepStatus.AWAITING_INPUT
+                        for result in pending
+                    )
+                    else OrchestrationStatus.WAITING_AGENT
+                )
+                blocking_run_status = (
+                    RunStatus.AWAITING_INPUT
+                    if pending_status == OrchestrationStatus.AWAITING_USER
+                    else RunStatus.PAUSED
+                )
+                if synced.status != pending_status:
+                    synced = await self._save_v2_state(
+                        synced,
+                        event_type=OrchestrationEventType.STATE_REDUCED,
+                        payload={"status": pending_status.value},
+                        mutate=lambda updated, status=pending_status: setattr(
+                            updated,
+                            "status",
+                            status,
+                        ),
+                    )
+                return synced, blocking_run_status
+
+        return synced, None
+
+    @staticmethod
+    def _resolve_v2_pending_results_from_outputs(
+        state: OrchestrationRunState,
+        entry: TrajectoryEntry,
+    ) -> None:
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        for index, result in enumerate(entry.results):
+            if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
+                continue
+            message_id = result.agent_message_id or result.paused_message_id
+            if not message_id:
+                continue
+            output = outputs_by_message_id.get(message_id)
+            if output is None:
+                continue
+            try:
+                output_status = StepStatus(output.status)
+            except ValueError:
+                continue
+            if output_status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
+                continue
+            entry.results[index] = StepResult(
+                step_number=entry.step_number,
+                agent_id=result.agent_id,
+                agent_name=result.agent_name,
+                task=result.task,
+                response_text=output.text or "",
+                success=output_status == StepStatus.SUCCESS,
+                status=output_status,
+                error_message=output.error,
+                agent_message_id=message_id,
+                completed_at=utcnow(),
+            )
+        if not any(
+            result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+            for result in entry.results
+        ):
+            entry.completed_at = entry.completed_at or utcnow()
+
+    async def _run_v2_ask_user_action(
+        self,
+        *,
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        conversation_context: str | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+        resume_pending_artifacts: bool = False,
+    ) -> SupervisorRunResult:
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
+
+        action = self._v2_supervisor_action(planner_action, agent_registry)
+        step_number = (
+            state.steps_used if resume_pending_artifacts else state.steps_used + 1
+        )
+        entry = TrajectoryEntry(
+            step_number=step_number,
+            action=action,
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+        trajectory.entries.append(entry)
+        trajectory.status = TrajectoryStatus.AWAITING_INPUT
+
+        questions = action.questions or [
+            ClarifyQuestion(
+                prompt=(
+                    action.clarification_question
+                    or "The supervisor needs your input."
+                ),
+                prompt_type=action.prompt_type,
+                choices=action.choices,
+            )
+        ]
+        group_id = (
+            f"{state.run_id}:step-{step_number}:supervisor-hitl-group"
+            if len(questions) > 1
+            else None
+        )
+        created_messages: list[str] = []
+        created_request_ids: list[str] = []
+        pending_request_ids = [
+            f"{state.run_id}:step-{step_number}:supervisor-hitl-{index}"
+            for index in range(1, len(questions) + 1)
+        ]
+        last_request = None
+        client_req_id = state.client_request_id or (
+            await self.task_state_store.resolve_client_request_id_for_message_id(
+                user_message_id
+            )
+        )
+
+        def mark_pending_hitl(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.INGESTING
+            updated.steps_used += 1
+            for request_id in pending_request_ids:
+                if request_id not in updated.pending_hitl_request_ids:
+                    updated.pending_hitl_request_ids.append(request_id)
+
+        if not resume_pending_artifacts:
+            state = await self._save_v2_state(
+                state,
+                event_type=OrchestrationEventType.HITL_REQUESTED,
+                payload={
+                    "status": OrchestrationStatus.INGESTING.value,
+                    "request_ids": pending_request_ids,
+                    "pending_artifacts": True,
+                },
+                mutate=mark_pending_hitl,
+            )
+
+        async def cleanup_created_artifacts() -> None:
+            cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
+            if cancel_request is not None:
+                for request_id in created_request_ids:
+                    try:
+                        await cancel_request(request_id, room_id)
+                    except Exception:
+                        logger.warning(
+                            "Failed to cancel orphaned v2 HITL request %s",
+                            request_id,
+                        )
+            for message_id in created_messages:
+                delete_message = getattr(
+                    self.message_writer,
+                    "delete_room_agent_message_by_message_id",
+                    None,
+                )
+                if delete_message is None:
+                    continue
+                try:
+                    await delete_message(message_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to delete orphaned v2 HITL agent message %s",
+                        message_id,
+                    )
+
+        for qi, question in enumerate(questions):
+            prompt_type = HITLPromptType.TEXT
+            if question.prompt_type:
+                try:
+                    prompt_type = HITLPromptType(question.prompt_type)
+                except ValueError:
+                    pass
+
+            hitl_agent_message = self.room_runtime.create_agent_message(
+                room_id=room_id,
+                related_message_id=user_message_id,
+                agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
+                content=question.prompt,
+                user_id=request_user_id,
+                step_number=step_number,
+                task_content=question.prompt,
+                client_request_id=client_req_id,
+            )
+            hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
+            await self.message_writer.upsert_room_agent_message(hitl_agent_message)
+            created_messages.append(hitl_agent_message.message_id)
+
+            request = await self.hitl_coordinator.request_input(
+                room_id=room_id,
+                user_message_id=user_message_id,
+                source="supervisor",
+                prompt=question.prompt,
+                request_id=pending_request_ids[qi],
+                prompt_type=prompt_type,
+                choices=question.choices,
+                agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
+                agent_name="HYBRO AI",
+                source_step_id=str(step_number),
+                continuation_message_id=user_message_id,
+                display_message_id=hitl_agent_message.message_id,
+                group_id=group_id,
+                group_total=len(questions) if group_id else None,
+                group_index=qi if group_id else None,
+                orchestration_run_id=state.run_id,
+                orchestration_schema_version=state.schema_version,
+            )
+            if request is None:
+                await cleanup_created_artifacts()
+                trajectory.status = TrajectoryStatus.FAILED
+                state = await self._mark_v2_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason="failed to create v2 HITL request",
+                )
+                del state
+                return await self._log_and_return(
+                    room_id,
+                    trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED,
+                        trajectory=trajectory,
+                    ),
+                )
+            created_request_ids.append(request.request_id)
+            last_request = request
+
+        saved = await self._save_interrupted_state(
+            kind=InterruptKind.HITL_SUPERVISOR,
+            trajectory=trajectory,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            hitl_request_id=last_request.request_id if last_request else None,
+            message_id=user_message_id,
+        )
+        if not saved:
+            await cleanup_created_artifacts()
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 HITL continuation",
+            )
+            del state
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.FAILED,
+                    trajectory=trajectory,
+                ),
+            )
+
+        def mark_awaiting_user(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.AWAITING_USER
+            updated.pending_hitl_request_ids = [
+                request_id
+                for request_id in updated.pending_hitl_request_ids
+                if request_id not in pending_request_ids
+            ]
+            for request_id in created_request_ids:
+                if request_id not in updated.pending_hitl_request_ids:
+                    updated.pending_hitl_request_ids.append(request_id)
+
+        state = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_REQUESTED,
+            payload={
+                "status": OrchestrationStatus.AWAITING_USER.value,
+                "request_ids": created_request_ids,
+            },
+            mutate=mark_awaiting_user,
+        )
+        del state
+
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.AWAITING_INPUT,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+            )
+        except Exception:
+            logger.debug("SSE v2 awaiting input notification failed", exc_info=True)
+
+        return await self._log_and_return(
+            room_id,
+            trajectory,
+            SupervisorRunResult(
+                status=RunStatus.AWAITING_INPUT,
+                trajectory=trajectory,
+                clarification_question=questions[0].prompt if questions else None,
+            ),
+        )
+
+    async def _run_v2_synthesis_action(
+        self,
+        *,
+        state: OrchestrationRunState,
+        planner_action: PlannerAction,
+        trajectory: SupervisorTrajectory,
+        room_id: str,
+        user_message_id: str,
+        token: CancellationToken | None,
+    ) -> SupervisorRunResult:
+        entry = TrajectoryEntry(
+            step_number=state.steps_used + 1,
+            action=self._v2_supervisor_action(planner_action, []),
+            started_at=utcnow(),
+        )
+        trajectory.entries.append(entry)
+
+        client_req_id = state.client_request_id or (
+            await self.task_state_store.resolve_client_request_id_for_message_id(
+                user_message_id
+            )
+        )
+        synth_coro = self._stream_supervisor_synthesis(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            trajectory=trajectory,
+            synthesis_instruction=planner_action.synthesis_instruction or "",
+            client_request_id=client_req_id,
+        )
+        try:
+            synthesis = await token.race(synth_coro) if token else await synth_coro
+        except CancellationError:
+            trajectory.status = TrajectoryStatus.CANCELED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.CANCELED,
+                reason="request canceled",
+            )
+            del state
+            return await self._log_and_return(
+                room_id,
+                trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.CANCELED,
+                    trajectory=trajectory,
+                ),
+            )
+
+        if trajectory.system_agent_message_id:
+            try:
+                db_msg = (
+                    await self.message_reader.get_room_agent_message_by_message_id(
+                        trajectory.system_agent_message_id
+                    )
+                )
+                if db_msg and db_msg.message_content:
+                    db_msg.message_content.message_text = synthesis
+                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id,
+                        db_msg.message_content,
+                    )
+
+                await self.delivery.send_agent_response(
+                    room_id=room_id,
+                    message_id=trajectory.system_agent_message_id,
+                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                    content=synthesis,
+                    related_message_id=user_message_id,
+                    client_request_id=client_req_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to emit v2 agent_response for supervisor synthesis",
+                    exc_info=True,
+                )
+
+        entry.completed_at = utcnow()
+        trajectory.status = TrajectoryStatus.COMPLETED
+        state = await self._mark_v2_terminal(
+            state,
+            OrchestrationStatus.COMPLETED,
+            reason=planner_action.reasoning,
+        )
+        del state
+        return await self._log_and_return(
+            room_id,
+            trajectory,
+            SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                trajectory=trajectory,
+                synthesis_text=synthesis,
+            ),
+        )
+
+    async def _save_v2_state(
+        self,
+        state: OrchestrationRunState,
+        *,
+        event_type: OrchestrationEventType,
+        payload: dict[str, Any],
+        mutate,
+    ) -> OrchestrationRunState:
+        expected_version = state.state_version
+        updated = state.model_copy(deep=True)
+        mutate(updated)
+        updated.state_version = expected_version + 1
+        updated.updated_at = utcnow()
+        saved = await self.orchestration_run_store.save_state(
+            updated,
+            expected_version=expected_version,
+        )
+        await self._append_v2_event(saved, event_type, payload=payload)
+        return saved
+
+    async def _mark_v2_terminal(
+        self,
+        state: OrchestrationRunState,
+        status: OrchestrationStatus,
+        *,
+        reason: str,
+    ) -> OrchestrationRunState:
+        expected_version = state.state_version
+        updated = mark_terminal(state, status, reason=reason)
+        saved = await self.orchestration_run_store.save_state(
+            updated,
+            expected_version=expected_version,
+        )
+        await self._append_v2_event(
+            saved,
+            OrchestrationEventType.RUN_TERMINAL,
+            payload={"status": saved.status.value, "reason": reason},
+        )
+        return saved
+
+    async def _append_v2_event(
+        self,
+        state: OrchestrationRunState,
+        event_type: OrchestrationEventType,
+        *,
+        payload: dict[str, Any],
+    ) -> None:
+        try:
+            await self.orchestration_run_store.append_event(
+                OrchestrationRunEvent(
+                    run_id=state.run_id,
+                    room_id=state.room_id,
+                    type=event_type,
+                    state_version=state.state_version,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("Failed to append v2 orchestration event", exc_info=True)
+
+    @staticmethod
+    def _apply_v2_dispatch_intents(
+        state: OrchestrationRunState,
+        intents: list[DispatchIntent],
+    ) -> None:
+        state.status = OrchestrationStatus.DISPATCHING
+        state.dispatch_intents.extend(intents)
+
+    @staticmethod
+    def _apply_v2_results(
+        state: OrchestrationRunState,
+        results: list[StepResult],
+        *,
+        status: OrchestrationStatus,
+        advance_step: bool,
+    ) -> None:
+        state.status = status
+        outputs_by_message_id = {
+            output.agent_message_id: output for output in state.agent_outputs
+        }
+        for result in results:
+            matched_intent = next(
+                (
+                    intent
+                    for intent in state.dispatch_intents
+                    if (
+                        intent.planned_agent_message_id == result.agent_message_id
+                        if result.agent_message_id
+                        else intent.agent_id == result.agent_id
+                        and intent.task == result.task
+                        and intent.status == "planned"
+                    )
+                ),
+                None,
+            )
+            output_message_id = result.agent_message_id or (
+                matched_intent.planned_agent_message_id if matched_intent else None
+            )
+            if output_message_id:
+                output = outputs_by_message_id.get(output_message_id)
+                if output is None:
+                    output = AgentOutputRecord(
+                        agent_message_id=output_message_id,
+                        agent_id=result.agent_id,
+                        status=result.status.value,
+                    )
+                    state.agent_outputs.append(output)
+                    outputs_by_message_id[output_message_id] = output
+                output.agent_id = result.agent_id
+                output.status = result.status.value
+                output.text = result.response_text or None
+                output.error = result.error_message
+            for intent in state.dispatch_intents:
+                if intent is matched_intent or intent.planned_agent_message_id == (
+                    result.agent_message_id
+                ):
+                    intent.status = result.status.value
+        if advance_step:
+            state.steps_used += 1
+
+    @staticmethod
+    def _v2_dispatch_intent(
+        *,
+        run_id: str,
+        step_number: int,
+        target_index: int,
+        target: DelegateTarget,
+    ) -> DispatchIntent:
+        step_id = f"{run_id}:step-{step_number}"
+        step_target_id = f"{step_id}:target-{target_index}"
+        return DispatchIntent(
+            step_id=step_id,
+            step_target_id=step_target_id,
+            dispatch_intent_id=f"{step_target_id}:intent",
+            planned_agent_message_id=f"{step_target_id}:message",
+            agent_id=target.agent_id,
+            task=target.task,
+            task_hash=hashlib.sha256(target.task.encode("utf-8")).hexdigest(),
+        )
+
+    @staticmethod
+    def _v2_supervisor_action(
+        planner_action: PlannerAction,
+        agent_registry: list[AgentProfile],
+    ) -> SupervisorAction:
+        names_by_id = {agent.agent_id: agent.agent_name for agent in agent_registry}
+        if planner_action.action == PlannerActionType.DELEGATE:
+            return SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning=planner_action.reasoning,
+                targets=[
+                    DelegateTarget(
+                        agent_id=target.agent_id,
+                        agent_name=(
+                            target.agent_name
+                            or names_by_id.get(target.agent_id)
+                            or target.agent_id
+                        ),
+                        task=target.task,
+                    )
+                    for target in planner_action.targets
+                ],
+            )
+        if planner_action.action == PlannerActionType.SYNTHESIZE:
+            return SupervisorAction(
+                action=ActionType.SYNTHESIZE,
+                reasoning=planner_action.reasoning,
+                synthesis_instruction=planner_action.synthesis_instruction,
+            )
+        if planner_action.action == PlannerActionType.ASK_USER:
+            questions = [
+                ClarifyQuestion(
+                    prompt=question.prompt,
+                    prompt_type=question.prompt_type,
+                    choices=question.choices,
+                )
+                for question in planner_action.questions
+            ]
+            return SupervisorAction(
+                action=ActionType.CLARIFY,
+                reasoning=planner_action.reasoning,
+                clarification_question=questions[0].prompt if questions else None,
+                prompt_type=questions[0].prompt_type if questions else None,
+                choices=questions[0].choices if questions else None,
+                questions=questions,
+            )
+        return SupervisorAction(
+            action=ActionType.DONE,
+            reasoning=planner_action.reasoning,
+        )
+
+    @staticmethod
+    def _v2_candidate_scope(
+        state: OrchestrationRunState,
+        agent_registry: list[AgentProfile],
+    ) -> list[AgentProfile]:
+        profiles_by_id = {agent.agent_id: agent for agent in agent_registry}
+        return [
+            profiles_by_id.get(agent_id)
+            or AgentProfile(
+                agent_id=agent_id,
+                agent_name=agent_id,
+                is_healthy=False,
+            )
+            for agent_id in state.candidate_agent_ids
+        ]
+
+    @staticmethod
+    def _v2_envelope_from_user_message(user_message) -> dict[str, Any]:
+        extend_info = getattr(user_message, "extend_info", None)
+        if not isinstance(extend_info, Mapping):
+            return {}
+        envelope = dict(extend_info)
+        for nested_key in ("orchestration", "orchestration_run"):
+            nested = extend_info.get(nested_key)
+            if isinstance(nested, Mapping):
+                envelope.update(nested)
+        return envelope
+
+    @staticmethod
+    def _v2_envelope_str(envelope: Mapping[str, Any], key: str) -> str | None:
+        value = envelope.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
 
     # ------------------------------------------------------------------
     # Main loop
@@ -1441,6 +3460,38 @@ class SupervisorExecutor:
     # Concurrent agent dispatch
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _step_result_from_existing_agent_message(
+        message,
+        *,
+        target: DelegateTarget,
+        step_number: int,
+        agent_message_id: str,
+    ) -> StepResult | None:
+        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        last_state = getattr(message, "last_notified_state", None)
+        if last_state not in terminal_states:
+            return None
+
+        is_success = last_state == "completed"
+        response_text = ""
+        message_content = getattr(message, "message_content", None)
+        if message_content and getattr(message_content, "message_text", None):
+            response_text = message_content.message_text
+
+        return StepResult(
+            step_number=step_number,
+            agent_id=target.agent_id,
+            agent_name=target.agent_name,
+            task=target.task,
+            response_text=response_text,
+            success=is_success,
+            status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+            error_message=None if is_success else "Agent task failed",
+            agent_message_id=agent_message_id,
+            completed_at=utcnow(),
+        )
+
     async def _dispatch_targets(
         self,
         targets: list[DelegateTarget],
@@ -1451,11 +3502,20 @@ class SupervisorExecutor:
         token: CancellationToken | None,
         request_user_id: str | None,
         quoted_text: str | None,
+        planned_message_ids: list[str] | None = None,
     ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
         valid_ids = {a.agent_id for a in agent_registry}
 
-        async def dispatch_one(target: DelegateTarget) -> StepResult:
+        def planned_message_id_at(index: int) -> str | None:
+            if planned_message_ids is None or index >= len(planned_message_ids):
+                return None
+            return planned_message_ids[index]
+
+        async def dispatch_one(
+            target: DelegateTarget,
+            planned_message_id: str | None = None,
+        ) -> StepResult:
             try:
                 # Validate agent_id against registry before any DB writes
                 if target.agent_id not in valid_ids:
@@ -1552,7 +3612,46 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
-                await self.message_writer.add_room_agent_message(message)
+                if planned_message_id:
+                    message.message_id = planned_message_id
+                inserted = await self.message_writer.add_room_agent_message(message)
+                if inserted is False:
+                    existing = (
+                        await self.message_reader.get_room_agent_message_by_message_id(
+                            message.message_id
+                        )
+                    )
+                    if existing is not None:
+                        terminal_result = self._step_result_from_existing_agent_message(
+                            existing,
+                            target=target,
+                            step_number=step_number,
+                            agent_message_id=message.message_id,
+                        )
+                        if terminal_result is not None:
+                            return terminal_result
+                        return StepResult(
+                            step_number=step_number,
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                            task=target.task,
+                            response_text="",
+                            success=True,
+                            status=StepStatus.PAUSED,
+                            paused_message_id=message.message_id,
+                            agent_message_id=message.message_id,
+                        )
+                    return StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Failed to create agent message",
+                        agent_message_id=message.message_id,
+                    )
 
                 # --- Emit slot_opened (Phase 1b) ---
                 if getattr(self, "_slot_lifecycle", None) and message.turn_id:
@@ -1713,7 +3812,9 @@ class SupervisorExecutor:
 
         if len(targets) == 1:
             if token:
-                work = asyncio.ensure_future(dispatch_one(targets[0]))
+                work = asyncio.ensure_future(
+                    dispatch_one(targets[0], planned_message_id_at(0))
+                )
                 cancel_waiter = token.wait()
                 try:
                     done, _pending = await asyncio.wait(
@@ -1750,15 +3851,25 @@ class SupervisorExecutor:
                         error_message="Agent dispatch was cancelled",
                     )
                 ]
-            return [await dispatch_one(targets[0])]
+            return [await dispatch_one(targets[0], planned_message_id_at(0))]
 
         if not token:
-            return list(await asyncio.gather(*(dispatch_one(t) for t in targets)))
+            return list(
+                await asyncio.gather(
+                    *(
+                        dispatch_one(target, planned_message_id_at(index))
+                        for index, target in enumerate(targets)
+                    )
+                )
+            )
 
         # Manage individual tasks so that when cancellation fires we
         # can still collect results (with agent_message_id) from tasks
         # that already completed -- needed for cancel_descendants cleanup.
-        tasks = [asyncio.ensure_future(dispatch_one(t)) for t in targets]
+        tasks = [
+            asyncio.ensure_future(dispatch_one(target, planned_message_id_at(index)))
+            for index, target in enumerate(targets)
+        ]
         cancel_waiter = token.wait()
         all_work = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -1964,6 +4075,30 @@ class SupervisorExecutor:
             if user_message:
                 if not isinstance(user_message.extend_info, dict):
                     user_message.extend_info = {}
+                envelope = self._v2_envelope_from_user_message(user_message)
+                if self._v2_envelope_str(
+                    envelope,
+                    "orchestration_run_id",
+                ) or envelope.get("orchestration_schema_version") == 2:
+                    user_message.extend_info.pop("supervisor_trajectory", None)
+                    user_message.extend_info.setdefault(
+                        "orchestration_schema_version",
+                        2,
+                    )
+                    run_id = self._v2_envelope_str(
+                        envelope,
+                        "orchestration_run_id",
+                    )
+                    if run_id:
+                        user_message.extend_info["orchestration_run_id"] = run_id
+                    user_message.extend_info["orchestration_status"] = (
+                        trajectory.status.value
+                    )
+                    await self.message_writer.update_room_user_message_by_message_id(
+                        user_message_id,
+                        user_message,
+                    )
+                    return user_message
                 user_message.extend_info["supervisor_trajectory"] = (
                     trajectory.model_dump(mode="json")
                 )

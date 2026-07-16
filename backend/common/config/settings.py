@@ -1,7 +1,7 @@
 import math
 import os
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
@@ -62,7 +62,14 @@ class Settings(BaseSettings):
     feature_run_dual_write: bool = True
     feature_run_event_sse: bool = False
     feature_run_watchdog: bool = True
-    feature_orchestration_v2: bool = False
+    execution_orchestration_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "execution_orchestration_v2",
+            "EXECUTION_ORCHESTRATION_V2",
+            "FEATURE_ORCHESTRATION_V2",
+        ),
+    )
 
     # Execution Tuning
     supervisor_max_steps: int = 8
@@ -312,15 +319,6 @@ class Settings(BaseSettings):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    @field_validator("feature_orchestration_v2", mode="before")
-    @classmethod
-    def normalize_feature_orchestration_v2(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
     @field_validator("feature_run_watchdog", mode="before")
     @classmethod
     def normalize_feature_run_watchdog(cls, value):
@@ -329,6 +327,15 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() not in {"0", "false", "off"}
+
+    @field_validator("execution_orchestration_v2", mode="before")
+    @classmethod
+    def normalize_execution_orchestration_v2(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
     @classmethod

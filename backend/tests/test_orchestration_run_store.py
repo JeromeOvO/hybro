@@ -6,6 +6,7 @@ import pytest
 
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
+    MongoOrchestrationRunStore,
     OrchestrationStoreConflict,
 )
 from models.orchestration import (
@@ -16,6 +17,74 @@ from models.orchestration import (
 )
 
 BASE_TIME = datetime(2026, 7, 5, 12, 0, tzinfo=UTC)
+
+
+class FakeMongoCollection:
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+        self.insert_error: Exception | None = None
+
+    async def find_one(self, query: dict, **kwargs) -> dict | None:
+        docs = [doc for doc in self.docs if self._matches(doc, query)]
+        sort = kwargs.get("sort")
+        if sort:
+            docs = self._sort(docs, sort)
+        return dict(docs[0]) if docs else None
+
+    async def find(self, query: dict, **kwargs) -> list[dict]:
+        docs = [doc for doc in self.docs if self._matches(doc, query)]
+        sort = kwargs.get("sort")
+        if sort:
+            docs = self._sort(docs, sort)
+        limit = kwargs.get("limit")
+        if limit:
+            docs = docs[:limit]
+        return [dict(doc) for doc in docs]
+
+    async def insert_one(self, document: dict) -> str:
+        if self.insert_error is not None:
+            raise self.insert_error
+        self.docs.append(dict(document))
+        return document.get("run_id") or document.get("event_id") or "inserted"
+
+    async def replace_one(self, query: dict, replacement: dict, **_kwargs) -> bool:
+        for index, doc in enumerate(self.docs):
+            if self._matches(doc, query):
+                self.docs[index] = dict(replacement)
+                return True
+        return False
+
+    @classmethod
+    def _matches(cls, doc: dict, query: dict) -> bool:
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                if "$nin" in expected and actual in expected["$nin"]:
+                    return False
+                if "$lte" in expected and not actual <= expected["$lte"]:
+                    return False
+                continue
+            if actual != expected:
+                return False
+        return True
+
+    @staticmethod
+    def _sort(docs: list[dict], sort: list[tuple[str, int]]) -> list[dict]:
+        sorted_docs = list(docs)
+        for key, direction in reversed(sort):
+            sorted_docs.sort(
+                key=lambda doc: doc.get(key),
+                reverse=direction < 0,
+            )
+        return sorted_docs
+
+
+class FakeMongo:
+    def __init__(self) -> None:
+        self.collections: dict[str, FakeMongoCollection] = {}
+
+    def collection(self, name: str) -> FakeMongoCollection:
+        return self.collections.setdefault(name, FakeMongoCollection())
 
 
 def _state(**overrides) -> OrchestrationRunState:
@@ -191,6 +260,77 @@ async def test_append_event_rejects_missing_run_duplicate_id_and_future_version(
         await store.append_event(future_version)
 
     assert len(store._events_by_run["run-1"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_persists_runs_across_store_instances_and_versions():
+    mongo = FakeMongo()
+    first_store = MongoOrchestrationRunStore(mongo)
+    second_store = MongoOrchestrationRunStore(mongo)
+    initial = _state()
+
+    await first_store.create_run(initial)
+    fetched = await second_store.get_run("run-1")
+
+    assert fetched == initial
+    assert fetched is not initial
+
+    updated = fetched.model_copy(deep=True)
+    updated.status = OrchestrationStatus.RUNNING
+    updated.state_version = 1
+    updated.updated_at = BASE_TIME + timedelta(seconds=5)
+    await second_store.save_state(updated, expected_version=0)
+
+    stale = fetched.model_copy(deep=True)
+    stale.status = OrchestrationStatus.DISPATCHING
+    stale.state_version = 1
+    with pytest.raises(OrchestrationStoreConflict, match="state_version"):
+        await first_store.save_state(stale, expected_version=0)
+
+    event = OrchestrationRunEvent(
+        event_id="event-1",
+        run_id="run-1",
+        room_id="room-1",
+        type=OrchestrationEventType.STATE_REDUCED,
+        state_version=1,
+        created_at=BASE_TIME,
+    )
+    await second_store.append_event(event)
+
+    assert mongo.collections["orchestration_runs"].docs[0]["status"] == "running"
+    assert mongo.collections["orchestration_run_events"].docs[0]["event_id"] == (
+        "event-1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_normalizes_duplicate_insert_to_conflict():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+    runs = mongo.collection("orchestration_runs")
+    runs.insert_error = RuntimeError("E11000 duplicate key error")
+
+    with pytest.raises(OrchestrationStoreConflict, match="already exists"):
+        await store.create_run(_state())
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_normalizes_duplicate_event_insert_to_conflict():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+    await store.create_run(_state())
+    events = mongo.collection("orchestration_run_events")
+    events.insert_error = RuntimeError("E11000 duplicate key error")
+
+    event = OrchestrationRunEvent(
+        event_id="event-1",
+        run_id="run-1",
+        room_id="room-1",
+        type=OrchestrationEventType.RUN_RECOVERED,
+        state_version=0,
+    )
+    with pytest.raises(OrchestrationStoreConflict, match="already exists"):
+        await store.append_event(event)
 
 
 @pytest.mark.asyncio

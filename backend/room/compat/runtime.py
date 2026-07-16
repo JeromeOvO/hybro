@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from uuid import uuid4
 
-from common.config import settings
+from common.config.settings import settings
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -2285,15 +2285,16 @@ class RoomServices:
         v2_orchestration_requested = self._is_v2_orchestration_request(request)
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
+        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
+            candidate_scope_mode = "explicit_selection"
 
         if (
             v2_orchestration_requested
             and candidate_scope_mode == "saved_group"
-            and selected_agent_ids is None
+            and not selected_agent_ids
         ):
             error_msg = (
-                "selected_agent_ids is required to snapshot a saved_group "
-                "candidate scope"
+                "selected_agent_ids is required for saved_group candidate scope"
             )
             return (
                 RoomCenterUserMessageResponse(
@@ -2458,7 +2459,7 @@ class RoomServices:
             use_supervisor and self._is_v2_orchestration_request(request)
         )
         v2_orchestration_active = (
-            v2_orchestration_requested and settings.feature_orchestration_v2
+            v2_orchestration_requested and settings.execution_orchestration_v2
         )
         pending_clarify_msg_id = (
             room.extend_info.get("pending_clarification_message_id")

@@ -206,7 +206,11 @@ def test_supervisor_agent_hitl_request_passes_paused_message_as_display_id():
     source = (
         _ROOT / "execution" / "orchestration" / "supervisor_executor.py"
     ).read_text()
-    start = source.index("request = await self.hitl_coordinator.request_input(")
+    agent_hitl_anchor = "Only create HITL for the FIRST awaiting agent"
+    start = source.index(
+        "request = await self.hitl_coordinator.request_input(",
+        source.index(agent_hitl_anchor),
+    )
     end = source.index("if request is None:", start)
     request_call = source[start:end]
 

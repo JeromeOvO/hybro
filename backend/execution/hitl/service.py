@@ -164,6 +164,7 @@ class HITLService:
         group_id: str | None = None,
         group_total: int | None = None,
         group_index: int | None = None,
+        request_id: str | None = None,
     ) -> HITLRequest | None:
         """Create and emit an HITL request.
 
@@ -194,12 +195,26 @@ class HITLService:
             message_id=resolved_display_message_id or continuation_message_id,
         )
 
+        existing_request_doc = None
+        if source == "supervisor" and request_id:
+            existing_request_doc = await self.persistence.get_hitl_request(request_id)
+            if existing_request_doc is not None and (
+                existing_request_doc.get("room_id") != room_id
+                or existing_request_doc.get("user_message_id") != user_message_id
+                or existing_request_doc.get("source") != source
+            ):
+                logger.error(
+                    "Refusing to reuse mismatched HITL request %s",
+                    request_id,
+                )
+                return None
+
         if continuation_message_id:
             # For grouped questions, only count the first question (group_index == 0)
             # against the per-message round limit.  Questions 1..N in the same group
             # are part of the same clarification round.
             is_first_in_group = group_id is None or group_index in (None, 0)
-            if is_first_in_group:
+            if is_first_in_group and existing_request_doc is None:
                 existing = await self.persistence.count_hitl_requests_for_message(
                     continuation_message_id
                 )
@@ -211,7 +226,7 @@ class HITLService:
                     )
                     return None
 
-        request = HITLRequest(
+        request_data = dict(
             room_id=room_id,
             user_message_id=user_message_id,
             source=source,
@@ -233,6 +248,9 @@ class HITLService:
             group_total=group_total,
             group_index=group_index,
         )
+        if request_id:
+            request_data["request_id"] = request_id
+        request = HITLRequest(**request_data)
 
         # 1. Persist FIRST (so it survives SSE drops)
         doc = request.model_dump(mode="json", exclude_none=True)
@@ -273,9 +291,21 @@ class HITLService:
                     )
         else:
             saved = await self.persistence.create_hitl_request(doc)
+            hitl_request_created = bool(saved)
             if not saved:
-                logger.error("Failed to persist HITL request %s", request.request_id)
-                return None
+                existing_doc = existing_request_doc
+                if existing_doc is None and request_id:
+                    existing_doc = await self.persistence.get_hitl_request(
+                        request.request_id
+                    )
+                if existing_doc is None:
+                    logger.error(
+                        "Failed to persist HITL request %s", request.request_id
+                    )
+                    return None
+                request = HITLRequest(
+                    **{k: v for k, v in existing_doc.items() if k != "_id"}
+                )
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
@@ -352,22 +382,34 @@ class HITLService:
                         group_index=group_index,
                     )
 
-        # 2. Emit SSE event
-        await self._emit_hitl_event(
-            room_id=room_id,
-            event_type=HITLEventType.INPUT_REQUESTED,
-            request=request,
-        )
+        # 2. Deterministic supervisor requests are already visible to clients
+        # when reused. Agent requests keep their existing projection event
+        # semantics, including reuse.
+        if source == "agent" or hitl_request_created:
+            await self._emit_hitl_event(
+                room_id=room_id,
+                event_type=HITLEventType.INPUT_REQUESTED,
+                request=request,
+            )
 
-        logger.info(
-            "hitl_request_created",
-            extra={
-                "hitl_request_id": request.request_id,
-                "hitl_source": source,
-                "hitl_prompt_type": prompt_type,
-                "room_id": room_id,
-            },
-        )
+            logger.info(
+                "hitl_request_created",
+                extra={
+                    "hitl_request_id": request.request_id,
+                    "hitl_source": source,
+                    "hitl_prompt_type": prompt_type,
+                    "room_id": room_id,
+                },
+            )
+        else:
+            logger.info(
+                "hitl_request_reused",
+                extra={
+                    "hitl_request_id": request.request_id,
+                    "hitl_source": source,
+                    "room_id": room_id,
+                },
+            )
         return request
 
     # ------------------------------------------------------------------

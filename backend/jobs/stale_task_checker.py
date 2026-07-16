@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -27,7 +28,9 @@ from common.a2a_constants import (
 from common.config import settings
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from execution.orchestration.run_store import OrchestrationStoreConflict
 from jobs.constants import STALE_TASK_CHECKER
+from models.orchestration import OrchestrationEventType, OrchestrationRunEvent
 from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
 
@@ -70,6 +73,11 @@ def increment_counter(_name: str) -> None:
 @dataclass(frozen=True)
 class StaleRecoveryDeps:
     schedule_recovery: Callable[..., asyncio.Task]
+
+
+@dataclass(frozen=True)
+class StaleOrchestrationRunRecoveryDeps:
+    orchestration_run_store: Any
 
 
 @dataclass(frozen=True)
@@ -139,6 +147,9 @@ class StaleTaskChecker:
         self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
         self._leader: LeaderGate | None = None
         self._execution_recovery_deps: StaleRecoveryDeps | None = None
+        self._orchestration_run_recovery_deps: (
+            StaleOrchestrationRunRecoveryDeps | None
+        ) = None
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
@@ -196,6 +207,12 @@ class StaleTaskChecker:
 
     def set_execution_recovery_deps(self, deps: StaleRecoveryDeps) -> None:
         self._execution_recovery_deps = deps
+
+    def set_orchestration_run_recovery_deps(
+        self,
+        deps: StaleOrchestrationRunRecoveryDeps,
+    ) -> None:
+        self._orchestration_run_recovery_deps = deps
 
     def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
         self._watchdog_event_deps = deps
@@ -315,6 +332,10 @@ class StaleTaskChecker:
         #    This handles mid-loop crashes where the server restarted while
         #    SupervisorExecutor.run() was in-flight.
         await self._recover_stuck_supervisor_trajectories()
+
+        # 6b. Recover v2 durable orchestration runs that no longer keep a full
+        # supervisor trajectory on the user message.
+        await self._recover_stuck_orchestration_runs()
 
         # 7. Recover HITL requests stuck in "processing" (worker crashed
         #    between CAS claim and finalization).
@@ -878,6 +899,164 @@ class StaleTaskChecker:
                 logger.error(
                     "supervisor_recovery: failed to trigger recovery for %s: %s",
                     message_id,
+                    e,
+                )
+
+    async def _recover_stuck_orchestration_runs(self) -> None:
+        """Recover stale v2 sidecar orchestration runs.
+
+        V2 supervisor checkpoints keep durable progress in
+        ``OrchestrationRunState`` rather than ``user_message.extend_info``.
+        This watchdog claims stale non-terminal sidecar runs with optimistic
+        concurrency and reuses the normal recovery orchestration path.
+        """
+        if self._orchestration_run_recovery_deps is None:
+            return
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "orchestration_v2_recovery: skipped because Execution recovery dependencies are not bound"
+            )
+            return
+
+        run_store = self._orchestration_run_recovery_deps.orchestration_run_store
+        cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
+        try:
+            states = await run_store.list_recoverable()
+        except Exception as e:
+            logger.error("orchestration_v2_recovery: failed to list runs: %s", e)
+            return
+
+        for state in states:
+            if ensure_utc(state.updated_at) > cutoff:
+                continue
+            if state.status.value == "awaiting_user":
+                logger.info(
+                    "orchestration_v2_recovery: skipping run %s — awaiting user input",
+                    state.run_id,
+                )
+                continue
+            if self._recovery_semaphore.locked():
+                logger.info(
+                    "Recovery slots full, deferring remaining v2 orchestration recoveries"
+                )
+                break
+            if await self._store.is_message_cancelled(state.user_message_id):
+                logger.info(
+                    "orchestration_v2_recovery: skipping run %s — cancelled by user",
+                    state.run_id,
+                )
+                continue
+
+            get_user_message = getattr(
+                self._store,
+                "get_room_user_message_by_message_id",
+                None,
+            )
+            if not callable(get_user_message):
+                logger.error(
+                    "orchestration_v2_recovery: skipping run %s because the "
+                    "processing-claim reader is not bound",
+                    state.run_id,
+                )
+                continue
+            try:
+                user_message = await get_user_message(state.user_message_id)
+                processing_claimed_at = (
+                    user_message.get("processing_claimed_at")
+                    if isinstance(user_message, dict)
+                    else getattr(user_message, "processing_claimed_at", None)
+                )
+                if (
+                    processing_claimed_at is not None
+                    and ensure_utc(processing_claimed_at) > cutoff
+                ):
+                    logger.info(
+                        "orchestration_v2_recovery: skipping live run %s",
+                        state.run_id,
+                    )
+                    continue
+            except Exception:
+                logger.warning(
+                    "orchestration_v2_recovery: failed to inspect processing "
+                    "claim for %s; skipping recovery",
+                    state.run_id,
+                    exc_info=True,
+                )
+                continue
+
+            expected_version = state.state_version
+            claimed = state.model_copy(deep=True)
+            claimed.state_version = expected_version + 1
+            claimed.updated_at = utcnow()
+            try:
+                saved = await run_store.save_state(
+                    claimed,
+                    expected_version=expected_version,
+                )
+            except OrchestrationStoreConflict:
+                logger.info(
+                    "orchestration_v2_recovery: run %s already claimed",
+                    state.run_id,
+                )
+                continue
+            except Exception as e:
+                logger.error(
+                    "orchestration_v2_recovery: failed to claim run %s: %s",
+                    state.run_id,
+                    e,
+                )
+                continue
+
+            try:
+                await run_store.append_event(
+                    OrchestrationRunEvent(
+                        run_id=saved.run_id,
+                        room_id=saved.room_id,
+                        type=OrchestrationEventType.RUN_RECOVERED,
+                        state_version=saved.state_version,
+                        payload={
+                            "previous_status": state.status.value,
+                            "user_message_id": state.user_message_id,
+                        },
+                    )
+                )
+            except OrchestrationStoreConflict:
+                logger.info(
+                    "orchestration_v2_recovery: recovery event already recorded for %s",
+                    saved.run_id,
+                )
+            except Exception:
+                logger.debug(
+                    "orchestration_v2_recovery: failed to append recovery event",
+                    exc_info=True,
+                )
+
+            try:
+                logger.info(
+                    "orchestration_v2_recovery: re-triggering run %s message %s",
+                    saved.run_id,
+                    saved.user_message_id,
+                )
+                request = OrchestrationRequest(
+                    room_id=saved.room_id,
+                    room_user_message_id=saved.user_message_id,
+                    room_related_message_id="",
+                    is_recovery=True,
+                )
+                await self._recovery_semaphore.acquire()
+                try:
+                    task = self._execution_recovery_deps.schedule_recovery(
+                        request,
+                        reason="orchestration_v2",
+                    )
+                except Exception:
+                    self._recovery_semaphore.release()
+                    raise
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
+            except Exception as e:
+                logger.error(
+                    "orchestration_v2_recovery: failed to trigger recovery for %s: %s",
+                    saved.run_id,
                     e,
                 )
 

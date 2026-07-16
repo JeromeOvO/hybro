@@ -422,6 +422,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.orchestration.factory import (
                 room_message_center as execution_room_message_center,
             )
+            from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+            from execution.orchestration.run_store import MongoOrchestrationRunStore
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
@@ -460,7 +462,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 default_model=llm_gateway_config.default_supervisor_model,
             )
             embedding_llm_service = EmbeddingLLMService(llm_provider=llm_provider)
-            discovery_llm_service = DiscoveryLLMService(
+            discovery_llm_service = DiscoveryLLMService(  # noqa: F841
                 llm_provider=llm_provider,
                 max_expansion_words=runtime.settings.discovery_query_expansion_threshold,
             )
@@ -654,6 +656,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
                 touch_task_message=task_store.touch_task_message,
                 is_message_cancelled=task_store.is_message_cancelled,
+                get_room_user_message_by_message_id=(
+                    message_store.get_room_user_message_by_message_id
+                ),
                 update_task_on_message=task_store.update_task_on_message,
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
@@ -975,6 +980,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_rate_limiter = app.state.agent_rate_limiter_factory(
                     runtime.settings, mongo_dal
                 )
+            orchestration_run_store = MongoOrchestrationRunStore(mongo_dal)
+            orchestration_planner = RoomSupervisorPlannerAdapter(
+                supervisor_service=room_supervisor_service
+            )
 
             room_message_center_impl = create_room_message_center(
                 room_runtime=execution_room_runtime,
@@ -1002,6 +1011,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 debate_prompt_injector=debate_prompt_injector,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
+                orchestration_run_store=orchestration_run_store,
+                orchestration_planner=orchestration_planner,
                 hitl_coordinator=hitl_manager,
                 task_notifications=TaskNotificationAdapter(
                     notify_task_update_with_string_state
@@ -1184,6 +1195,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
                 StaleHITLDeps,
+                StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
             )
@@ -1231,6 +1243,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             stale_task_checker.set_execution_recovery_deps(
                 StaleRecoveryDeps(
                     schedule_recovery=execution_facade.schedule_recovery_orchestration,
+                )
+            )
+            stale_task_checker.set_orchestration_run_recovery_deps(
+                StaleOrchestrationRunRecoveryDeps(
+                    orchestration_run_store=orchestration_run_store,
                 )
             )
             stale_task_checker.set_hitl_deps(
@@ -1643,6 +1660,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> None:
     await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
+    await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
 
@@ -1852,6 +1870,43 @@ async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
     )
 
 
+async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("run_id", 1)],
+        name="orchestration_run_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("user_message_id", 1), ("created_at", -1)],
+        name="orchestration_user_message_created_at",
+    )
+    await _create_index(
+        mongo,
+        "orchestration_runs",
+        [("status", 1), ("updated_at", 1)],
+        name="orchestration_status_updated_at",
+    )
+    await _create_index(
+        mongo,
+        "orchestration_run_events",
+        [("event_id", 1)],
+        name="orchestration_event_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "orchestration_run_events",
+        [("run_id", 1), ("created_at", 1)],
+        name="orchestration_run_created_at",
+    )
+
+
 async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
@@ -1869,6 +1924,14 @@ async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
 
 
 async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "room_agent_messages",
+        [("message_id", 1)],
+        name="room_agent_message_id_unique",
+        unique=True,
+        critical=True,
+    )
     await _create_index(
         mongo,
         "room_agent_messages",
