@@ -333,11 +333,12 @@ events, recovery queries, and envelope reconstruction. Public run lifecycle
 projection accepts an explicit public `RunState`, is idempotent by causation id,
 and remains behind the existing run dual-write feature gate. A projection with
 a new causation id records that binding even when the public head is already at
-the requested active state. Mapping orchestration-specific statuses into public
-run states belongs to the later state-driven loop wiring. This foundation does
-not replace or activate a new supervisor loop by itself; `RoomMessageCenter`
-and `SupervisorExecutor` retain their existing orchestration behavior until the
-state-driven loop is wired in.
+the requested active state; repeated processing projections use `RUN_RESUMED`
+rather than emitting another start event. Mapping orchestration-specific
+statuses into public run states belongs to the later state-driven loop wiring.
+This foundation does not replace or activate a new supervisor loop by itself;
+`RoomMessageCenter` and `SupervisorExecutor` retain their existing orchestration
+behavior until the state-driven loop is wired in.
 
 ### `context_memory`
 

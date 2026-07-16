@@ -240,7 +240,7 @@ async def test_project_run_state_rejects_orchestration_status_before_repository_
         (
             SSEProcessingStatus.PROCESSING,
             RunState.PROCESSING,
-            RunEventType.RUN_STARTED,
+            RunEventType.RUN_RESUMED,
         ),
         (
             SSEProcessingStatus.AWAITING_INPUT,

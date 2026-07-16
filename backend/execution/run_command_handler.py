@@ -423,7 +423,7 @@ class RunCommandHandler:
                 return None
             event_type = (
                 RunEventType.RUN_RESUMED
-                if current_state == RunState.AWAITING_INPUT
+                if current_state in {RunState.AWAITING_INPUT, RunState.PROCESSING}
                 else RunEventType.RUN_STARTED
             )
             next_state = RunState.PROCESSING
