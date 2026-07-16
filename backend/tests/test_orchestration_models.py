@@ -10,10 +10,14 @@ from models.orchestration import (
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
+    DispatchContentRef,
+    DispatchExpectedOutput,
+    DispatchRefKind,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
+    PlannedDelegateTarget,
     PlannerAction,
 )
 
@@ -54,6 +58,43 @@ def test_planner_action_schema_rejects_unknown_actions():
             action="done",
             reasoning="legacy terminal",
         )
+
+
+def test_delegate_target_preserves_explicit_resource_refs():
+    target = PlannedDelegateTarget(
+        agent_id="agent-1",
+        task="Review the selected submission.",
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx:file-file-1:text",
+            )
+        ],
+        attachment_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ATTACHMENT,
+                ref_id="file:file-1",
+                mime_type="application/pdf",
+                required=False,
+            )
+        ],
+        expected_outputs=[
+            DispatchExpectedOutput(kind="summary", description="Review summary")
+        ],
+    )
+
+    assert target.context_refs[0].ref_id == "ctx:file-file-1:text"
+    assert target.attachment_refs[0].required is False
+    assert target.expected_outputs[0].kind == "summary"
+    assert target.attachment_policy == "explicit_refs_only"
+
+
+def test_candidate_snapshot_defaults_to_text_input_mode():
+    candidate = CandidateAgentSnapshot(agent_id="agent-1")
+
+    assert candidate.input_modes == ["text"]
+    assert candidate.output_modes == []
+    assert candidate.supports_file_upload is False
 
 
 def test_mark_running_returns_updated_copy_without_mutating_input():

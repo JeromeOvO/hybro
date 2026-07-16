@@ -57,10 +57,37 @@ class PlannerActionType(StrEnum):
     FAIL = "fail"
 
 
+class DispatchRefKind(StrEnum):
+    CONTEXT = "context"
+    ARTIFACT = "artifact"
+    ATTACHMENT = "attachment"
+
+
+class DispatchContentRef(BaseModel):
+    kind: DispatchRefKind
+    ref_id: str
+    source_agent_message_id: str | None = None
+    mime_type: str | None = None
+    required: bool = True
+
+
+class DispatchExpectedOutput(BaseModel):
+    kind: str
+    required: bool = True
+    description: str | None = None
+
+
 class PlannedDelegateTarget(BaseModel):
     agent_id: str
     task: str
     agent_name: str | None = None
+    context_refs: list[DispatchContentRef] = Field(default_factory=list)
+    artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
+    attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
+    expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
+    attachment_policy: Literal["explicit_refs_only", "compatible_only"] = (
+        "explicit_refs_only"
+    )
 
 
 class PlannerQuestion(BaseModel):
@@ -84,6 +111,9 @@ class CandidateAgentSnapshot(BaseModel):
     capability_summary: str = ""
     status: str | None = None
     source: str | None = None
+    input_modes: list[str] = Field(default_factory=lambda: ["text"])
+    output_modes: list[str] = Field(default_factory=list)
+    supports_file_upload: bool = False
 
 
 class CandidateScopeSnapshot(BaseModel):
@@ -164,6 +194,13 @@ class DispatchIntent(BaseModel):
     task: str
     task_hash: str
     status: str = "planned"
+    context_refs: list[DispatchContentRef] = Field(default_factory=list)
+    artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
+    attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
+    expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
+    attachment_policy: Literal["explicit_refs_only", "compatible_only"] = (
+        "explicit_refs_only"
+    )
 
 
 class AgentOutputRecord(BaseModel):
