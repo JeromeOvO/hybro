@@ -977,6 +977,8 @@ class TestRequestInput:
         assert projection_call.args == ("agent-paused-msg",)
         assert projection_call.kwargs["request_id"] == "hitl-next"
         mock_hitl_db_service.persist_hitl_user_answer.assert_not_awaited()
+        mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
+        continuation.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_blocking_followup_hitl_preserves_v2_run_links(
@@ -1044,8 +1046,6 @@ class TestRequestInput:
         )
         assert followup_doc["orchestration_run_id"] == "run-msg-1"
         assert followup_doc["orchestration_schema_version"] == 2
-        mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
-        continuation.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(
