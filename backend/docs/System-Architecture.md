@@ -350,6 +350,15 @@ envelope activation is disabled by default behind `FEATURE_ORCHESTRATION_V2`
 until the state-driven loop and its context assembly are wired; pending legacy
 clarifications always resume before a new v2 envelope can be created.
 
+The orchestration boundary also defines deterministic planner context and agent
+result ingestion. `build_orchestration_planner_context` projects quoted content,
+candidate metadata, step budget, and durable run state into an immutable
+planner-facing payload; `RoomSupervisorPlannerAdapter` parses and validates the
+next action through the existing action contract. Agent terminal responses can
+be normalized into `AgentResultRead` records and projected by the pure,
+replay-safe `AgentResultIngestor` when an orchestration ingestion service is
+bound. These boundaries do not enable the state-driven supervisor loop.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,
