@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
+from common.config.settings import settings
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
+from execution.orchestration.result_ingestor import AgentResultRead
 
 if TYPE_CHECKING:
     from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort
@@ -70,7 +72,19 @@ class ResponseHITLReader(Protocol):
     ) -> list[dict]: ...
 
 
+class OrchestrationResultIngestorService(Protocol):
+    async def ingest_agent_result(self, result: AgentResultRead) -> Any: ...
+
+
 logger = get_logger(__name__)
+_orchestration_result_ingestor: OrchestrationResultIngestorService | None = None
+
+
+def bind_orchestration_result_ingestor(
+    service: OrchestrationResultIngestorService | None,
+) -> None:
+    global _orchestration_result_ingestor
+    _orchestration_result_ingestor = service
 
 
 class AgentResponseHandler:
@@ -357,6 +371,15 @@ class AgentResponseHandler:
         # NOTE: send_agent_response removed — _notify() above already delivers
         # content + parts via task_update SSE. The redundant agent_response SSE
         # created a duplicate message entity in the frontend.
+        await self._ingest_orchestration_result(
+            e,
+            status="completed",
+            text=display_text,
+            artifacts=self._orchestration_result_artifacts(
+                e,
+                persisted_artifacts=artifacts_for_db,
+            ),
+        )
         await self._resume_orchestration(e.message_id, display_text or "")
 
     async def _on_error(self, e: AgentEvent) -> None:
@@ -379,17 +402,32 @@ class AgentResponseHandler:
             error=error,
             has_partial_content=has_partial or None,
         )
+        await self._ingest_orchestration_result(
+            e,
+            status=state,
+            text=e.text or None,
+            artifacts=e.artifacts or [],
+            error=error,
+        )
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_canceled(self, e: AgentEvent) -> None:
+        canceled_text = e.text or "Task was canceled"
         if not e.skip_persist:
             await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 "canceled",
-                message_text=e.text or "Task was canceled",
+                message_text=canceled_text,
             )
         await self._notify_terminal_best_effort(e, coerce_task_state("canceled"))
         await self._terminate_slot(e, "canceled")
+        await self._ingest_orchestration_result(
+            e,
+            status="canceled",
+            text=e.text or None,
+            artifacts=e.artifacts or [],
+            error=e.error_text or canceled_text,
+        )
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_interactive(self, e: AgentEvent) -> None:
@@ -534,12 +572,21 @@ class AgentResponseHandler:
         # out exactly as _on_response/_on_error would.
         # The idempotency check in notify_task_update (update_last_notified_state)
         # prevents duplicate SSE on paths where agent_response was already sent.
+        terminal_result_status: str | None = None
         if e.state:
+            state_value = str(getattr(e.state, "value", e.state))
+            if state_value in settings.terminal_processing_statuses:
+                terminal_result_status = state_value
             try:
                 from common.a2a_constants import TERMINAL_STATES
 
                 _state_enum = coerce_task_state(e.state)
                 if _state_enum in TERMINAL_STATES:
+                    terminal_result_status = getattr(
+                        _state_enum,
+                        "value",
+                        str(_state_enum),
+                    )
                     try:
                         await self._task_writer.update_task_state_on_message(
                             e.message_id, e.state
@@ -567,6 +614,15 @@ class AgentResponseHandler:
                     e.message_id,
                     exc_info=True,
                 )
+
+        if terminal_result_status is not None:
+            await self._ingest_orchestration_result(
+                e,
+                status=terminal_result_status,
+                text=e.text or None,
+                artifacts=e.artifacts or [],
+                error=self._terminal_result_error(e, terminal_result_status),
+            )
 
         await self._emit_processing_status(
             room_id=e.room_id,
@@ -683,6 +739,67 @@ class AgentResponseHandler:
         except Exception:
             logger.warning(
                 "AgentResponseHandler: terminal task notification failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _orchestration_result_artifacts(
+        e: AgentEvent,
+        *,
+        persisted_artifacts: list[dict] | None = None,
+    ) -> list[dict]:
+        if e.artifacts:
+            return e.artifacts
+        if e.parts:
+            non_text = [p for p in e.parts if p.get("kind") in ("file", "data")]
+            if non_text:
+                return [{"name": "agent-output", "parts": non_text}]
+        return persisted_artifacts or []
+
+    @staticmethod
+    def _terminal_result_error(e: AgentEvent, status: str) -> str | None:
+        if status not in {"failed", "canceled", "rejected", "error", "rate_limited"}:
+            return None
+        if e.error_text:
+            return e.error_text
+        if e.text:
+            return e.text
+        if isinstance(e.details, str):
+            return e.details
+        if isinstance(e.details, dict):
+            details_message = e.details.get("message") or e.details.get("error")
+            return str(details_message) if details_message is not None else None
+        return None
+
+    async def _ingest_orchestration_result(
+        self,
+        e: AgentEvent,
+        *,
+        status: str,
+        text: str | None = None,
+        artifacts: list[dict] | None = None,
+        error: str | None = None,
+    ) -> None:
+        service = _orchestration_result_ingestor
+        if service is None:
+            return
+
+        try:
+            result = AgentResultRead(
+                agent_message_id=e.message_id,
+                agent_id=e.agent_id,
+                status=status,
+                text=text,
+                artifacts=artifacts or [],
+                error=error,
+            )
+            maybe_result = service.ingest_agent_result(result)
+            if inspect.isawaitable(maybe_result):
+                await maybe_result
+        except Exception:
+            logger.warning(
+                "AgentResponseHandler: orchestration result ingestion failed for %s",
                 e.message_id,
                 exc_info=True,
             )

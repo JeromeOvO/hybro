@@ -812,6 +812,14 @@ class RoomSupervisorService:
         )
 
     @staticmethod
+    def parse_planner_action(response_json: dict) -> PlannerAction:
+        """Parse an existing supervisor JSON decision into a v2 planner action."""
+
+        return RoomSupervisorService._parse_legacy_action_as_planner_action(
+            response_json
+        )
+
+    @staticmethod
     def _parse_legacy_action_as_planner_action(
         response_json: dict,
     ) -> PlannerAction:
@@ -918,6 +926,19 @@ class RoomSupervisorService:
     # =========================================================================
     # LLM Helpers
     # =========================================================================
+
+    async def call_planner_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict:
+        """Call the supervisor JSON model through the public planner boundary."""
+
+        return await self._call_supervisor_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
     async def _call_supervisor_llm(
         self,

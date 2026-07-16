@@ -14,11 +14,24 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from execution.dispatch.agent_event import AgentEvent
-from execution.dispatch.response_handler import AgentResponseHandler, ResponseTaskWriter
+from execution.dispatch.response_handler import (
+    AgentResponseHandler,
+    ResponseTaskWriter,
+    bind_orchestration_result_ingestor,
+)
+from execution.orchestration.result_ingestor import AgentResultIngestor, AgentResultRead
+from models.orchestration import OrchestrationRunState
 
 # =============================================================================
 # Fixtures
 # =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _reset_orchestration_result_ingestor():
+    bind_orchestration_result_ingestor(None)
+    yield
+    bind_orchestration_result_ingestor(None)
 
 
 def _make_handler(
@@ -469,6 +482,218 @@ class TestResponseEvent:
 
         # send_agent_response removed — _notify() delivers parts via task_update
         h._delivery.send_agent_response.assert_not_awaited()
+
+
+class TestOrchestrationResultIngestorHook:
+    @pytest.mark.asyncio
+    async def test_default_hook_is_no_op_for_terminal_response(self):
+        h = _make_handler()
+        event = AgentEvent(kind="response", **_base_event(), text="Done!")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001",
+            task_result_text="Done!",
+            failed=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_hook_runs_after_terminal_persist_and_notify_before_resume(self):
+        events: list[str] = []
+
+        async def persist_completed(*args, **kwargs):
+            events.append("persist")
+            return True, "resolved text"
+
+        async def notify(*args, **kwargs):
+            events.append("notify")
+            return True
+
+        async def resume(*args, **kwargs):
+            events.append("resume")
+            return True
+
+        async def ingest(result):
+            events.append("hook")
+            assert isinstance(result, AgentResultRead)
+
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(side_effect=persist_completed)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        rmc = MagicMock()
+        rmc.resume_queue_from_continuation = AsyncMock(side_effect=resume)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(side_effect=ingest)
+        bind_orchestration_result_ingestor(service)
+        h = _make_handler(db=db, rmc=rmc)
+        artifacts = [{"artifactId": "artifact-1", "parts": [{"kind": "text"}]}]
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="raw text",
+            artifacts=artifacts,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(side_effect=notify),
+            )
+            await h.handle(event)
+
+        assert events == ["persist", "notify", "hook", "resume"]
+        service.ingest_agent_result.assert_awaited_once()
+        result = service.ingest_agent_result.await_args.args[0]
+        assert result == AgentResultRead(
+            agent_message_id="msg-001",
+            agent_id="agent-001",
+            status="completed",
+            text="resolved text",
+            artifacts=artifacts,
+            error=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_hook_exception_does_not_prevent_legacy_resume_path(self):
+        h = _make_handler()
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(side_effect=RuntimeError("boom"))
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(kind="response", **_base_event(), text="Done!")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        service.ingest_agent_result.assert_awaited_once()
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001",
+            task_result_text="Done!",
+            failed=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_parts_only_response_ingestion_is_idempotent(self):
+        state = OrchestrationRunState(
+            run_id="run-001",
+            room_id="room-001",
+            user_message_id="user-msg-001",
+            goal="collect artifact",
+            candidate_agent_ids=["agent-001"],
+        )
+        ingestor = AgentResultIngestor()
+
+        async def ingest(result):
+            nonlocal state
+            state = ingestor.ingest(state, result)
+
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(side_effect=ingest)
+        bind_orchestration_result_ingestor(service)
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="Done!",
+            parts=[{"kind": "data", "data": {"value": 1}}],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+            await h.handle(event)
+
+        assert service.ingest_agent_result.await_count == 2
+        assert len(state.artifacts) == 1
+        assert state.agent_outputs[0].artifact_keys == [
+            state.artifacts[0]["artifact_key"]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_hook_maps_error_and_canceled_terminal_events(self):
+        h = _make_handler()
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(
+                AgentEvent(
+                    kind="error",
+                    **_base_event(message_id="msg-error"),
+                    text="partial",
+                    error_text="boom",
+                    state="failed",
+                )
+            )
+            await h.handle(
+                AgentEvent(
+                    kind="canceled",
+                    **_base_event(message_id="msg-canceled"),
+                    text="stopped",
+                )
+            )
+
+        error_result = service.ingest_agent_result.await_args_list[0].args[0]
+        canceled_result = service.ingest_agent_result.await_args_list[1].args[0]
+        assert error_result == AgentResultRead(
+            agent_message_id="msg-error",
+            agent_id="agent-001",
+            status="failed",
+            text="partial",
+            artifacts=[],
+            error="boom",
+        )
+        assert canceled_result == AgentResultRead(
+            agent_message_id="msg-canceled",
+            agent_id="agent-001",
+            status="canceled",
+            text="stopped",
+            artifacts=[],
+            error="stopped",
+        )
+
+    @pytest.mark.asyncio
+    async def test_error_hook_preserves_terminal_state(self):
+        h = _make_handler()
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(
+                AgentEvent(
+                    kind="error",
+                    **_base_event(),
+                    error_text="nope",
+                    state="rejected",
+                )
+            )
+
+        result = service.ingest_agent_result.await_args.args[0]
+        assert result.status == "rejected"
+        assert result.error == "nope"
 
 
 # =============================================================================
@@ -1253,6 +1478,95 @@ class TestHandlerNotifyTaskUpdate:
             record_lifecycle=True,
             client_request_id=None,
             details=None,
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_processing_status_terminal_close_out_ingests_agent_result(self):
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        artifacts = [{"artifactId": "artifact-1", "parts": [{"kind": "text"}]}]
+        event = AgentEvent(
+            kind="processing_status",
+            **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="failed",
+            details="relay failed",
+            artifacts=artifacts,
+        )
+
+        await h.handle(event)
+
+        service.ingest_agent_result.assert_awaited_once_with(
+            AgentResultRead(
+                agent_message_id="msg-001",
+                agent_id="agent-001",
+                status="failed",
+                text=None,
+                artifacts=artifacts,
+                error="relay failed",
+            )
+        )
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="failed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details={"message": "relay failed"},
+            error_message="relay failed",
+        )
+
+    @pytest.mark.asyncio
+    async def test_processing_status_terminal_non_task_state_ingests_agent_result(self):
+        mock_impl = AsyncMock(return_value=True)
+        h = _make_handler(
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="processing_status",
+            **_base_event(),
+            lifecycle_message_id="umsg-001",
+            state="rate_limited",
+            details={"message": "too many requests"},
+        )
+
+        await h.handle(event)
+
+        mock_impl.assert_not_awaited()
+        service.ingest_agent_result.assert_awaited_once_with(
+            AgentResultRead(
+                agent_message_id="msg-001",
+                agent_id="agent-001",
+                status="rate_limited",
+                text=None,
+                artifacts=[],
+                error="too many requests",
+            )
+        )
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="rate_limited",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details={"message": "too many requests"},
             error_message=None,
         )
 
