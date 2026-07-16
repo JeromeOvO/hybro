@@ -1638,8 +1638,7 @@ class RoomServices:
     ) -> bool:
         info = cls._orchestration_request_info(request)
         return (
-            settings.execution_orchestration_v2
-            and info.get("mode") == "supervisor"
+            info.get("mode") == "supervisor"
             and info.get("orchestration_schema_version") == 2
         )
 
@@ -2459,7 +2458,9 @@ class RoomServices:
         v2_orchestration_requested = (
             use_supervisor and self._is_v2_orchestration_request(request)
         )
-        v2_orchestration_active = v2_orchestration_requested
+        v2_orchestration_active = (
+            v2_orchestration_requested and settings.execution_orchestration_v2
+        )
         pending_clarify_msg_id = (
             room.extend_info.get("pending_clarification_message_id")
             if isinstance(room.extend_info, dict)
