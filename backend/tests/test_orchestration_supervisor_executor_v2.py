@@ -565,6 +565,64 @@ async def test_run_v2_resumes_ingesting_hitl_without_replanning_or_duplicates():
 
 
 @pytest.mark.asyncio
+async def test_run_v2_fails_corrupt_ingesting_hitl_checkpoint():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="run-message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.INGESTING
+    state.steps_used = 1
+    state.pending_hitl_request_ids = [
+        "run-message-1:step-1:supervisor-hitl-1"
+    ]
+    state.decision_log = [
+        {
+            "action": PlannerActionType.ASK_USER.value,
+            "reasoning": "missing serialized planner action",
+            "targets": [],
+        }
+    ]
+    await store.create_run(state)
+    planner = RecordingPlanner()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.trajectory.status == TrajectoryStatus.FAILED
+    assert planner.contexts == []
+    state = await store.get_run("run-message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.FAILED
+    assert "no valid ASK_USER planner action" in (state.terminal_reason or "")
+
+
+@pytest.mark.asyncio
 async def test_run_v2_returns_paused_when_sidecar_write_is_superseded():
     user_message = RoomUserMessage(
         room_id="room-1",

@@ -364,12 +364,22 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                     resume_pending_artifacts=True,
                 )
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            reason = (
+                "INGESTING checkpoint has pending HITL requests but no valid "
+                "ASK_USER planner action"
+            )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason=reason,
+            )
+            del state
             return await self._log_and_return(
                 room_id,
                 trajectory,
                 SupervisorRunResult(
-                    status=RunStatus.AWAITING_INPUT,
+                    status=RunStatus.FAILED,
                     trajectory=trajectory,
                 ),
             )

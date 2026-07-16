@@ -223,6 +223,7 @@ class TestRequestInput:
             existing.request_id
         )
         mock_hitl_db_service.count_hitl_requests_for_message.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_legacy_request_omits_absent_v2_run_links_when_persisted(

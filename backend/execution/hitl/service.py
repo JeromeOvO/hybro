@@ -291,6 +291,7 @@ class HITLService:
                     )
         else:
             saved = await self.persistence.create_hitl_request(doc)
+            hitl_request_created = bool(saved)
             if not saved:
                 existing_doc = existing_request_doc
                 if existing_doc is None and request_id:
@@ -381,22 +382,34 @@ class HITLService:
                         group_index=group_index,
                     )
 
-        # 2. Emit SSE event
-        await self._emit_hitl_event(
-            room_id=room_id,
-            event_type=HITLEventType.INPUT_REQUESTED,
-            request=request,
-        )
+        # 2. Deterministic supervisor requests are already visible to clients
+        # when reused. Agent requests keep their existing projection event
+        # semantics, including reuse.
+        if source == "agent" or hitl_request_created:
+            await self._emit_hitl_event(
+                room_id=room_id,
+                event_type=HITLEventType.INPUT_REQUESTED,
+                request=request,
+            )
 
-        logger.info(
-            "hitl_request_created",
-            extra={
-                "hitl_request_id": request.request_id,
-                "hitl_source": source,
-                "hitl_prompt_type": prompt_type,
-                "room_id": room_id,
-            },
-        )
+            logger.info(
+                "hitl_request_created",
+                extra={
+                    "hitl_request_id": request.request_id,
+                    "hitl_source": source,
+                    "hitl_prompt_type": prompt_type,
+                    "room_id": room_id,
+                },
+            )
+        else:
+            logger.info(
+                "hitl_request_reused",
+                extra={
+                    "hitl_request_id": request.request_id,
+                    "hitl_source": source,
+                    "room_id": room_id,
+                },
+            )
         return request
 
     # ------------------------------------------------------------------
