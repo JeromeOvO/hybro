@@ -4,6 +4,7 @@ from typing import Any
 
 from common.utils.logger import get_logger
 from execution.ports import ProcessingStatusLike
+from models.run import RunState
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,27 @@ class RunLifecycleAdapter:
             message_id=message_id,
             client_request_id=kwargs.get("client_request_id"),
             details=error_message,
+        )
+
+    async def project_run_state(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        target_state: RunState,
+        terminal_reason: str | None,
+        causation_id: str,
+        client_request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._command_handler.project_run_state(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=trigger_message_id,
+            target_state=target_state,
+            terminal_reason=terminal_reason,
+            causation_id=causation_id,
+            client_request_id=client_request_id,
         )
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:

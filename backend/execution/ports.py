@@ -21,6 +21,7 @@ from models.room import (
     RoomAgentMessage,
     RoomUserMessage,
 )
+from models.run import RunState
 
 ProcessingStatusLike = str | Enum
 
@@ -826,6 +827,18 @@ class RunLifecyclePort(Protocol):
         client_request_id: str | None = None,
         details: dict[str, Any] | None = None,
         error_message: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    async def project_run_state(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        target_state: RunState,
+        terminal_reason: str | None,
+        causation_id: str,
+        client_request_id: str | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def heal_diverged_runs(self, limit: int = 500) -> int: ...

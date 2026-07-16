@@ -14,6 +14,7 @@ from execution.run_command_handler import (
 from execution.run_command_handler import (
     run_command_handler as _default_run_command_handler,
 )
+from models.run import RunState
 
 
 class RunLifecycleService:
@@ -41,6 +42,29 @@ class RunLifecycleService:
             message_id=message_id,
             client_request_id=client_request_id,
             details=detail_text,
+        )
+
+    async def project_run_state(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        target_state: RunState,
+        terminal_reason: str | None,
+        causation_id: str,
+        client_request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not feature_run_dual_write_enabled():
+            return None
+        return await run_command_handler.project_run_state(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=trigger_message_id,
+            target_state=target_state,
+            terminal_reason=terminal_reason,
+            causation_id=causation_id,
+            client_request_id=client_request_id,
         )
 
 
