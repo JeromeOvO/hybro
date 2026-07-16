@@ -21,6 +21,7 @@ from execution.orchestration.run_store import (
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.orchestration import (
+    CompletionEvidence,
     DispatchIntent,
     OrchestrationStatus,
     PlannedDelegateTarget,
@@ -160,6 +161,11 @@ async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
         PlannerAction(
             action=PlannerActionType.COMPLETE,
             reasoning="Projection reviewed",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["The selected projection was reviewed."],
+                final_answer_intent="Summarize the projection review.",
+                confidence=1.0,
+            ),
         ),
     )
     executor = _executor(
