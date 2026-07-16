@@ -224,6 +224,15 @@ def _input_modes(candidate: Any) -> list[str]:
     return modes or ["text"]
 
 
+def _candidate_needs_text_projection(candidate: Any, source_mime: str) -> bool:
+    modes = _input_modes(candidate)
+    normalized_modes = {mode.strip().lower() for mode in modes}
+    accepts_text = "text" in normalized_modes or mime_type_is_accepted(
+        "text/plain", modes
+    )
+    return accepts_text and not mime_type_is_accepted(source_mime, modes)
+
+
 class OrchestrationResourceProvider:
     def __init__(
         self,
@@ -261,7 +270,15 @@ class OrchestrationResourceProvider:
                 and mime_type_is_accepted(attachment.mime_type, _input_modes(candidate))
             ]
             projection = self._projection_refs_by_run[run_id].get(source_ref_id)
-            if projection is None and attachment.mime_type == "application/pdf":
+            needs_text_projection = any(
+                _candidate_needs_text_projection(candidate, attachment.mime_type)
+                for candidate in candidate_agents
+            )
+            if (
+                projection is None
+                and attachment.mime_type == "application/pdf"
+                and needs_text_projection
+            ):
                 projection = await self.ensure_projection(
                     source_ref_id,
                     run_id=run_id,
@@ -336,6 +353,16 @@ class OrchestrationResourceProvider:
         payload = self._payloads_by_run[run_id].get(ref_id)
         if payload is not None:
             return payload
+        projection_source = self._attachment_by_projection_ref(ref_id, attachments)
+        if projection_source is not None:
+            projection = await self.ensure_projection(
+                attachment_resource_ref_id(projection_source.file_id),
+                run_id=run_id,
+                attachments=attachments,
+            )
+            if projection.status != "ready":
+                return None
+            return self._payloads_by_run[run_id].get(ref_id)
         attachment = self._attachment_by_resource_ref(ref_id, attachments)
         if attachment is None:
             return None
@@ -370,5 +397,15 @@ class OrchestrationResourceProvider:
     ) -> UserAttachment | None:
         for attachment in attachments:
             if attachment_resource_ref_id(attachment.file_id) == ref_id:
+                return attachment
+        return None
+
+    @staticmethod
+    def _attachment_by_projection_ref(
+        ref_id: str,
+        attachments: Sequence[UserAttachment],
+    ) -> UserAttachment | None:
+        for attachment in attachments:
+            if text_projection_ref_id(attachment.file_id) == ref_id:
                 return attachment
         return None

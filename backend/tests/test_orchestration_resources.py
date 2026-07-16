@@ -242,6 +242,63 @@ async def test_resource_catalog_generates_and_resolves_projection_without_presee
 
 
 @pytest.mark.asyncio
+async def test_resource_catalog_skips_projection_when_all_candidates_accept_pdf():
+    projection_service = SimpleNamespace(ensure_projection=AsyncMock())
+    provider = OrchestrationResourceProvider(projection_service=projection_service)
+
+    resources = await provider.list_resources(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        attachments=[_pdf_attachment()],
+        candidate_agents=[
+            SimpleNamespace(agent_id="pdf-agent", input_modes=["application/pdf"])
+        ],
+    )
+
+    assert resources[0].projections == []
+    projection_service.ensure_projection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resource_provider_lazily_regenerates_projection_after_cache_miss():
+    projection_service = SimpleNamespace(
+        ensure_projection=AsyncMock(
+            return_value=(
+                ResourceProjectionRef(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    source_ref_id="file:file-1",
+                    mime_type="text/plain",
+                    status="ready",
+                    recommended_for_input_modes=["text"],
+                ),
+                ResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="regenerated text",
+                ),
+            )
+        )
+    )
+    provider = OrchestrationResourceProvider(projection_service=projection_service)
+
+    payload = await provider.resolve_ref(
+        "ctx:file-file-1:text",
+        run_id="run-1",
+        attachments=[_pdf_attachment()],
+    )
+
+    assert payload is not None
+    assert payload.text == "regenerated text"
+    projection_service.ensure_projection.assert_awaited_once_with(
+        _pdf_attachment(),
+        target_mime="text/plain",
+    )
+
+
+@pytest.mark.asyncio
 async def test_resource_provider_evicts_oldest_run_cache():
     provider = OrchestrationResourceProvider(max_cached_runs=1)
 
