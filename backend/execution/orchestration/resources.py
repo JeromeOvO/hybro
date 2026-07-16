@@ -67,7 +67,7 @@ class AttachmentProjectionService:
         *,
         content_reader: Any,
         max_pdf_bytes: int = 10 * 1024 * 1024,
-        max_text_chars: int = 80_000,
+        max_text_chars: int = 120_000,
     ) -> None:
         self._content_reader = content_reader
         self._max_pdf_bytes = max_pdf_bytes

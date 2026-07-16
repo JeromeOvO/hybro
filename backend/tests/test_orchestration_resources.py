@@ -111,6 +111,12 @@ def test_resource_ref_helpers_are_deterministic():
     assert text_projection_ref_id("file-1") == "ctx:file-file-1:text"
 
 
+def test_attachment_projection_service_uses_public_default_text_limit():
+    service = AttachmentProjectionService(content_reader=AsyncMock())
+
+    assert service._max_text_chars == 120_000
+
+
 @pytest.mark.asyncio
 async def test_pdf_projection_failure_for_empty_text_pdf():
     content_reader = AsyncMock()
