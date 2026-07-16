@@ -8,6 +8,7 @@ import pytest
 from common.config.settings import Settings
 from common.utils.time import utcnow
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+from execution.orchestration.resources import ResourcePayload
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
@@ -107,6 +108,81 @@ async def test_run_v2_builds_resource_catalog_before_planning():
     assert result.status == RunStatus.FAILED
     provider.list_resources.assert_awaited_once()
     assert planner.contexts[0].available_resources == []
+
+
+@pytest.mark.asyncio
+async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use the selected projection"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Use the selected projection",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    task="Review the projection",
+                    context_refs=[
+                        {
+                            "kind": "context",
+                            "ref_id": "ctx:file-file-1:text",
+                        }
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="Projection reviewed",
+        ),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected submission text",
+            )
+        ),
+    )
+
+    result = await executor.run_v2(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use the selected projection",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    dispatched_message = (
+        executor.agent_message_processor.process_single_message.await_args.args[0]
+    )
+    resolved = dispatched_message.extend_info["resolved_dispatch_payload_refs"]
+    assert resolved["context_refs"] == ["ctx:file-file-1:text"]
+    assert resolved["resource_payloads"][0]["text"] == (
+        "Projected submission text"
+    )
 
 
 def _agent_message(message_id: str) -> SimpleNamespace:

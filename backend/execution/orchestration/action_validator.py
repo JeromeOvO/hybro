@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from models.orchestration import PlannerAction, PlannerActionType
+from models.orchestration import (
+    OrchestrationRunState,
+    PlannedDelegateTarget,
+    PlannerAction,
+    PlannerActionType,
+)
 
 
 class PlannerActionValidationError(ValueError):
@@ -22,6 +27,7 @@ class PlannerActionValidator:
         steps_used: int = 0,
         step_budget: int = 8,
         has_agent_output: bool = False,
+        run_state: OrchestrationRunState | None = None,
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 
@@ -53,18 +59,7 @@ class PlannerActionValidator:
                         "non-empty task"
                     )
                 if run_state is not None:
-                    artifact_keys = {
-                        str(artifact.get("artifact_key"))
-                        for artifact in run_state.artifacts
-                        if isinstance(artifact, dict)
-                        and artifact.get("artifact_key") is not None
-                    }
-                    for ref in target.artifact_refs:
-                        if ref.required and ref.ref_id not in artifact_keys:
-                            raise PlannerActionValidationError(
-                                f"delegate target {target.agent_id!r} references "
-                                f"unknown artifact {ref.ref_id!r}"
-                            )
+                    _validate_required_artifact_refs(target, run_state)
 
         if (
             action.action
@@ -76,3 +71,20 @@ class PlannerActionValidator:
             )
 
         return action
+
+
+def _validate_required_artifact_refs(
+    target: PlannedDelegateTarget,
+    run_state: OrchestrationRunState,
+) -> None:
+    artifact_keys = {
+        str(artifact.get("artifact_key"))
+        for artifact in run_state.artifacts
+        if isinstance(artifact, dict) and artifact.get("artifact_key") is not None
+    }
+    for ref in target.artifact_refs:
+        if ref.required and ref.ref_id not in artifact_keys:
+            raise PlannerActionValidationError(
+                f"delegate target {target.agent_id!r} references "
+                f"unknown artifact {ref.ref_id!r}"
+            )

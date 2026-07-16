@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -6,6 +7,7 @@ from execution.orchestration.dispatch_payload import (
     DispatchPayloadValidationError,
     resolve_dispatch_payload_refs,
 )
+from execution.orchestration.resources import ResourcePayload
 from models.orchestration import (
     DispatchContentRef,
     DispatchRefKind,
@@ -32,7 +34,8 @@ def _state():
     )
 
 
-def test_resolver_returns_only_explicit_attachment_refs_supported_by_agent_card():
+@pytest.mark.asyncio
+async def test_resolver_returns_only_explicit_attachment_refs_supported_by_agent_card():
     attachment = UserAttachment(
         file_id="file-1",
         s3_key="uploads/room-1/file-1/report.pdf",
@@ -40,7 +43,7 @@ def test_resolver_returns_only_explicit_attachment_refs_supported_by_agent_card(
         file_name="report.pdf",
         size_bytes=16,
     )
-    payload = resolve_dispatch_payload_refs(
+    payload = await resolve_dispatch_payload_refs(
         run_state=_state(),
         target_agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
         context_refs=[],
@@ -56,7 +59,8 @@ def test_resolver_returns_only_explicit_attachment_refs_supported_by_agent_card(
     assert payload.attachment_failures == []
 
 
-def test_resolver_rejects_unreferenced_original_attachment():
+@pytest.mark.asyncio
+async def test_resolver_rejects_unreferenced_original_attachment():
     attachment = UserAttachment(
         file_id="file-1",
         s3_key="uploads/room-1/file-1/report.pdf",
@@ -64,7 +68,7 @@ def test_resolver_rejects_unreferenced_original_attachment():
         file_name="report.pdf",
         size_bytes=16,
     )
-    payload = resolve_dispatch_payload_refs(
+    payload = await resolve_dispatch_payload_refs(
         run_state=_state(),
         target_agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
         context_refs=[],
@@ -77,7 +81,8 @@ def test_resolver_rejects_unreferenced_original_attachment():
     assert payload.attachment_failures == []
 
 
-def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
+@pytest.mark.asyncio
+async def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
     attachment = UserAttachment(
         file_id="file-1",
         s3_key="uploads/room-1/file-1/report.pdf",
@@ -85,7 +90,7 @@ def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
         file_name="report.pdf",
         size_bytes=16,
     )
-    payload = resolve_dispatch_payload_refs(
+    payload = await resolve_dispatch_payload_refs(
         run_state=_state(),
         target_agent_card=SimpleNamespace(default_input_modes=["text"]),
         context_refs=[],
@@ -106,9 +111,10 @@ def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
     ]
 
 
-def test_resolver_rejects_unknown_required_artifact_ref():
+@pytest.mark.asyncio
+async def test_resolver_rejects_unknown_required_artifact_ref():
     with pytest.raises(DispatchPayloadValidationError, match="unknown artifact"):
-        resolve_dispatch_payload_refs(
+        await resolve_dispatch_payload_refs(
             run_state=_state(),
             target_agent_card=SimpleNamespace(default_input_modes=["text"]),
             context_refs=[],
@@ -118,3 +124,35 @@ def test_resolver_rejects_unknown_required_artifact_ref():
             attachment_refs=[],
             original_attachments=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_resolver_materializes_selected_projected_resource():
+    provider = SimpleNamespace(
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected submission text",
+            )
+        )
+    )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx:file-file-1:text",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[],
+        resource_provider=provider,
+    )
+
+    assert payload.selected_context_refs == ["ctx:file-file-1:text"]
+    assert payload.resource_payloads[0].text == "Projected submission text"

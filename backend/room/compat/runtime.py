@@ -3525,6 +3525,31 @@ class RoomServices:
             # Log but continue with original message if context building fails
             logger.warning(f"Failed to build context for agent message: {e}")
 
+        resolved_payload_refs = (
+            message.extend_info.get("resolved_dispatch_payload_refs")
+            if isinstance(message.extend_info, dict)
+            else None
+        )
+        resolved_resource_payloads = (
+            resolved_payload_refs.get("resource_payloads")
+            if isinstance(resolved_payload_refs, dict)
+            else None
+        )
+        if isinstance(resolved_resource_payloads, list):
+            for payload in resolved_resource_payloads:
+                if not isinstance(payload, dict):
+                    continue
+                text = payload.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if payload.get("mime_type") != "text/plain":
+                    continue
+                ref_id = payload.get("ref_id")
+                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
+                agent_message.parts.append(
+                    Part(root=TextPart(text=f"[Selected resource: {label}]\n{text}"))
+                )
+
         # Append file parts from user attachments after explicit preflight checks.
         # Trace back through agent message chain to find the originating user message.
         # In chained mention flows, later agents have related_message_id pointing to
@@ -3550,6 +3575,27 @@ class RoomServices:
                 if not isinstance(attachment, dict | UserAttachment):
                     continue
                 user_attachments.append(UserAttachment.model_validate(attachment))
+        if (
+            user_attachments
+            and isinstance(message.extend_info, dict)
+            and message.extend_info.get("attachment_forwarding_policy")
+            == "explicit_refs_only"
+        ):
+            resolved_refs = message.extend_info.get("resolved_dispatch_payload_refs")
+            selected_refs = (
+                resolved_refs.get("attachment_refs")
+                if isinstance(resolved_refs, dict)
+                else []
+            )
+            selected_ref_set = {
+                str(ref) for ref in selected_refs if isinstance(ref, str)
+            }
+            user_attachments = [
+                attachment
+                for attachment in user_attachments
+                if attachment.file_id in selected_ref_set
+                or f"file:{attachment.file_id}" in selected_ref_set
+            ]
         if user_attachments:
             agent_card_obj = getattr(agent, "agent_card", None)
             if agent_card_obj is None:

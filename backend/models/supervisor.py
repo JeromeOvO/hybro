@@ -12,12 +12,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from common.utils.time import utcnow
 from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
+from common.utils.time import utcnow
 
 if TYPE_CHECKING:
     from models.agent import Agent
 
+from models.orchestration import DispatchContentRef, DispatchExpectedOutput
 
 # =========================================================================
 # Shared models
@@ -91,6 +92,11 @@ class DelegateTarget(BaseModel):
     agent_id: str
     agent_name: str
     task: str
+    context_refs: list[DispatchContentRef] = Field(default_factory=list)
+    artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
+    attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
+    expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
+    attachment_policy: str = "explicit_refs_only"
 
 
 class ClarifyQuestion(BaseModel):

@@ -172,8 +172,8 @@ class OrchestrationPlannerContext(BaseModel):
 def build_orchestration_planner_context(
     *,
     run_state: OrchestrationRunState,
-    candidate_scope: Sequence[Any] | Mapping[str, Any],
     message_text: str,
+    candidate_scope: Sequence[Any] | Mapping[str, Any] = (),
     quote: Any | None = None,
     quote_required: bool = False,
     room_background: str | None = None,

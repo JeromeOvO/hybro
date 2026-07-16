@@ -186,6 +186,7 @@ async def test_planner_adapter_accepts_artifact_refs_without_run_state():
     )
     context = build_orchestration_planner_context(
         run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
         message_text="Use the artifact",
     )
     adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
@@ -243,6 +244,7 @@ async def test_planner_adapter_preserves_raw_delegate_target_refs_and_policy():
     }
     context = build_orchestration_planner_context(
         run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
         message_text="Use selected refs",
     )
     adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
@@ -328,6 +330,7 @@ async def test_planner_adapter_defaults_missing_attachment_policy_to_explicit_re
     }
     context = build_orchestration_planner_context(
         run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
         message_text="Use selected refs",
     )
     adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
@@ -370,6 +373,7 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     supervisor_service = FakeSupervisorService()
     context = build_orchestration_planner_context(
         run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
         message_text="Use selected refs",
     )
     adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
@@ -403,7 +407,11 @@ def test_delegate_rejects_unknown_required_artifact_ref():
     )
 
     with pytest.raises(PlannerActionValidationError, match="unknown artifact"):
-        PlannerActionValidator.validate(action, run_state=state)
+        PlannerActionValidator.validate(
+            action,
+            candidate_agent_ids=["agent-1"],
+            run_state=state,
+        )
 
 
 @pytest.mark.parametrize(

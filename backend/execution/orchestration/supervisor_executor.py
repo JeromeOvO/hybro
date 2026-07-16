@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -34,6 +34,11 @@ from execution.orchestration.action_validator import (
 )
 from execution.orchestration.context_builder import build_orchestration_planner_context
 from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
+from execution.orchestration.dispatch_payload import (
+    DispatchPayloadValidationError,
+    ResolvedDispatchPayload,
+    resolve_dispatch_payload_refs,
+)
 from execution.orchestration.planner import (
     OrchestrationPlanner,
     RoomSupervisorPlannerAdapter,
@@ -59,7 +64,7 @@ from models.orchestration import (
     PlannerActionType,
 )
 from models.processing import ProcessingStatus
-from models.room import CoordinatorAgentId
+from models.room import CoordinatorAgentId, UserAttachment
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -546,6 +551,7 @@ class SupervisorExecutor:
                     steps_used=state.steps_used,
                     step_budget=state.step_budget,
                     has_agent_output=bool(state.agent_outputs),
+                    run_state=state,
                 )
             except PlannerActionValidationError as exc:
                 trajectory.status = TrajectoryStatus.FAILED
@@ -915,6 +921,8 @@ class SupervisorExecutor:
             planned_message_ids=[
                 intent.planned_agent_message_id for intent in intents
             ],
+            run_state=state,
+            original_attachments=self._user_attachments_from_message(user_message),
         )
         entry.results = results
         entry.completed_at = utcnow()
@@ -1119,6 +1127,11 @@ class SupervisorExecutor:
                     agent_id=intent.agent_id,
                     agent_name=agent_names.get(intent.agent_id) or intent.agent_id,
                     task=intent.task,
+                    context_refs=list(intent.context_refs),
+                    artifact_refs=list(intent.artifact_refs),
+                    attachment_refs=list(intent.attachment_refs),
+                    expected_outputs=list(intent.expected_outputs),
+                    attachment_policy=intent.attachment_policy,
                 )
                 for intent in replay_intents
             ]
@@ -1134,6 +1147,8 @@ class SupervisorExecutor:
                 planned_message_ids=[
                     intent.planned_agent_message_id for intent in replay_intents
                 ],
+                run_state=state,
+                original_attachments=self._user_attachments_from_message(user_message),
             )
             results.extend(replay_results)
 
@@ -2163,6 +2178,11 @@ class SupervisorExecutor:
             agent_id=target.agent_id,
             task=target.task,
             task_hash=hashlib.sha256(target.task.encode("utf-8")).hexdigest(),
+            context_refs=list(target.context_refs),
+            artifact_refs=list(target.artifact_refs),
+            attachment_refs=list(target.attachment_refs),
+            expected_outputs=list(target.expected_outputs),
+            attachment_policy=target.attachment_policy,
         )
 
     @staticmethod
@@ -2184,6 +2204,11 @@ class SupervisorExecutor:
                             or target.agent_id
                         ),
                         task=target.task,
+                        context_refs=list(target.context_refs),
+                        artifact_refs=list(target.artifact_refs),
+                        attachment_refs=list(target.attachment_refs),
+                        expected_outputs=list(target.expected_outputs),
+                        attachment_policy=target.attachment_policy,
                     )
                     for target in planner_action.targets
                 ],
@@ -3485,6 +3510,37 @@ class SupervisorExecutor:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _user_attachments_from_message(user_message) -> list[UserAttachment]:
+        message_content = getattr(user_message, "message_content", None)
+        attachments = getattr(message_content, "attachments", None)
+        if not isinstance(attachments, Sequence) or isinstance(
+            attachments,
+            str | bytes,
+        ):
+            return []
+
+        normalized: list[UserAttachment] = []
+        for attachment in attachments:
+            if isinstance(attachment, UserAttachment):
+                normalized.append(attachment)
+                continue
+            try:
+                if isinstance(attachment, Mapping):
+                    normalized.append(UserAttachment.model_validate(attachment))
+                elif hasattr(attachment, "model_dump"):
+                    normalized.append(
+                        UserAttachment.model_validate(
+                            attachment.model_dump(mode="json")
+                        )
+                    )
+            except Exception:
+                logger.warning(
+                    "Skipping invalid user attachment while resolving dispatch refs",
+                    exc_info=True,
+                )
+        return normalized
+
+    @staticmethod
     def _step_result_from_existing_agent_message(
         message,
         *,
@@ -3527,6 +3583,8 @@ class SupervisorExecutor:
         request_user_id: str | None,
         quoted_text: str | None,
         planned_message_ids: list[str] | None = None,
+        run_state: OrchestrationRunState | None = None,
+        original_attachments: list | None = None,
     ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
         valid_ids = {a.agent_id for a in agent_registry}
@@ -3622,6 +3680,31 @@ class SupervisorExecutor:
                             error_message=f"Rate limited: {rate_result.reason}",
                         )
 
+                resolved_payload: ResolvedDispatchPayload | None = None
+                if run_state is not None:
+                    try:
+                        resolved_payload = await resolve_dispatch_payload_refs(
+                            run_state=run_state,
+                            target_agent_card=getattr(agent, "agent_card", None)
+                            or agent,
+                            context_refs=target.context_refs,
+                            artifact_refs=target.artifact_refs,
+                            attachment_refs=target.attachment_refs,
+                            original_attachments=original_attachments or [],
+                            resource_provider=self.orchestration_resource_provider,
+                        )
+                    except DispatchPayloadValidationError as exc:
+                        return StepResult(
+                            step_number=step_number,
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                            task=target.task,
+                            response_text="",
+                            success=False,
+                            status=StepStatus.FAILED,
+                            error_message=str(exc),
+                        )
+
                 # Create RoomAgentMessage only after validation passes
                 message = self.room_runtime.create_agent_message(
                     room_id=room_id,
@@ -3638,6 +3721,41 @@ class SupervisorExecutor:
                 )
                 if planned_message_id:
                     message.message_id = planned_message_id
+                if resolved_payload is not None:
+                    if not isinstance(message.extend_info, dict):
+                        message.extend_info = {}
+                    message.extend_info["attachment_forwarding_policy"] = (
+                        "explicit_refs_only"
+                    )
+                    message.extend_info["resolved_dispatch_payload_refs"] = {
+                        "context_refs": list(
+                            resolved_payload.selected_context_refs
+                        ),
+                        "artifact_refs": list(
+                            resolved_payload.selected_artifact_refs
+                        ),
+                        "attachment_refs": list(
+                            resolved_payload.selected_attachment_refs
+                        ),
+                        "resource_payloads": [
+                            payload.model_dump(mode="json")
+                            for payload in resolved_payload.resource_payloads
+                        ],
+                    }
+                    message.extend_info["dispatch_payload_refs"] = {
+                        "context_refs": [
+                            ref.model_dump(mode="json")
+                            for ref in target.context_refs
+                        ],
+                        "artifact_refs": [
+                            ref.model_dump(mode="json")
+                            for ref in target.artifact_refs
+                        ],
+                        "attachment_refs": [
+                            ref.model_dump(mode="json")
+                            for ref in target.attachment_refs
+                        ],
+                    }
                 inserted = await self.message_writer.add_room_agent_message(message)
                 if inserted is False:
                     existing = (

@@ -10,7 +10,6 @@ from pypdf import PdfReader
 from common.utils.a2a_file_modes import mime_type_is_accepted
 from models.room import UserAttachment
 
-
 ResourceKind = Literal["attachment", "context", "artifact"]
 ResourceOrigin = Literal["user_message", "context_projection", "agent_message", "system"]
 ResourceStatus = Literal["ready", "processing", "failed", "unavailable"]
