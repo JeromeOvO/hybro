@@ -867,13 +867,23 @@ class RoomSupervisorService:
                 not isinstance(task, str) or not task.strip()
             ):
                 raise ValueError("delegate planner action target requires task")
-            targets.append(
-                {
-                    "agent_id": agent_id,
-                    "agent_name": target.get("agent_name"),
-                    "task": task,
-                }
-            )
+            parsed_target = {
+                "agent_id": agent_id,
+                "agent_name": target.get("agent_name"),
+                "task": task,
+            }
+            target_payload = dict(target)
+            target_payload.setdefault("attachment_policy", "explicit_refs_only")
+            for field_name in (
+                "context_refs",
+                "artifact_refs",
+                "attachment_refs",
+                "expected_outputs",
+                "attachment_policy",
+            ):
+                if field_name in target_payload:
+                    parsed_target[field_name] = target_payload[field_name]
+            targets.append(parsed_target)
 
         raw_questions = response_json.get("questions")
         if raw_questions is None and isinstance(
@@ -932,18 +942,22 @@ class RoomSupervisorService:
         *,
         system_prompt: str,
         user_prompt: str,
+        schema: dict | None = None,
     ) -> dict:
         """Call the supervisor JSON model through the public planner boundary."""
 
         return await self._call_supervisor_llm(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            schema=schema,
         )
 
     async def _call_supervisor_llm(
         self,
         system_prompt: str,
         user_prompt: str,
+        *,
+        schema: dict | None = None,
     ) -> dict:
         """Call the Supervisor LLM and return JSON response.
 
@@ -952,10 +966,13 @@ class RoomSupervisorService:
         """
         if self._supervisor_service is None:
             raise LLMServiceNotBoundError("SupervisorLLMService is not bound")
-        return await self._supervisor_service.call_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        kwargs = {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        }
+        if schema is not None:
+            kwargs["schema"] = schema
+        return await self._supervisor_service.call_json(**kwargs)
 
     async def _call_supervisor_llm_text(
         self,

@@ -6,9 +6,18 @@ from execution.orchestration.run_reducer import (
     mark_terminal,
 )
 from models.orchestration import (
+    AuthorizationBasis,
+    CandidateAgentSnapshot,
+    CandidateScopeSnapshot,
+    CompletionEvidence,
+    DispatchContentRef,
+    DispatchExpectedOutput,
+    DispatchRefKind,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
+    ParticipantSnapshot,
+    PlannedDelegateTarget,
     PlannerAction,
 )
 
@@ -49,6 +58,43 @@ def test_planner_action_schema_rejects_unknown_actions():
             action="done",
             reasoning="legacy terminal",
         )
+
+
+def test_delegate_target_preserves_explicit_resource_refs():
+    target = PlannedDelegateTarget(
+        agent_id="agent-1",
+        task="Review the selected submission.",
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx:file-file-1:text",
+            )
+        ],
+        attachment_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ATTACHMENT,
+                ref_id="file:file-1",
+                mime_type="application/pdf",
+                required=False,
+            )
+        ],
+        expected_outputs=[
+            DispatchExpectedOutput(kind="summary", description="Review summary")
+        ],
+    )
+
+    assert target.context_refs[0].ref_id == "ctx:file-file-1:text"
+    assert target.attachment_refs[0].required is False
+    assert target.expected_outputs[0].kind == "summary"
+    assert target.attachment_policy == "explicit_refs_only"
+
+
+def test_candidate_snapshot_defaults_to_text_input_mode():
+    candidate = CandidateAgentSnapshot(agent_id="agent-1")
+
+    assert candidate.input_modes == ["text"]
+    assert candidate.output_modes == []
+    assert candidate.supports_file_upload is False
 
 
 def test_mark_running_returns_updated_copy_without_mutating_input():
@@ -120,3 +166,97 @@ def test_mark_terminal_coerces_raw_string_status_to_enum():
     assert updated.status == OrchestrationStatus.COMPLETED
     assert isinstance(updated.status, OrchestrationStatus)
     assert updated.terminal_reason == "done"
+
+
+def _candidate_scope():
+    return CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        revision=1,
+        source="saved_group",
+        room_id="room-1",
+        group_id="group-1",
+        agent_ids=["agent-1", "agent-2"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Broker",
+                role="broker",
+                capability_summary="Collects broker requirements.",
+                status="active",
+                source="saved_group",
+            ),
+            CandidateAgentSnapshot(
+                agent_id="agent-2",
+                name="Insurer",
+                role="insurer",
+                capability_summary="Produces quote options.",
+                status="active",
+                source="saved_group",
+            ),
+        ],
+        authorization_basis=AuthorizationBasis(
+            kind="saved_group_member",
+            room_id="room-1",
+            group_id="group-1",
+            selected_by_user_id="user-1",
+        ),
+    )
+
+
+def test_candidate_scope_snapshot_is_first_class_run_state():
+    scope = _candidate_scope()
+    state = _run_state(candidate_scope=scope)
+
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.source == "saved_group"
+    assert state.candidate_scope.agent_ids == ["agent-1", "agent-2"]
+    assert state.candidate_scope.authorization_basis.kind == "saved_group_member"
+
+
+def test_participant_snapshot_preserves_debate_ordering_and_round():
+    participant = ParticipantSnapshot(
+        mode="debate",
+        ordered_agent_ids=["agent-1", "agent-2"],
+        current_round=1,
+        max_rounds=3,
+        turn_policy="debate_rounds",
+        completed_agent_ids=["agent-1"],
+    )
+    state = _run_state(participant_snapshot=participant)
+
+    assert state.participant_snapshot.mode == "debate"
+    assert state.participant_snapshot.ordered_agent_ids == ["agent-1", "agent-2"]
+    assert state.participant_snapshot.current_round == 1
+
+
+def test_completion_evidence_confidence_must_be_normalized():
+    valid = CompletionEvidence(
+        satisfied_criteria=["criterion-1"],
+        referenced_fact_ids=["fact-1"],
+        referenced_artifact_keys=["artifact-1"],
+        unresolved_questions=[],
+        final_answer_intent="answer_user",
+        confidence=0.75,
+    )
+
+    assert valid.confidence == 0.75
+
+    with pytest.raises(Exception, match="confidence"):
+        CompletionEvidence(
+            satisfied_criteria=["criterion-1"],
+            referenced_fact_ids=["fact-1"],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=1.5,
+        )
+
+    with pytest.raises(Exception, match="confidence"):
+        CompletionEvidence(
+            satisfied_criteria=["criterion-1"],
+            referenced_fact_ids=["fact-1"],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=float("nan"),
+        )

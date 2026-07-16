@@ -44,6 +44,7 @@ def create_room_message_center(
         "room_supervisor_service": _defaults.room_supervisor_service,
         "orchestration_run_store": _defaults.orchestration_run_store,
         "orchestration_planner": _defaults.orchestration_planner,
+        "orchestration_resource_provider": None,
         "hitl_coordinator": None,
         "task_notifications": None,
         "task_notification_impl": None,

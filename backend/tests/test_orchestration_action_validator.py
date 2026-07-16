@@ -4,12 +4,31 @@ from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
 )
+from execution.orchestration.context_builder import build_orchestration_planner_context
+from execution.orchestration.planner import (
+    PLANNER_ACTION_RESPONSE_SCHEMA,
+    RoomSupervisorPlannerAdapter,
+)
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import (
+    DispatchContentRef,
+    DispatchExpectedOutput,
+    DispatchRefKind,
+    OrchestrationRunState,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
 )
+
+
+def _state_for_validation() -> OrchestrationRunState:
+    return OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        goal="Coordinate this",
+        candidate_agent_ids=["agent-1"],
+    )
 
 
 def _target(agent_id: str = "agent-1", task: str = "do work"):
@@ -145,6 +164,254 @@ def test_delegate_rejects_empty_target_task():
 
     with pytest.raises(PlannerActionValidationError, match="task"):
         _validate(action)
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_accepts_artifact_refs_without_run_state():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Use the existing artifact.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Use the quote artifact.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="artifact-1",
+                    )
+                ],
+            )
+        ],
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Use the artifact",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
+
+    result = await adapter.plan(context)
+
+    assert result is action
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_preserves_raw_delegate_target_refs_and_policy():
+    raw_action = {
+        "action": "delegate",
+        "reasoning": "Use selected references.",
+        "targets": [
+            {
+                "agent_id": "agent-1",
+                "agent_name": "Agent One",
+                "task": "Underwrite with selected context.",
+                "context_refs": [
+                    {
+                        "kind": "context",
+                        "ref_id": "fact-1",
+                        "source_agent_message_id": "agent-msg-1",
+                        "mime_type": "text/plain",
+                        "required": True,
+                    }
+                ],
+                "artifact_refs": [
+                    {
+                        "kind": "artifact",
+                        "ref_id": "artifact-1",
+                        "mime_type": "application/json",
+                        "required": False,
+                    }
+                ],
+                "attachment_refs": [
+                    {
+                        "kind": "attachment",
+                        "ref_id": "file-1",
+                        "mime_type": "application/pdf",
+                        "required": False,
+                    }
+                ],
+                "expected_outputs": [
+                    {
+                        "kind": "quote_summary",
+                        "required": True,
+                        "description": "Summarize underwriting blockers.",
+                    }
+                ],
+                "attachment_policy": "compatible_only",
+            }
+        ],
+    }
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Use selected refs",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
+
+    result = await adapter.plan(context)
+
+    target = result.targets[0]
+    assert target.context_refs == [
+        DispatchContentRef(
+            kind=DispatchRefKind.CONTEXT,
+            ref_id="fact-1",
+            source_agent_message_id="agent-msg-1",
+            mime_type="text/plain",
+        )
+    ]
+    assert target.artifact_refs == [
+        DispatchContentRef(
+            kind=DispatchRefKind.ARTIFACT,
+            ref_id="artifact-1",
+            mime_type="application/json",
+            required=False,
+        )
+    ]
+    assert target.attachment_refs == [
+        DispatchContentRef(
+            kind=DispatchRefKind.ATTACHMENT,
+            ref_id="file-1",
+            mime_type="application/pdf",
+            required=False,
+        )
+    ]
+    assert target.expected_outputs == [
+        DispatchExpectedOutput(
+            kind="quote_summary",
+            required=True,
+            description="Summarize underwriting blockers.",
+        )
+    ]
+    assert target.attachment_policy == "compatible_only"
+
+
+def test_planner_schema_does_not_expose_attachment_policy():
+    target_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["targets"]["items"]
+
+    assert "attachment_policy" not in target_schema["properties"]
+    assert "attachment_policy" not in target_schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_defaults_missing_attachment_policy_to_explicit_refs_only():
+    raw_action = {
+        "action": "delegate",
+        "reasoning": "Use selected projection.",
+        "targets": [
+            {
+                "agent_id": "agent-1",
+                "agent_name": "Agent One",
+                "task": "Read the selected text projection.",
+                "context_refs": [
+                    {
+                        "kind": "context",
+                        "ref_id": "ctx:file-file-1:text",
+                        "source_agent_message_id": None,
+                        "mime_type": "text/plain",
+                        "required": True,
+                    }
+                ],
+                "artifact_refs": [],
+                "attachment_refs": [],
+                "expected_outputs": [
+                    {
+                        "kind": "summary",
+                        "required": True,
+                        "description": "Summarize the projection.",
+                    }
+                ],
+            }
+        ],
+        "questions": [],
+        "synthesis_instruction": None,
+        "failure_reason": None,
+        "completion_evidence": None,
+    }
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Use selected refs",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
+
+    result = await adapter.plan(context)
+
+    assert result.targets[0].attachment_policy == "explicit_refs_only"
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_requests_strict_planner_action_schema():
+    class FakeSupervisorService:
+        def __init__(self):
+            self.schema = None
+
+        async def call_planner_json(self, *, system_prompt, user_prompt, schema=None):
+            self.schema = schema
+            return {
+                "action": "delegate",
+                "reasoning": "Use selected agent.",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "task": "Do the requested work.",
+                        "expected_outputs": [
+                            {
+                                "kind": "summary",
+                                "required": True,
+                                "description": "Summarize the result.",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        @staticmethod
+        def parse_planner_action(response_json):
+            return RoomSupervisorService.parse_planner_action(response_json)
+
+    supervisor_service = FakeSupervisorService()
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Use selected refs",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    assert supervisor_service.schema is not None
+    target_schema = supervisor_service.schema["properties"]["targets"]["items"]
+    expected_outputs_schema = target_schema["properties"]["expected_outputs"]
+    assert expected_outputs_schema["items"]["type"] == "object"
+    assert "kind" in expected_outputs_schema["items"]["required"]
+
+
+def test_delegate_rejects_unknown_required_artifact_ref():
+    state = _state_for_validation()
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Use missing artifact",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Use the missing artifact.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="missing",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError, match="unknown artifact"):
+        PlannerActionValidator.validate(
+            action,
+            candidate_agent_ids=["agent-1"],
+            run_state=state,
+        )
 
 
 @pytest.mark.parametrize(

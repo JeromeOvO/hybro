@@ -158,6 +158,26 @@ async def test_supervisor_service_delegates_json_to_focused_service():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_planner_json_forwards_schema_to_focused_service():
+    supervisor = AsyncMock()
+    supervisor.call_json = AsyncMock(return_value={"action": "fail"})
+    service = RoomSupervisorService(supervisor_service=supervisor)
+    schema = {"type": "object"}
+
+    await service.call_planner_json(
+        system_prompt="system",
+        user_prompt="user",
+        schema=schema,
+    )
+
+    supervisor.call_json.assert_awaited_once_with(
+        system_prompt="system",
+        user_prompt="user",
+        schema=schema,
+    )
+
+
+@pytest.mark.asyncio
 async def test_supervisor_service_delegates_text_stream_to_focused_service():
     async def stream(system_prompt: str, user_prompt: str):
         yield f"{system_prompt}:{user_prompt}"

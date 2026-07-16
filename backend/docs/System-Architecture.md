@@ -384,6 +384,16 @@ the winning writer to continue, and deterministic supervisor HITL artifacts can
 finish materializing from an `INGESTING` checkpoint without re-planning. Legacy
 supervisor requests continue to use the existing loop.
 
+The v2 planner receives a bounded resource catalog for user attachments and
+generated projections. Resource references are explicit: planner targets select
+context, artifact, or attachment refs, dispatch validates those refs against the
+run state and Agent Card input modes, and only selected payloads are materialized
+for the target Agent. PDF text projection is size-bounded and injected as
+selected context, while raw attachments remain behind an explicit-ref-only
+forwarding policy. The resource provider and projection service are assembled in
+`container.py`; failure recovery and retry policy remain separate orchestration
+concerns.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,
