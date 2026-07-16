@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Sequence
 from io import BytesIO
 from typing import Any, Literal, Protocol
@@ -228,10 +229,16 @@ class OrchestrationResourceProvider:
         self,
         *,
         projection_service: AttachmentProjectionServicePort | None = None,
+        max_cached_runs: int = 128,
     ) -> None:
         self._projection_service = projection_service
-        self._payloads_by_ref: dict[str, ResourcePayload] = {}
-        self._projection_refs_by_source: dict[str, ResourceProjectionRef] = {}
+        self._max_cached_runs = max_cached_runs
+        self._payloads_by_run: OrderedDict[str, dict[str, ResourcePayload]] = (
+            OrderedDict()
+        )
+        self._projection_refs_by_run: OrderedDict[
+            str, dict[str, ResourceProjectionRef]
+        ] = OrderedDict()
 
     async def list_resources(
         self,
@@ -242,6 +249,7 @@ class OrchestrationResourceProvider:
         attachments: Sequence[UserAttachment],
         candidate_agents: Sequence[Any],
     ) -> list[ResourceRef]:
+        self._touch_run(run_id)
         resources: list[ResourceRef] = []
         for attachment in attachments:
             source_ref_id = attachment_resource_ref_id(attachment.file_id)
@@ -252,16 +260,12 @@ class OrchestrationResourceProvider:
                 if agent_id is not None
                 and mime_type_is_accepted(attachment.mime_type, _input_modes(candidate))
             ]
-            projection = self._projection_refs_by_source.get(source_ref_id)
+            projection = self._projection_refs_by_run[run_id].get(source_ref_id)
             if projection is None and attachment.mime_type == "application/pdf":
-                projection = ResourceProjectionRef(
-                    ref_id=text_projection_ref_id(attachment.file_id),
-                    kind="context",
-                    source_ref_id=source_ref_id,
-                    mime_type="text/plain",
-                    status="unavailable",
-                    recommended_for_input_modes=["text"],
-                    summary="Text projection has not been generated.",
+                projection = await self.ensure_projection(
+                    source_ref_id,
+                    run_id=run_id,
+                    attachments=attachments,
                 )
             resources.append(
                 ResourceRef(
@@ -283,9 +287,11 @@ class OrchestrationResourceProvider:
         self,
         ref_id: str,
         *,
+        run_id: str,
         attachments: Sequence[UserAttachment],
         target_mime: str = "text/plain",
     ) -> ResourceProjectionRef:
+        self._touch_run(run_id)
         source = self._attachment_by_resource_ref(ref_id, attachments)
         if source is None:
             return ResourceProjectionRef(
@@ -308,24 +314,26 @@ class OrchestrationResourceProvider:
                 recommended_for_input_modes=["text"],
                 summary="Text projection service is unavailable.",
             )
-            self._projection_refs_by_source[ref_id] = projection
+            self._projection_refs_by_run[run_id][ref_id] = projection
             return projection
         projection, payload = await self._projection_service.ensure_projection(
             source,
             target_mime=target_mime,
         )
-        self._projection_refs_by_source[ref_id] = projection
+        self._projection_refs_by_run[run_id][ref_id] = projection
         if payload is not None:
-            self._payloads_by_ref[payload.ref_id] = payload
+            self._payloads_by_run[run_id][payload.ref_id] = payload
         return projection
 
     async def resolve_ref(
         self,
         ref_id: str,
         *,
+        run_id: str,
         attachments: Sequence[UserAttachment],
     ) -> ResourcePayload | None:
-        payload = self._payloads_by_ref.get(ref_id)
+        self._touch_run(run_id)
+        payload = self._payloads_by_run[run_id].get(ref_id)
         if payload is not None:
             return payload
         attachment = self._attachment_by_resource_ref(ref_id, attachments)
@@ -340,10 +348,20 @@ class OrchestrationResourceProvider:
             metadata={
                 "file_id": attachment.file_id,
                 "file_name": attachment.file_name,
-                "s3_key": attachment.s3_key,
                 "size_bytes": attachment.size_bytes,
             },
         )
+
+    def _touch_run(self, run_id: str) -> None:
+        if run_id in self._payloads_by_run:
+            self._payloads_by_run.move_to_end(run_id)
+            self._projection_refs_by_run.move_to_end(run_id)
+            return
+        self._payloads_by_run[run_id] = {}
+        self._projection_refs_by_run[run_id] = {}
+        while len(self._payloads_by_run) > self._max_cached_runs:
+            evicted_run_id, _ = self._payloads_by_run.popitem(last=False)
+            self._projection_refs_by_run.pop(evicted_run_id, None)
 
     @staticmethod
     def _attachment_by_resource_ref(

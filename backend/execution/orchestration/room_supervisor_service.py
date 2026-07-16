@@ -942,12 +942,14 @@ class RoomSupervisorService:
         *,
         system_prompt: str,
         user_prompt: str,
+        schema: dict | None = None,
     ) -> dict:
         """Call the supervisor JSON model through the public planner boundary."""
 
         return await self._call_supervisor_llm(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            schema=schema,
         )
 
     async def _call_supervisor_llm(

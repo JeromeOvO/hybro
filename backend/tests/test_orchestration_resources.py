@@ -66,7 +66,7 @@ async def test_resource_provider_lists_pdf_attachment_with_text_projection_ref()
             mime_type="text/plain",
             status="unavailable",
             recommended_for_input_modes=["text"],
-            summary="Text projection has not been generated.",
+            summary="Text projection service is unavailable.",
         )
     ]
 
@@ -76,6 +76,7 @@ async def test_resource_provider_resolves_raw_attachment_metadata_payload():
     provider = OrchestrationResourceProvider()
     payload = await provider.resolve_ref(
         "file:file-1",
+        run_id="run-1",
         attachments=[_pdf_attachment()],
     )
 
@@ -88,7 +89,6 @@ async def test_resource_provider_resolves_raw_attachment_metadata_payload():
         metadata={
             "file_id": "file-1",
             "file_name": "submission.pdf",
-            "s3_key": "uploads/room-1/file-1/submission.pdf",
             "size_bytes": 128,
         },
     )
@@ -100,6 +100,7 @@ async def test_resource_provider_returns_none_for_unknown_ref():
 
     payload = await provider.resolve_ref(
         "file:missing",
+        run_id="run-1",
         attachments=[_pdf_attachment()],
     )
 
@@ -182,13 +183,82 @@ async def test_provider_caches_successful_projection_payload(monkeypatch):
 
     projection = await provider.ensure_projection(
         "file:file-1",
+        run_id="run-1",
         attachments=[_pdf_attachment()],
     )
     payload = await provider.resolve_ref(
         "ctx:file-file-1:text",
+        run_id="run-1",
         attachments=[_pdf_attachment()],
     )
 
     assert projection.status == "ready"
     assert payload.text == "hello world!"
     assert payload.metadata["is_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_resource_catalog_generates_and_resolves_projection_without_preseed():
+    projection_service = SimpleNamespace(
+        ensure_projection=AsyncMock(
+            return_value=(
+                ResourceProjectionRef(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    source_ref_id="file:file-1",
+                    mime_type="text/plain",
+                    status="ready",
+                    recommended_for_input_modes=["text"],
+                    summary="Projection ready.",
+                ),
+                ResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="projected text",
+                ),
+            )
+        )
+    )
+    provider = OrchestrationResourceProvider(projection_service=projection_service)
+
+    resources = await provider.list_resources(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        attachments=[_pdf_attachment()],
+        candidate_agents=[SimpleNamespace(agent_id="agent-1", input_modes=["text"])],
+    )
+    payload = await provider.resolve_ref(
+        "ctx:file-file-1:text",
+        run_id="run-1",
+        attachments=[_pdf_attachment()],
+    )
+
+    assert resources[0].projections[0].status == "ready"
+    assert payload is not None
+    assert payload.text == "projected text"
+    projection_service.ensure_projection.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resource_provider_evicts_oldest_run_cache():
+    provider = OrchestrationResourceProvider(max_cached_runs=1)
+
+    await provider.list_resources(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        attachments=[],
+        candidate_agents=[],
+    )
+    await provider.list_resources(
+        run_id="run-2",
+        room_id="room-1",
+        user_message_id="msg-1",
+        attachments=[],
+        candidate_agents=[],
+    )
+
+    assert list(provider._payloads_by_run) == ["run-2"]
+    assert list(provider._projection_refs_by_run) == ["run-2"]

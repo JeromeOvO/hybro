@@ -67,6 +67,12 @@ async def resolve_dispatch_payload_refs(
         attachment_refs=attachment_refs,
         original_attachments=original_attachments,
     )
+    if attachment_failures:
+        first_failure = attachment_failures[0]
+        raise DispatchPayloadValidationError(
+            first_failure["message"],
+            code=first_failure["code"],
+        )
 
     return ResolvedDispatchPayload(
         selected_context_refs=selected_context_refs,
@@ -101,6 +107,7 @@ async def _resolve_context_refs(
         payload = (
             await resource_provider.resolve_ref(
                 ref.ref_id,
+                run_id=run_state.run_id,
                 attachments=original_attachments,
             )
             if resource_provider is not None

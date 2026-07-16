@@ -8,7 +8,11 @@ import pytest
 from common.config.settings import Settings
 from common.utils.time import utcnow
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
-from execution.orchestration.resources import ResourcePayload
+from execution.orchestration.resources import (
+    OrchestrationResourceProvider,
+    ResourcePayload,
+    ResourceProjectionRef,
+)
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
@@ -116,7 +120,18 @@ async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
         room_id="room-1",
         message_id="message-1",
         user_id="user-1",
-        message_content=MessageContent(message_text="Use the selected projection"),
+        message_content=MessageContent(
+            message_text="Use the selected projection",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=128,
+                )
+            ],
+        ),
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
@@ -152,16 +167,28 @@ async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
         planner=planner,
         user_message=user_message,
     )
-    executor.orchestration_resource_provider = SimpleNamespace(
-        list_resources=AsyncMock(return_value=[]),
-        resolve_ref=AsyncMock(
-            return_value=ResourcePayload(
-                ref_id="ctx:file-file-1:text",
-                kind="context",
-                mime_type="text/plain",
-                text="Projected submission text",
+    projection_service = SimpleNamespace(
+        ensure_projection=AsyncMock(
+            return_value=(
+                ResourceProjectionRef(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    source_ref_id="file:file-1",
+                    mime_type="text/plain",
+                    status="ready",
+                    recommended_for_input_modes=["text"],
+                ),
+                ResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected submission text",
+                ),
             )
-        ),
+        )
+    )
+    executor.orchestration_resource_provider = OrchestrationResourceProvider(
+        projection_service=projection_service
     )
 
     result = await executor.run_v2(
@@ -183,6 +210,7 @@ async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
     assert resolved["resource_payloads"][0]["text"] == (
         "Projected submission text"
     )
+    projection_service.ensure_projection.assert_awaited_once()
 
 
 def _agent_message(message_id: str) -> SimpleNamespace:

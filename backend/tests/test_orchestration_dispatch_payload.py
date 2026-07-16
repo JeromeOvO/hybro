@@ -82,7 +82,7 @@ async def test_resolver_rejects_unreferenced_original_attachment():
 
 
 @pytest.mark.asyncio
-async def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
+async def test_resolver_rejects_incompatible_explicit_attachment_ref():
     attachment = UserAttachment(
         file_id="file-1",
         s3_key="uploads/room-1/file-1/report.pdf",
@@ -90,25 +90,22 @@ async def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref
         file_name="report.pdf",
         size_bytes=16,
     )
-    payload = await resolve_dispatch_payload_refs(
-        run_state=_state(),
-        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
-        context_refs=[],
-        artifact_refs=[],
-        attachment_refs=[
-            DispatchContentRef(kind=DispatchRefKind.ATTACHMENT, ref_id="file-1")
-        ],
-        original_attachments=[attachment],
-    )
+    with pytest.raises(
+        DispatchPayloadValidationError,
+        match="Agent does not accept report.pdf",
+    ) as exc_info:
+        await resolve_dispatch_payload_refs(
+            run_state=_state(),
+            target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+            context_refs=[],
+            artifact_refs=[],
+            attachment_refs=[
+                DispatchContentRef(kind=DispatchRefKind.ATTACHMENT, ref_id="file-1")
+            ],
+            original_attachments=[attachment],
+        )
 
-    assert payload.selected_attachment_refs == []
-    assert payload.attachment_failures == [
-        {
-            "ref_id": "file-1",
-            "code": "agent_does_not_accept_file_type",
-            "message": "Agent does not accept report.pdf (application/pdf).",
-        }
-    ]
+    assert exc_info.value.code == "agent_does_not_accept_file_type"
 
 
 @pytest.mark.asyncio
@@ -124,6 +121,29 @@ async def test_resolver_rejects_unknown_required_artifact_ref():
             attachment_refs=[],
             original_attachments=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_unknown_required_attachment_ref():
+    with pytest.raises(
+        DispatchPayloadValidationError,
+        match="Attachment ref not found: file:missing",
+    ) as exc_info:
+        await resolve_dispatch_payload_refs(
+            run_state=_state(),
+            target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+            context_refs=[],
+            artifact_refs=[],
+            attachment_refs=[
+                DispatchContentRef(
+                    kind=DispatchRefKind.ATTACHMENT,
+                    ref_id="file:missing",
+                )
+            ],
+            original_attachments=[],
+        )
+
+    assert exc_info.value.code == "attachment_ref_not_found"
 
 
 @pytest.mark.asyncio
@@ -156,3 +176,8 @@ async def test_resolver_materializes_selected_projected_resource():
 
     assert payload.selected_context_refs == ["ctx:file-file-1:text"]
     assert payload.resource_payloads[0].text == "Projected submission text"
+    provider.resolve_ref.assert_awaited_once_with(
+        "ctx:file-file-1:text",
+        run_id="run-1",
+        attachments=[],
+    )
