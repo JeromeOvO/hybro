@@ -362,6 +362,14 @@ bound. Sparse or identical terminal replays preserve richer output and do not
 advance the run-state version. These boundaries do not enable the state-driven
 supervisor loop.
 
+HITL records, execution DTOs, delivery events, live SSE frames, and catch-up
+responses preserve optional `orchestration_run_id` and
+`orchestration_schema_version` links without changing legacy payloads. Supervisor
+HITL requests propagate these links from the orchestration state, and grouped
+cancellation or expiry terminalizes each pending sibling while retaining its
+own linkage metadata. This contract remains compatible with legacy HITL records
+that do not contain orchestration fields.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,
