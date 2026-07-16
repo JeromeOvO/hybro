@@ -280,11 +280,7 @@ def _candidate_items_from_mapping(candidate_scope: Mapping[str, Any]) -> list[An
     if _looks_like_agent_mapping(candidate_scope):
         return [candidate_scope]
 
-    items: list[Any] = []
-    for agent_id, agent_name in candidate_scope.items():
-        if isinstance(agent_id, str) and isinstance(agent_name, str):
-            items.append({"agent_id": agent_id, "agent_name": agent_name})
-    return items
+    return []
 
 
 def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:

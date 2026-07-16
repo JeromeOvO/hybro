@@ -74,17 +74,17 @@ class RoomSupervisorPlannerAdapter:
             ensure_ascii=False,
             sort_keys=True,
         )
-        return await self._supervisor_service._call_supervisor_llm(
+        return await self._supervisor_service.call_planner_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
 
-    @staticmethod
-    def _parse_action(raw_action: Mapping[str, Any] | PlannerAction) -> PlannerAction:
+    def _parse_action(
+        self,
+        raw_action: Mapping[str, Any] | PlannerAction,
+    ) -> PlannerAction:
         if isinstance(raw_action, PlannerAction):
             return raw_action
         if not isinstance(raw_action, Mapping):
             raise ValueError("planner adapter expected a JSON object")
-        return RoomSupervisorService._parse_legacy_action_as_planner_action(
-            dict(raw_action)
-        )
+        return self._supervisor_service.parse_planner_action(dict(raw_action))

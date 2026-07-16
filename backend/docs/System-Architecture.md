@@ -354,10 +354,13 @@ The orchestration boundary also defines deterministic planner context and agent
 result ingestion. `build_orchestration_planner_context` projects quoted content,
 candidate metadata, step budget, and durable run state into an immutable
 planner-facing payload; `RoomSupervisorPlannerAdapter` parses and validates the
-next action through the existing action contract. Agent terminal responses can
+next action through the supervisor service's public planner boundary and the
+existing action contract. Agent terminal responses can
 be normalized into `AgentResultRead` records and projected by the pure,
 replay-safe `AgentResultIngestor` when an orchestration ingestion service is
-bound. These boundaries do not enable the state-driven supervisor loop.
+bound. Sparse or identical terminal replays preserve richer output and do not
+advance the run-state version. These boundaries do not enable the state-driven
+supervisor loop.
 
 ### `context_memory`
 

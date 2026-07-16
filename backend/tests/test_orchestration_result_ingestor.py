@@ -29,6 +29,9 @@ def test_canonical_artifact_key_coalesces_snake_and_camel_ids():
     assert canonical_artifact_key("agent-msg-1", 0, {"artifact_id": "artifact-1"}) == (
         canonical_artifact_key("agent-msg-1", 99, {"artifactId": "artifact-1"})
     )
+    assert canonical_artifact_key("agent-msg-1", 0, {"artifact_id": "artifact-1"}) == (
+        canonical_artifact_key("agent-msg-1", 99, {"id": "artifact-1"})
+    )
     assert canonical_artifact_key("agent-msg-1", 0, {"part_id": "part-1"}) == (
         canonical_artifact_key("agent-msg-1", 99, {"partId": "part-1"})
     )
@@ -118,8 +121,37 @@ def test_reingesting_same_result_is_idempotent_for_outputs_and_artifacts():
     twice = ingestor.ingest(once, result)
 
     assert once.state_version == 1
-    assert twice.state_version == 2
+    assert twice is once
+    assert twice.state_version == 1
     assert len(twice.agent_outputs) == 1
     assert len(twice.artifacts) == 1
     assert twice.agent_outputs[0].artifact_keys == once.agent_outputs[0].artifact_keys
     assert twice.artifacts == once.artifacts
+
+
+def test_sparse_terminal_replay_preserves_richer_result_without_version_bump():
+    ingestor = AgentResultIngestor()
+    rich_result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        text="The agent finished.",
+        artifacts=[{"artifact_id": "artifact-1", "name": "answer"}],
+        error="diagnostic detail",
+    )
+    sparse_terminal = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+    )
+
+    rich_state = ingestor.ingest(_run_state(), rich_result)
+    replayed = ingestor.ingest(rich_state, sparse_terminal)
+
+    assert replayed is rich_state
+    assert replayed.state_version == 1
+    assert replayed.agent_outputs[0].text == "The agent finished."
+    assert replayed.agent_outputs[0].error == "diagnostic detail"
+    assert replayed.agent_outputs[0].artifact_keys == [
+        "agent-msg-1:artifact_id:artifact-1"
+    ]

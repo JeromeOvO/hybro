@@ -23,7 +23,7 @@ class AgentResultRead(BaseModel):
 _STABLE_ID_FIELDS = (
     ("artifact_id", "artifact_id"),
     ("artifactId", "artifact_id"),
-    ("id", "id"),
+    ("id", "artifact_id"),
     ("part_id", "part_id"),
     ("partId", "part_id"),
 )
@@ -54,9 +54,31 @@ class AgentResultIngestor:
             result = AgentResultRead.model_validate(result)
 
         updated = state.model_copy(deep=True)
+        result_artifact_keys, artifacts_changed = self._merge_artifacts(
+            updated,
+            result,
+        )
+        output_changed = self._merge_output(
+            updated,
+            result,
+            result_artifact_keys,
+        )
+
+        if not artifacts_changed and not output_changed:
+            return state
+        updated.state_version += 1
+        updated.updated_at = utcnow()
+        return updated
+
+    @staticmethod
+    def _merge_artifacts(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+    ) -> tuple[list[str], bool]:
+        changed = False
         existing_artifact_keys = {
             artifact.get("artifact_key")
-            for artifact in updated.artifacts
+            for artifact in state.artifacts
             if isinstance(artifact, dict)
         }
 
@@ -75,19 +97,29 @@ class AgentResultIngestor:
 
             artifact_record = copy.deepcopy(artifact_payload)
             artifact_record["artifact_key"] = artifact_key
-            updated.artifacts.append(artifact_record)
+            state.artifacts.append(artifact_record)
             existing_artifact_keys.add(artifact_key)
+            changed = True
 
+        return result_artifact_keys, changed
+
+    @staticmethod
+    def _merge_output(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+        result_artifact_keys: list[str],
+    ) -> bool:
+        changed = False
         existing_output = next(
             (
                 output
-                for output in updated.agent_outputs
+                for output in state.agent_outputs
                 if output.agent_message_id == result.agent_message_id
             ),
             None,
         )
         if existing_output is None:
-            updated.agent_outputs.append(
+            state.agent_outputs.append(
                 AgentOutputRecord(
                     agent_message_id=result.agent_message_id,
                     agent_id=result.agent_id,
@@ -97,15 +129,23 @@ class AgentResultIngestor:
                     error=result.error,
                 )
             )
+            changed = True
         else:
-            existing_output.agent_id = result.agent_id
-            existing_output.status = result.status
-            existing_output.text = result.text
-            existing_output.error = result.error
+            if existing_output.agent_id != result.agent_id:
+                existing_output.agent_id = result.agent_id
+                changed = True
+            if existing_output.status != result.status:
+                existing_output.status = result.status
+                changed = True
+            if result.text is not None and existing_output.text != result.text:
+                existing_output.text = result.text
+                changed = True
+            if result.error is not None and existing_output.error != result.error:
+                existing_output.error = result.error
+                changed = True
             for artifact_key in result_artifact_keys:
                 if artifact_key not in existing_output.artifact_keys:
                     existing_output.artifact_keys.append(artifact_key)
+                    changed = True
 
-        updated.state_version += 1
-        updated.updated_at = utcnow()
-        return updated
+        return changed

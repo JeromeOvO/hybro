@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,6 +13,7 @@ from execution.orchestration.context_builder import (
     build_orchestration_planner_context,
 )
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
+from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import (
     AgentOutputRecord,
     DispatchIntent,
@@ -87,6 +90,26 @@ def test_candidate_scope_comes_from_sidecar_scope_not_message_mentions():
     assert context.candidate_scope.agent_ids == ["agent-1"]
     assert [agent.agent_id for agent in context.candidate_scope.agents] == ["agent-1"]
     assert "agent-2" not in context.candidate_agent_ids
+
+
+@pytest.mark.parametrize(
+    "candidate_scope",
+    [
+        {"mode": "saved_group", "group_id": "group-1"},
+        {"mode": "saved_group", "group_id": "group-1", "agents": []},
+    ],
+)
+def test_metadata_only_candidate_scope_does_not_invent_agent_ids(candidate_scope):
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=[]),
+        candidate_scope=candidate_scope,
+        message_text="Continue",
+    )
+
+    assert context.candidate_scope.mode == "saved_group"
+    assert context.candidate_scope.group_id == "group-1"
+    assert context.candidate_scope.agent_ids == []
+    assert context.candidate_scope.agents == []
 
 
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():
@@ -215,6 +238,52 @@ async def test_planner_adapter_keeps_v2_validation_outside_prompt_text():
         await adapter.plan(context)
 
     assert "planner_action_schema_version" not in "\n".join(seen_prompt_values)
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_uses_public_supervisor_service_boundary():
+    parsed_action = RoomSupervisorService.parse_planner_action(
+        {
+            "action": "delegate",
+            "reasoning": "use scoped agent",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "task": "Handle the request",
+                }
+            ],
+        }
+    )
+    service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "use scoped agent",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Handle the request",
+                    }
+                ],
+            }
+        ),
+        parse_planner_action=MagicMock(return_value=parsed_action),
+    )
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[_candidate("agent-1", "Agent One")],
+        message_text="Delegate",
+    )
+
+    action = await RoomSupervisorPlannerAdapter(
+        supervisor_service=service,
+    ).plan(context)
+
+    assert action.action == PlannerActionType.DELEGATE
+    service.call_planner_json.assert_awaited_once()
+    service.parse_planner_action.assert_called_once()
 
 
 def _collect_strings(value, output: list[str]) -> None:
