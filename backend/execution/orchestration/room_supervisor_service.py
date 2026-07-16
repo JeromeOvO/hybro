@@ -878,16 +878,11 @@ class RoomSupervisorService:
                 "context_refs",
                 "artifact_refs",
                 "attachment_refs",
+                "expected_outputs",
                 "attachment_policy",
             ):
                 if field_name in target_payload:
                     parsed_target[field_name] = target_payload[field_name]
-            if "expected_outputs" in target_payload:
-                parsed_target["expected_outputs"] = (
-                    RoomSupervisorService._normalize_expected_outputs(
-                        target_payload["expected_outputs"]
-                    )
-                )
             targets.append(parsed_target)
 
         raw_questions = response_json.get("questions")
@@ -919,41 +914,6 @@ class RoomSupervisorService:
             synthesis_instruction=response_json.get("synthesis_instruction"),
             failure_reason=response_json.get("failure_reason"),
         )
-
-    @staticmethod
-    def _normalize_expected_outputs(raw_expected_outputs):
-        if not isinstance(raw_expected_outputs, list):
-            return raw_expected_outputs
-
-        normalized = []
-        for output in raw_expected_outputs:
-            if isinstance(output, str):
-                description = output.strip()
-                if not description:
-                    continue
-                normalized.append(
-                    {
-                        "kind": RoomSupervisorService._expected_output_kind(
-                            description
-                        ),
-                        "required": True,
-                        "description": description,
-                    }
-                )
-                continue
-            normalized.append(output)
-        return normalized
-
-    @staticmethod
-    def _expected_output_kind(description: str) -> str:
-        kind = description
-        for separator in ("(", ":", "-", "—"):
-            before_separator = description.split(separator, 1)[0].strip()
-            if before_separator:
-                kind = before_separator
-                break
-        kind = "_".join(kind.lower().split())
-        return kind or description
 
     @staticmethod
     def _fallback_synthesis(trajectory: SupervisorTrajectory) -> str:

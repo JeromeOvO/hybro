@@ -338,50 +338,6 @@ async def test_planner_adapter_defaults_missing_attachment_policy_to_explicit_re
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_normalizes_string_expected_outputs_from_raw_action():
-    raw_action = {
-        "action": "delegate",
-        "reasoning": "Collect broker submission outputs.",
-        "targets": [
-            {
-                "agent_id": "agent-1",
-                "task": "Extract the broker submission pack.",
-                "expected_outputs": [
-                    "broker_submission_pack (text)",
-                    "missing_info_questions (array of strings)",
-                    "status_flag ('ready_to_send' or 'needs_more_info')",
-                ],
-            }
-        ],
-    }
-    context = build_orchestration_planner_context(
-        run_state=_state_for_validation(),
-        message_text="Use selected refs",
-    )
-    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
-
-    result = await adapter.plan(context)
-
-    assert result.targets[0].expected_outputs == [
-        DispatchExpectedOutput(
-            kind="broker_submission_pack",
-            required=True,
-            description="broker_submission_pack (text)",
-        ),
-        DispatchExpectedOutput(
-            kind="missing_info_questions",
-            required=True,
-            description="missing_info_questions (array of strings)",
-        ),
-        DispatchExpectedOutput(
-            kind="status_flag",
-            required=True,
-            description="status_flag ('ready_to_send' or 'needs_more_info')",
-        ),
-    ]
-
-
-@pytest.mark.asyncio
 async def test_planner_adapter_requests_strict_planner_action_schema():
     class FakeSupervisorService:
         def __init__(self):
