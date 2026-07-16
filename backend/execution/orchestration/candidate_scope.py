@@ -128,66 +128,70 @@ def _raw_candidate_items(
         return [selected_agent_set]
 
     if isinstance(selected_agent_set, Mapping):
-        raw_agents = _first_mapping_value(
-            selected_agent_set, "agents", "candidate_agents"
-        )
-        raw_ids = _first_mapping_value(
-            selected_agent_set, "agent_ids", "candidate_agent_ids"
-        )
-        if isinstance(raw_agents, Sequence) and not isinstance(
-            raw_agents, str | bytes
-        ):
-            items = list(raw_agents)
-            if items:
-                if isinstance(raw_ids, Sequence) and not isinstance(
-                    raw_ids, str | bytes
-                ):
-                    return _candidate_items_ordered_by_ids(items, raw_ids)
-                return items
-
-        if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-            return list(raw_ids)
-
-        if _looks_like_agent_mapping(selected_agent_set):
-            return [selected_agent_set]
-
-        items: list[Any] = []
-        for agent_id, value in selected_agent_set.items():
-            if not isinstance(agent_id, str):
-                continue
-            if isinstance(value, str):
-                items.append({"agent_id": agent_id, "name": value})
-            elif isinstance(value, Mapping):
-                items.append({"agent_id": agent_id, **value})
-            else:
-                items.append(value)
-        return items
+        return _raw_candidate_items_from_mapping(selected_agent_set)
 
     if _looks_like_scope_object(selected_agent_set):
-        raw_agents = _first_attr_value(selected_agent_set, "agents", "candidate_agents")
-        raw_ids = _first_attr_value(
-            selected_agent_set, "agent_ids", "candidate_agent_ids"
-        )
-        if isinstance(raw_agents, Sequence) and not isinstance(
-            raw_agents, str | bytes
-        ):
-            items = list(raw_agents)
-            if items:
-                if isinstance(raw_ids, Sequence) and not isinstance(
-                    raw_ids, str | bytes
-                ):
-                    return _candidate_items_ordered_by_ids(items, raw_ids)
-                return items
-
-        if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, str | bytes):
-            return list(raw_ids)
-
-        return []
+        return _raw_candidate_items_from_scope_object(selected_agent_set)
 
     if not isinstance(selected_agent_set, Sequence):
         return [selected_agent_set]
 
     return list(selected_agent_set)
+
+
+def _raw_candidate_items_from_mapping(
+    selected_agent_set: Mapping[str, Any],
+) -> list[Any]:
+    scope_items = _candidate_items_from_agents_and_ids(
+        _first_mapping_value(selected_agent_set, "agents", "candidate_agents"),
+        _first_mapping_value(
+            selected_agent_set, "agent_ids", "candidate_agent_ids"
+        ),
+    )
+    if scope_items is not None:
+        return scope_items
+    if _looks_like_agent_mapping(selected_agent_set):
+        return [selected_agent_set]
+
+    items: list[Any] = []
+    for agent_id, value in selected_agent_set.items():
+        if not isinstance(agent_id, str):
+            continue
+        if isinstance(value, str):
+            items.append({"agent_id": agent_id, "name": value})
+        elif isinstance(value, Mapping):
+            items.append({"agent_id": agent_id, **value})
+        else:
+            items.append(value)
+    return items
+
+
+def _raw_candidate_items_from_scope_object(selected_agent_set: Any) -> list[Any]:
+    return (
+        _candidate_items_from_agents_and_ids(
+            _first_attr_value(selected_agent_set, "agents", "candidate_agents"),
+            _first_attr_value(
+                selected_agent_set, "agent_ids", "candidate_agent_ids"
+            ),
+        )
+        or []
+    )
+
+
+def _candidate_items_from_agents_and_ids(
+    raw_agents: Any,
+    raw_ids: Any,
+) -> list[Any] | None:
+    ids = list(raw_ids) if _is_non_string_sequence(raw_ids) else None
+    if _is_non_string_sequence(raw_agents):
+        items = list(raw_agents)
+        if items:
+            return _candidate_items_ordered_by_ids(items, ids) if ids else items
+    return ids
+
+
+def _is_non_string_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, str | bytes)
 
 
 def _candidate_items_ordered_by_ids(
