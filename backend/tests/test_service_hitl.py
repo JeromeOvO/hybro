@@ -15,7 +15,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from execution.hitl.exceptions import (
-    ContinuationLostError,
     HITLConflictError,
     HITLNotFoundError,
     HITLRequestProjectionError,
@@ -1996,11 +1995,30 @@ class TestHandleResponseErrors:
         self,
         hitl_service,
         mock_hitl_db_service,
+        mock_hitl_delivery,
     ):
-        hitl_service._persistence = mock_hitl_db_service
-        hitl_service._record_orchestration_supervisor_response = AsyncMock(
-            return_value=True
+        run_store = InMemoryOrchestrationRunStore()
+        state = OrchestrationRunState(
+            run_id="run-msg-1",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            goal="Coordinate this",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.AWAITING_USER,
+            pending_hitl_request_ids=["hitl-supervisor-1"],
+            open_questions=[
+                {
+                    "request_id": "hitl-supervisor-1",
+                    "source": "supervisor",
+                    "status": "open",
+                    "prompt": "Which account?",
+                }
+            ],
         )
+        await run_store.create_run(state)
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        hitl_service._orchestration_run_store = run_store
         mock_hitl_db_service.get_pending_continuation_on_message.return_value = None
         request = HITLRequest(
             request_id="hitl-supervisor-1",
@@ -2013,9 +2031,37 @@ class TestHandleResponseErrors:
             orchestration_schema_version=2,
             status=HITLStatus.PENDING,
         )
+        request_doc = request.model_dump(mode="json")
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+        mock_hitl_db_service.claim_hitl_request.return_value = request_doc
 
-        with pytest.raises(ContinuationLostError):
-            await hitl_service._handle_supervisor_response(request, "Account A")
+        with pytest.raises(HITLRoutingFailedError):
+            await hitl_service.handle_response(
+                room_id=request.room_id,
+                request_id=request.request_id,
+                user_input="Account A",
+                user_id="user-1",
+            )
+
+        retry_updates = [
+            call.args[2]
+            for call in mock_hitl_db_service.fenced_update_hitl_request.await_args_list
+            if len(call.args) >= 3 and isinstance(call.args[2], dict)
+        ]
+        assert any(
+            update.get("status") == HITLStatus.PENDING.value
+            and update.get("claim_id") is None
+            for update in retry_updates
+        )
+        assert not any(
+            update.get("status") == HITLStatus.CANCELED.value
+            for update in retry_updates
+        )
+        persisted = await run_store.get_run("run-msg-1")
+        assert persisted is not None
+        assert persisted.status == OrchestrationStatus.RUNNING
+        assert persisted.open_questions[0]["answer"] == "Account A"
+        mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_group_recovery_resolves_all_supervisor_siblings(
@@ -2090,6 +2136,9 @@ class TestHandleResponseErrors:
         assert {question["status"] for question in persisted.open_questions} == {
             "resolved"
         }
+        assert [
+            question["request_id"] for question in persisted.open_questions
+        ] == ["hitl-1", "hitl-2"]
         assert persisted.facts[0]["request_ids"] == ["hitl-2", "hitl-1"]
 
     @pytest.mark.asyncio

@@ -1219,7 +1219,8 @@ class HITLService:
                 if not matches:
                     continue
 
-                question["request_id"] = request.request_id
+                if not question_request_id:
+                    question["request_id"] = request.request_id
                 question["status"] = "resolved"
                 question["resolved"] = True
                 question["answer"] = user_input
@@ -1390,6 +1391,11 @@ class HITLService:
             )
             if recorded and self._schedule_orchestration_recovery(request):
                 return
+            if recorded:
+                raise HITLRoutingFailedError(
+                    "Supervisor reply was recorded but orchestration recovery "
+                    "could not be scheduled"
+                )
             raise ContinuationLostError(
                 f"No continuation found for message {request.continuation_message_id} — "
                 "the supervisor reply could not schedule orchestration recovery"
