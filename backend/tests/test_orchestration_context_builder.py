@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from execution.orchestration.action_validator import PlannerActionValidationError
+from execution.orchestration.candidate_scope import normalize_candidate_scope
 from execution.orchestration.context_builder import (
     MissingRequiredQuoteError,
     build_orchestration_planner_context,
@@ -484,6 +485,74 @@ def test_candidate_scope_dict_agent_summary_and_status_are_visible():
     assert agent.description == "Collects broker requirements."
     assert agent.capabilities == ["Collects broker requirements."]
     assert agent.is_healthy is True
+
+
+def test_candidate_scope_snapshot_includes_agent_card_input_modes_for_planner():
+    agent = SimpleNamespace(
+        agent_id="insurer-1",
+        agent_status="active",
+        agent_card=SimpleNamespace(
+            name="Cyber Insurer",
+            description="Underwrites structured cyber submissions.",
+            default_input_modes=["text"],
+            default_output_modes=["text"],
+            skills=[SimpleNamespace(id="underwrite-cyber")],
+        ),
+        call_count=10,
+        call_success_count=9,
+    )
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="explicit_selection",
+        selected_agent_set=[agent],
+        selected_by_user_id="user-1",
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["insurer-1"], candidate_scope=scope),
+        message_text="Underwrite the submission",
+    )
+
+    planner_agent = context.candidate_scope.agents[0]
+    assert planner_agent.agent_id == "insurer-1"
+    assert planner_agent.capabilities == ["underwrite-cyber"]
+    assert planner_agent.input_modes == ["text"]
+    assert planner_agent.output_modes == ["text"]
+    assert planner_agent.supports_file_upload is False
+
+
+def test_candidate_scope_snapshot_includes_serialized_agent_card_modes_for_planner():
+    agent = {
+        "agent_id": "insurer-1",
+        "agent_status": "active",
+        "agent_card": {
+            "name": "Cyber Insurer",
+            "description": "Underwrites structured cyber submissions.",
+            "default_input_modes": ["text"],
+            "default_output_modes": ["text"],
+            "skills": [{"id": "underwrite-cyber"}],
+        },
+        "call_count": 10,
+        "call_success_count": 9,
+    }
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="explicit_selection",
+        selected_agent_set=[agent],
+        selected_by_user_id="user-1",
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["insurer-1"], candidate_scope=scope),
+        message_text="Underwrite the submission",
+    )
+
+    planner_agent = context.candidate_scope.agents[0]
+    assert planner_agent.agent_id == "insurer-1"
+    assert planner_agent.capabilities == ["underwrite-cyber"]
+    assert planner_agent.input_modes == ["text"]
+    assert planner_agent.output_modes == ["text"]
+    assert planner_agent.supports_file_upload is False
 
 
 def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts():

@@ -307,6 +307,68 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert "report.pdf" in failure["message"]
         reader.get_bytes.assert_not_called()
 
+    async def test_compatible_only_policy_skips_unsupported_user_attachment(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="f2",
+            s3_key="uploads/r/f2/report.pdf",
+            mime_type="application/pdf",
+            file_name="report.pdf",
+            size_bytes=4,
+        )
+        reader = self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text"]),
+        )
+        message = self._message()
+        message.extend_info["attachment_forwarding_policy"] = "compatible_only"
+
+        result = await svc.process_agent_message(self._request(message))
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        assert len(result.a2a_message.parts) == 1
+        assert "attachment_preflight_failure" not in message.extend_info
+        assert message.extend_info["skipped_user_attachments"] == [
+            {
+                "file_name": "report.pdf",
+                "mime_type": "application/pdf",
+                "reason": "unsupported_by_agent",
+            }
+        ]
+        reader.get_bytes.assert_not_called()
+
+    async def test_explicit_refs_only_does_not_inherit_original_user_attachment(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="f2",
+            s3_key="uploads/r/f2/report.pdf",
+            mime_type="application/pdf",
+            file_name="report.pdf",
+            size_bytes=4,
+        )
+        reader = self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
+        )
+        message = self._message()
+        message.extend_info["attachment_forwarding_policy"] = "explicit_refs_only"
+        message.extend_info["dispatch_payload_refs"] = {
+            "context_refs": [],
+            "artifact_refs": [],
+            "attachment_refs": [],
+            "expected_outputs": [],
+        }
+
+        result = await svc.process_agent_message(self._request(message))
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        assert len(result.a2a_message.parts) == 1
+        reader.get_bytes.assert_not_called()
+
     async def test_oversized_declared_attachment_returns_file_too_large(self):
         svc = RoomServices()
         attachment = UserAttachment(

@@ -262,11 +262,9 @@ class SupervisorExecutor:
                         action=ActionType.DELEGATE,
                         reasoning="Projected from orchestration run state",
                         targets=[
-                            DelegateTarget(
-                                agent_id=intent.agent_id,
-                                agent_name=agent_names.get(intent.agent_id)
-                                or intent.agent_id,
-                                task=intent.task,
+                            SupervisorExecutor._delegate_target_from_intent(
+                                intent,
+                                agent_names.get(intent.agent_id) or intent.agent_id,
                             )
                             for intent in intents
                         ],
@@ -1665,15 +1663,9 @@ class SupervisorExecutor:
 
         if replay_intents:
             replay_targets = [
-                DelegateTarget(
-                    agent_id=intent.agent_id,
-                    agent_name=agent_names.get(intent.agent_id) or intent.agent_id,
-                    task=intent.task,
-                    context_refs=list(intent.context_refs),
-                    artifact_refs=list(intent.artifact_refs),
-                    attachment_refs=list(intent.attachment_refs),
-                    expected_outputs=list(intent.expected_outputs),
-                    attachment_policy=intent.attachment_policy,
+                self._delegate_target_from_intent(
+                    intent,
+                    agent_names.get(intent.agent_id) or intent.agent_id,
                 )
                 for intent in replay_intents
             ]
@@ -1980,11 +1972,9 @@ class SupervisorExecutor:
                 action=ActionType.DELEGATE,
                 reasoning="Recovered in-flight v2 dispatch from committed agent messages",
                 targets=[
-                    DelegateTarget(
-                        agent_id=intent.agent_id,
-                        agent_name=agent_names.get(intent.agent_id)
-                        or intent.agent_id,
-                        task=intent.task,
+                    SupervisorExecutor._delegate_target_from_intent(
+                        intent,
+                        agent_names.get(intent.agent_id) or intent.agent_id,
                     )
                     for intent in intents
                 ],
@@ -3986,6 +3976,22 @@ class SupervisorExecutor:
         )
 
     @staticmethod
+    def _delegate_target_from_intent(
+        intent: DispatchIntent,
+        agent_name: str,
+    ) -> DelegateTarget:
+        return DelegateTarget(
+            agent_id=intent.agent_id,
+            agent_name=agent_name,
+            task=intent.task,
+            context_refs=list(intent.context_refs),
+            artifact_refs=list(intent.artifact_refs),
+            attachment_refs=list(intent.attachment_refs),
+            expected_outputs=list(intent.expected_outputs),
+            attachment_policy=intent.attachment_policy,
+        )
+
+    @staticmethod
     def _v2_candidate_scope(
         state: OrchestrationRunState,
         agent_registry: list[AgentProfile],
@@ -4597,14 +4603,36 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
+                if not isinstance(message.extend_info, dict):
+                    message.extend_info = {}
+                message.extend_info["attachment_forwarding_policy"] = (
+                    target.attachment_policy
+                    if getattr(target, "attachment_policy", None)
+                    else "explicit_refs_only"
+                )
+                message.extend_info["dispatch_payload_refs"] = {
+                    "context_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "context_refs", [])
+                    ],
+                    "artifact_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "artifact_refs", [])
+                    ],
+                    "attachment_refs": [
+                        ref.model_dump(mode="json")
+                        for ref in getattr(target, "attachment_refs", [])
+                    ],
+                    "expected_outputs": [
+                        output.model_dump(mode="json")
+                        for output in getattr(target, "expected_outputs", [])
+                    ],
+                }
                 if planned_message_id:
                     message.message_id = planned_message_id
                 if resolved_payload is not None:
                     if not isinstance(message.extend_info, dict):
                         message.extend_info = {}
-                    message.extend_info["attachment_forwarding_policy"] = (
-                        "explicit_refs_only"
-                    )
                     message.extend_info["resolved_dispatch_payload_refs"] = {
                         "context_refs": list(
                             resolved_payload.selected_context_refs
@@ -4618,20 +4646,6 @@ class SupervisorExecutor:
                         "resource_payloads": [
                             payload.model_dump(mode="json")
                             for payload in resolved_payload.resource_payloads
-                        ],
-                    }
-                    message.extend_info["dispatch_payload_refs"] = {
-                        "context_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.context_refs
-                        ],
-                        "artifact_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.artifact_refs
-                        ],
-                        "attachment_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.attachment_refs
                         ],
                     }
                 inserted = await self.message_writer.add_room_agent_message(message)

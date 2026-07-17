@@ -14,11 +14,10 @@ from pydantic import BaseModel, Field
 
 from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
 from common.utils.time import utcnow
+from models.orchestration import DispatchContentRef, DispatchExpectedOutput
 
 if TYPE_CHECKING:
     from models.agent import Agent
-
-from models.orchestration import DispatchContentRef, DispatchExpectedOutput
 
 # =========================================================================
 # Shared models

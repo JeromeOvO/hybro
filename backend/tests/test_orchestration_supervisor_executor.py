@@ -22,7 +22,10 @@ from models.hitl import InterruptKind
 from models.orchestration import (
     AgentOutputRecord,
     CompletionEvidence,
+    DispatchContentRef,
+    DispatchExpectedOutput,
     DispatchIntent,
+    DispatchRefKind,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -476,6 +479,45 @@ def _executor(
     return executor
 
 
+def _dispatch_refs_payload():
+    return {
+        "context_refs": [
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx-1",
+                source_agent_message_id="source-msg-1",
+                mime_type="text/plain",
+                required=False,
+            )
+        ],
+        "artifact_refs": [
+            DispatchContentRef(
+                kind=DispatchRefKind.ARTIFACT,
+                ref_id="artifact-1",
+                source_agent_message_id="source-msg-2",
+                mime_type="application/json",
+                required=False,
+            )
+        ],
+        "attachment_refs": [
+            DispatchContentRef(
+                kind=DispatchRefKind.ATTACHMENT,
+                ref_id="file-1",
+                source_agent_message_id="user-msg-1",
+                mime_type="application/pdf",
+                required=False,
+            )
+        ],
+        "expected_outputs": [
+            DispatchExpectedOutput(
+                kind="summary",
+                required=True,
+                description="Summarize the attached file",
+            )
+        ],
+    }
+
+
 @pytest.mark.asyncio
 async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
     user_message = RoomUserMessage(
@@ -553,6 +595,116 @@ async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
     ]
     assert added_message_ids == ["sys-message-1", intent.planned_agent_message_id]
     assert "supervisor_trajectory" not in user_message.extend_info
+
+
+@pytest.mark.asyncio
+async def test_run_delegate_path_preserves_planner_dispatch_metadata():
+    refs = _dispatch_refs_payload()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Delegate with explicit refs",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Use the referenced materials",
+                    context_refs=refs["context_refs"],
+                    attachment_refs=refs["attachment_refs"],
+                    expected_outputs=refs["expected_outputs"],
+                    attachment_policy="compatible_only",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="Summarize the completed agent output",
+            synthesis_instruction="Summarize the answer",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    state = await store.get_run("message-1")
+    assert state is not None
+    assert len(state.dispatch_intents) == 1
+    intent = state.dispatch_intents[0]
+    assert intent.context_refs == refs["context_refs"]
+    assert intent.artifact_refs == []
+    assert intent.attachment_refs == refs["attachment_refs"]
+    assert intent.expected_outputs == refs["expected_outputs"]
+    assert intent.attachment_policy == "compatible_only"
+
+    delegated_message = executor.message_writer.add_room_agent_message.await_args_list[
+        1
+    ].args[0]
+    assert delegated_message.message_id == intent.planned_agent_message_id
+    assert (
+        delegated_message.extend_info["attachment_forwarding_policy"]
+        == "compatible_only"
+    )
+    assert delegated_message.extend_info["dispatch_payload_refs"] == {
+        "context_refs": [
+            ref.model_dump(mode="json") for ref in refs["context_refs"]
+        ],
+        "artifact_refs": [],
+        "attachment_refs": [
+            ref.model_dump(mode="json") for ref in refs["attachment_refs"]
+        ],
+        "expected_outputs": [
+            output.model_dump(mode="json") for output in refs["expected_outputs"]
+        ],
+    }
+
+
+def test_v2_dispatch_intent_preserves_dispatch_metadata():
+    refs = _dispatch_refs_payload()
+
+    intent = SupervisorExecutor._v2_dispatch_intent(
+        run_id="run-1",
+        step_number=2,
+        target_index=3,
+        target=DelegateTarget(
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Use the referenced materials",
+            context_refs=refs["context_refs"],
+            artifact_refs=refs["artifact_refs"],
+            attachment_refs=refs["attachment_refs"],
+            expected_outputs=refs["expected_outputs"],
+            attachment_policy="compatible_only",
+        ),
+    )
+
+    assert intent.context_refs == refs["context_refs"]
+    assert intent.artifact_refs == refs["artifact_refs"]
+    assert intent.attachment_refs == refs["attachment_refs"]
+    assert intent.expected_outputs == refs["expected_outputs"]
+    assert intent.attachment_policy == "compatible_only"
 
 
 @pytest.mark.asyncio
@@ -5706,6 +5858,7 @@ async def test_run_reentry_reconciles_inflight_dispatch_before_planning():
 
 @pytest.mark.asyncio
 async def test_run_reentry_replays_planned_intent_without_created_message():
+    refs = _dispatch_refs_payload()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -5740,6 +5893,10 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
             task="Handle",
             task_hash="hash",
             status="planned",
+            context_refs=refs["context_refs"],
+            artifact_refs=refs["artifact_refs"],
+            attachment_refs=refs["attachment_refs"],
+            expected_outputs=refs["expected_outputs"],
         )
     )
     await store.create_run(state)
@@ -5769,6 +5926,26 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
         for call in executor.message_writer.add_room_agent_message.await_args_list
     ]
     assert "message-1:step-1:target-1:message" in added_message_ids
+    replayed_message = executor.message_writer.add_room_agent_message.await_args_list[
+        1
+    ].args[0]
+    assert replayed_message.extend_info["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert replayed_message.extend_info["dispatch_payload_refs"] == {
+        "context_refs": [
+            ref.model_dump(mode="json") for ref in refs["context_refs"]
+        ],
+        "artifact_refs": [
+            ref.model_dump(mode="json") for ref in refs["artifact_refs"]
+        ],
+        "attachment_refs": [
+            ref.model_dump(mode="json") for ref in refs["attachment_refs"]
+        ],
+        "expected_outputs": [
+            output.model_dump(mode="json") for output in refs["expected_outputs"]
+        ],
+    }
     assert planner.contexts[0].state_context.current_step.steps_used == 1
 
 
