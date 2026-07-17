@@ -4,11 +4,13 @@ Tests for Supervisor Improvements:
 - Part 2: SSE stage notifications in SupervisorExecutor
 """
 
+import inspect
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.orchestration import (
@@ -159,6 +161,18 @@ def _make_executor() -> SupervisorExecutor:
     se.rate_limit_service = MagicMock()
     se.MAX_STEPS = 8
     se._emitted_status_details = []
+
+    async def raw_action_provider(_context):
+        result = se.supervisor_service.decide_next()
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, SupervisorAction):
+            return result.model_dump(mode="json", exclude_none=True)
+        return result
+
+    se.orchestration_planner = RoomSupervisorPlannerAdapter(
+        raw_action_provider=raw_action_provider
+    )
 
     async def emit_processing_status(**kwargs):
         detail = kwargs.get("details")

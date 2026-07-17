@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
 from common.message_commit_events import publish_message_committed
+from common.utils.a2a_helpers import artifacts_to_dicts
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -107,6 +108,9 @@ if TYPE_CHECKING:
     from execution.state.task_state_manager import TaskStateManager
 
 logger = get_logger(__name__)
+
+
+DEFAULT_DEBATE_ROUNDS = 2
 
 
 class SupervisorExecutor:
@@ -387,6 +391,7 @@ class SupervisorExecutor:
             "canceled",
             "cancelled",
             "rejected",
+            "expired",
             "timeout",
             "timed_out",
         }:
@@ -528,6 +533,29 @@ class SupervisorExecutor:
             ),
             agents=agents,
         )
+
+    async def _emit_supervisor_stage(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        details: str,
+        stage: str,
+        client_request_id: str | None = None,
+        agents: list[dict] | None = None,
+    ) -> None:
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                client_request_id=client_request_id,
+                details=details,
+                agents=agents,
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (%s)", stage, exc_info=True)
 
     async def _stream_supervisor_synthesis(
         self,
@@ -697,18 +725,13 @@ class SupervisorExecutor:
                 )
 
             if not (token and token.is_cancelled):
-                try:
-                    await self._emit_processing_status(
-                        room_id=room_id,
-                        status=SSEProcessingStatus.PROCESSING,
-                        message_id=user_message_id,
-                        lifecycle_message_id=user_message_id,
-                        details="Planning next action...",
-                    )
-                except Exception:
-                    logger.debug(
-                        "SSE stage notification failed (planning)", exc_info=True
-                    )
+                await self._emit_supervisor_stage(
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    client_request_id=state.client_request_id,
+                    details="Planning next action...",
+                    stage="planning",
+                )
 
             original_attachments = self._user_attachments_from_message(user_message)
             available_resources = (
@@ -846,10 +869,17 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
+                    def record_completion_evidence(
+                        updated: OrchestrationRunState,
+                        evidence=planner_action.completion_evidence,
+                    ) -> None:
+                        updated.completion_evidence = evidence
+
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.COMPLETED,
                         reason=planner_action.reasoning,
+                        mutate=record_completion_evidence,
                     )
                     return await self._log_state_and_return(
                         room_id,
@@ -930,7 +960,7 @@ class SupervisorExecutor:
         value = getattr(self, "debate_rounds", None)
         if isinstance(value, int) and value > 0:
             return value
-        return 2
+        return DEFAULT_DEBATE_ROUNDS
 
     @staticmethod
     def _next_participant_agent_id(state: OrchestrationRunState) -> str | None:
@@ -1382,16 +1412,6 @@ class SupervisorExecutor:
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details=f"Delegating to {len(action.targets)} agent(s)...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
             step_number=step_number,
@@ -1409,6 +1429,21 @@ class SupervisorExecutor:
             )
             for index, target in enumerate(action.targets, start=1)
         ]
+
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=state.client_request_id,
+            details=f"Delegating to {len(action.targets)} agent(s)...",
+            stage="delegating",
+            agents=[
+                {
+                    "agent_id": target.agent_id,
+                    "agent_name": target.agent_name,
+                }
+                for target in action.targets
+            ],
+        )
 
         state = await self._save_v2_state(
             state,
@@ -1432,18 +1467,15 @@ class SupervisorExecutor:
             run_state=state,
             original_attachments=self._user_attachments_from_message(user_message),
         )
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=state.client_request_id,
+            details="Evaluating agent results...",
+            stage="evaluating",
+        )
         entry.results = results
         entry.completed_at = utcnow()
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details="Evaluating agent results...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
 
         for result in results:
             if result.status == StepStatus.SUCCESS and result.success:
@@ -1581,6 +1613,7 @@ class SupervisorExecutor:
             "failed",
             "canceled",
             "rejected",
+            "expired",
         }
         current_intents = [
             intent
@@ -1873,7 +1906,7 @@ class SupervisorExecutor:
                     value = getattr(value, key, None)
             return value
 
-        terminal_states = {"completed", "failed", "canceled", "rejected"}
+        terminal_states = {"completed", "failed", "canceled", "rejected", "expired"}
         interactive_states = {
             "input-required",
             "auth-required",
@@ -3406,16 +3439,6 @@ class SupervisorExecutor:
         token: CancellationToken | None,
     ) -> SupervisorRunResult:
         trajectory = self._compat_trajectory_from_state(state)
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details="Synthesizing responses...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
             action=self._v2_supervisor_action(planner_action, []),
@@ -3427,6 +3450,13 @@ class SupervisorExecutor:
             await self.task_state_store.resolve_client_request_id_for_message_id(
                 user_message_id
             )
+        )
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=client_req_id,
+            details="Synthesizing responses...",
+            stage="synthesizing",
         )
         synth_coro = self._stream_supervisor_synthesis(
             room_id=room_id,
@@ -3611,6 +3641,49 @@ class SupervisorExecutor:
             if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
         ]
 
+    async def _v2_artifacts_for_output_message(
+        self,
+        state: OrchestrationRunState,
+        output_message_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if not output_message_id:
+            return []
+        persisted_artifacts = await self._v2_persisted_artifacts_for_agent_message(
+            output_message_id
+        )
+        if persisted_artifacts:
+            return persisted_artifacts
+        return self._v2_artifacts_for_result(state, output_message_id)
+
+    async def _v2_persisted_artifacts_for_agent_message(
+        self,
+        output_message_id: str,
+    ) -> list[dict[str, Any]]:
+        get_message = getattr(
+            self.message_reader,
+            "get_room_agent_message_by_message_id",
+            None,
+        )
+        if get_message is None:
+            return []
+        message = await get_message(output_message_id)
+        if message is None:
+            return []
+        return self._v2_artifacts_from_agent_message(message)
+
+    @staticmethod
+    def _v2_artifacts_from_agent_message(message) -> list[dict[str, Any]]:
+        message_content = getattr(message, "message_content", None)
+        task = getattr(message_content, "message_task", None)
+        if task is None:
+            return []
+        artifacts = (
+            task.get("artifacts")
+            if isinstance(task, Mapping)
+            else getattr(task, "artifacts", None)
+        )
+        return artifacts_to_dicts(artifacts if isinstance(artifacts, list) else None)
+
     @staticmethod
     def _apply_v2_result_metadata(
         state: OrchestrationRunState,
@@ -3684,7 +3757,7 @@ class SupervisorExecutor:
                 )
             )
             if output_message_id:
-                artifacts = self._v2_artifacts_for_result(
+                artifacts = await self._v2_artifacts_for_output_message(
                     current,
                     output_message_id,
                 )
@@ -4264,20 +4337,51 @@ class SupervisorExecutor:
                     ),
                 )
 
-        return await self._execute_orchestration_loop(
-            state=state,
-            room_id=room_id,
-            user_message_id=user_message_id,
-            message_text=message_text,
-            agent_registry=agent_registry,
-            room_config=room_config,
-            conversation_context=conversation_context,
-            token=token,
-            request_user_id=request_user_id,
-            quoted_text=quoted_text,
-            allow_awaiting_user_recovery=resolved_hitl_reply,
-            user_message=user_message,
-        )
+        try:
+            return await self._execute_orchestration_loop(
+                state=state,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                token=token,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                allow_awaiting_user_recovery=resolved_hitl_reply,
+                user_message=user_message,
+            )
+        except CancellationError:
+            raise
+        except Exception:
+            await self._mark_current_run_failed_after_unhandled_exception(
+                state.run_id,
+                reason="supervisor execution failed unexpectedly",
+            )
+            raise
+
+    async def _mark_current_run_failed_after_unhandled_exception(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+    ) -> None:
+        try:
+            current = await self.run_store.get_run(run_id)
+            if current is None or current.status in TERMINAL_ORCHESTRATION_STATUSES:
+                return
+            await self._mark_v2_terminal(
+                current,
+                OrchestrationStatus.FAILED,
+                reason=reason,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to terminalize orchestration run after supervisor error",
+                extra={"run_id": run_id},
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Concurrent agent dispatch
@@ -4961,6 +5065,41 @@ class SupervisorExecutor:
                 )
 
         return result
+
+    # ------------------------------------------------------------------
+    # Per-step trajectory checkpoint (crash recovery)
+    # ------------------------------------------------------------------
+
+    async def _checkpoint_run_reference(
+        self,
+        user_message,
+        state: OrchestrationRunState,
+    ) -> None:
+        if user_message is None:
+            return
+        if not isinstance(user_message.extend_info, dict):
+            user_message.extend_info = {}
+        user_message.extend_info["orchestration_run_id"] = state.run_id
+        user_message.extend_info["orchestration_status"] = state.status.value
+        user_message.extend_info.pop("supervisor_trajectory", None)
+        if state.client_request_id:
+            user_message.extend_info["client_request_id"] = state.client_request_id
+        if state.candidate_scope is not None:
+            user_message.extend_info["candidate_scope_snapshot_id"] = (
+                state.candidate_scope.snapshot_id
+            )
+            user_message.extend_info["candidate_scope_source"] = (
+                state.candidate_scope.source
+            )
+
+        message_id = getattr(user_message, "message_id", None) or state.user_message_id
+        if not isinstance(message_id, str):
+            return
+        await self.message_writer.update_room_user_message_by_message_id(
+            message_id,
+            user_message,
+        )
+
 
     # ------------------------------------------------------------------
     # Reconcile PAUSED results against actual DB state

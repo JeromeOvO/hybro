@@ -13,6 +13,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 """
 
 import asyncio
+import copy
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -35,6 +36,7 @@ from models.memory import (
     TurnRole,
 )
 from models.orchestration import PlannerAction
+from models.processing import ProcessingResult, ProcessingStatus
 from models.room import MessageContent, RoomUserMessage
 from models.supervisor import (
     ActionType,
@@ -1336,6 +1338,72 @@ class _InMemoryRoomMessageStore:
     async def update_room_agent_message_by_message_id(self, message_id: str, message):
         self.agent_messages[message_id] = message
 
+    async def update_task_state_on_message(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ):
+        message = self.agent_messages.get(message_id)
+        if message is None:
+            return False, None
+        if message_text is not None:
+            message.message_content.message_text = message_text
+        task = getattr(message.message_content, "message_task", None)
+        if task is None:
+            task = SimpleNamespace(
+                id=task_id or message_id,
+                context_id=context_id,
+                status=SimpleNamespace(state=state),
+                artifacts=[],
+            )
+            message.message_content.message_task = task
+        else:
+            status = getattr(task, "status", None)
+            if status is None:
+                task.status = SimpleNamespace(state=state)
+            elif isinstance(status, dict):
+                status["state"] = state
+            else:
+                status.state = state
+        if artifacts is not None:
+            task.artifacts = copy.deepcopy(artifacts)
+        message.last_notified_state = state
+        return True, message_text
+
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict,
+        *,
+        append: bool = False,
+    ):
+        message = self.agent_messages.get(message_id)
+        if message is None:
+            return False
+        task = getattr(message.message_content, "message_task", None)
+        if task is None:
+            task = SimpleNamespace(
+                id=message_id,
+                status=SimpleNamespace(state="working"),
+                artifacts=[],
+            )
+            message.message_content.message_task = task
+        if not isinstance(getattr(task, "artifacts", None), list):
+            task.artifacts = []
+        artifact_payload = copy.deepcopy(artifact)
+        if append and task.artifacts:
+            task.artifacts[-1].setdefault("parts", []).extend(
+                artifact_payload.get("parts") or []
+            )
+        else:
+            task.artifacts.append(artifact_payload)
+        return True
+
     async def update_room_agent_message_with_new_message_content_by_message_id(
         self,
         message_id: str,
@@ -1382,6 +1450,8 @@ class _FakeRoomRuntime:
             step_number=kwargs.get("step_number"),
             task_content=kwargs.get("task_content"),
             client_request_id=kwargs.get("client_request_id"),
+            extend_info={},
+            last_notified_state=None,
         )
 
 
@@ -1425,14 +1495,27 @@ class _FakePhase5App:
         self.hitl_coordinator.request_input = AsyncMock(return_value=request)
 
         self.room_runtime = _FakeRoomRuntime()
+        self._agent_results = {}
+        self._agent_by_id = {
+            "agent-1": _FakeAgent("agent-1", "Agent One"),
+            "broker": _FakeAgent("broker", "Broker"),
+            "insurer": _FakeAgent("insurer", "Insurer"),
+        }
         self.agent_lookup = AsyncMock()
         self.agent_lookup.get_agent_by_agent_id = AsyncMock(
-            side_effect=lambda agent_id: _FakeAgent(agent_id, "Agent One")
-            if agent_id == "agent-1"
-            else None
+            side_effect=lambda agent_id: self._agent_by_id.get(agent_id)
         )
 
-        self._agent_by_id = {"agent-1": _FakeAgent("agent-1", "Agent One")}
+        self.agent_dispatcher = SimpleNamespace(
+            resolve_agent=AsyncMock(
+                side_effect=lambda agent_id, _room_id: self._agent_by_id.get(agent_id)
+            )
+        )
+        self.agent_message_processor = SimpleNamespace(
+            process_single_message=AsyncMock(
+                side_effect=self._process_stubbed_agent_message
+            )
+        )
 
         self._executor = SupervisorExecutor(
             supervisor_service=SimpleNamespace(synthesize_stream=AsyncMock()),
@@ -1445,8 +1528,8 @@ class _FakePhase5App:
             continuation_store=self.continuation_store,
             event_publisher=AsyncMock(),
             rate_limit_service=None,
-            agent_dispatcher=SimpleNamespace(),
-            agent_message_processor=SimpleNamespace(),
+            agent_dispatcher=self.agent_dispatcher,
+            agent_message_processor=self.agent_message_processor,
             hitl_coordinator=self.hitl_coordinator,
             debate_rounds=2,
             orchestration_run_store=self.run_store,
@@ -1504,29 +1587,81 @@ class _FakePhase5App:
         self.planner = planner
         self._executor.orchestration_planner = planner
 
+    def stub_agent_result(
+        self,
+        *,
+        agent_id: str,
+        agent_message_id: str,
+        text: str,
+        artifacts: list[dict] | None = None,
+    ) -> None:
+        self._agent_results[agent_id] = SimpleNamespace(
+            agent_message_id=agent_message_id,
+            text=text,
+            artifacts=copy.deepcopy(artifacts or []),
+        )
+
+    async def _process_stubbed_agent_message(
+        self,
+        message,
+        room_id: str,
+        agent,
+        user_message_id: str,
+        **_kwargs,
+    ):
+        stub = self._agent_results.get(agent.agent_id)
+        if stub is None:
+            return ProcessingResult(
+                ProcessingStatus.FAILED,
+                f"No stubbed result for {agent.agent_id}",
+            )
+        assert message.message_id == stub.agent_message_id
+        await self.room_store.update_task_state_on_message(
+            message.message_id,
+            "completed",
+            message_text=stub.text,
+            artifacts=stub.artifacts,
+        )
+        return ProcessingResult(ProcessingStatus.SUCCESS, stub.text)
+
     async def send_supervisor_message(
         self,
         *,
         room_id: str,
         user_id: str,
         message: str,
+        message_id: str | None = None,
         dispatch: dict | None = None,
         legacy_supervisor_trajectory: dict | None = None,
         extend_info: dict | None = None,
     ):
-        room_message_id = f"msg-{uuid4().hex}"
+        room_message_id = message_id or f"msg-{uuid4().hex}"
         dispatch = dispatch or {}
         candidate_scope_mode = "explicit_selection"
+        candidate_scope_group_id = None
+        candidate_agent_ids = ["agent-1"]
+        if dispatch.get("message_target_mode") == "saved_group":
+            candidate_scope_mode = "saved_group"
+            candidate_scope_group_id = dispatch.get("target_group_id")
+            if dispatch.get("target_group_id") == "group-1":
+                candidate_agent_ids = ["broker", "insurer"]
         if isinstance(extend_info, dict):
             candidate_scope_mode = extend_info.get(
                 "candidate_scope_mode", candidate_scope_mode
+            )
+            candidate_scope_group_id = extend_info.get(
+                "candidate_scope_group_id", candidate_scope_group_id
+            )
+            candidate_agent_ids = extend_info.get(
+                "candidate_agent_ids", candidate_agent_ids
             )
         extend_payload = {
             "orchestration": True,
             "orchestration_schema_version": 2,
             "orchestration_run_id": room_message_id,
             "candidate_scope_mode": candidate_scope_mode,
-            "candidate_agent_ids": ["agent-1"],
+            "candidate_scope_group_id": candidate_scope_group_id,
+            "candidate_agent_ids": candidate_agent_ids,
             "client_request_id": "client-1",
             "message_target_mode": dispatch.get(
                 "message_target_mode",
@@ -1756,3 +1891,104 @@ async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info
         "completed",
         "awaiting_user",
     }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_evidence():
+    app = _make_phase5_app()
+    run_id = "run-autonomous-loop"
+    broker_message_id = f"{run_id}:step-1:target-1:message"
+    insurer_message_id = f"{run_id}:step-1:target-2:message"
+    quote_artifact_key = f"{insurer_message_id}:artifact_id:quote-1"
+
+    app.stub_planner_actions(
+        [
+            {
+                "action": "delegate",
+                "reasoning": "Need broker and insurer input.",
+                "targets": [
+                    {
+                        "agent_id": "broker",
+                        "agent_name": "Broker",
+                        "task": "Collect requirements.",
+                    },
+                    {
+                        "agent_id": "insurer",
+                        "agent_name": "Insurer",
+                        "task": "Prepare quote.",
+                    },
+                ],
+            },
+            {
+                "action": "complete",
+                "reasoning": "Both required outputs are available.",
+                "completion_evidence": {
+                    "satisfied_criteria": [
+                        "requirements_collected",
+                        "quote_prepared",
+                    ],
+                    "referenced_fact_ids": [
+                        f"{broker_message_id}:text",
+                        f"{insurer_message_id}:text",
+                    ],
+                    "referenced_artifact_keys": [quote_artifact_key],
+                    "unresolved_questions": [],
+                    "final_answer_intent": "answer_user",
+                    "confidence": 0.86,
+                },
+            },
+        ]
+    )
+    app.stub_agent_result(
+        agent_id="broker",
+        agent_message_id=broker_message_id,
+        text="Requirements are complete.",
+    )
+    app.stub_agent_result(
+        agent_id="insurer",
+        agent_message_id=insurer_message_id,
+        text="Quote is ready.",
+        artifacts=[{"artifact_id": "quote-1", "summary": "Carrier quote"}],
+    )
+
+    result = await app.send_supervisor_message(
+        room_id="room-1",
+        user_id="user-1",
+        message="Get the quote ready.",
+        message_id=run_id,
+        dispatch={"message_target_mode": "saved_group", "target_group_id": "group-1"},
+    )
+
+    assert len(app.planner.contexts) == 2
+    complete_context = app.planner.contexts[1].prompt_payload()["state_context"]
+    assert [
+        output["agent_id"] for output in complete_context["agent_outputs"]
+    ] == ["broker", "insurer"]
+    assert {
+        fact["fact_id"] for fact in complete_context["facts"]
+    } >= {f"{broker_message_id}:text", f"{insurer_message_id}:text"}
+    assert {
+        artifact["artifact_key"] for artifact in complete_context["artifacts"]
+    } >= {quote_artifact_key}
+
+    state = await app.run_store.get_latest_by_user_message_id(result.message_id)
+    assert state is not None
+    assert state.status.value == "completed"
+    assert state.candidate_scope.source == "saved_group"
+    assert state.candidate_scope.group_id == "group-1"
+    assert [
+        (output.agent_id, output.agent_message_id) for output in state.agent_outputs
+    ] == [
+        ("broker", broker_message_id),
+        ("insurer", insurer_message_id),
+    ]
+    assert state.completion_evidence.confidence == 0.86
+    assert {artifact["artifact_key"] for artifact in state.artifacts} >= {
+        quote_artifact_key
+    }
+
+    message_record = await app.room_store.get_room_user_message_by_message_id(
+        result.message_id
+    )
+    assert message_record is not None
+    assert "supervisor_trajectory" not in message_record.extend_info

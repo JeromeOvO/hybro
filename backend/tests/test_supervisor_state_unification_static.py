@@ -35,3 +35,55 @@ def test_room_message_center_does_not_route_to_run_v2():
     assert "self.supervisor_executor.run_v2" not in source
     assert "if is_v2_supervisor" not in source
     assert "if is_v2_resume" not in source
+
+
+def _assignment_targets(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if isinstance(node, ast.AnnAssign | ast.AugAssign):
+        return [node.target]
+    return []
+
+
+def _is_supervisor_trajectory_key_assignment(target: ast.AST) -> bool:
+    if not isinstance(target, ast.Subscript):
+        return False
+    slice_node = target.slice
+    if isinstance(slice_node, ast.Constant):
+        return slice_node.value == "supervisor_trajectory"
+    return False
+
+
+def test_new_execution_files_do_not_assign_supervisor_trajectory():
+    checked = [
+        Path("execution/orchestration/supervisor_executor.py"),
+        Path("execution/orchestration/room_message_center.py"),
+        Path("room/compat/runtime.py"),
+    ]
+    offenders: list[str] = []
+    for path in checked:
+        source = path.read_text()
+        tree = ast.parse(source)
+        lines = source.splitlines()
+        for node in ast.walk(tree):
+            for target in _assignment_targets(node):
+                if _is_supervisor_trajectory_key_assignment(target):
+                    offenders.append(f"{path}:{node.lineno}:{lines[node.lineno - 1].strip()}")
+
+    assert offenders == []
+
+
+def test_frontend_does_not_read_supervisor_trajectory_directly():
+    frontend_root = Path("../frontend")
+    ignored_parts = {"node_modules", ".next", "dist", "build", "coverage"}
+    matches: list[str] = []
+    for path in frontend_root.rglob("*"):
+        if not path.is_file() or ignored_parts.intersection(path.parts):
+            continue
+        if path.suffix not in {".ts", ".tsx", ".js", ".jsx"}:
+            continue
+        text = path.read_text(errors="ignore")
+        if "supervisor_trajectory" in text or "SupervisorTrajectory" in text:
+            matches.append(str(path))
+
+    assert matches == []
