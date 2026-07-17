@@ -126,6 +126,8 @@ async def test_blocking_resume_logs_state_result_before_returning():
         envelope={},
         goal="Coordinate this",
     )
+    state.status = OrchestrationStatus.AWAITING_USER
+    state.pending_hitl_request_ids = ["hitl-1"]
     await store.create_run(state)
     executor = _executor(
         store=store,
@@ -1446,6 +1448,128 @@ async def test_run_fails_corrupt_ingesting_hitl_checkpoint():
 
 
 @pytest.mark.asyncio
+async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    request_input = AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    cancel_request = AsyncMock()
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=request_input,
+        cancel_request=cancel_request,
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
+
+    original_save = store.save_state
+
+    async def save_state_spy(
+        next_state: OrchestrationRunState,
+        *,
+        expected_version: int,
+    ) -> OrchestrationRunState:
+        if next_state.status == OrchestrationStatus.AWAITING_USER:
+            raise RuntimeError("failed to persist final ask user state")
+        return await original_save(next_state, expected_version=expected_version)
+
+    monkeypatch.setattr(store, "save_state", save_state_spy)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    request_input.assert_awaited_once()
+    cancel_request.assert_awaited_once_with("hitl-1", "room-1")
+    executor.message_writer.delete_room_agent_message_by_message_id.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+    assert persisted.pending_hitl_request_ids == []
+    assert not persisted.open_questions
+
+
+@pytest.mark.asyncio
+async def test_run_ask_user_request_input_exception_triggers_cleanup_and_failure(monkeypatch):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need user choice",
+            questions=[{"prompt": "Which account?", "prompt_type": "text"}],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    input_error = RuntimeError("request input failed")
+    input_error.request_id = "orphaned-hitl"
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(side_effect=input_error),
+        cancel_request=AsyncMock(),
+    )
+    executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    executor.hitl_coordinator.cancel_request.assert_awaited_once_with(
+        "orphaned-hitl",
+        "room-1",
+    )
+    executor.message_writer.delete_room_agent_message_by_message_id.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+    assert persisted.pending_hitl_request_ids == []
+
+
+@pytest.mark.asyncio
 async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -1496,6 +1620,91 @@ async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning(
     assert state is not None
     assert state.status == OrchestrationStatus.AWAITING_USER
     assert state.pending_hitl_request_ids == ["hitl-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_stale_awaiting_user_pending_hitl_does_not_block_recovering_awaiting_input():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.SYNTHESIZE,
+            reasoning="should not plan",
+            synthesis_instruction="ignored",
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.AWAITING_USER,
+        candidate_agent_ids=["agent-1"],
+    )
+    state.pending_hitl_request_ids = ["resolved-hitl-1"]
+    state.open_questions = [
+        {
+            "request_id": "resolved-hitl-1",
+            "status": "resolved",
+            "prompt": "already answered",
+            "answer": "ok",
+        }
+    ]
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Need approval",
+            ),
+        )
+    ]
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="message-1:step-1:target-1:message",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            text="Needs review",
+        )
+    ]
+    await store.create_run(state)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == ["hitl-agent-1"]
 
 
 @pytest.mark.asyncio
@@ -1572,6 +1781,74 @@ async def test_run_agent_awaiting_input_creates_hitl_prompt_and_continuation():
     assert state.status == OrchestrationStatus.AWAITING_USER
     assert state.pending_hitl_request_ids == ["hitl-agent-1"]
     assert state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+
+
+@pytest.mark.asyncio
+async def test_run_agent_awaiting_input_request_input_exception_cancels_and_fails():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="agent needs auth",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Use external account",
+                )
+            ],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.AWAITING_INPUT,
+            message_id="message-1:step-1:target-1:message",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Please authenticate.",
+        )
+    )
+    request_error = RuntimeError("agent request input failed")
+    request_error.request_id = "agent-hitl-1"
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(side_effect=request_error),
+        cancel_request=AsyncMock(),
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    executor.hitl_coordinator.cancel_request.assert_awaited_once_with(
+        "agent-hitl-1",
+        "room-1",
+    )
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+
 
 
 @pytest.mark.asyncio
@@ -2135,6 +2412,401 @@ async def test_run_final_paused_sibling_resume_reconciles_sidecar_outputs():
     }
     assert output_texts["message-1:step-1:target-1:message"] == "First result"
     assert output_texts["message-1:step-1:target-2:message"] == "Second result"
+
+
+@pytest.mark.asyncio
+async def test_run_resumed_trajectory_only_pending_awaiting_input_rehydrates_hitl_request():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.RUNNING,
+        candidate_agent_ids=["agent-1"],
+    )
+    state.summary_intent_id = "message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.system_agent_message_id = "sys-message-1"
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    resumed_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume with pending awaiting input only",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Handle the request",
+                        )
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Handle the request",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    )
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == ["hitl-agent-1"]
+    assert persisted.open_questions
+    assert persisted.open_questions[0]["request_id"] == "hitl-agent-1"
+
+
+@pytest.mark.asyncio
+async def test_run_resumed_trajectory_mixed_terminal_and_pending_awaiting_input_rehydrates_hitl_request():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.RUNNING,
+        candidate_agent_ids=["agent-1", "agent-2"],
+    )
+    state.summary_intent_id = "message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.system_agent_message_id = "sys-message-1"
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Auth required",
+            ),
+        ),
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=2,
+            target=DelegateTarget(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                task="Need approval",
+            ),
+        ),
+    ]
+    await store.create_run(state)
+
+    resumed_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume mixed outcomes",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Auth required",
+                        ),
+                        DelegateTarget(
+                            agent_id="agent-2",
+                            agent_name="Agent Two",
+                            task="Need approval",
+                        ),
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Auth required",
+                        response_text="done",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-2",
+                        agent_name="Agent Two",
+                        task="Need approval",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-2:message",
+                    ),
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == ["hitl-agent-1"]
+    assert persisted.open_questions
+    assert persisted.open_questions[0]["request_id"] == "hitl-agent-1"
+    output_status_by_id = {
+        output.agent_message_id: output.status
+        for output in persisted.agent_outputs
+    }
+    assert output_status_by_id["message-1:step-1:target-1:message"] == "completed"
+    assert (
+        output_status_by_id["message-1:step-1:target-2:message"]
+        == StepStatus.AWAITING_INPUT.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_resumed_trajectory_mixed_terminal_and_awaiting_input_clears_resolved_hitl_request():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-2"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.RUNNING,
+        candidate_agent_ids=["agent-1", "agent-2"],
+    )
+    state.summary_intent_id = "message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.system_agent_message_id = "sys-message-1"
+    state.pending_hitl_request_ids = ["old-hitl-id"]
+    state.open_questions = [
+        {
+            "request_id": "old-hitl-id",
+            "status": "open",
+            "source": "agent",
+            "prompt": "Old question",
+        }
+    ]
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Auth required",
+            ),
+        ),
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=2,
+            target=DelegateTarget(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                task="Need approval",
+            ),
+        ),
+    ]
+    await store.create_run(state)
+
+    resumed_trajectory = SupervisorTrajectory(
+        hitl_user_reply="approved",
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume mixed outcomes",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Auth required",
+                        ),
+                        DelegateTarget(
+                            agent_id="agent-2",
+                            agent_name="Agent Two",
+                            task="Need approval",
+                        ),
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Auth required",
+                        response_text="done",
+                        success=True,
+                        status=StepStatus.SUCCESS,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-2",
+                        agent_name="Agent Two",
+                        task="Need approval",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-2:message",
+                    ),
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ],
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == ["hitl-agent-2"]
+    assert all(
+        question.get("request_id") != "old-hitl-id" or question.get("status") != "open"
+        for question in persisted.open_questions
+    )
+    output_status_by_id = {
+        output.agent_message_id: output.status
+        for output in persisted.agent_outputs
+    }
+    assert output_status_by_id["message-1:step-1:target-1:message"] == "completed"
+    assert output_status_by_id["message-1:step-1:target-2:message"] == StepStatus.AWAITING_INPUT.value
 
 
 @pytest.mark.asyncio
@@ -2789,6 +3461,126 @@ async def test_recover_v2_inflight_dispatch_paused_and_awaiting_fails_without_hi
     assert call_order == ["save:push_notification"]
 
 
+@pytest.mark.asyncio
+async def test_run_agent_awaiting_input_cancels_hitl_request_if_v2_state_save_fails(
+    monkeypatch,
+):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    request_input = AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    cancel_request = AsyncMock()
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=request_input,
+        cancel_request=cancel_request,
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.RUNNING,
+        candidate_agent_ids=["agent-1"],
+    )
+    state.summary_intent_id = "message-1:summary"
+    state.summary_message_id = "sys-message-1"
+    state.system_agent_message_id = "sys-message-1"
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    original_save_state = store.save_state
+
+    async def save_state_spy(
+        next_state: OrchestrationRunState,
+        *,
+        expected_version: int,
+    ) -> OrchestrationRunState:
+        if next_state.status == OrchestrationStatus.AWAITING_USER:
+            raise RuntimeError("failed to persist awaitl user state")
+        return await original_save_state(next_state, expected_version=expected_version)
+
+    monkeypatch.setattr(store, "save_state", save_state_spy)
+
+    resumed_trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="resume pending awaiting input only",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Handle the request",
+                        )
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Handle the request",
+                        response_text="",
+                        success=False,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="message-1:step-1:target-1:message",
+                    )
+                ],
+                started_at=utcnow(),
+                completed_at=utcnow(),
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        resumed_trajectory=resumed_trajectory,
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    request_input.assert_awaited_once()
+    cancel_request.assert_awaited_once_with("hitl-agent-1", "room-1")
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.FAILED
+    assert persisted.pending_hitl_request_ids == []
+    assert persisted.open_questions == []
 @pytest.mark.asyncio
 async def test_ingest_v2_results_ignores_event_append_failures(monkeypatch):
     store = InMemoryOrchestrationRunStore()
