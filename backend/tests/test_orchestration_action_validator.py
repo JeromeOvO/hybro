@@ -11,6 +11,11 @@ from execution.orchestration.planner import (
 )
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import (
+    ActiveDispatchRef,
+    AgentOutputRecord,
+    CandidateAgentSnapshot,
+    CandidateScopeSnapshot,
+    CompletionEvidence,
     DispatchContentRef,
     DispatchExpectedOutput,
     DispatchRefKind,
@@ -431,6 +436,197 @@ def test_complete_allowed_after_agent_output_before_budget_exhaustion():
     result = _validate(action, has_agent_output=True)
 
     assert result is action
+
+
+def _scope():
+    return CandidateScopeSnapshot(
+        snapshot_id="scope-1",
+        source="explicit_selection",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[CandidateAgentSnapshot(agent_id="agent-1", name="Agent One")],
+    )
+
+
+def _complete_run_state(**overrides):
+    values = {
+        "run_id": "run-1",
+        "room_id": "room-1",
+        "user_message_id": "msg-1",
+        "goal": "Collect evidence",
+        "candidate_agent_ids": ["agent-1"],
+        "candidate_scope": _scope(),
+        "agent_outputs": [
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="answer",
+            )
+        ],
+        "facts": [{"fact_id": "fact-1", "text": "quote is available"}],
+        "artifacts": [{"artifact_key": "artifact-1", "name": "quote"}],
+    }
+    values.update(overrides)
+    return OrchestrationRunState(**values)
+
+
+def _complete_action(**evidence_overrides):
+    evidence = {
+        "satisfied_criteria": ["quote_collected"],
+        "referenced_fact_ids": ["fact-1"],
+        "referenced_artifact_keys": ["artifact-1"],
+        "unresolved_questions": [],
+        "final_answer_intent": "answer_user",
+        "confidence": 0.8,
+    }
+    evidence.update(evidence_overrides)
+    return PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="goal satisfied",
+        completion_evidence=CompletionEvidence(**evidence),
+    )
+
+
+def test_complete_requires_structured_evidence():
+    action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
+
+    with pytest.raises(PlannerActionValidationError, match="completion evidence"):
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+
+
+def test_complete_rejects_unknown_fact_reference():
+    action = _complete_action(referenced_fact_ids=["missing-fact"])
+
+    with pytest.raises(PlannerActionValidationError, match="missing-fact"):
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+
+
+def test_complete_rejects_pending_hitl_and_active_dispatches():
+    action = _complete_action()
+
+    with pytest.raises(PlannerActionValidationError, match="pending HITL"):
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(pending_hitl_request_ids=["hitl-1"]),
+        )
+
+    with pytest.raises(PlannerActionValidationError, match="active dispatch"):
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(
+                active_dispatches=[
+                    ActiveDispatchRef(
+                        agent_message_id="agent-msg-2",
+                        agent_id="agent-1",
+                        status="running",
+                    )
+                ]
+            ),
+        )
+
+
+def test_complete_accepts_rejected_active_dispatch_reference():
+    action = _complete_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(
+                active_dispatches=[
+                    ActiveDispatchRef(
+                        agent_message_id="agent-msg-2",
+                        agent_id="agent-1",
+                        status="rejected",
+                    )
+                ]
+            ),
+        )
+        is action
+    )
+
+
+@pytest.mark.parametrize(
+    "open_question",
+    [
+        {"question_id": "question-1", "text": "Need more detail"},
+        {
+            "question_id": "question-1",
+            "text": "Need more detail",
+            "resolved": False,
+            "blocking": False,
+        },
+    ],
+)
+def test_complete_rejects_every_open_question(open_question):
+    action = _complete_action()
+
+    with pytest.raises(PlannerActionValidationError, match="unresolved questions"):
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(
+                open_questions=[open_question]
+            ),
+        )
+
+
+def test_complete_rejects_blank_satisfied_criteria():
+    action = _complete_action(satisfied_criteria=["  "])
+
+    with pytest.raises(PlannerActionValidationError, match="satisfied criteria"):
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+
+
+def test_complete_accepts_valid_evidence():
+    action = _complete_action()
+
+    assert PlannerActionValidator.validate(action, run_state=_complete_run_state()) is action
+
+
+def test_complete_accepts_valid_evidence_with_facts_only():
+    action = _complete_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(agent_outputs=[]),
+        )
+        is action
+    )
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_accepts_completion_with_facts_only():
+    action = _complete_action()
+    state = _complete_run_state(agent_outputs=[])
+    context = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["agent-1"],
+        message_text="Summarize the collected facts",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
+
+    result = await adapter.plan(context)
+
+    assert result is action
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_rejects_synthesis_with_facts_only():
+    action = PlannerAction(
+        action=PlannerActionType.SYNTHESIZE,
+        reasoning="Synthesize the collected facts.",
+    )
+    state = _complete_run_state(agent_outputs=[])
+    context = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["agent-1"],
+        message_text="Synthesize the collected facts",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
+
+    with pytest.raises(PlannerActionValidationError, match="requires agent output"):
+        await adapter.plan(context)
 
 
 @pytest.mark.parametrize(

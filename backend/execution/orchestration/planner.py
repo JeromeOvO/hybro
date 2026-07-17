@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from execution.orchestration.action_validator import PlannerActionValidator
 from execution.orchestration.context_builder import OrchestrationPlannerContext
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
-from models.orchestration import PlannerAction
+from models.orchestration import PlannerAction, PlannerActionType
 
 RawPlannerActionProvider = Callable[
     [OrchestrationPlannerContext],
@@ -195,12 +195,17 @@ class RoomSupervisorPlannerAdapter:
     async def plan(self, context: OrchestrationPlannerContext) -> PlannerAction:
         raw_action = await self._raw_action(context)
         action = self._parse_action(raw_action)
+        has_agent_output = bool(context.state_context.agent_outputs)
+        if action.action == PlannerActionType.COMPLETE:
+            has_agent_output = bool(
+                context.state_context.agent_outputs or context.state_context.facts
+            )
         return PlannerActionValidator.validate(
             action,
             candidate_agent_ids=context.candidate_agent_ids,
             steps_used=context.state_context.current_step.steps_used,
             step_budget=context.state_context.current_step.step_budget,
-            has_agent_output=bool(context.state_context.agent_outputs),
+            has_agent_output=has_agent_output,
         )
 
     async def _raw_action(
