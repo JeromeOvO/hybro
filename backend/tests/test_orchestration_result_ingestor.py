@@ -499,7 +499,7 @@ def test_reingesting_no_id_artifact_ignores_projection_fields_for_identity():
     assert twice.artifacts[0]["summary"] == "Bogus summary 2"
 
 
-def test_reingesting_blank_text_removes_existing_fact():
+def test_blank_text_clears_fact_but_missing_text_omits_update():
     ingestor = AgentResultIngestor()
     first = AgentResultRead(
         agent_message_id="agent-msg-1",
@@ -525,7 +525,8 @@ def test_reingesting_blank_text_removes_existing_fact():
     third = ingestor.ingest(once, missing)
 
     assert twice.facts == []
-    assert third.facts == []
+    assert third is once
+    assert third.facts == once.facts
 
 
 def test_reingesting_failed_result_without_text_removes_existing_fact():

@@ -314,10 +314,8 @@ def _is_sparse_terminal_replay(
         and result.error is None
         and not result.artifacts
         and (
-            (
-                existing_output.text is not None
-                and existing_output.error is not None
-            )
+            existing_output.text is not None
+            or existing_output.error is not None
             or bool(existing_output.artifact_keys)
         )
     )
