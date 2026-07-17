@@ -1475,6 +1475,7 @@ class _FakePhase5App:
         self.room_center.task_notification_store = AsyncMock()
         self.room_center.supervisor_executor = self._executor
         self.room_center.agent_resolver_service = AsyncMock()
+        self.room_center.supervisor_planning_error_cls = RuntimeError
         self.room_center.a2a_transport = None
         self.room_center.remote_task_reader = AsyncMock()
         self.room_center.debate_prompt_injector = None
@@ -1509,27 +1510,39 @@ class _FakePhase5App:
         room_id: str,
         user_id: str,
         message: str,
-        dispatch: dict,
+        dispatch: dict | None = None,
         legacy_supervisor_trajectory: dict | None = None,
+        extend_info: dict | None = None,
     ):
         room_message_id = f"msg-{uuid4().hex}"
+        dispatch = dispatch or {}
+        candidate_scope_mode = "explicit_selection"
+        if isinstance(extend_info, dict):
+            candidate_scope_mode = extend_info.get(
+                "candidate_scope_mode", candidate_scope_mode
+            )
+        extend_payload = {
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": room_message_id,
+            "candidate_scope_mode": candidate_scope_mode,
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+            "message_target_mode": dispatch.get(
+                "message_target_mode",
+                "saved_group",
+            ),
+            "target_group_id": dispatch.get("target_group_id"),
+        }
+        if isinstance(extend_info, dict):
+            extend_payload.update(extend_info)
+        extend_payload["orchestration_run_id"] = room_message_id
         user_message = RoomUserMessage(
             room_id=room_id,
             message_id=room_message_id,
             user_id=user_id,
             message_content=MessageContent(message_text=message),
-            extend_info={
-                "orchestration": True,
-                "orchestration_schema_version": 2,
-                "orchestration_run_id": room_message_id,
-                "candidate_agent_ids": ["agent-1"],
-                "client_request_id": "client-1",
-                "message_target_mode": (dispatch or {}).get(
-                    "message_target_mode",
-                    "saved_group",
-                ),
-                "target_group_id": (dispatch or {}).get("target_group_id"),
-            },
+            extend_info=extend_payload,
         )
         if legacy_supervisor_trajectory is not None:
             user_message.extend_info["supervisor_trajectory"] = (
@@ -1698,3 +1711,48 @@ async def test_state_driven_supervisor_builds_planner_context_without_trajectory
     assert message_record is not None
     assert message_record.extend_info is not None
     assert "supervisor_trajectory" not in message_record.extend_info
+
+
+@pytest.mark.asyncio
+async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info():
+    app = _make_phase5_app()
+    app.stub_planner_actions(
+        [
+            {
+                "action": "ask_user",
+                "reasoning": "Need one missing value before delegation.",
+                "questions": [
+                    {
+                        "prompt": "What coverage limit do you need?",
+                        "prompt_type": "text",
+                    }
+                ],
+            }
+        ]
+    )
+
+    response = await app.send_supervisor_message(
+        room_id="room-1",
+        user_id="user-1",
+        message="Collect the needed quote information.",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "msg-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+
+    message = await app.room_store.get_room_user_message_by_message_id(response.message_id)
+    assert message is not None
+    assert message.extend_info is not None
+    assert "supervisor_trajectory" not in message.extend_info
+    assert message.extend_info["orchestration_run_id"] == response.message_id
+    assert message.extend_info["candidate_scope_snapshot_id"] is not None
+    assert message.extend_info["candidate_scope_source"] == "explicit_selection"
+    assert message.extend_info["client_request_id"] == "client-1"
+    assert message.extend_info["orchestration_status"] in {
+        "running",
+        "completed",
+        "awaiting_user",
+    }

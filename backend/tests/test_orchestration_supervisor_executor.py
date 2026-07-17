@@ -22,6 +22,7 @@ from models.agent import AgentStatus
 from models.orchestration import (
     CompletionEvidence,
     DispatchIntent,
+    OrchestrationRunState,
     OrchestrationStatus,
     PlannedDelegateTarget,
     PlannerAction,
@@ -2726,6 +2727,8 @@ async def test_room_message_center_orchestration_result_keeps_user_extend_info_l
         update_room_user_message_by_message_id=AsyncMock()
     )
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+    rmc._emit_processing_status = AsyncMock()
 
     await rmc._handle_supervisor_run_result(
         SupervisorRunResult(
@@ -2740,6 +2743,115 @@ async def test_room_message_center_orchestration_result_keeps_user_extend_info_l
     assert "supervisor_trajectory" not in user_message.extend_info
     assert user_message.extend_info["orchestration_run_id"] == "message-1"
     assert user_message.extend_info["orchestration_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_room_message_center_legacy_trajectory_status_updates_without_payload():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "supervisor_trajectory": {"status": "running", "entries": []},
+            "message_notes": "legacy",
+        },
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock()
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+    rmc._emit_processing_status = AsyncMock()
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=None,
+        ),
+        room_id="room-1",
+        user_message_id="message-1",
+        user_message=user_message,
+    )
+
+    assert user_message.extend_info["supervisor_trajectory"]["status"] == "completed"
+    assert user_message.extend_info["orchestration_status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "run_status,expected_trajectory_status,expected_orchestration_status",
+    [
+        (
+            OrchestrationStatus.BUDGET_EXHAUSTED,
+            "failed",
+            "budget_exhausted",
+        ),
+        (
+            OrchestrationStatus.AWAITING_USER,
+            "awaiting_input",
+            "awaiting_user",
+        ),
+    ],
+    ids=["budget_exhausted_to_failed", "awaiting_user_to_awaiting_input"],
+)
+@pytest.mark.asyncio
+async def test_room_message_center_legacy_trajectory_status_maps_orchestration_values(
+    run_status,
+    expected_trajectory_status,
+    expected_orchestration_status,
+):
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={"supervisor_trajectory": {"status": "running", "entries": []}},
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock()
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+    rmc._emit_processing_status = AsyncMock()
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=(
+                RunStatus.AWAITING_INPUT
+                if run_status == OrchestrationStatus.AWAITING_USER
+                else RunStatus.FAILED
+            ),
+            trajectory=None,
+            run_state=OrchestrationRunState(
+                run_id="run-1",
+                room_id="room-1",
+                user_message_id="message-1",
+                goal="Coordinate this",
+                candidate_agent_ids=["agent-1"],
+                status=run_status,
+            ),
+        ),
+        room_id="room-1",
+        user_message_id="message-1",
+        user_message=user_message,
+    )
+
+    assert (
+        user_message.extend_info["supervisor_trajectory"]["status"]
+        == expected_trajectory_status
+    )
+    assert (
+        user_message.extend_info["orchestration_status"]
+        == expected_orchestration_status
+    )
 
 
 @pytest.mark.asyncio
