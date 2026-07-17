@@ -2785,8 +2785,16 @@ async def test_room_message_center_legacy_trajectory_status_updates_without_payl
 @pytest.mark.parametrize(
     "run_status,expected_trajectory_status,expected_orchestration_status",
     [
-        (OrchestrationStatus.BUDGET_EXHAUSTED, "failed", "failed"),
-        (OrchestrationStatus.AWAITING_USER, "awaiting_input", "awaiting_input"),
+        (
+            OrchestrationStatus.BUDGET_EXHAUSTED,
+            "failed",
+            "budget_exhausted",
+        ),
+        (
+            OrchestrationStatus.AWAITING_USER,
+            "awaiting_input",
+            "awaiting_user",
+        ),
     ],
     ids=["budget_exhausted_to_failed", "awaiting_user_to_awaiting_input"],
 )

@@ -2401,7 +2401,7 @@ class RoomMessageCenter:
                 if isinstance(legacy_trajectory, dict):
                     legacy_trajectory["status"] = legacy_trajectory_status
                 user_message.extend_info["orchestration_status"] = (
-                    legacy_trajectory_status
+                    orchestration_status
                 )
             else:
                 user_message.extend_info["supervisor_trajectory"] = (
