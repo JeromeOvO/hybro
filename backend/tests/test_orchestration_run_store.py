@@ -221,6 +221,27 @@ async def test_append_event_stores_event_copy():
 
 
 @pytest.mark.asyncio
+async def test_append_event_does_not_mutate_state_snapshot():
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(_state())
+
+    await store.append_event(
+        OrchestrationRunEvent(
+            run_id=state.run_id,
+            room_id=state.room_id,
+            type=OrchestrationEventType.STATE_REDUCED,
+            state_version=0,
+            payload={"status": "should-not-mutate"},
+        )
+    )
+
+    loaded = await store.get_run(state.run_id)
+    assert loaded is not None
+    assert loaded.state_version == 0
+    assert loaded.status == state.status
+
+
+@pytest.mark.asyncio
 async def test_append_event_rejects_missing_run_duplicate_id_and_future_version():
     store = InMemoryOrchestrationRunStore()
     missing_run_event = OrchestrationRunEvent(
@@ -407,6 +428,22 @@ async def test_reconstruct_from_envelope_builds_schema_v2_state_without_trajecto
 
 
 @pytest.mark.asyncio
+async def test_reconstruct_from_empty_envelope_leaves_candidate_scope_unset():
+    store = InMemoryOrchestrationRunStore()
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-empty",
+        room_id="room-7",
+        user_message_id="message-9",
+        envelope={},
+        goal="Summarize the latest account notes",
+    )
+
+    assert state.candidate_agent_ids == []
+    assert state.candidate_scope is None
+
+
+@pytest.mark.asyncio
 async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
     store = InMemoryOrchestrationRunStore()
 
@@ -440,4 +477,68 @@ async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
 
     assert flat_state.candidate_agent_ids == ["agent-a", "agent-b"]
     assert flat_state.client_request_id == "client-flat"
+    assert flat_state.candidate_scope is not None
+    assert flat_state.candidate_scope.agent_ids == flat_state.candidate_agent_ids
+    assert [agent.name for agent in flat_state.candidate_scope.agents] == [
+        "Analyst",
+        "Researcher",
+    ]
     assert nested_state.candidate_agent_ids == ["agent-c", "agent-d"]
+    assert nested_state.candidate_scope is not None
+    assert nested_state.candidate_scope.agent_ids == nested_state.candidate_agent_ids
+    assert [agent.name for agent in nested_state.candidate_scope.agents] == [
+        "Writer",
+        "Reviewer",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mongo_reconstruct_from_envelope_parity_for_legacy_scope():
+    mongo = FakeMongo()
+    store = MongoOrchestrationRunStore(mongo)
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-mongo",
+        room_id="room-7",
+        user_message_id="message-9",
+        envelope={
+            "room_config": {
+                "room_agent_set": {
+                    "agent-e": "Agent Eleven",
+                    "agent-f": "Agent Twelve",
+                }
+            },
+            "client_request_id": "client-mongo",
+        },
+        goal="Summarize the latest account notes",
+    )
+
+    assert state.candidate_agent_ids == ["agent-e", "agent-f"]
+    assert state.client_request_id == "client-mongo"
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == state.candidate_agent_ids
+    assert [agent.name for agent in state.candidate_scope.agents] == [
+        "Agent Eleven",
+        "Agent Twelve",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reconstruct_from_envelope_populates_candidate_scope():
+    store = InMemoryOrchestrationRunStore()
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        envelope={
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+            "candidate_scope_snapshot_version": 1,
+        },
+        goal="Need a quote",
+    )
+
+    assert state.candidate_scope is not None
+    assert state.candidate_scope.agent_ids == ["agent-1"]
+    assert state.candidate_scope.source == "explicit_selection"

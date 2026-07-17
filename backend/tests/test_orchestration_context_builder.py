@@ -20,9 +20,12 @@ from models.orchestration import (
     AuthorizationBasis,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
+    CompletionEvidence,
     DispatchIntent,
     OrchestrationRunState,
     OrchestrationStatus,
+    ParticipantSnapshot,
+    PlannerActionRecord,
     PlannerActionType,
 )
 from models.supervisor import AgentProfile
@@ -328,6 +331,66 @@ def test_candidate_scope_partial_snapshot_preserves_all_agent_ids_in_order():
         "Collects broker requirements."
     )
     assert context.candidate_scope.agents[1].agent_name is None
+
+
+def test_context_builder_prefers_run_state_candidate_scope():
+    state = _run_state(
+        candidate_agent_ids=["legacy-agent"],
+        candidate_scope=CandidateScopeSnapshot(
+            snapshot_id="scope-1",
+            source="explicit_selection",
+            room_id="room-1",
+            agent_ids=["agent-1"],
+            agents=[CandidateAgentSnapshot(agent_id="agent-1", name="Agent One")],
+        ),
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["legacy-agent"],
+        message_text="Need a quote",
+    )
+
+    assert context.candidate_agent_ids == ["agent-1"]
+    assert context.candidate_scope.agents[0].agent_name == "Agent One"
+
+
+def test_context_builder_exposes_run_state_extensions():
+    state = _run_state(
+        participant_snapshot=ParticipantSnapshot(
+            mode="sequential",
+            ordered_agent_ids=["agent-1", "agent-2"],
+            turn_policy="sequential_rounds",
+        ),
+        system_agent_message_id="sys-msg-1",
+        active_dispatches=[
+            {"agent_message_id": "agent-msg-1", "agent_id": "agent-1", "status": "running"}
+        ],
+        last_planner_action=PlannerActionRecord(
+            action="delegate", reasoning="need quote"
+        ),
+        completion_evidence=CompletionEvidence(
+            satisfied_criteria=["quote_collected"],
+            referenced_fact_ids=["fact-1"],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=0.9,
+        ),
+    )
+
+    payload = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["agent-1"],
+        message_text="Need a quote",
+    ).prompt_payload()
+
+    state_context = payload["state_context"]
+    assert state_context["participant_snapshot"]["mode"] == "sequential"
+    assert state_context["system_agent_message_id"] == "sys-msg-1"
+    assert state_context["active_dispatches"][0]["agent_message_id"] == "agent-msg-1"
+    assert state_context["last_planner_action"]["action"] == "delegate"
+    assert state_context["completion_evidence"]["confidence"] == 0.9
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
