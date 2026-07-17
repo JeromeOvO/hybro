@@ -10,6 +10,7 @@ from models.orchestration import (
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
+    DelegationOutcomeRecord,
     DispatchContentRef,
     DispatchExpectedOutput,
     DispatchRefKind,
@@ -18,10 +19,99 @@ from models.orchestration import (
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
+    PendingAgentContinuation,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
 )
+
+
+def test_legacy_expected_output_loads_with_outcome_contract_defaults():
+    output = DispatchExpectedOutput.model_validate(
+        {"kind": "artifact", "required": True, "description": None}
+    )
+
+    assert output.output_key is None
+    assert output.artifact_name is None
+    assert output.required_fields == []
+    assert output.allow_partial is True
+
+
+def test_legacy_run_loads_with_outcome_collections_defaulted():
+    state = OrchestrationRunState.model_validate(
+        {
+            "run_id": "run-1",
+            "room_id": "room-1",
+            "user_message_id": "msg-1",
+            "goal": "coordinate",
+            "candidate_agent_ids": ["agent-1"],
+        }
+    )
+
+    assert state.delegation_outcomes == []
+    assert state.pending_agent_continuations == []
+    assert state.goal_family_dispositions == []
+    assert state.assumptions == []
+    assert state.unknowns == []
+    assert state.blockers == []
+
+
+def test_outcome_does_not_persist_derived_policy_counters():
+    fields = DelegationOutcomeRecord.model_fields
+
+    assert "same_agent_attempt_number" not in fields
+    assert "required_progress_epoch" not in fields
+    assert "no_progress_repair_used_in_epoch" not in fields
+
+
+def test_pending_continuation_defaults_open():
+    continuation = PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
+    )
+
+    assert continuation.status == "open"
+    assert continuation.attempted_resource_fingerprints == []
+
+
+def test_outcome_state_round_trips_nested_evidence():
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="blocked",
+        assumptions=[
+            {
+                "key": "currency",
+                "description": "Amounts are denominated in GBP.",
+                "applies_to_output_keys": ["quote"],
+            }
+        ],
+        blockers=[
+            {
+                "key": "missing-limit",
+                "description": "The requested limit is unavailable.",
+                "blocked_output_keys": ["quote"],
+                "source": "agent",
+            }
+        ],
+    )
+    state = _run_state(delegation_outcomes=[outcome], blockers=outcome.blockers)
+
+    restored = OrchestrationRunState.model_validate_json(state.model_dump_json())
+
+    assert restored.delegation_outcomes[0].status == "blocked"
+    assert restored.delegation_outcomes[0].assumptions[0].key == "currency"
+    assert restored.blockers[0].key == "missing-limit"
 
 
 def _run_state(**overrides):
@@ -51,6 +141,11 @@ def test_event_types_cover_recovery_and_terminal_projection():
     assert OrchestrationEventType.RUN_RECOVERED.value == "run_recovered"
     assert OrchestrationEventType.PUBLIC_LIFECYCLE_PROJECTED.value == (
         "public_lifecycle_projected"
+    )
+    assert OrchestrationEventType.OUTCOME_EVALUATED.value == "outcome_evaluated"
+    assert (
+        OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED.value
+        == "required_evidence_invalidated"
     )
 
 

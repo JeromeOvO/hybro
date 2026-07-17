@@ -14,6 +14,7 @@ RUNTIME_CONFIG_ENV_VARS = (
     "FEATURE_RUN_WATCHDOG",
     "FEATURE_ORCHESTRATION_V2",
     "EXECUTION_ORCHESTRATION_V2",
+    "ORCHESTRATION_OUTCOME_GUARDRAILS",
     "SUPERVISOR_MAX_STEPS",
     "RUN_WATCHDOG_STALE_MINUTES",
     "MATCH_VECTOR_WEIGHT",
@@ -41,6 +42,7 @@ def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.feature_run_event_sse is False
     assert settings.feature_run_watchdog is True
     assert settings.execution_orchestration_v2 is False
+    assert settings.orchestration_outcome_guardrails is False
     assert settings.supervisor_max_steps == 8
     assert settings.run_watchdog_stale_minutes == 90
     assert settings.match_vector_weight == 0.85
@@ -52,6 +54,36 @@ def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.compaction_concurrency == 5
     assert settings.pinecone_index_name == PINECONE_INDEX_NAME_DEFAULT
     assert settings.memory_search_index_name == MEMORY_SEARCH_INDEX_NAME_DEFAULT
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", False),
+        ("0", False),
+        ("false", False),
+        ("1", True),
+        ("true", True),
+    ],
+)
+def test_orchestration_outcome_guardrails_parsing(
+    raw: str,
+    expected: bool,
+) -> None:
+    settings = Settings(_env_file=None, orchestration_outcome_guardrails=raw)
+
+    assert settings.orchestration_outcome_guardrails is expected
+
+
+def test_orchestration_outcome_guardrails_reads_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_runtime_config_env(monkeypatch)
+    monkeypatch.setenv("ORCHESTRATION_OUTCOME_GUARDRAILS", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.orchestration_outcome_guardrails is True
 
 
 def test_execution_orchestration_v2_accepts_legacy_env_name(

@@ -70,6 +70,7 @@ class Settings(BaseSettings):
             "FEATURE_ORCHESTRATION_V2",
         ),
     )
+    orchestration_outcome_guardrails: bool = False
 
     # Execution Tuning
     supervisor_max_steps: int = 8
@@ -331,6 +332,15 @@ class Settings(BaseSettings):
     @field_validator("execution_orchestration_v2", mode="before")
     @classmethod
     def normalize_execution_orchestration_v2(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator("orchestration_outcome_guardrails", mode="before")
+    @classmethod
+    def normalize_orchestration_outcome_guardrails(cls, value):
         if value is None or str(value).strip() == "":
             return False
         if isinstance(value, bool):
