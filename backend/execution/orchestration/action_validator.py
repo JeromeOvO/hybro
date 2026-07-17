@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from models.orchestration import (
     CompletionEvidence,
@@ -144,7 +144,15 @@ def _validate_completion_blockers(
         raise PlannerActionValidationError(
             "complete action is blocked by active dispatches"
         )
-    if run_state.open_questions or evidence.unresolved_questions:
+    has_unresolved_question = any(
+        not isinstance(question, Mapping)
+        or (
+            question.get("status") != "resolved"
+            and question.get("resolved") is not True
+        )
+        for question in run_state.open_questions
+    )
+    if has_unresolved_question or evidence.unresolved_questions:
         raise PlannerActionValidationError(
             "complete action is blocked by unresolved questions"
         )

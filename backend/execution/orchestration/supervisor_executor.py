@@ -2217,15 +2217,16 @@ class SupervisorExecutor:
 
         def resolve_hitl(updated: OrchestrationRunState) -> None:
             prompts: list[str] = []
-            remaining_questions: list[dict[str, Any]] = []
             for question in updated.open_questions:
                 if question.get("request_id") not in resolved_request_ids:
-                    remaining_questions.append(question)
                     continue
+                question["status"] = "resolved"
+                question["resolved"] = True
+                question["answer"] = answer
+                question["resolved_at"] = resolved_at
                 prompt = question.get("prompt")
                 if isinstance(prompt, str) and prompt:
                     prompts.append(prompt)
-            updated.open_questions = remaining_questions
             updated.facts.append(
                 {
                     "fact_id": (
@@ -2514,6 +2515,10 @@ class SupervisorExecutor:
         )
         created_messages: list[str] = []
         created_request_ids: list[str] = []
+        pending_request_ids = [
+            f"{state.run_id}:step-{step_number}:supervisor-hitl-{index}"
+            for index in range(1, len(questions) + 1)
+        ]
         last_request = None
         client_req_id = state.client_request_id or (
             await self.task_state_store.resolve_client_request_id_for_message_id(
@@ -2703,7 +2708,6 @@ class SupervisorExecutor:
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
-            updated.steps_used += 1
             for index, request_id in enumerate(created_request_ids):
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
@@ -2744,7 +2748,9 @@ class SupervisorExecutor:
             await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
             failed_reason = "failed to persist v2 supervisor HITL state"
-            skip_request_ids = set(created_request_ids)
+            skip_request_ids = set(
+                [*pending_request_ids, *created_request_ids]
+            )
             created_request_ids_set = set(created_request_ids)
 
             def mark_failed(updated: OrchestrationRunState) -> None:

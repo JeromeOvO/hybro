@@ -128,6 +128,14 @@ async def test_blocking_resume_logs_state_result_before_returning():
     )
     state.status = OrchestrationStatus.AWAITING_USER
     state.pending_hitl_request_ids = ["hitl-1"]
+    state.open_questions = [
+        {
+            "request_id": "hitl-1",
+            "status": "open",
+            "prompt": "Continue?",
+            "source": "supervisor",
+        }
+    ]
     await store.create_run(state)
     executor = _executor(
         store=store,
@@ -1661,7 +1669,7 @@ async def test_run_ask_user_message_creation_failure_clears_synthetic_pending_st
         request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
     )
     executor._save_interrupted_state = AsyncMock(return_value=True)
-    executor.message_writer.add_room_agent_message = AsyncMock(
+    executor.message_writer.upsert_room_agent_message = AsyncMock(
         side_effect=RuntimeError("failed to persist clarifier message")
     )
     executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
@@ -2117,7 +2125,7 @@ async def test_run_ask_user_save_interrupted_state_exception_clears_transient_st
     executor._save_interrupted_state = AsyncMock(
         side_effect=RuntimeError("failed to save interrupted state")
     )
-    executor.message_writer.add_room_agent_message = AsyncMock(
+    executor.message_writer.upsert_room_agent_message = AsyncMock(
         return_value=SimpleNamespace(message_id="clarifier-message-1")
     )
     executor.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
@@ -2135,7 +2143,9 @@ async def test_run_ask_user_save_interrupted_state_exception_clears_transient_st
     assert result.status == RunStatus.FAILED
     request_input.assert_awaited_once()
     cancel_request.assert_awaited_once_with("hitl-1", "room-1")
-    created_message_id = executor.message_writer.add_room_agent_message.await_args.args[0].message_id
+    created_message_id = (
+        executor.message_writer.upsert_room_agent_message.await_args.args[0].message_id
+    )
     executor.message_writer.delete_room_agent_message_by_message_id.assert_awaited_once_with(
         created_message_id,
     )
@@ -4277,7 +4287,12 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
         and fact.get("request_ids") == ["hitl-1"]
         for fact in state.facts
     )
-    assert state.open_questions == []
+    assert any(
+        question.get("request_id") == "hitl-1"
+        and question.get("status") == "resolved"
+        and question.get("answer") == "Account A"
+        for question in state.open_questions
+    )
 
 
 @pytest.mark.asyncio
@@ -4347,7 +4362,7 @@ async def test_run_supervisor_hitl_reply_allows_complete_after_question_resolves
     state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.COMPLETED
-    assert state.open_questions == []
+    assert state.open_questions[0]["resolved"] is True
 
 
 @pytest.mark.asyncio

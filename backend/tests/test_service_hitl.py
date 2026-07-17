@@ -16,8 +16,8 @@ import pytest
 
 from execution.hitl.exceptions import (
     HITLConflictError,
-    HITLRequestProjectionError,
     HITLNotFoundError,
+    HITLRequestProjectionError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )

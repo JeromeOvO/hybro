@@ -571,6 +571,27 @@ def test_complete_rejects_every_open_question(open_question):
         )
 
 
+def test_complete_accepts_resolved_question_history():
+    action = _complete_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(
+                open_questions=[
+                    {
+                        "question_id": "question-1",
+                        "text": "Need more detail",
+                        "status": "resolved",
+                        "resolved": True,
+                    }
+                ]
+            ),
+        )
+        is action
+    )
+
+
 def test_complete_rejects_blank_satisfied_criteria():
     action = _complete_action(satisfied_criteria=["  "])
 
