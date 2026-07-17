@@ -649,7 +649,7 @@ def test_ingest_artifact_summary_falls_back_to_description():
     assert updated.artifacts[0]["summary"] == "Detailed quote description"
 
 
-def test_reingesting_no_artifacts_removes_legacy_artifact_without_source_metadata():
+def test_sparse_replay_preserves_legacy_artifact_without_source_metadata():
     state = _run_state(
         agent_outputs=[
             AgentOutputRecord(
@@ -692,14 +692,18 @@ def test_reingesting_no_artifacts_removes_legacy_artifact_without_source_metadat
         for output in updated.agent_outputs
         if output.agent_message_id == "agent-msg-1"
     )
-    assert output.artifact_keys == []
+    assert updated is state
+    assert output.artifact_keys == ["agent-msg-1:artifact_id:old"]
     assert [
         artifact["artifact_key"]
         for artifact in updated.artifacts
-    ] == ["agent-msg-2:artifact_id:other"]
+    ] == [
+        "agent-msg-1:artifact_id:old",
+        "agent-msg-2:artifact_id:other",
+    ]
 
 
-def test_reingesting_no_artifacts_preserves_shared_artifact_key():
+def test_sparse_replay_preserves_shared_artifact_key():
     shared_key = "shared:artifact_id:quote"
     state = _run_state(
         agent_outputs=[
@@ -743,7 +747,8 @@ def test_reingesting_no_artifacts_preserves_shared_artifact_key():
         for output in updated.agent_outputs
         if output.agent_message_id == "agent-msg-2"
     )
-    assert output.artifact_keys == []
+    assert updated is state
+    assert output.artifact_keys == [shared_key]
     assert other_output.artifact_keys == [shared_key]
     assert updated.artifacts == [
         {
