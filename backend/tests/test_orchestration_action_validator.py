@@ -611,6 +611,24 @@ async def test_planner_adapter_accepts_completion_with_facts_only():
     assert result is action
 
 
+@pytest.mark.asyncio
+async def test_planner_adapter_rejects_synthesis_with_facts_only():
+    action = PlannerAction(
+        action=PlannerActionType.SYNTHESIZE,
+        reasoning="Synthesize the collected facts.",
+    )
+    state = _complete_run_state(agent_outputs=[])
+    context = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["agent-1"],
+        message_text="Synthesize the collected facts",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
+
+    with pytest.raises(PlannerActionValidationError, match="requires agent output"):
+        await adapter.plan(context)
+
+
 @pytest.mark.parametrize(
     ("legacy_action", "planner_action"),
     [
