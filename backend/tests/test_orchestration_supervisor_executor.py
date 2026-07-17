@@ -152,6 +152,60 @@ async def test_blocking_resume_logs_state_result_before_returning():
 
 
 @pytest.mark.asyncio
+async def test_loaded_debate_run_reconciles_missing_participant_snapshot():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Debate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope={},
+        goal="Debate this",
+    )
+    state.candidate_agent_ids = ["agent-1", "agent-2"]
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.debate_rounds = 1
+
+    loaded = await executor._load_or_create_run_state_for_run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Debate this",
+        agent_registry=[
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                is_healthy=True,
+            ),
+            AgentProfile(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                is_healthy=True,
+            ),
+        ],
+        room_config=RoomConfig(is_debate_mode=True),
+        user_message=user_message,
+    )
+
+    assert loaded.participant_snapshot is not None
+    assert loaded.participant_snapshot.ordered_agent_ids == [
+        "agent-1",
+        "agent-2",
+    ]
+    assert loaded.step_budget >= 3
+    assert loaded.state_version == state.state_version + 1
+
+
+@pytest.mark.asyncio
 async def test_run_builds_resource_catalog_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",

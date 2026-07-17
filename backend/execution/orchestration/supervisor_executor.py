@@ -1049,6 +1049,56 @@ class SupervisorExecutor:
             )
         return state
 
+    async def _reconcile_loaded_run_state(
+        self,
+        state: OrchestrationRunState,
+        *,
+        room_id: str,
+        user_message_id: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig | None,
+    ) -> OrchestrationRunState:
+        state = self._validate_run_binding(
+            state,
+            room_id=room_id,
+            user_message_id=user_message_id,
+        )
+        if (
+            state.participant_snapshot is not None
+            or not room_config
+            or not getattr(room_config, "is_debate_mode", False)
+            or not agent_registry
+        ):
+            return state
+
+        updated = state.model_copy(deep=True)
+        updated.participant_snapshot = self._debate_participant_snapshot(
+            self._v2_candidate_scope(updated, agent_registry),
+            debate_rounds=self._configured_debate_rounds(),
+        )
+        if updated.participant_snapshot is None:
+            return state
+        updated.step_budget = max(
+            updated.step_budget,
+            len(updated.participant_snapshot.ordered_agent_ids) + 1,
+        )
+        updated.state_version = state.state_version + 1
+        updated.updated_at = utcnow()
+        try:
+            return await self.run_store.save_state(
+                updated,
+                expected_version=state.state_version,
+            )
+        except OrchestrationStoreConflict:
+            latest = await self.run_store.get_run(state.run_id)
+            if latest is None:
+                raise
+            return self._validate_run_binding(
+                latest,
+                room_id=room_id,
+                user_message_id=user_message_id,
+            )
+
     async def _load_or_create_run_state_for_run(
         self,
         *,
@@ -1066,19 +1116,23 @@ class SupervisorExecutor:
         )
         existing = await self.run_store.get_run(effective_run_id)
         if existing is not None:
-            return self._validate_run_binding(
+            return await self._reconcile_loaded_run_state(
                 existing,
                 room_id=room_id,
                 user_message_id=user_message_id,
+                agent_registry=agent_registry,
+                room_config=room_config,
             )
         existing = await self.run_store.get_latest_by_user_message_id(
             user_message_id
         )
         if existing is not None:
-            return self._validate_run_binding(
+            return await self._reconcile_loaded_run_state(
                 existing,
                 room_id=room_id,
                 user_message_id=user_message_id,
+                agent_registry=agent_registry,
+                room_config=room_config,
             )
 
         state = await self.run_store.reconstruct_from_envelope(
@@ -1126,19 +1180,23 @@ class SupervisorExecutor:
         except OrchestrationStoreConflict:
             existing = await self.run_store.get_run(effective_run_id)
             if existing is not None:
-                return self._validate_run_binding(
+                return await self._reconcile_loaded_run_state(
                     existing,
                     room_id=room_id,
                     user_message_id=user_message_id,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
                 )
             existing = await self.run_store.get_latest_by_user_message_id(
                 user_message_id
             )
             if existing is not None:
-                return self._validate_run_binding(
+                return await self._reconcile_loaded_run_state(
                     existing,
                     room_id=room_id,
                     user_message_id=user_message_id,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
                 )
             raise
 
