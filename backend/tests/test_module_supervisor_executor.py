@@ -248,6 +248,7 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
     target.artifact_refs = [
         DispatchContentRef(kind=DispatchRefKind.ARTIFACT, ref_id="artifact-1")
     ]
+    target.required_resource_refs = ["room-background", "artifact-1"]
     state = OrchestrationRunState(
         run_id="run-1",
         room_id="room-1",
@@ -310,6 +311,10 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
     assert result[0].success is True
     assert len(calls) == 1
     assert calls[0]["run_state"] is state
+    assert calls[0]["required_resource_refs"] == [
+        "room-background",
+        "artifact-1",
+    ]
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
     assert "artifact-1" in create_kwargs["content"]
     assert "Broker submission" in create_kwargs["task_content"]
