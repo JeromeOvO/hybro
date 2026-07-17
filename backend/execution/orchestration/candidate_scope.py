@@ -21,6 +21,7 @@ _AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
     "explicit_selection": "explicit_selection",
     "mention": "mention",
 }
+SUPPORTED_CANDIDATE_SCOPE_SOURCES = frozenset(_AUTHORIZATION_KIND_BY_SOURCE)
 
 
 def normalize_candidate_scope(
@@ -68,6 +69,7 @@ def candidate_scope_from_legacy_envelope(
         or "explicit_selection"
     )
     group_id = _optional_str(raw_envelope.get("candidate_scope_group_id"))
+    snapshot_id = _optional_str(raw_envelope.get("candidate_scope_snapshot_id"))
     revision = _positive_int(raw_envelope.get("candidate_scope_snapshot_version")) or 1
     candidate_ids = _string_list(raw_envelope.get("candidate_agent_ids"))
 
@@ -87,7 +89,10 @@ def candidate_scope_from_legacy_envelope(
         group_id=group_id,
         selected_agent_set=selected,
     )
-    return scope.model_copy(update={"revision": revision})
+    updates: dict[str, Any] = {"revision": revision}
+    if snapshot_id is not None:
+        updates["snapshot_id"] = snapshot_id
+    return scope.model_copy(update=updates)
 
 
 def candidate_scope_items(candidate_scope: Any) -> list[Any]:
