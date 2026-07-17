@@ -138,6 +138,13 @@ def _validate_completion_blockers(
     if run_state.pending_hitl_request_ids:
         raise PlannerActionValidationError("complete action is blocked by pending HITL")
     if any(
+        failure.status == "open" and failure.recoverable
+        for failure in run_state.open_failures
+    ):
+        raise PlannerActionValidationError(
+            "complete action is blocked by open recoverable failure"
+        )
+    if any(
         item.status not in {"completed", "failed", "canceled", "rejected"}
         for item in run_state.active_dispatches
     ):

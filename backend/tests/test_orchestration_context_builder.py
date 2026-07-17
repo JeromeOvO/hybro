@@ -23,6 +23,7 @@ from models.orchestration import (
     CandidateScopeSnapshot,
     CompletionEvidence,
     DispatchIntent,
+    OpenFailureRecord,
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
@@ -394,6 +395,33 @@ def test_context_builder_exposes_run_state_extensions():
     assert state_context["completion_evidence"]["confidence"] == 0.9
 
 
+def test_context_builder_exposes_open_failures_to_planner():
+    state = _run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="fp",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="timeout",
+                error_message="Timed out",
+                recoverable=True,
+                status="open",
+                recovery_hints=["retry_same_agent_with_smaller_context"],
+            )
+        ]
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Finish the workflow",
+    )
+
+    assert context.state_context.open_failures[0]["failure_id"] == "failure-1"
+    assert context.state_context.open_failures[0]["recoverable"] is True
+
+
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-1"]),
@@ -752,6 +780,40 @@ async def test_planner_adapter_supervisor_prompt_requires_delegate_target_task()
     ]
     assert '"task"' in system_prompt
     assert "required" in system_prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "route to scoped specialist",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Handle the request",
+                    }
+                ],
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[_candidate("agent-1", "Agent One")],
+        message_text="Handle this workflow",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ]
+    assert "Only include attachment_refs when the target agent's candidate_scope input_modes support that attachment MIME." in system_prompt
+    assert "Prefer artifact_refs over raw attachment_refs when an upstream agent has produced a structured artifact." in system_prompt
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ from models.orchestration import (
     DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
+    OpenFailureRecord,
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -518,6 +519,28 @@ def _dispatch_refs_payload():
     }
 
 
+def _explicit_dispatch_intent(
+    run_id: str,
+    step_number: int,
+    target_index: int,
+    target,
+) -> DispatchIntent:
+    return DispatchIntent(
+        step_id=f"{run_id}:step-{step_number}",
+        step_target_id=f"{run_id}:step-{step_number}:target-{target_index}",
+        dispatch_intent_id=f"{run_id}:step-{step_number}:target-{target_index}:intent",
+        planned_agent_message_id=f"agent-msg-{step_number}",
+        agent_id=target.agent_id,
+        task=target.task,
+        task_hash=f"hash-{step_number}",
+        context_refs=list(target.context_refs),
+        artifact_refs=list(target.artifact_refs),
+        attachment_refs=list(target.attachment_refs),
+        expected_outputs=list(target.expected_outputs),
+        attachment_policy=target.attachment_policy,
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
     user_message = RoomUserMessage(
@@ -810,6 +833,386 @@ async def test_run_validates_complete_against_run_state_after_dispatch():
     assert state is not None
     assert state.status == OrchestrationStatus.FAILED
     assert state.terminal_reason == "complete action requires completion evidence"
+
+
+@pytest.mark.asyncio
+async def test_run_replans_after_recoverable_agent_failure_before_complete():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Underwrite this submission"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "user-msg-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    failed_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Try insurer with raw attachment.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Underwrite the submission.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="broker-msg:artifact_id:submission",
+                    )
+                ],
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            )
+        ],
+    )
+    retry_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Retry insurer using broker artifact only.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Underwrite using the broker artifact.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="broker-msg:artifact_id:submission",
+                    )
+                ],
+            )
+        ],
+    )
+    complete_action = PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="Recovered answer satisfies the goal.",
+        completion_evidence=CompletionEvidence(
+            satisfied_criteria=["underwriting_answer_collected"],
+            referenced_fact_ids=["agent-msg-2:text"],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=0.8,
+        ),
+    )
+    planner = SimpleNamespace(
+        plan=AsyncMock(side_effect=[failed_action, retry_action, complete_action])
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(
+        _run_state(
+            run_id="user-msg-1",
+            user_message_id="user-msg-1",
+            goal="Underwrite this submission",
+            candidate_agent_ids=["agent-1"],
+            artifacts=[
+                {
+                    "artifact_key": "broker-msg:artifact_id:submission",
+                    "artifact_id": "submission",
+                    "source_agent_message_id": "broker-msg",
+                    "source_agent_id": "agent-broker",
+                    "summary": "Broker artifact",
+                }
+            ],
+        )
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor._v2_dispatch_intent = MagicMock(side_effect=_explicit_dispatch_intent)
+    executor._dispatch_targets = AsyncMock(
+        side_effect=[
+            [
+                StepResult(
+                    step_number=1,
+                    agent_id="agent-1",
+                    agent_name="agent-1",
+                    task="Underwrite the submission.",
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message=(
+                        "Agent does not accept the uploaded file type for: "
+                        "report.pdf (application/pdf)."
+                    ),
+                    agent_message_id="agent-msg-1",
+                    status_message="agent_does_not_accept_file_type",
+                )
+            ],
+            [
+                StepResult(
+                    step_number=2,
+                    agent_id="agent-1",
+                    agent_name="agent-1",
+                    task="Underwrite using the broker artifact.",
+                    response_text="Recovered answer.",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id="agent-msg-2",
+                )
+            ],
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        message_text="Underwrite this submission",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Insurer")],
+        room_config=RoomConfig(),
+        conversation_context=None,
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert planner.plan.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_run_stops_when_repeated_recoverable_failure_exhausts_step_budget():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Underwrite this submission"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "user-msg-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+            "orchestration_step_budget": 1,
+        },
+    )
+    delegate_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Try the same failing dispatch.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Underwrite the submission.",
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            )
+        ],
+    )
+    planner = SimpleNamespace(plan=AsyncMock(return_value=delegate_action))
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor._v2_dispatch_intent = MagicMock(side_effect=_explicit_dispatch_intent)
+    executor._dispatch_targets = AsyncMock(
+        return_value=[
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Insurer",
+                task="Underwrite the submission.",
+                response_text="",
+                success=False,
+                status=StepStatus.FAILED,
+                error_message=(
+                    "Agent does not accept the uploaded file type for: "
+                    "report.pdf (application/pdf)."
+                ),
+                agent_message_id="agent-msg-1",
+                status_message="agent_does_not_accept_file_type",
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        message_text="Underwrite this submission",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Insurer")],
+        room_config=RoomConfig(),
+        conversation_context=None,
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert executor._dispatch_targets.await_count == 1
+    assert planner.plan.await_count <= 2
+
+
+@pytest.mark.asyncio
+async def test_run_stops_when_recoverable_failure_retry_budget_is_exhausted():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Underwrite this submission"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "user-msg-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+            "orchestration_step_budget": 6,
+        },
+    )
+    delegate_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Retry the same recoverable dispatch.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Underwrite the submission.",
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            )
+        ],
+    )
+    planner = SimpleNamespace(plan=AsyncMock(return_value=delegate_action))
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor._v2_dispatch_intent = MagicMock(side_effect=_explicit_dispatch_intent)
+    executor._dispatch_targets = AsyncMock(
+        return_value=[
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Insurer",
+                task="Underwrite the submission.",
+                response_text="",
+                success=False,
+                status=StepStatus.FAILED,
+                error_message=(
+                    "Agent does not accept the uploaded file type for: "
+                    "report.pdf (application/pdf)."
+                ),
+                agent_message_id=None,
+                status_message="agent_does_not_accept_file_type",
+            )
+        ]
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        message_text="Underwrite this submission",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Insurer")],
+        room_config=RoomConfig(),
+        conversation_context=None,
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert executor._dispatch_targets.await_count == 3
+    state = await store.get_latest_by_user_message_id("user-msg-1")
+    assert state is not None
+    assert len(state.open_failures) == 1
+    assert state.open_failures[0].retry_count == state.open_failures[0].max_retries
+    assert state.open_failures[0].status == "abandoned"
+
+
+def test_exhausted_recoverable_failure_for_intents_does_not_block_different_error_class():
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="artifact-1",
+                    )
+                ],
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Retry underwrite with broker artifact only",
+                task_hash="hash-retry",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="artifact-1",
+                    )
+                ],
+            ),
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-a",
+                fingerprint="failure-a",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                dispatch_intent_id="intent-1",
+                error_code="agent_does_not_accept_file_type",
+                error_message="file type rejected",
+                recoverable=True,
+                retry_count=2,
+                max_retries=2,
+                status="abandoned",
+            ),
+            OpenFailureRecord(
+                failure_id="failure-b",
+                fingerprint="failure-b",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-2",
+                dispatch_intent_id="intent-2",
+                error_code="timeout",
+                error_message="agent timed out",
+                recoverable=True,
+                retry_count=0,
+                max_retries=2,
+                status="open",
+            ),
+        ],
+    )
+    retry_intent = DispatchIntent(
+        step_id="step-3",
+        step_target_id="step-3:target-1",
+        dispatch_intent_id="intent-3",
+        planned_agent_message_id="agent-msg-3",
+        agent_id="agent-1",
+        task="Retry underwrite with broker artifact only",
+        task_hash="hash-shared",
+        artifact_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ARTIFACT,
+                ref_id="artifact-1",
+            )
+        ],
+    )
+
+    blocking_failure = SupervisorExecutor._exhausted_recoverable_failure_for_intents(
+        state,
+        [retry_intent],
+    )
+
+    assert blocking_failure is None
 
 
 @pytest.mark.asyncio

@@ -4,12 +4,18 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
+from execution.orchestration.failure_classifier import classify_agent_failure
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
     AgentResultRead,
     canonical_artifact_key,
+    related_open_failure_for_dispatch_intent,
 )
-from models.orchestration import AgentOutputRecord, OrchestrationRunState
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchIntent,
+    OrchestrationRunState,
+)
 
 
 def _run_state(**overrides):
@@ -838,3 +844,662 @@ def test_sparse_replay_preserves_shared_artifact_key():
             "name": "Shared quote",
         }
     ]
+
+
+def test_ingest_failed_attachment_preflight_opens_recoverable_failure():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text="",
+        error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+        status_message="agent_does_not_accept_file_type",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    assert len(updated.open_failures) == 1
+    failure = updated.open_failures[0]
+    assert failure.source == "a2a_adapter"
+    assert failure.agent_id == "agent-1"
+    assert failure.agent_message_id == "agent-msg-1"
+    assert failure.error_code == "agent_does_not_accept_file_type"
+    assert failure.recoverable is True
+    assert failure.recovery_hints == ["retry_without_unsupported_attachments"]
+
+
+def test_ingest_later_success_resolves_only_matching_open_failure():
+    ingestor = AgentResultIngestor()
+    failed = ingestor.ingest(
+        _run_state(
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="step-1",
+                    step_target_id="step-1:target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Task 1",
+                    task_hash="hash-1",
+                ),
+                DispatchIntent(
+                    step_id="step-2",
+                    step_target_id="step-2:target-1",
+                    dispatch_intent_id="intent-2",
+                    planned_agent_message_id="agent-msg-2",
+                    agent_id="agent-1",
+                    task="Task 2",
+                    task_hash="hash-2",
+                ),
+            ]
+        ),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+    failed = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the request.",
+            status_message="timeout",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered answer.",
+        ),
+    )
+
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-1"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"
+    assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failures():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Task 1",
+                task_hash="hash-1",
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Task 2",
+                task_hash="hash-2",
+            ),
+        ]
+    )
+
+    once = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+    twice = ingestor.ingest(
+        once,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: report.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    assert len(twice.open_failures) == 2
+    assert [failure.dispatch_intent_id for failure in twice.open_failures] == [
+        "intent-1",
+        "intent-2",
+    ]
+    assert twice.open_failures[0].fingerprint != twice.open_failures[1].fingerprint
+
+
+def test_ingest_attachment_free_retry_resolves_only_related_open_failure():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-a"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Underwrite submission B",
+                task_hash="hash-b",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-b"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-3",
+                step_target_id="step-3:target-1",
+                dispatch_intent_id="intent-3",
+                planned_agent_message_id="agent-msg-3",
+                agent_id="agent-1",
+                task="Underwrite submission A from broker artifact only",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[],
+            ),
+        ]
+    )
+
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: a.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: b.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-3",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered answer for submission A.",
+        ),
+    )
+
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"
+    assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_ingest_cross_agent_retry_resolves_unique_lineage_failure():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+        ]
+    )
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent rate limit exceeded.",
+            status_message="rate_limited",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-2",
+            status="completed",
+            text="Recovered with alternate underwriter.",
+        ),
+    )
+
+    assert recovered.open_failures[0].status == "resolved"
+    assert recovered.open_failures[0].resolved_by_agent_message_id == "agent-msg-2"
+
+
+def test_ingest_unrelated_cross_agent_success_keeps_failure_open():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Underwrite submission B",
+                task_hash="hash-b",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+            ),
+        ]
+    )
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent rate limit exceeded.",
+            status_message="rate_limited",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-2",
+            status="completed",
+            text="Completed unrelated submission B.",
+        ),
+    )
+
+    assert recovered.open_failures[0].status == "open"
+    assert recovered.open_failures[0].resolved_by_agent_message_id is None
+
+
+def test_failure_hints_only_advertise_supported_recovery_paths():
+    rate_limited = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="agent-msg-1",
+        error="Agent rate limit exceeded.",
+        status_message="rate_limited",
+    )
+    generic = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="agent-msg-2",
+        error="Agent execution failed.",
+        status_message=None,
+    )
+
+    assert rate_limited is not None
+    assert rate_limited.recovery_hints == ["retry_different_agent"]
+    assert generic is not None
+    assert generic.recovery_hints == ["retry_with_refined_task"]
+
+
+def test_ingest_unrelated_attachment_free_success_does_not_resolve_lone_attachment_failure():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-a"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Underwrite unrelated submission B from broker artifact only",
+                task_hash="hash-b",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+                attachment_refs=[],
+            ),
+        ]
+    )
+
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: a.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+            text="Completed unrelated submission B.",
+        ),
+    )
+
+    assert len(recovered.open_failures) == 1
+    assert recovered.open_failures[0].dispatch_intent_id == "intent-1"
+    assert recovered.open_failures[0].status == "open"
+    assert recovered.open_failures[0].resolved_by_agent_message_id is None
+
+
+def test_ingest_same_task_text_with_different_refs_does_not_resolve_open_failure():
+    ingestor = AgentResultIngestor()
+    task_text = "Underwrite submission"
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task=task_text,
+                task_hash="hash-shared-task-text",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+                attachment_refs=[
+                    {"kind": "attachment", "ref_id": "file-a"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task=task_text,
+                task_hash="hash-shared-task-text",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+                attachment_refs=[],
+            ),
+        ]
+    )
+
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: a.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+            text="Completed different submission with the same task text.",
+        ),
+    )
+
+    assert len(recovered.open_failures) == 1
+    assert recovered.open_failures[0].dispatch_intent_id == "intent-1"
+    assert recovered.open_failures[0].status == "open"
+    assert recovered.open_failures[0].resolved_by_agent_message_id is None
+
+
+def test_related_open_failure_for_dispatch_intent_requires_more_than_task_text_match():
+    task_text = "Underwrite submission"
+    failed_intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="step-1:target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        task=task_text,
+        task_hash="hash-shared-task-text",
+        artifact_refs=[
+            {
+                "kind": "artifact",
+                "ref_id": "broker-msg:artifact_id:submission-a",
+            }
+        ],
+        attachment_refs=[
+            {"kind": "attachment", "ref_id": "file-a"},
+        ],
+    )
+    retry_intent = DispatchIntent(
+        step_id="step-2",
+        step_target_id="step-2:target-1",
+        dispatch_intent_id="intent-2",
+        planned_agent_message_id="agent-msg-2",
+        agent_id="agent-1",
+        task=task_text,
+        task_hash="hash-shared-task-text",
+        artifact_refs=[
+            {
+                "kind": "artifact",
+                "ref_id": "broker-msg:artifact_id:submission-b",
+            }
+        ],
+        attachment_refs=[],
+    )
+    state = _run_state(
+        dispatch_intents=[failed_intent, retry_intent],
+    )
+    failed_state = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent does not accept the uploaded file type for: a.pdf (application/pdf).",
+            status_message="agent_does_not_accept_file_type",
+        ),
+    )
+
+    assert (
+        related_open_failure_for_dispatch_intent(
+            failed_state.open_failures,
+            retry_intent=retry_intent,
+            dispatch_intents=failed_state.dispatch_intents,
+        )
+        is None
+    )
+
+
+def test_ingest_replan_success_resolves_related_timeout_without_broad_same_agent_fallback():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Summarize claim packet",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-claim"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                task="Summarize unrelated packet",
+                task_hash="hash-other",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-other"},
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-3",
+                step_target_id="step-3:target-1",
+                dispatch_intent_id="intent-3",
+                planned_agent_message_id="agent-msg-3",
+                agent_id="agent-1",
+                task="Retry claim packet with tighter prompt",
+                task_hash="hash-shared",
+                artifact_refs=[
+                    {"kind": "artifact", "ref_id": "artifact-claim"},
+                ],
+            ),
+        ]
+    )
+
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the request.",
+            status_message="timeout",
+        ),
+    )
+    state = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent timed out while processing the unrelated request.",
+            status_message="timeout",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-3",
+            agent_id="agent-1",
+            status="completed",
+            text="Recovered timeout response.",
+        ),
+    )
+
+    first_failure, second_failure = recovered.open_failures
+    assert first_failure.dispatch_intent_id == "intent-1"
+    assert first_failure.status == "resolved"
+    assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
+    assert second_failure.dispatch_intent_id == "intent-2"
+    assert second_failure.status == "open"

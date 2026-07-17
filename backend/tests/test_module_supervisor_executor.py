@@ -21,7 +21,9 @@ from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.orchestration import (
     AgentOutputRecord,
+    DispatchContentRef,
     DispatchIntent,
+    DispatchRefKind,
     OrchestrationRunState,
     OrchestrationStatus,
     PlannedDelegateTarget,
@@ -227,6 +229,47 @@ async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_re
         "attachment_refs": [],
         "expected_outputs": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_logs_planner_decision_with_refs(caplog):
+    se = _make_supervisor_executor()
+    se.run_store = InMemoryOrchestrationRunStore()
+    state = await se.run_store.create_run(
+        OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Coordinate the selected agents",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.RUNNING,
+        )
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Use broker artifact for insurer.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Use broker artifact.",
+                artifact_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ARTIFACT,
+                        ref_id="broker-msg:artifact_id:submission",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with caplog.at_level("INFO"):
+        await se._record_v2_planner_action(state, action)
+
+    assert any(
+        record.message == "supervisor_planner_decision"
+        and record.__dict__.get("action") == "delegate"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
