@@ -2833,12 +2833,9 @@ class SupervisorExecutor:
                         artifacts=artifacts,
                     ),
                 )
-                if next_state.state_version == expected_version:
-                    next_state.state_version += 1
-                    next_state.updated_at = utcnow()
-            else:
-                next_state.state_version += 1
-                next_state.updated_at = utcnow()
+
+            next_state.state_version = expected_version + 1
+            next_state.updated_at = utcnow()
 
             current = await self.run_store.save_state(
                 next_state,
