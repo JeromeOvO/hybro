@@ -2795,52 +2795,6 @@ class SupervisorExecutor:
                 existing["display_message_id"] = message_id
             self._clear_stale_pending_hitl_request_ids(updated)
 
-        try:
-            saved = await self._save_interrupted_state(
-                kind=InterruptKind.HITL_SUPERVISOR,
-                trajectory=trajectory,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-                hitl_request_id=pending_request_ids[-1],
-                message_id=user_message_id,
-            )
-        except Exception:
-            await self._clear_continuation_state(
-                message_id=user_message_id,
-                to_user_message=True,
-            )
-            trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
-                state,
-                OrchestrationStatus.FAILED,
-                reason="failed to save v2 supervisor HITL continuation",
-                mutate=lambda updated: mark_failed_supervisor_cleanup(updated, {}),
-            )
-            return await self._log_state_and_return(
-                room_id,
-                state,
-                self._state_run_result(status=RunStatus.FAILED, state=state),
-            )
-        if not saved:
-            trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
-                state,
-                OrchestrationStatus.FAILED,
-                reason="failed to save v2 HITL continuation",
-                mutate=lambda updated: mark_failed_supervisor_cleanup(updated, {}),
-            )
-            return await self._log_state_and_return(
-                room_id,
-                state,
-                self._state_run_result(status=RunStatus.FAILED, state=state),
-            )
-
         for qi, question in enumerate(questions):
             prompt_type = HITLPromptType.TEXT
             if question.prompt_type:
@@ -2963,6 +2917,66 @@ class SupervisorExecutor:
                         state=state,
                     ),
                 )
+
+        try:
+            saved = await self._save_interrupted_state(
+                kind=InterruptKind.HITL_SUPERVISOR,
+                trajectory=trajectory,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                hitl_request_id=created_request_ids[-1],
+                message_id=user_message_id,
+            )
+        except Exception:
+            await self._clear_continuation_state(
+                message_id=user_message_id,
+                to_user_message=True,
+            )
+            cleanup_failures = await cleanup_created_artifacts()
+            trajectory.status = TrajectoryStatus.FAILED
+
+            def mark_failed_continuation_save(
+                updated: OrchestrationRunState,
+            ) -> None:
+                mark_failed_supervisor_cleanup(updated, cleanup_failures)
+
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 supervisor HITL continuation",
+                mutate=mark_failed_continuation_save,
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
+        if not saved:
+            cleanup_failures = await cleanup_created_artifacts()
+            trajectory.status = TrajectoryStatus.FAILED
+
+            def mark_failed_unsaved_continuation(
+                updated: OrchestrationRunState,
+            ) -> None:
+                mark_failed_supervisor_cleanup(updated, cleanup_failures)
+
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 HITL continuation",
+                mutate=mark_failed_unsaved_continuation,
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER

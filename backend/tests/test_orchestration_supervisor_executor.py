@@ -1235,7 +1235,18 @@ async def test_run_ask_user_creates_hitl_prompt_and_continuation():
     executor.hitl_coordinator = SimpleNamespace(
         request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
     )
-    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    async def save_interrupted_state(**_kwargs):
+        creating_state = await store.get_run("message-1")
+        assert creating_state is not None
+        assert creating_state.status == OrchestrationStatus.INGESTING
+        assert creating_state.pending_hitl_request_ids == ["hitl-1"]
+        assert creating_state.open_questions[0]["status"] == "creating"
+        return True
+
+    executor._save_interrupted_state = AsyncMock(
+        side_effect=save_interrupted_state
+    )
 
     result = await executor.run(
         room_id="room-1",
@@ -2452,10 +2463,14 @@ async def test_run_ask_user_save_interrupted_state_exception_clears_transient_st
     )
 
     assert result.status == RunStatus.FAILED
-    request_input.assert_not_awaited()
-    cancel_request.assert_not_awaited()
-    executor.message_writer.upsert_room_agent_message.assert_not_awaited()
-    executor.message_writer.delete_room_agent_message_by_message_id.assert_not_awaited()
+    request_input.assert_awaited_once()
+    cancel_request.assert_awaited_once_with("hitl-1", "room-1")
+    created_message_id = (
+        executor.message_writer.upsert_room_agent_message.await_args.args[0].message_id
+    )
+    executor.message_writer.delete_room_agent_message_by_message_id.assert_awaited_once_with(
+        created_message_id,
+    )
     persisted = await store.get_run("message-1")
     assert persisted is not None
     assert persisted.status == OrchestrationStatus.FAILED
