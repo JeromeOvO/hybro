@@ -31,10 +31,61 @@ def test_legacy_expected_output_loads_with_outcome_contract_defaults():
         {"kind": "artifact", "required": True, "description": None}
     )
 
-    assert output.output_key is None
+    assert output.output_key is not None
+    assert output.output_key.startswith("legacy:")
     assert output.artifact_name is None
     assert output.required_fields == []
     assert output.allow_partial is True
+
+
+def test_legacy_expected_output_key_is_stable_across_whitespace():
+    first = DispatchExpectedOutput(
+        kind="artifact",
+        description="Produce a quote summary.",
+        required_fields=["pricing.premium", "pricing.currency"],
+    )
+    second = DispatchExpectedOutput(
+        kind="  artifact ",
+        description=" Produce  a quote summary. ",
+        required_fields=["pricing.currency", "pricing.premium"],
+    )
+
+    assert first.output_key == second.output_key
+
+
+@pytest.mark.parametrize(
+    ("persisted_value", "validation_status", "expected"),
+    [(True, "candidate", False), (False, "validated", True)],
+)
+def test_blocker_derives_compatibility_validation_field(
+    persisted_value: bool,
+    validation_status: str,
+    expected: bool,
+):
+    outcome = DelegationOutcomeRecord.model_validate(
+        {
+            "outcome_id": "outcome-1",
+            "dispatch_intent_id": "intent-1",
+            "agent_id": "agent-1",
+            "goal_family_fingerprint": "family-1",
+            "goal_revision_fingerprint": "revision-1",
+            "attempt_fingerprint": "attempt-1",
+            "status": "blocked",
+            "blockers": [
+                {
+                    "key": "missing-limit",
+                    "description": "The requested limit is unavailable.",
+                    "source": "agent",
+                    "validated_user_only": persisted_value,
+                    "validation_status": validation_status,
+                }
+            ],
+        }
+    )
+
+    blocker = outcome.blockers[0]
+    assert blocker.validated_user_only is expected
+    assert blocker.model_dump()["validated_user_only"] is expected
 
 
 def test_legacy_run_loads_with_outcome_collections_defaulted():

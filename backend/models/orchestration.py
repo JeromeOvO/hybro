@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from common.utils.time import utcnow
 
@@ -86,6 +88,38 @@ class DispatchExpectedOutput(BaseModel):
     required_fields: list[str] = Field(default_factory=list)
     allow_partial: bool = True
 
+    @model_validator(mode="after")
+    def _ensure_stable_output_key(self) -> DispatchExpectedOutput:
+        if self.output_key is not None and self.output_key.strip():
+            self.output_key = self.output_key.strip()
+            return self
+
+        contract = {
+            "kind": " ".join(self.kind.split()),
+            "artifact_name": (
+                " ".join(self.artifact_name.split())
+                if self.artifact_name is not None
+                else None
+            ),
+            "required_fields": sorted(
+                " ".join(field.split()) for field in self.required_fields
+            ),
+            "description": (
+                " ".join(self.description.split())
+                if self.description is not None
+                else None
+            ),
+        }
+        payload = json.dumps(
+            contract,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self.output_key = f"legacy:{digest[:20]}"
+        return self
+
 
 class AssumptionRecord(BaseModel):
     key: str
@@ -114,10 +148,23 @@ class BlockerRecord(BaseModel):
     source: Literal["agent", "planner", "executor"]
     evidence_refs: list[str] = Field(default_factory=list)
     claimed_user_only: bool = False
-    validated_user_only: bool = False
-    validation_status: Literal["candidate", "validated"] = "candidate"
+    validation_status: Literal["candidate", "validated"] = Field(
+        default="candidate",
+        description=(
+            "Authoritative user-only validation state. The validated_user_only "
+            "compatibility field is derived from this value."
+        ),
+    )
     status: Literal["open", "resolved", "waived"] = "open"
     resolution_attempts: list[BlockerResolutionAttempt] = Field(default_factory=list)
+
+    @computed_field(
+        description="Compatibility mirror derived from validation_status.",
+        return_type=bool,
+    )
+    @property
+    def validated_user_only(self) -> bool:
+        return self.validation_status == "validated"
 
 
 class OpenFailureRecord(BaseModel):
