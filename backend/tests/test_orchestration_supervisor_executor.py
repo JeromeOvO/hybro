@@ -3793,6 +3793,41 @@ async def test_run_resumed_trajectory_clears_resolved_agent_hitl_without_reply_s
     )
 
 
+def test_agent_id_fallback_requires_one_open_pending_question_for_agent():
+    state = _run_state(run_id="message-1", user_message_id="message-1")
+    state.pending_hitl_request_ids = ["hitl-1", "hitl-2"]
+    state.open_questions = [
+        {
+            "request_id": "hitl-1",
+            "source": "agent",
+            "status": "open",
+            "agent_id": "agent-1",
+        },
+        {
+            "request_id": "hitl-2",
+            "source": "agent",
+            "status": "open",
+            "agent_id": "agent-1",
+        },
+    ]
+    terminal_result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Complete one request",
+        response_text="done",
+        success=True,
+        status=StepStatus.SUCCESS,
+    )
+
+    resolved = SupervisorExecutor._resolved_agent_hitl_request_ids_for_results(
+        state,
+        [terminal_result],
+    )
+
+    assert resolved == set()
+
+
 @pytest.mark.asyncio
 async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_progress():
     user_message = _state_unification_user_message(message_id="message-1")

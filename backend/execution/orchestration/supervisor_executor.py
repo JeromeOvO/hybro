@@ -2744,6 +2744,28 @@ class SupervisorExecutor:
             result.agent_id for result in terminal_results if result.agent_id
         }
         pending_request_ids = set(state.pending_hitl_request_ids)
+        fallback_request_ids_by_agent: dict[str, set[str]] = {}
+        for question in state.open_questions:
+            if not isinstance(question, Mapping):
+                continue
+            request_id = question.get("request_id")
+            agent_id = question.get("agent_id")
+            if (
+                not isinstance(request_id, str)
+                or request_id not in pending_request_ids
+                or not isinstance(agent_id, str)
+                or question.get("source") != "agent"
+                or question.get("status") != "open"
+            ):
+                continue
+            has_message_id = any(
+                isinstance(question.get(key), str) and question.get(key)
+                for key in ("display_message_id", "continuation_message_id")
+            )
+            if not has_message_id:
+                fallback_request_ids_by_agent.setdefault(agent_id, set()).add(
+                    request_id
+                )
         resolved: set[str] = set()
         for question in state.open_questions:
             if not isinstance(question, Mapping):
@@ -2765,7 +2787,11 @@ class SupervisorExecutor:
                 resolved.add(request_id)
                 continue
             agent_id = question.get("agent_id")
-            if isinstance(agent_id, str) and agent_id in terminal_agent_ids:
+            if (
+                isinstance(agent_id, str)
+                and agent_id in terminal_agent_ids
+                and fallback_request_ids_by_agent.get(agent_id) == {request_id}
+            ):
                 resolved.add(request_id)
         return resolved
 

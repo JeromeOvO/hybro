@@ -1089,6 +1089,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 client_request_id_resolver=execution_client_request_id_resolver,
             )
             _execution_deps = create_execution_deps(execution_facade)
+            hitl_manager.bind_orchestration_recovery_scheduler(
+                execution_facade.schedule_recovery_orchestration
+            )
 
             async def emit_room_processing_status(**kwargs):
                 return await emit_execution_room_processing_status(

@@ -35,6 +35,7 @@ from models.hitl import (
     HITLRequest,
     HITLStatus,
 )
+from models.request import OrchestrationRequest
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -104,6 +105,7 @@ class HITLService:
         continuation=None,
         task_notifications=None,
         orchestration_run_store=None,
+        orchestration_recovery_scheduler=None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
@@ -111,6 +113,10 @@ class HITLService:
         self._continuation: HITLContinuationPort | None = continuation
         self._task_notifications: HITLTaskNotificationPort | None = task_notifications
         self._orchestration_run_store = orchestration_run_store
+        self._orchestration_recovery_scheduler = orchestration_recovery_scheduler
+
+    def bind_orchestration_recovery_scheduler(self, scheduler) -> None:
+        self._orchestration_recovery_scheduler = scheduler
 
     @property
     def persistence(self):
@@ -1131,6 +1137,34 @@ class HITLService:
         if not run_id or run_store is None:
             return False
 
+        resolved_request_ids = [request.request_id] if request.request_id else []
+        if request.group_id is not None:
+            try:
+                group_docs = await self.persistence.get_hitl_group_requests(
+                    request.group_id
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to load supervisor HITL group for orchestration recovery",
+                    extra={
+                        "hitl_request_id": request.request_id,
+                        "hitl_group_id": request.group_id,
+                        "orchestration_run_id": run_id,
+                    },
+                    exc_info=True,
+                )
+                return False
+            for group_doc in group_docs:
+                group_request_id = group_doc.get("request_id")
+                if (
+                    isinstance(group_request_id, str)
+                    and group_request_id not in resolved_request_ids
+                    and group_doc.get("room_id") == request.room_id
+                    and group_doc.get("source") == "supervisor"
+                ):
+                    resolved_request_ids.append(group_request_id)
+        resolved_request_id_set = set(resolved_request_ids)
+
         from execution.orchestration.run_store import OrchestrationStoreConflict
         from models.orchestration import (
             TERMINAL_ORCHESTRATION_STATUSES,
@@ -1164,7 +1198,6 @@ class HITLService:
 
             updated = state.model_copy(deep=True)
             resolved_at = utcnow().isoformat()
-            request_ids = [request.request_id] if request.request_id else []
             prompts: list[str] = []
             matched = False
             for question in updated.open_questions:
@@ -1177,7 +1210,7 @@ class HITLService:
 
                 question_request_id = question.get("request_id")
                 display_message_id = question.get("display_message_id")
-                matches = question_request_id == request.request_id
+                matches = question_request_id in resolved_request_id_set
                 if not matches and not question_request_id:
                     matches = (
                         isinstance(display_message_id, str)
@@ -1222,7 +1255,7 @@ class HITLService:
             updated.pending_hitl_request_ids = [
                 pending_request_id
                 for pending_request_id in updated.pending_hitl_request_ids
-                if pending_request_id != request.request_id
+                if pending_request_id not in resolved_request_id_set
             ]
             updated.facts.append(
                 {
@@ -1231,7 +1264,7 @@ class HITLService:
                     ),
                     "source": "hitl_user_reply",
                     "text": user_input,
-                    "request_ids": request_ids,
+                    "request_ids": resolved_request_ids,
                     "question_prompts": prompts,
                     "created_at": resolved_at,
                 }
@@ -1240,7 +1273,8 @@ class HITLService:
                 question.get("request_id")
                 for question in updated.open_questions
                 if isinstance(question, dict)
-                and question.get("status") == "open"
+                and question.get("status")
+                in {"open", "creating", "cleanup_failed"}
                 and isinstance(question.get("request_id"), str)
             }
             updated.pending_hitl_request_ids = [
@@ -1293,7 +1327,7 @@ class HITLService:
                         type=OrchestrationEventType.HITL_RESOLVED,
                         state_version=saved.state_version,
                         payload={
-                            "request_ids": request_ids,
+                            "request_ids": resolved_request_ids,
                             "answer_recorded": True,
                             "source": "supervisor_recovery",
                         },
@@ -1315,6 +1349,33 @@ class HITLService:
         )
         return False
 
+    def _schedule_orchestration_recovery(self, request: HITLRequest) -> bool:
+        scheduler = getattr(self, "_orchestration_recovery_scheduler", None)
+        if not callable(scheduler):
+            return False
+        recovery_request = OrchestrationRequest(
+            room_id=request.room_id,
+            room_user_message_id=request.user_message_id,
+            room_related_message_id="",
+            is_recovery=True,
+        )
+        try:
+            scheduled = scheduler(
+                recovery_request,
+                reason="hitl_continuation_lost",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to schedule orchestration recovery for supervisor HITL reply",
+                extra={
+                    "hitl_request_id": request.request_id,
+                    "orchestration_run_id": request.orchestration_run_id,
+                },
+                exc_info=True,
+            )
+            return False
+        return scheduled is not None
+
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
@@ -1327,25 +1388,11 @@ class HITLService:
                 request,
                 user_input,
             )
-            if recorded:
-                resumed = await self.continuation.resume_queue_from_continuation(
-                    request.continuation_message_id,
-                    task_result_text=None,
-                )
-                if not resumed:
-                    logger.warning(
-                        "Supervisor HITL reply recorded in orchestration state but "
-                        "continuation resume was unavailable",
-                        extra={
-                            "hitl_request_id": request.request_id,
-                            "orchestration_run_id": request.orchestration_run_id,
-                            "continuation_message_id": request.continuation_message_id,
-                        },
-                    )
+            if recorded and self._schedule_orchestration_recovery(request):
                 return
             raise ContinuationLostError(
                 f"No continuation found for message {request.continuation_message_id} — "
-                "the supervisor loop may have already been cleaned up or recovered"
+                "the supervisor reply could not schedule orchestration recovery"
             )
 
         if continuation.get("supervisor"):

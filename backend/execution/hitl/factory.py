@@ -13,6 +13,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "continuation",
         "task_notifications",
         "orchestration_run_store",
+        "orchestration_recovery_scheduler",
     }
     legacy_aliases = {
         "store",
@@ -30,6 +31,9 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         continuation=kwargs.get("continuation"),
         task_notifications=kwargs.get("task_notifications"),
         orchestration_run_store=kwargs.get("orchestration_run_store"),
+        orchestration_recovery_scheduler=kwargs.get(
+            "orchestration_recovery_scheduler"
+        ),
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")
@@ -37,6 +41,9 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     service._continuation = kwargs.get("continuation")
     service._task_notifications = kwargs.get("task_notifications")
     service._orchestration_run_store = kwargs.get("orchestration_run_store")
+    service._orchestration_recovery_scheduler = kwargs.get(
+        "orchestration_recovery_scheduler"
+    )
     return service
 
 
