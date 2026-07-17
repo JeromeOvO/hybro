@@ -602,7 +602,7 @@ def _intent_ref_keys(
     if include_attachments:
         refs.extend(intent.attachment_refs)
     return {
-        (getattr(ref, "kind").value, getattr(ref, "ref_id"))
+        (ref.kind.value, ref.ref_id)
         for ref in refs
     }
 

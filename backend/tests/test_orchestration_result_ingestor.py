@@ -10,7 +10,11 @@ from execution.orchestration.result_ingestor import (
     canonical_artifact_key,
     related_open_failure_for_dispatch_intent,
 )
-from models.orchestration import AgentOutputRecord, DispatchIntent, OrchestrationRunState
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchIntent,
+    OrchestrationRunState,
+)
 
 
 def _run_state(**overrides):

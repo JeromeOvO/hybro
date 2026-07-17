@@ -529,7 +529,7 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
 
 
 def test_complete_rejected_when_recoverable_failure_is_open():
-    state = _state_for_validation(
+    state = _complete_run_state(
         open_failures=[
             OpenFailureRecord(
                 failure_id="failure-1",
