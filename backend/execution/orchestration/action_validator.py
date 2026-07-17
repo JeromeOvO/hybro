@@ -134,6 +134,21 @@ def _validate_delegate(
             "delegate action requires at least one target",
             code="delegate_target_missing",
         )
+    if len(action.targets) > 1:
+        parallel_groups = {target.parallel_group for target in action.targets}
+        has_single_group = len(parallel_groups) == 1 and all(
+            isinstance(group, str) and bool(group.strip())
+            for group in parallel_groups
+        )
+        has_intra_action_dependency = any(
+            target.depends_on for target in action.targets
+        )
+        if not has_single_group or has_intra_action_dependency:
+            raise PlannerActionValidationError(
+                "multi-target delegate requires one explicit independent "
+                "parallel_group",
+                code="parallel_dependency_unspecified",
+            )
     candidate_ids = set(candidate_agent_ids)
     for target in action.targets:
         if target.agent_id not in candidate_ids:

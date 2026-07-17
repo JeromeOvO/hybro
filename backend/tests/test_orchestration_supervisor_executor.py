@@ -716,6 +716,9 @@ def test_v2_dispatch_intent_preserves_dispatch_metadata():
             agent_id="agent-1",
             agent_name="Agent One",
             task="Use the referenced materials",
+            depends_on=["prior-intent"],
+            parallel_group="fanout-1",
+            required_resource_refs=["ctx:file-file-1:text"],
             context_refs=refs["context_refs"],
             artifact_refs=refs["artifact_refs"],
             attachment_refs=refs["attachment_refs"],
@@ -724,11 +727,39 @@ def test_v2_dispatch_intent_preserves_dispatch_metadata():
         ),
     )
 
+    assert intent.depends_on == ["prior-intent"]
+    assert intent.parallel_group == "fanout-1"
+    assert intent.required_resource_refs == ["ctx:file-file-1:text"]
     assert intent.context_refs == refs["context_refs"]
     assert intent.artifact_refs == refs["artifact_refs"]
     assert intent.attachment_refs == refs["attachment_refs"]
     assert intent.expected_outputs == refs["expected_outputs"]
     assert intent.attachment_policy == "compatible_only"
+
+
+def test_v2_supervisor_action_preserves_dependency_metadata():
+    planner_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Run independent checks.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Check section A.",
+                parallel_group="fanout-1",
+                required_resource_refs=["artifact-1"],
+            )
+        ],
+    )
+
+    action = SupervisorExecutor._v2_supervisor_action(
+        planner_action,
+        [AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+    )
+    target = action.targets[0]
+
+    assert target.depends_on == []
+    assert target.parallel_group == "fanout-1"
+    assert target.required_resource_refs == ["artifact-1"]
 
 
 @pytest.mark.asyncio
@@ -1698,11 +1729,13 @@ async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_i
                     agent_id="agent-1",
                     agent_name="Agent One",
                     task="Auth required",
+                    parallel_group="fanout-1",
                 ),
                 PlannedDelegateTarget(
                     agent_id="agent-2",
                     agent_name="Agent Two",
                     task="More context",
+                    parallel_group="fanout-1",
                 ),
             ],
         )
@@ -3273,11 +3306,13 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
                     agent_id="agent-1",
                     agent_name="Agent One",
                     task="Async task",
+                    parallel_group="fanout-1",
                 ),
                 PlannedDelegateTarget(
                     agent_id="agent-2",
                     agent_name="Agent Two",
                     task="Needs user input",
+                    parallel_group="fanout-1",
                 ),
             ],
         )
@@ -3357,11 +3392,13 @@ async def test_run_multiple_awaiting_input_results_keep_secondary_awaiting_input
                     agent_id="agent-1",
                     agent_name="Agent One",
                     task="Auth required",
+                    parallel_group="fanout-1",
                 ),
                 PlannedDelegateTarget(
                     agent_id="agent-2",
                     agent_name="Agent Two",
                     task="More context",
+                    parallel_group="fanout-1",
                 ),
             ],
         )
@@ -3479,11 +3516,13 @@ async def test_run_partial_paused_resume_waits_for_remaining_agents():
                     agent_id="agent-1",
                     agent_name="Agent One",
                     task="First task",
+                    parallel_group="fanout-1",
                 ),
                 PlannedDelegateTarget(
                     agent_id="agent-2",
                     agent_name="Agent Two",
                     task="Second task",
+                    parallel_group="fanout-1",
                 ),
             ],
         )
@@ -3635,11 +3674,13 @@ async def test_run_final_paused_sibling_resume_reconciles_sidecar_outputs():
                     agent_id="agent-1",
                     agent_name="Agent One",
                     task="First task",
+                    parallel_group="fanout-1",
                 ),
                 PlannedDelegateTarget(
                     agent_id="agent-2",
                     agent_name="Agent Two",
                     task="Second task",
+                    parallel_group="fanout-1",
                 ),
             ],
         )

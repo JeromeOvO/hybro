@@ -66,6 +66,9 @@ def test_delegate_target_preserves_explicit_resource_refs():
     target = PlannedDelegateTarget(
         agent_id="agent-1",
         task="Review the selected submission.",
+        depends_on=["prior-intent"],
+        parallel_group="fanout-1",
+        required_resource_refs=["ctx:file-file-1:text"],
         context_refs=[
             DispatchContentRef(
                 kind=DispatchRefKind.CONTEXT,
@@ -85,6 +88,9 @@ def test_delegate_target_preserves_explicit_resource_refs():
         ],
     )
 
+    assert target.depends_on == ["prior-intent"]
+    assert target.parallel_group == "fanout-1"
+    assert target.required_resource_refs == ["ctx:file-file-1:text"]
     assert target.context_refs[0].ref_id == "ctx:file-file-1:text"
     assert target.attachment_refs[0].required is False
     assert target.expected_outputs[0].kind == "summary"

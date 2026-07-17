@@ -1911,11 +1911,13 @@ async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_e
                         "agent_id": "broker",
                         "agent_name": "Broker",
                         "task": "Collect requirements.",
+                        "parallel_group": "quote-fanout",
                     },
                     {
                         "agent_id": "insurer",
                         "agent_name": "Insurer",
                         "task": "Prepare quote.",
+                        "parallel_group": "quote-fanout",
                     },
                 ],
             },
