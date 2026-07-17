@@ -1684,9 +1684,13 @@ class RoomMessageCenter:
             room_id=room_id,
             user_message_id=room_user_message_id,
             original_clarify_message_id=(
-                result.trajectory.clarify_original_message_id
-                if result.trajectory
-                else None
+                extend.get("clarify_original_message_id")
+                if is_clarify_resume
+                else getattr(
+                    resumed_trajectory,
+                    "clarify_original_message_id",
+                    None,
+                )
             ),
             user_message=user_message,
         )
@@ -2145,11 +2149,7 @@ class RoomMessageCenter:
             room_id=room_id,
             user_message_id=user_message_id,
             room=room,
-            original_clarify_message_id=(
-                result.trajectory.clarify_original_message_id
-                if result.trajectory
-                else None
-            ),
+            original_clarify_message_id=trajectory.clarify_original_message_id,
         )
 
         await self._log_room_memory_stats(room_id)
@@ -2370,8 +2370,12 @@ class RoomMessageCenter:
                 )
                 if orig_msg and isinstance(orig_msg.extend_info, dict):
                     orig_traj = orig_msg.extend_info.get("supervisor_trajectory")
-                    if isinstance(orig_traj, dict) and result_trajectory is not None:
-                        orig_traj["status"] = result_trajectory.status
+                    if isinstance(orig_traj, dict):
+                        orig_traj["status"] = (
+                            result_trajectory.status
+                            if result_trajectory is not None
+                            else orchestration_status
+                        )
                         await self.message_writer.update_room_user_message_by_message_id(
                             original_clarify_message_id, orig_msg
                         )

@@ -952,6 +952,62 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
 
 
 @pytest.mark.asyncio
+async def test_state_run_result_unsticks_original_clarify_message():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="resume-msg",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Account A"),
+        extend_info={},
+    )
+    original_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="original-msg",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={"supervisor_trajectory": {"status": "clarifying"}},
+    )
+    state = _completed_state_with_agent_outputs()
+    state.status = OrchestrationStatus.WAITING_AGENT
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(
+            side_effect=lambda message_id: {
+                "resume-msg": user_message,
+                "original-msg": original_message,
+            }.get(message_id)
+        )
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock()
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc._turn_event_appender = None
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.PAUSED,
+            trajectory=None,
+            run_id=state.run_id,
+            run_state=state,
+        ),
+        room_id="room-1",
+        user_message_id="resume-msg",
+        original_clarify_message_id="original-msg",
+        user_message=user_message,
+    )
+
+    assert original_message.extend_info["supervisor_trajectory"]["status"] == (
+        OrchestrationStatus.WAITING_AGENT.value
+    )
+    assert any(
+        call.args[0] == "original-msg"
+        for call in rmc.message_writer.update_room_user_message_by_message_id.await_args_list
+    )
+
+
+@pytest.mark.asyncio
 async def test_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
