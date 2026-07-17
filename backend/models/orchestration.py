@@ -226,7 +226,12 @@ class OrchestrationRunState(BaseModel):
     schema_version: int = 2
     state_version: int = 0
     facts: list[dict[str, Any]] = Field(default_factory=list)
-    open_questions: list[dict[str, Any]] = Field(default_factory=list)
+    open_questions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Unresolved completion blockers; remove entries when they are resolved."
+        ),
+    )
     agent_outputs: list[AgentOutputRecord] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     completion_criteria: list[dict[str, Any]] = Field(default_factory=list)

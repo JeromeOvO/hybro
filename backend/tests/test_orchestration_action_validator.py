@@ -546,21 +546,26 @@ def test_complete_accepts_rejected_active_dispatch_reference():
     )
 
 
-def test_complete_rejects_unresolved_non_blocking_open_question():
+@pytest.mark.parametrize(
+    "open_question",
+    [
+        {"question_id": "question-1", "text": "Need more detail"},
+        {
+            "question_id": "question-1",
+            "text": "Need more detail",
+            "resolved": False,
+            "blocking": False,
+        },
+    ],
+)
+def test_complete_rejects_every_open_question(open_question):
     action = _complete_action()
 
     with pytest.raises(PlannerActionValidationError, match="unresolved questions"):
         PlannerActionValidator.validate(
             action,
             run_state=_complete_run_state(
-                open_questions=[
-                    {
-                        "question_id": "question-1",
-                        "text": "Need more detail",
-                        "resolved": False,
-                        "blocking": False,
-                    }
-                ]
+                open_questions=[open_question]
             ),
         )
 

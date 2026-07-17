@@ -144,9 +144,7 @@ def _validate_completion_blockers(
         raise PlannerActionValidationError(
             "complete action is blocked by active dispatches"
         )
-    if any(
-        not question.get("resolved") for question in run_state.open_questions
-    ) or evidence.unresolved_questions:
+    if run_state.open_questions or evidence.unresolved_questions:
         raise PlannerActionValidationError(
             "complete action is blocked by unresolved questions"
         )

@@ -127,7 +127,12 @@ class OrchestrationStateContext(BaseModel):
     current_step: OrchestrationStepContext
     current_plan: list[dict[str, Any]] = Field(default_factory=list)
     facts: list[dict[str, Any]] = Field(default_factory=list)
-    open_questions: list[dict[str, Any]] = Field(default_factory=list)
+    open_questions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Unresolved completion blockers; remove entries when they are resolved."
+        ),
+    )
     agent_outputs: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     completion_criteria: list[dict[str, Any]] = Field(default_factory=list)
