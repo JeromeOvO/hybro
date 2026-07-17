@@ -1196,6 +1196,24 @@ class HITLService:
             if state is None or state.status in TERMINAL_ORCHESTRATION_STATUSES:
                 return False
 
+            already_resolved_request_ids = {
+                question.get("request_id")
+                for question in state.open_questions
+                if isinstance(question, dict)
+                and question.get("source") == "supervisor"
+                and question.get("status") == "resolved"
+                and question.get("request_id") in resolved_request_id_set
+            }
+            if (
+                resolved_request_id_set
+                and resolved_request_id_set <= already_resolved_request_ids
+                and not (
+                    resolved_request_id_set
+                    & set(state.pending_hitl_request_ids)
+                )
+            ):
+                return True
+
             updated = state.model_copy(deep=True)
             resolved_at = utcnow().isoformat()
             prompts: list[str] = []

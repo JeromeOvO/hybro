@@ -2063,6 +2063,23 @@ class TestHandleResponseErrors:
         assert persisted.open_questions[0]["answer"] == "Account A"
         mock_hitl_delivery.emit.assert_not_awaited()
 
+        hitl_service._orchestration_recovery_scheduler = MagicMock(
+            return_value=MagicMock()
+        )
+        result = await hitl_service.handle_response(
+            room_id=request.room_id,
+            request_id=request.request_id,
+            user_input="Account A",
+            user_id="user-1",
+        )
+
+        assert result == {"status": "ok", "request_id": request.request_id}
+        persisted_after_retry = await run_store.get_run("run-msg-1")
+        assert persisted_after_retry is not None
+        assert len(persisted_after_retry.open_questions) == 1
+        assert len(persisted_after_retry.facts) == 1
+        hitl_service._orchestration_recovery_scheduler.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_group_recovery_resolves_all_supervisor_siblings(
         self,
