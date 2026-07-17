@@ -117,6 +117,7 @@ class AgentResultIngestor:
             if output.agent_message_id != result.agent_message_id
             for artifact_key in output.artifact_keys
         }
+        preserve_sparse_replay = _is_sparse_terminal_replay(existing_output, result)
         result_artifact_keys: list[str] = []
         for index, artifact in enumerate(result.artifacts):
             artifact_payload = copy.deepcopy(artifact)
@@ -154,29 +155,26 @@ class AgentResultIngestor:
             existing_artifacts_by_key[artifact_key] = artifact_record
             changed = True
 
-        if result.artifacts:
+        if not preserve_sparse_replay:
             current_artifact_keys = set(result_artifact_keys)
             retained_artifacts = [
                 artifact
                 for artifact in state.artifacts
                 if not (
-                    (
-                        isinstance(artifact, dict)
-                        and artifact.get("artifact_key")
-                        not in artifact_keys_referenced_by_other_outputs
-                        and (
-                            (
-                                artifact.get("source_agent_message_id")
-                                == result.agent_message_id
-                                and artifact.get("artifact_key")
-                                not in current_artifact_keys
-                            )
-                            or (
-                                artifact.get("artifact_key")
-                                in previous_artifact_keys
-                                and artifact.get("artifact_key")
-                                not in current_artifact_keys
-                            )
+                    isinstance(artifact, dict)
+                    and artifact.get("artifact_key")
+                    not in artifact_keys_referenced_by_other_outputs
+                    and (
+                        (
+                            artifact.get("source_agent_message_id")
+                            == result.agent_message_id
+                            and artifact.get("artifact_key")
+                            not in current_artifact_keys
+                        )
+                        or (
+                            artifact.get("artifact_key") in previous_artifact_keys
+                            and artifact.get("artifact_key")
+                            not in current_artifact_keys
                         )
                     )
                 )
@@ -215,6 +213,10 @@ class AgentResultIngestor:
             )
             changed = True
         else:
+            preserve_sparse_replay = _is_sparse_terminal_replay(
+                existing_output,
+                result,
+            )
             if existing_output.agent_id != result.agent_id:
                 existing_output.agent_id = result.agent_id
                 changed = True
@@ -227,7 +229,10 @@ class AgentResultIngestor:
             if result.error is not None and existing_output.error != result.error:
                 existing_output.error = result.error
                 changed = True
-            if result.artifacts and existing_output.artifact_keys != result_artifact_keys:
+            if (
+                not preserve_sparse_replay
+                and existing_output.artifact_keys != result_artifact_keys
+            ):
                 existing_output.artifact_keys = result_artifact_keys
                 changed = True
 
@@ -246,6 +251,16 @@ class AgentResultIngestor:
             if isinstance(fact, dict)
         }
         existing_fact = existing_facts_by_id.get(fact_id)
+        existing_output = next(
+            (
+                output
+                for output in state.agent_outputs
+                if output.agent_message_id == result.agent_message_id
+            ),
+            None,
+        )
+        if _is_sparse_terminal_replay(existing_output, result):
+            return False
         if text and _is_fact_projectable(result):
             fact_record = {
                 "fact_id": fact_id,
@@ -286,6 +301,21 @@ def _artifact_summary(artifact: dict[str, Any]) -> str:
 
 def _is_fact_projectable(result: AgentResultRead) -> bool:
     return result.status == "completed"
+
+
+def _is_sparse_terminal_replay(
+    existing_output: AgentOutputRecord | None,
+    result: AgentResultRead,
+) -> bool:
+    return bool(
+        existing_output is not None
+        and existing_output.status == result.status
+        and result.text is None
+        and result.error is None
+        and not result.artifacts
+        and existing_output.text is not None
+        and (existing_output.error is not None or bool(existing_output.artifact_keys))
+    )
 
 
 def _apply_artifact_projection(
