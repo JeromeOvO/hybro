@@ -19,8 +19,6 @@ from models.orchestration import DispatchContentRef, DispatchExpectedOutput
 if TYPE_CHECKING:
     from models.agent import Agent
 
-from models.orchestration import DispatchContentRef, DispatchExpectedOutput
-
 # =========================================================================
 # Shared models
 # =========================================================================

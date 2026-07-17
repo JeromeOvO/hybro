@@ -487,6 +487,7 @@ def _dispatch_refs_payload():
                 ref_id="ctx-1",
                 source_agent_message_id="source-msg-1",
                 mime_type="text/plain",
+                required=False,
             )
         ],
         "artifact_refs": [
@@ -495,6 +496,7 @@ def _dispatch_refs_payload():
                 ref_id="artifact-1",
                 source_agent_message_id="source-msg-2",
                 mime_type="application/json",
+                required=False,
             )
         ],
         "attachment_refs": [
@@ -503,6 +505,7 @@ def _dispatch_refs_payload():
                 ref_id="file-1",
                 source_agent_message_id="user-msg-1",
                 mime_type="application/pdf",
+                required=False,
             )
         ],
         "expected_outputs": [

@@ -3622,11 +3622,15 @@ class RoomServices:
                 if not isinstance(attachment, dict | UserAttachment):
                     continue
                 user_attachments.append(UserAttachment.model_validate(attachment))
+        forwarding_policy = (
+            message.extend_info.get("attachment_forwarding_policy")
+            if isinstance(message.extend_info, dict)
+            else None
+        )
         if (
             user_attachments
+            and forwarding_policy == "explicit_refs_only"
             and isinstance(message.extend_info, dict)
-            and message.extend_info.get("attachment_forwarding_policy")
-            == "explicit_refs_only"
         ):
             resolved_refs = message.extend_info.get("resolved_dispatch_payload_refs")
             selected_refs = (

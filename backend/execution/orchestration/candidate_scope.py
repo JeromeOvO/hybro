@@ -264,7 +264,9 @@ def _candidate_item_id(raw_item: Any) -> str | None:
     return _optional_str(_first_attr_value(raw_item, "agent_id", "id"))
 
 
-def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
+def _candidate_agent_snapshot(  # noqa: C901
+    raw_item: Any,
+) -> CandidateAgentSnapshot | None:
     if isinstance(raw_item, str):
         agent_id = _optional_str(raw_item)
         if agent_id is None:
@@ -375,6 +377,38 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
         input_modes = ["text"]
         output_modes = []
         supports_file_upload = False
+    direct_input_modes = _candidate_modes_from_object(
+        raw_item,
+        None,
+        "input_modes",
+        "default_input_modes",
+        "defaultInputModes",
+        default=[],
+    )
+    if direct_input_modes:
+        input_modes = direct_input_modes
+    direct_output_modes = _candidate_modes_from_object(
+        raw_item,
+        None,
+        "output_modes",
+        "default_output_modes",
+        "defaultOutputModes",
+        default=[],
+    )
+    if direct_output_modes:
+        output_modes = direct_output_modes
+    direct_supports_file_upload = _first_attr_value(
+        raw_item,
+        "supports_file_upload",
+        "supportsFileUpload",
+    )
+    if direct_supports_file_upload is not None:
+        supports_file_upload = bool(direct_supports_file_upload)
+    capabilities = _string_list(
+        _first_attr_value(raw_item, "capabilities", "skills")
+    )
+    if not capabilities and agent_card is not None:
+        capabilities = _skill_list(_first_card_value(agent_card, "skills"))
 
     return CandidateAgentSnapshot(
         agent_id=agent_id,
@@ -383,9 +417,7 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
         capability_summary=capability_summary or "",
         status=_status_from_object(raw_item),
         source=_optional_str(_first_attr_value(raw_item, "source")),
-        capabilities=_string_list(
-            _first_attr_value(raw_item, "capabilities", "skills")
-        ),
+        capabilities=capabilities,
         input_modes=input_modes,
         output_modes=output_modes,
         supports_file_upload=bool(supports_file_upload),

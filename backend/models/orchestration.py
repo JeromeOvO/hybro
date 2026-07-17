@@ -96,7 +96,7 @@ class OpenFailureRecord(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
     @model_validator(mode="after")
-    def _retry_count_within_budget(self) -> "OpenFailureRecord":
+    def _retry_count_within_budget(self) -> OpenFailureRecord:
         if self.retry_count < 0 or self.retry_count > self.max_retries:
             raise ValueError("retry_count must be between 0 and max_retries")
         return self

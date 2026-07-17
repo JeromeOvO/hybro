@@ -4633,9 +4633,6 @@ class SupervisorExecutor:
                 if resolved_payload is not None:
                     if not isinstance(message.extend_info, dict):
                         message.extend_info = {}
-                    message.extend_info["attachment_forwarding_policy"] = (
-                        "explicit_refs_only"
-                    )
                     message.extend_info["resolved_dispatch_payload_refs"] = {
                         "context_refs": list(
                             resolved_payload.selected_context_refs
@@ -4649,20 +4646,6 @@ class SupervisorExecutor:
                         "resource_payloads": [
                             payload.model_dump(mode="json")
                             for payload in resolved_payload.resource_payloads
-                        ],
-                    }
-                    message.extend_info["dispatch_payload_refs"] = {
-                        "context_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.context_refs
-                        ],
-                        "artifact_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.artifact_refs
-                        ],
-                        "attachment_refs": [
-                            ref.model_dump(mode="json")
-                            for ref in target.attachment_refs
                         ],
                     }
                 inserted = await self.message_writer.add_room_agent_message(message)
