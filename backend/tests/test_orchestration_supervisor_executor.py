@@ -58,6 +58,56 @@ class RecordingPlanner:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_room_id", "stored_user_message_id"),
+    [
+        ("room-2", "message-1"),
+        ("room-1", "message-2"),
+    ],
+)
+async def test_run_rejects_state_bound_to_another_request(
+    stored_room_id,
+    stored_user_message_id,
+):
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="shared-run",
+        room_id=stored_room_id,
+        user_message_id=stored_user_message_id,
+        envelope={},
+        goal="Other request",
+    )
+    await store.create_run(state)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration_run_id": "shared-run",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    with pytest.raises(ValueError, match="orchestration run binding mismatch"):
+        await executor.run(
+            room_id="room-1",
+            user_message_id="message-1",
+            message_text="Coordinate this",
+            agent_registry=[
+                AgentProfile(agent_id="agent-1", agent_name="Agent One")
+            ],
+            room_config=RoomConfig(),
+            user_message=user_message,
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_builds_resource_catalog_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",

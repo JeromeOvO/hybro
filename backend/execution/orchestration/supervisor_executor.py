@@ -1034,6 +1034,21 @@ class SupervisorExecutor:
             return value
         return 8
 
+    @staticmethod
+    def _validate_run_binding(
+        state: OrchestrationRunState,
+        *,
+        room_id: str,
+        user_message_id: str,
+    ) -> OrchestrationRunState:
+        if state.room_id != room_id or state.user_message_id != user_message_id:
+            raise ValueError(
+                "orchestration run binding mismatch: "
+                f"run_id={state.run_id!r}, room_id={state.room_id!r}, "
+                f"user_message_id={state.user_message_id!r}"
+            )
+        return state
+
     async def _load_or_create_run_state_for_run(
         self,
         *,
@@ -1051,12 +1066,20 @@ class SupervisorExecutor:
         )
         existing = await self.run_store.get_run(effective_run_id)
         if existing is not None:
-            return existing
+            return self._validate_run_binding(
+                existing,
+                room_id=room_id,
+                user_message_id=user_message_id,
+            )
         existing = await self.run_store.get_latest_by_user_message_id(
             user_message_id
         )
         if existing is not None:
-            return existing
+            return self._validate_run_binding(
+                existing,
+                room_id=room_id,
+                user_message_id=user_message_id,
+            )
 
         state = await self.run_store.reconstruct_from_envelope(
             run_id=effective_run_id,
@@ -1103,12 +1126,20 @@ class SupervisorExecutor:
         except OrchestrationStoreConflict:
             existing = await self.run_store.get_run(effective_run_id)
             if existing is not None:
-                return existing
+                return self._validate_run_binding(
+                    existing,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
             existing = await self.run_store.get_latest_by_user_message_id(
                 user_message_id
             )
             if existing is not None:
-                return existing
+                return self._validate_run_binding(
+                    existing,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
             raise
 
     async def _ensure_v2_running_state(
