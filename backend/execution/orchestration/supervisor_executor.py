@@ -20,7 +20,6 @@ import asyncio
 import hashlib
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
@@ -105,13 +104,6 @@ if TYPE_CHECKING:
     from execution.state.task_state_manager import TaskStateManager
 
 logger = get_logger(__name__)
-
-
-class _SupervisorSettings:
-    debate_rounds = 2
-
-
-settings = _SupervisorSettings()
 
 
 class SupervisorExecutor:
@@ -573,6 +565,38 @@ class SupervisorExecutor:
         if terminal_result is not None:
             return terminal_result
         if (
+            state.status == OrchestrationStatus.INGESTING
+            and state.pending_hitl_request_ids
+        ):
+            pending_action = self._v2_pending_hitl_planner_action(state)
+            if pending_action is not None:
+                return await self._run_ask_user_action(
+                    state=state,
+                    planner_action=pending_action,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                    resume_pending_artifacts=True,
+                )
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason=(
+                    "INGESTING checkpoint has pending HITL requests but no valid "
+                    "ASK_USER planner action"
+                ),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
+        if (
             state.status == OrchestrationStatus.AWAITING_USER
             and state.pending_hitl_request_ids
         ):
@@ -865,10 +889,7 @@ class SupervisorExecutor:
         value = getattr(self, "debate_rounds", None)
         if isinstance(value, int) and value > 0:
             return value
-        settings_value = getattr(settings, "debate_rounds", None)
-        if isinstance(settings_value, int) and settings_value > 0:
-            return settings_value
-        return 1
+        return 2
 
     @staticmethod
     def _next_participant_agent_id(state: OrchestrationRunState) -> str | None:
@@ -1231,6 +1252,16 @@ class SupervisorExecutor:
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                details=f"Delegating to {len(action.targets)} agent(s)...",
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
             step_number=step_number,
@@ -1273,6 +1304,16 @@ class SupervisorExecutor:
         )
         entry.results = results
         entry.completed_at = utcnow()
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                details="Evaluating agent results...",
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
 
         for result in results:
             if result.status == StepStatus.SUCCESS and result.success:
@@ -1894,16 +1935,15 @@ class SupervisorExecutor:
 
         def resolve_hitl(updated: OrchestrationRunState) -> None:
             prompts: list[str] = []
+            remaining_questions: list[dict[str, Any]] = []
             for question in updated.open_questions:
                 if question.get("request_id") not in resolved_request_ids:
+                    remaining_questions.append(question)
                     continue
-                question["status"] = "resolved"
-                question["resolved"] = True
-                question["answer"] = answer
-                question["resolved_at"] = resolved_at
                 prompt = question.get("prompt")
                 if isinstance(prompt, str) and prompt:
                     prompts.append(prompt)
+            updated.open_questions = remaining_questions
             updated.facts.append(
                 {
                     "fact_id": (
@@ -2411,6 +2451,16 @@ class SupervisorExecutor:
         token: CancellationToken | None,
     ) -> SupervisorRunResult:
         trajectory = self._compat_trajectory_from_state(state)
+        try:
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.PROCESSING,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+                details="Synthesizing responses...",
+            )
+        except Exception:
+            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
             action=self._v2_supervisor_action(planner_action, []),
@@ -2748,6 +2798,8 @@ class SupervisorExecutor:
         user_message=None,
     ) -> SupervisorRunResult:
         """Execute the full supervisor loop for a user message."""
+        if not hasattr(self, "orchestration_resource_provider"):
+            self.orchestration_resource_provider = OrchestrationResourceProvider()
         state = await self._load_or_create_run_state_for_run(
             room_id=room_id,
             user_message_id=user_message_id,

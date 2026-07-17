@@ -8,7 +8,7 @@ Covers:
 - Scope: all_agents + debate bypasses LLM selector
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -648,7 +648,6 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
-@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -1067,7 +1066,6 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
-@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestDebateResume:
     @pytest.fixture
     def se(self):

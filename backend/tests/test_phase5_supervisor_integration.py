@@ -1274,8 +1274,16 @@ class TestHandleV2RunResultUnifiedSummary:
         rmc._emit_unified_summary.assert_awaited_once()
         call_kwargs = rmc._emit_unified_summary.call_args
         assert call_kwargs[1]["trajectory_responses"] == [
-            {"agent_name": "Agent Alpha", "message": "Alpha's answer here."},
-            {"agent_name": "Agent Beta", "message": "Beta's answer here."},
+            {
+                "agent_id": "agent-1",
+                "agent_name": "Agent Alpha",
+                "message": "Alpha's answer here.",
+            },
+            {
+                "agent_id": "agent-2",
+                "agent_name": "Agent Beta",
+                "message": "Beta's answer here.",
+            },
         ]
 
 
@@ -1320,6 +1328,9 @@ class _InMemoryRoomMessageStore:
         return self.agent_messages.get(message_id)
 
     async def add_room_agent_message(self, message):
+        self.agent_messages[message.message_id] = message
+
+    async def upsert_room_agent_message(self, message):
         self.agent_messages[message.message_id] = message
 
     async def update_room_agent_message_by_message_id(self, message_id: str, message):
@@ -1473,6 +1484,7 @@ class _FakePhase5App:
         self.room_center.build_turn_content = None
         self.room_center.agent_response_handler = None
         self.room_center.queue_executor = None
+        self.room_center.supervisor_planning_error_cls = RuntimeError
 
         self.room_center.room_reader.get_room_by_room_id = AsyncMock(
             side_effect=lambda room_id: SimpleNamespace(

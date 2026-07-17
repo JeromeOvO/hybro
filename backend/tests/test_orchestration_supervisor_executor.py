@@ -16,7 +16,6 @@ from execution.orchestration.resources import (
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
-    OrchestrationStoreConflict,
 )
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
@@ -43,7 +42,6 @@ from models.supervisor import (
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
-    TrajectoryStatus,
 )
 
 
@@ -60,7 +58,7 @@ class RecordingPlanner:
 
 
 @pytest.mark.asyncio
-async def test_run_v2_builds_resource_catalog_before_planning():
+async def test_run_builds_resource_catalog_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -100,7 +98,7 @@ async def test_run_v2_builds_resource_catalog_before_planning():
     )
     executor.orchestration_resource_provider = provider
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Use attachment",
@@ -116,7 +114,7 @@ async def test_run_v2_builds_resource_catalog_before_planning():
 
 
 @pytest.mark.asyncio
-async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
+async def test_run_materializes_only_selected_resource_refs_for_dispatch():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -197,7 +195,7 @@ async def test_run_v2_materializes_only_selected_resource_refs_for_dispatch():
         projection_service=projection_service
     )
 
-    result = await executor.run_v2(
+    result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
         message_text="Use the selected projection",
@@ -841,7 +839,9 @@ async def test_run_fails_corrupt_ingesting_hitl_checkpoint():
     )
 
     assert result.status == RunStatus.FAILED
-    assert result.trajectory.status == TrajectoryStatus.FAILED
+    assert result.trajectory is None
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.FAILED
     assert planner.contexts == []
     state = await store.get_run("run-message-1")
     assert state is not None
@@ -1570,12 +1570,7 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
         and fact.get("request_ids") == ["hitl-1"]
         for fact in state.facts
     )
-    assert any(
-        question.get("request_id") == "hitl-1"
-        and question.get("status") == "resolved"
-        and question.get("answer") == "Account A"
-        for question in state.open_questions
-    )
+    assert state.open_questions == []
 
 
 @pytest.mark.asyncio
@@ -1645,7 +1640,7 @@ async def test_run_supervisor_hitl_reply_allows_complete_after_question_resolves
     state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.COMPLETED
-    assert state.open_questions[0]["resolved"] is True
+    assert state.open_questions == []
 
 
 @pytest.mark.asyncio
