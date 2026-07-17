@@ -448,7 +448,7 @@ def _scope():
     )
 
 
-def _state_for_validation(**overrides):
+def _complete_run_state(**overrides):
     values = {
         "run_id": "run-1",
         "room_id": "room-1",
@@ -492,14 +492,14 @@ def test_complete_requires_structured_evidence():
     action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
 
     with pytest.raises(PlannerActionValidationError, match="completion evidence"):
-        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
 
 
 def test_complete_rejects_unknown_fact_reference():
     action = _complete_action(referenced_fact_ids=["missing-fact"])
 
     with pytest.raises(PlannerActionValidationError, match="missing-fact"):
-        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
 
 
 def test_complete_rejects_pending_hitl_and_active_dispatches():
@@ -508,13 +508,13 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
     with pytest.raises(PlannerActionValidationError, match="pending HITL"):
         PlannerActionValidator.validate(
             action,
-            run_state=_state_for_validation(pending_hitl_request_ids=["hitl-1"]),
+            run_state=_complete_run_state(pending_hitl_request_ids=["hitl-1"]),
         )
 
     with pytest.raises(PlannerActionValidationError, match="active dispatch"):
         PlannerActionValidator.validate(
             action,
-            run_state=_state_for_validation(
+            run_state=_complete_run_state(
                 active_dispatches=[
                     ActiveDispatchRef(
                         agent_message_id="agent-msg-2",
@@ -532,7 +532,7 @@ def test_complete_accepts_rejected_active_dispatch_reference():
     assert (
         PlannerActionValidator.validate(
             action,
-            run_state=_state_for_validation(
+            run_state=_complete_run_state(
                 active_dispatches=[
                     ActiveDispatchRef(
                         agent_message_id="agent-msg-2",
@@ -552,7 +552,7 @@ def test_complete_rejects_unresolved_non_blocking_open_question():
     with pytest.raises(PlannerActionValidationError, match="unresolved questions"):
         PlannerActionValidator.validate(
             action,
-            run_state=_state_for_validation(
+            run_state=_complete_run_state(
                 open_questions=[
                     {
                         "question_id": "question-1",
@@ -569,13 +569,13 @@ def test_complete_rejects_blank_satisfied_criteria():
     action = _complete_action(satisfied_criteria=["  "])
 
     with pytest.raises(PlannerActionValidationError, match="satisfied criteria"):
-        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
 
 
 def test_complete_accepts_valid_evidence():
     action = _complete_action()
 
-    assert PlannerActionValidator.validate(action, run_state=_state_for_validation()) is action
+    assert PlannerActionValidator.validate(action, run_state=_complete_run_state()) is action
 
 
 def test_complete_accepts_valid_evidence_with_facts_only():
@@ -584,7 +584,7 @@ def test_complete_accepts_valid_evidence_with_facts_only():
     assert (
         PlannerActionValidator.validate(
             action,
-            run_state=_state_for_validation(agent_outputs=[]),
+            run_state=_complete_run_state(agent_outputs=[]),
         )
         is action
     )
@@ -593,7 +593,7 @@ def test_complete_accepts_valid_evidence_with_facts_only():
 @pytest.mark.asyncio
 async def test_planner_adapter_accepts_completion_with_facts_only():
     action = _complete_action()
-    state = _state_for_validation(agent_outputs=[])
+    state = _complete_run_state(agent_outputs=[])
     context = build_orchestration_planner_context(
         run_state=state,
         candidate_scope=["agent-1"],
