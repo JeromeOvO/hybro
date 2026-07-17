@@ -126,6 +126,8 @@ async def test_blocking_resume_logs_state_result_before_returning():
         envelope={},
         goal="Coordinate this",
     )
+    state.status = OrchestrationStatus.AWAITING_USER
+    state.pending_hitl_request_ids = ["hitl-1"]
     await store.create_run(state)
     executor = _executor(
         store=store,

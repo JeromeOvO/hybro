@@ -19,10 +19,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
