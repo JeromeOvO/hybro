@@ -26,6 +26,7 @@ def test_execute_orchestration_loop_has_no_trajectory_core_state():
     assert "_resume_trajectory_for_state_loop" not in loop_source
     assert "trajectory=trajectory" not in loop_source
     assert "self._checkpoint_trajectory(" not in loop_source
+    assert "async def _checkpoint_trajectory(" not in source
 
 
 def test_room_message_center_does_not_route_to_run_v2():

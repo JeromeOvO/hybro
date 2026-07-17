@@ -1507,10 +1507,10 @@ class RoomMessageCenter:
                 "clarify_original_message_id"
             )
 
-        # Crash-recovery resume: if the checkpointed trajectory has
-        # status="running" or "recovering" (set by the atomic claim in the
-        # stale task checker), a previous server instance crashed mid-loop.
-        # Resume from the checkpoint instead of starting fresh.
+        # Backward-compatibility recovery for trajectory checkpoints written
+        # before run-state unification. New supervisor runs never write this
+        # field and recover exclusively through OrchestrationRunStore in
+        # StaleTaskChecker._recover_stuck_orchestration_runs.
         if resumed_trajectory is None and not is_clarify_resume:
             checkpoint_data = extend.get("supervisor_trajectory")
             if isinstance(checkpoint_data, dict) and checkpoint_data.get("status") in (
