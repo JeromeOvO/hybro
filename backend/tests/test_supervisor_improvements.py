@@ -11,6 +11,12 @@ import pytest
 
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from execution.orchestration.supervisor_executor import SupervisorExecutor
+from models.orchestration import (
+    CompletionEvidence,
+    PlannedDelegateTarget,
+    PlannerAction,
+    PlannerActionType,
+)
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -162,6 +168,46 @@ def _make_executor() -> SupervisorExecutor:
             )
 
     se.bind_execution_event_deps(emit_processing_status)
+
+    class LegacyActionPlanner:
+        async def plan(self, context):
+            action = await se.supervisor_service.decide_next()
+            if action.action == ActionType.DELEGATE:
+                return PlannerAction(
+                    action=PlannerActionType.DELEGATE,
+                    reasoning=action.reasoning,
+                    targets=[
+                        PlannedDelegateTarget(
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                            task=target.task,
+                        )
+                        for target in action.targets
+                    ],
+                )
+            if action.action == ActionType.SYNTHESIZE:
+                return PlannerAction(
+                    action=PlannerActionType.SYNTHESIZE,
+                    reasoning=action.reasoning,
+                    synthesis_instruction=action.synthesis_instruction,
+                )
+            if context.state_context.agent_outputs:
+                return PlannerAction(
+                    action=PlannerActionType.COMPLETE,
+                    reasoning=action.reasoning,
+                    completion_evidence=CompletionEvidence(
+                        satisfied_criteria=["The delegated work completed."],
+                        final_answer_intent="Return the completed result.",
+                        confidence=1.0,
+                    ),
+                )
+            return PlannerAction(
+                action=PlannerActionType.FAIL,
+                reasoning=action.reasoning,
+                failure_reason=action.reasoning,
+            )
+
+    se.orchestration_planner = LegacyActionPlanner()
     return se
 
 

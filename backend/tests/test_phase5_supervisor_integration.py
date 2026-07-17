@@ -13,9 +13,11 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 """
 
 import asyncio
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -23,6 +25,7 @@ from common.utils.time import utcnow
 from context_memory import assembly as context_memory_assembly
 from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
 from context_memory.config import TokenBudgetConfig
+from models.agent import AgentStatus
 from models.memory import (
     ConversationTurn,
     MemoryContent,
@@ -31,6 +34,8 @@ from models.memory import (
     RoomSummary,
     TurnRole,
 )
+from models.orchestration import PlannerAction
+from models.room import MessageContent, RoomUserMessage
 from models.supervisor import (
     ActionType,
     RunStatus,
@@ -1269,9 +1274,284 @@ class TestHandleV2RunResultUnifiedSummary:
         rmc._emit_unified_summary.assert_awaited_once()
         call_kwargs = rmc._emit_unified_summary.call_args
         assert call_kwargs[1]["trajectory_responses"] == [
-            {"agent_name": "Agent Alpha", "message": "Alpha's answer here."},
-            {"agent_name": "Agent Beta", "message": "Beta's answer here."},
+            {
+                "agent_id": "agent-1",
+                "agent_name": "Agent Alpha",
+                "message": "Alpha's answer here.",
+            },
+            {
+                "agent_id": "agent-2",
+                "agent_name": "Agent Beta",
+                "message": "Beta's answer here.",
+            },
         ]
+
+
+class _Phase5StubPlanner:
+    def __init__(self, actions):
+        self._actions = list(actions)
+        self.contexts = []
+
+    @property
+    def last_context_payload(self):
+        if not self.contexts:
+            return None
+        context = self.contexts[-1]
+        return context.prompt_payload()
+
+    async def plan(self, context):
+        assert hasattr(context, "prompt_payload"), (
+            "Planner received non-structured context; expected OrchestrationPlannerContext"
+        )
+        self.contexts.append(context)
+        if not self._actions:
+            raise AssertionError("planner called more times than expected")
+        return PlannerAction(**self._actions.pop(0))
+
+
+class _InMemoryRoomMessageStore:
+    def __init__(self) -> None:
+        self.user_messages = {}
+        self.agent_messages = {}
+
+    def _set_user_message(self, message: RoomUserMessage) -> None:
+        self.user_messages[message.message_id] = message
+
+    async def get_room_user_message_by_message_id(self, message_id: str):
+        return self.user_messages.get(message_id)
+
+    async def update_room_user_message_by_message_id(self, message_id: str, message):
+        self.user_messages[message_id] = message
+        return True
+
+    async def get_room_agent_message_by_message_id(self, message_id: str):
+        return self.agent_messages.get(message_id)
+
+    async def add_room_agent_message(self, message):
+        self.agent_messages[message.message_id] = message
+
+    async def upsert_room_agent_message(self, message):
+        self.agent_messages[message.message_id] = message
+
+    async def update_room_agent_message_by_message_id(self, message_id: str, message):
+        self.agent_messages[message_id] = message
+
+    async def update_room_agent_message_with_new_message_content_by_message_id(
+        self,
+        message_id: str,
+        message_content,
+    ):
+        message = self.agent_messages.get(message_id)
+        if message is not None:
+            message.message_content = message_content
+
+    async def cancel_descendants(self, message_id: str):
+        return None
+
+    async def cancel_agent_messages_by_ids(self, message_ids):
+        return None
+
+
+class _FakeAgent:
+    def __init__(self, agent_id: str, name: str) -> None:
+        self.agent_id = agent_id
+        self.agent_card = SimpleNamespace(
+            name=name,
+            description="",
+            skills=[],
+        )
+        self.call_count = 1
+        self.call_success_count = 1
+        self.agent_status = AgentStatus.active
+
+
+class _FakeRoomRuntime:
+    def __init__(self) -> None:
+        self._next_message_seq = 0
+
+    def create_agent_message(self, **kwargs):
+        self._next_message_seq += 1
+        return SimpleNamespace(
+            room_id=kwargs["room_id"],
+            message_id=f"agent-msg-{self._next_message_seq}",
+            message_type="agent",
+            user_id=kwargs.get("user_id"),
+            agent_id=kwargs.get("agent_id"),
+            related_message_id=kwargs.get("related_message_id"),
+            message_content=MessageContent(message_text=kwargs.get("content", "")),
+            step_number=kwargs.get("step_number"),
+            task_content=kwargs.get("task_content"),
+            client_request_id=kwargs.get("client_request_id"),
+        )
+
+
+class _FakePhase5App:
+    def __init__(self) -> None:
+        from execution.orchestration.room_message_center import RoomMessageCenter
+        from execution.orchestration.run_store import InMemoryOrchestrationRunStore
+        from execution.orchestration.supervisor_executor import SupervisorExecutor
+
+        self.run_store = InMemoryOrchestrationRunStore()
+        self.room_store = _InMemoryRoomMessageStore()
+        self.planner = _Phase5StubPlanner([])
+
+        self.delivery = SimpleNamespace(
+            send_task_submitted=AsyncMock(),
+            send_task_update=AsyncMock(),
+            send_agent_response=AsyncMock(),
+            remove_token=MagicMock(),
+            clear_cancellation=MagicMock(),
+        )
+        self.task_state_store = AsyncMock()
+        self.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="client-1"
+        )
+        self.task_state_store.resolve_client_request_id_for_agent_message = AsyncMock(
+            return_value="client-1"
+        )
+        self.continuation_store = AsyncMock()
+        self.continuation_store.save_continuation_on_user_message = AsyncMock(
+            return_value=True
+        )
+        self.continuation_store.save_continuation_on_message = AsyncMock(
+            return_value=True
+        )
+        self.continuation_store.get_pending_continuation_on_message = AsyncMock(
+            return_value=None
+        )
+        self.hitl_coordinator = AsyncMock()
+
+        request = SimpleNamespace(request_id=f"request-{uuid4().hex}")
+        self.hitl_coordinator.request_input = AsyncMock(return_value=request)
+
+        self.room_runtime = _FakeRoomRuntime()
+        self.agent_lookup = AsyncMock()
+        self.agent_lookup.get_agent_by_agent_id = AsyncMock(
+            side_effect=lambda agent_id: _FakeAgent(agent_id, "Agent One")
+            if agent_id == "agent-1"
+            else None
+        )
+
+        self._agent_by_id = {"agent-1": _FakeAgent("agent-1", "Agent One")}
+
+        self._executor = SupervisorExecutor(
+            supervisor_service=SimpleNamespace(synthesize_stream=AsyncMock()),
+            room_runtime=self.room_runtime,
+            tsm=SimpleNamespace(),
+            delivery=self.delivery,
+            message_reader=self.room_store,
+            message_writer=self.room_store,
+            task_state_store=self.task_state_store,
+            continuation_store=self.continuation_store,
+            event_publisher=AsyncMock(),
+            rate_limit_service=None,
+            agent_dispatcher=SimpleNamespace(),
+            agent_message_processor=SimpleNamespace(),
+            hitl_coordinator=self.hitl_coordinator,
+            debate_rounds=2,
+            orchestration_run_store=self.run_store,
+            orchestration_planner=self.planner,
+        )
+
+        self.room_center = RoomMessageCenter.__new__(RoomMessageCenter)
+        self.room_center.message_reader = self.room_store
+        self.room_center.message_writer = self.room_store
+        self.room_center.task_state_store = self.task_state_store
+        self.room_center.continuation_store = self.continuation_store
+        self.room_center.agent_lookup = self.agent_lookup
+        self.room_center.agent_group_reader = AsyncMock()
+        self.room_center.room_reader = AsyncMock()
+        self.room_center.room_writer = AsyncMock()
+        self.room_center.memory_reader = AsyncMock()
+        self.room_center.memory_reader.get_room_memory_by_room_id = AsyncMock(
+            return_value=None
+        )
+        self.room_center.hitl_reader = AsyncMock()
+        self.room_center.delivery = self.delivery
+        self.room_center.coordinator = AsyncMock()
+        self.room_center.event_publisher = AsyncMock()
+        self.room_center.room_memory = AsyncMock()
+        self.room_center.task_notifier = AsyncMock()
+        self.room_center.task_notification_store = AsyncMock()
+        self.room_center.supervisor_executor = self._executor
+        self.room_center.agent_resolver_service = AsyncMock()
+        self.room_center.a2a_transport = None
+        self.room_center.remote_task_reader = AsyncMock()
+        self.room_center.debate_prompt_injector = None
+        self.room_center.rate_limit_service = None
+        self.room_center.context_memory_runtime = None
+        self.room_center.context_compaction = None
+        self.room_center.build_turn_content = None
+        self.room_center.agent_response_handler = None
+        self.room_center.queue_executor = None
+        self.room_center.supervisor_planning_error_cls = RuntimeError
+
+        self.room_center.room_reader.get_room_by_room_id = AsyncMock(
+            side_effect=lambda room_id: SimpleNamespace(
+                room_agent_set={"agent-1": "Agent One"},
+                extend_info={},
+                room_id=room_id,
+            )
+        )
+        self.room_center.room_writer.update_room_by_room_id = AsyncMock()
+
+        status_emitter = AsyncMock()
+        self.room_center.bind_execution_event_deps(status_emitter)
+
+    def stub_planner_actions(self, actions):
+        planner = _Phase5StubPlanner(actions)
+        self.planner = planner
+        self._executor.orchestration_planner = planner
+
+    async def send_supervisor_message(
+        self,
+        *,
+        room_id: str,
+        user_id: str,
+        message: str,
+        dispatch: dict,
+        legacy_supervisor_trajectory: dict | None = None,
+    ):
+        room_message_id = f"msg-{uuid4().hex}"
+        user_message = RoomUserMessage(
+            room_id=room_id,
+            message_id=room_message_id,
+            user_id=user_id,
+            message_content=MessageContent(message_text=message),
+            extend_info={
+                "orchestration": True,
+                "orchestration_schema_version": 2,
+                "orchestration_run_id": room_message_id,
+                "candidate_agent_ids": ["agent-1"],
+                "client_request_id": "client-1",
+                "message_target_mode": (dispatch or {}).get(
+                    "message_target_mode",
+                    "saved_group",
+                ),
+                "target_group_id": (dispatch or {}).get("target_group_id"),
+            },
+        )
+        if legacy_supervisor_trajectory is not None:
+            user_message.extend_info["supervisor_trajectory"] = (
+                legacy_supervisor_trajectory
+            )
+
+        self.room_store._set_user_message(user_message)
+
+        await self.room_center._process_supervisor(
+            user_message=user_message,
+            room_id=room_id,
+            room_user_message_id=room_message_id,
+            user_id=user_id,
+            quoted_text=None,
+            token=None,
+        )
+
+        return SimpleNamespace(message_id=room_message_id)
+
+
+def _make_phase5_app():
+    return _FakePhase5App()
 
 
 # =========================================================================
@@ -1357,3 +1637,64 @@ class TestParseV2ActionMultiQuestion:
             "questions": "not a list",
         })
         assert action.questions is None
+
+
+@pytest.mark.asyncio
+async def test_state_driven_supervisor_builds_planner_context_without_trajectory_text():
+    app = _make_phase5_app()
+    app.stub_planner_actions(
+        [
+            {
+                "action": "ask_user",
+                "reasoning": "Need one missing value before delegation.",
+                "questions": [
+                    {"prompt": "What coverage limit do you need?", "prompt_type": "text"},
+                ],
+            }
+        ]
+    )
+
+    legacy_sentinel = f"legacy-sentinel-{uuid4().hex}"
+    legacy_payload = {
+        "trajectory": {
+            "trajectory_text": f"{legacy_sentinel}: stale trajectory text",
+            "trajectory_summary": f"{legacy_sentinel}: stale trajectory summary",
+        },
+        "trajectory_summary": f"{legacy_sentinel}: fallback trajectory summary",
+        "trajectory_text": f"{legacy_sentinel}: question history",
+    }
+
+    result = await app.send_supervisor_message(
+        room_id="room-1",
+        user_id="user-1",
+        message="Get a quote.",
+        legacy_supervisor_trajectory=legacy_payload,
+        dispatch={
+            "message_target_mode": "saved_group",
+            "target_group_id": "group-1",
+        },
+    )
+
+    state = await app.run_store.get_latest_by_user_message_id(result.message_id)
+    assert state is not None
+    assert state.status.value == "awaiting_user"
+    assert state.decision_log
+
+    captured_payload = app.planner.last_context_payload
+    assert captured_payload is not None
+    assert isinstance(captured_payload, dict)
+    assert "state_context" in captured_payload
+    assert isinstance(captured_payload["state_context"], dict)
+    assert captured_payload.get("message") == {"text": "Get a quote."}
+    payload_text = json.dumps(captured_payload, ensure_ascii=False, sort_keys=True)
+    assert legacy_sentinel not in payload_text
+    assert '"trajectory"' not in payload_text
+    assert '"trajectory_summary"' not in payload_text
+    assert '"trajectory_text"' not in payload_text
+
+    message_record = await app.room_store.get_room_user_message_by_message_id(
+        result.message_id
+    )
+    assert message_record is not None
+    assert message_record.extend_info is not None
+    assert "supervisor_trajectory" not in message_record.extend_info

@@ -8,13 +8,20 @@ Covers:
 - Scope: all_agents + debate bypasses LLM selector
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from common.dto import MessageCommitted
 from common.utils.time import utcnow
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
+from models.orchestration import (
+    CompletionEvidence,
+    PlannedDelegateTarget,
+    PlannerAction,
+    PlannerActionType,
+)
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -46,6 +53,242 @@ class RecordingEventPublisher:
         self.internal_events.append(event)
 
 
+class SequentialDebatePlanner:
+    """Planner fixture that drives one healthy candidate per state-loop step."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        healthy_candidates = [
+            agent
+            for agent in context.candidate_scope.agents
+            if agent.is_healthy is not False
+        ]
+        for agent in healthy_candidates:
+            if agent.agent_id in handled_agent_ids:
+                continue
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning=f"Debate: {agent.agent_name or agent.agent_id}",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id=agent.agent_id,
+                        agent_name=agent.agent_name or agent.agent_id,
+                        task=context.message_text,
+                    )
+                ],
+            )
+
+        return PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="All healthy debate candidates responded",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["All healthy debate candidates responded"],
+                final_answer_intent="Debate complete",
+                confidence=1.0,
+            ),
+        )
+
+
+class MultiTargetDebatePlanner:
+    """Planner fixture that over-selects remaining candidates like a raw LLM can."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        remaining = [
+            agent
+            for agent in context.candidate_scope.agents
+            if agent.is_healthy is not False and agent.agent_id not in handled_agent_ids
+        ]
+        if remaining:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Debate all remaining candidates",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id=agent.agent_id,
+                        agent_name=agent.agent_name or agent.agent_id,
+                        task=context.message_text,
+                    )
+                    for agent in remaining
+                ],
+            )
+
+        return PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="All healthy debate candidates responded",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["All healthy debate candidates responded"],
+                final_answer_intent="Debate complete",
+                confidence=1.0,
+            ),
+        )
+
+
+class SingleOutOfOrderDebatePlanner:
+    """Planner fixture that asks for a later participant before the next turn."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        if "a1" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Ask Beta first",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id="a2",
+                        agent_name="Beta",
+                        task=context.message_text,
+                    )
+                ],
+            )
+        if "a2" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Ask Beta next",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id="a2",
+                        agent_name="Beta",
+                        task=context.message_text,
+                    )
+                ],
+            )
+        return _debate_complete_action()
+
+
+class MissingNextParticipantDebatePlanner:
+    """Planner fixture that returns candidates while omitting the required turn."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        if "a1" not in handled_agent_ids:
+            targets = [
+                PlannedDelegateTarget(
+                    agent_id="a2",
+                    agent_name="Beta",
+                    task=context.message_text,
+                ),
+                PlannedDelegateTarget(
+                    agent_id="a3",
+                    agent_name="Gamma",
+                    task=context.message_text,
+                ),
+            ]
+        elif "a2" not in handled_agent_ids:
+            targets = [
+                PlannedDelegateTarget(
+                    agent_id="a3",
+                    agent_name="Gamma",
+                    task=context.message_text,
+                )
+            ]
+        elif "a3" not in handled_agent_ids:
+            targets = [
+                PlannedDelegateTarget(
+                    agent_id="a3",
+                    agent_name="Gamma",
+                    task=context.message_text,
+                )
+            ]
+        else:
+            return _debate_complete_action()
+
+        return PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Missing the next required participant",
+            targets=targets,
+        )
+
+
+class PrematureCompleteDebatePlanner:
+    """Planner fixture that tries to complete before required turns are done."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        return _debate_complete_action()
+
+
+class PrematureSynthesizeDebatePlanner:
+    """Planner fixture that synthesizes after only the first debate response."""
+
+    def __init__(self):
+        self.contexts = []
+
+    async def plan(self, context):
+        self.contexts.append(context)
+        handled_agent_ids = {
+            output["agent_id"]
+            for output in context.state_context.agent_outputs
+            if output.get("status") in {"success", "completed", "failed"}
+        }
+        if "a1" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Ask Alpha first",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id="a1",
+                        agent_name="Alpha",
+                        task=context.message_text,
+                    )
+                ],
+            )
+        if "a2" not in handled_agent_ids:
+            return PlannerAction(
+                action=PlannerActionType.SYNTHESIZE,
+                reasoning="Summarize before Beta responds",
+                synthesis_instruction="Summarize the debate so far",
+            )
+        return _debate_complete_action()
+
+
+def _debate_complete_action() -> PlannerAction:
+    return PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="All healthy debate candidates responded",
+        completion_evidence=CompletionEvidence(
+            satisfied_criteria=["All healthy debate candidates responded"],
+            final_answer_intent="Debate complete",
+            confidence=1.0,
+        ),
+    )
+
+
 def _make_agent_profile(agent_id: str, name: str, healthy: bool = True) -> AgentProfile:
     return AgentProfile(
         agent_id=agent_id,
@@ -71,6 +314,9 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.event_publisher = RecordingEventPublisher()
     se.rate_limit_service = MagicMock()
     se.debate_rounds = 1
+    se.orchestration_run_store = InMemoryOrchestrationRunStore()
+    se.orchestration_planner = SequentialDebatePlanner()
+    se._processing_status_emitter = AsyncMock()
     return se
 
 
@@ -119,6 +365,7 @@ def _make_delegate_entry(
                 response_text=response_text,
                 success=success,
                 status=StepStatus.SUCCESS if success else StepStatus.FAILED,
+                agent_message_id=f"agent-msg-{agent_id}",
             )
         ],
     )
@@ -401,7 +648,6 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
-@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -411,6 +657,12 @@ class TestSequentialDebateDispatch:
 
     def _debate_config(self) -> RoomConfig:
         return RoomConfig(is_debate_mode=True, room_agent_set={"a1": "Alpha", "a2": "Beta"})
+
+    def _debate_config_three(self) -> RoomConfig:
+        return RoomConfig(
+            is_debate_mode=True,
+            room_agent_set={"a1": "Alpha", "a2": "Beta", "a3": "Gamma"},
+        )
 
     @pytest.mark.asyncio
     async def test_dispatches_one_per_step(self, se):
@@ -465,6 +717,220 @@ class TestSequentialDebateDispatch:
         assert [event.was_successful for event in committed_events] == [True, True]
 
     @pytest.mark.asyncio
+    async def test_debate_mode_limits_multi_target_planner_to_next_participant(self, se):
+        """Debate room policy should narrow an over-selected planner action."""
+        se.orchestration_planner = MultiTargetDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        assert result.trajectory is None
+        assert result.run_state is not None
+        assert result.run_state.participant_snapshot is not None
+        assert result.run_state.participant_snapshot.ordered_agent_ids == ["a1", "a2"]
+        assert result.run_state.participant_snapshot.turn_policy == "debate_rounds"
+        first_context = se.orchestration_planner.contexts[0]
+        assert first_context.state_context.participant_snapshot["turn_policy"] == (
+            "debate_rounds"
+        )
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_corrects_single_out_of_order_target(self, se):
+        se.orchestration_planner = SingleOutOfOrderDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        assert result.trajectory is None
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_corrects_targets_missing_next_participant(self, se):
+        se.orchestration_planner = MissingNextParticipantDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+            _make_agent_profile("a3", "Gamma"),
+        ]
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config_three(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"], ["a3"]]
+        assert result.trajectory is None
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_does_not_complete_before_required_turns(self, se):
+        se.orchestration_planner = PrematureCompleteDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        assert result.trajectory is None
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_does_not_synthesize_before_required_turns(self, se):
+        se.orchestration_planner = PrematureSynthesizeDebatePlanner()
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        dispatch_calls = []
+        se._run_synthesis_action = AsyncMock(
+            side_effect=AssertionError("synthesis should wait for all debate turns")
+        )
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=f"response from {target.agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{target.agent_id}",
+                )
+                for target in targets
+            ]
+
+        se._dispatch_targets = fake_dispatch
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a1"], ["a2"]]
+        se._run_synthesis_action.assert_not_awaited()
+        assert result.trajectory is None
+
+    @pytest.mark.asyncio
     async def test_done_after_all_agents(self, se):
         """Loop should return COMPLETED after dispatching all agents."""
         agents = [_make_agent_profile("a1", "Alpha")]
@@ -474,7 +940,7 @@ class TestSequentialDebateDispatch:
                 step_number=1,
                 agent_id="a1",
                 agent_name="Alpha",
-                task="task",
+                task=targets[0].task,
                 response_text="done",
                 success=True,
                 status=StepStatus.SUCCESS,
@@ -492,8 +958,10 @@ class TestSequentialDebateDispatch:
         )
 
         assert result.status == RunStatus.COMPLETED
-        # Last trajectory entry should be DONE
-        assert result.trajectory.entries[-1].action.action == ActionType.DONE
+        assert result.trajectory is None
+        assert result.run_state is not None
+        assert result.run_state.status == "completed"
+        assert result.run_state.decision_log[-1]["action"] == "complete"
 
     @pytest.mark.asyncio
     async def test_budget_accommodates_all_agents(self, se):
@@ -584,15 +1052,13 @@ class TestSequentialDebateDispatch:
         assert result.status == RunStatus.COMPLETED
         # a2 should NOT be dispatched (unhealthy on resume), only a3
         assert dispatch_ids == ["a3"]
-        # There should be a FAILED entry for a2 in the trajectory
-        failed_entries = [
-            e for e in result.trajectory.entries
-            if e.action.action == ActionType.DELEGATE
-            and e.results
-            and not e.results[0].success
-        ]
-        assert len(failed_entries) == 1
-        assert failed_entries[0].results[0].agent_id == "a2"
+        assert result.trajectory is None
+        assert result.run_state is not None
+        output_agent_ids = {
+            output.agent_id for output in result.run_state.agent_outputs
+        }
+        assert output_agent_ids == {"a1", "a3"}
+        assert "a2" not in output_agent_ids
 
 
 # =========================================================================
@@ -600,7 +1066,6 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
-@patch("execution.orchestration.supervisor_executor.settings", MagicMock(debate_rounds=1))
 class TestDebateResume:
     @pytest.fixture
     def se(self):

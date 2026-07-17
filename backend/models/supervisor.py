@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -249,6 +249,9 @@ class RunStatus(StrEnum):
 
 class SupervisorRunResult(BaseModel):
     status: RunStatus
-    trajectory: SupervisorTrajectory
+    trajectory: SupervisorTrajectory | None = None
+    run_id: str | None = None
+    run_state: Any | None = None
     synthesis_text: str | None = None
     clarification_question: str | None = None
+    terminal_reason: str | None = None
