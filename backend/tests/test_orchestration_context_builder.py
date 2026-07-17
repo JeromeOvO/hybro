@@ -554,6 +554,41 @@ def test_state_context_is_deterministic_and_includes_run_plan_outputs_artifacts(
     assert first_dump["artifacts"] == [{"key": "artifact-1", "type": "file"}]
 
 
+def test_state_context_excludes_resolved_question_history():
+    context = build_orchestration_planner_context(
+        run_state=_run_state(
+            open_questions=[
+                {
+                    "request_id": "hitl-open",
+                    "status": "open",
+                    "prompt": "Which account?",
+                },
+                {
+                    "request_id": "hitl-resolved-status",
+                    "status": "resolved",
+                    "prompt": "Which region?",
+                    "answer": "US",
+                },
+                {
+                    "request_id": "hitl-resolved-flag",
+                    "resolved": True,
+                    "prompt": "Which currency?",
+                    "answer": "USD",
+                },
+            ]
+        ),
+        message_text="Continue",
+    )
+
+    assert context.state_context.open_questions == [
+        {
+            "prompt": "Which account?",
+            "request_id": "hitl-open",
+            "status": "open",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_planner_adapter_parses_and_validates_against_context_boundary():
     async def raw_action(_context):

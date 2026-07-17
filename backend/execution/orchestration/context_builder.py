@@ -130,7 +130,7 @@ class OrchestrationStateContext(BaseModel):
     open_questions: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
-            "Unresolved completion blockers; remove entries when they are resolved."
+            "Unresolved completion blockers projected from the run-state history."
         ),
     )
     agent_outputs: list[dict[str, Any]] = Field(default_factory=list)
@@ -476,7 +476,13 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         current_step=current_step,
         current_plan=_stable_model_list(run_state.dispatch_intents),
         facts=_stable_mapping_list(run_state.facts),
-        open_questions=_stable_mapping_list(run_state.open_questions),
+        open_questions=_stable_mapping_list(
+            question
+            for question in run_state.open_questions
+            if isinstance(question, Mapping)
+            and question.get("status") != "resolved"
+            and question.get("resolved") is not True
+        ),
         agent_outputs=_stable_model_list(run_state.agent_outputs),
         artifacts=_stable_mapping_list(run_state.artifacts),
         completion_criteria=_stable_mapping_list(run_state.completion_criteria),
