@@ -4973,6 +4973,7 @@ class SupervisorExecutor:
                             artifact_refs=target.artifact_refs,
                             attachment_refs=target.attachment_refs,
                             original_attachments=original_attachments or [],
+                            required_resource_refs=target.required_resource_refs,
                             resource_provider=self.orchestration_resource_provider,
                         )
                     except DispatchPayloadValidationError as exc:

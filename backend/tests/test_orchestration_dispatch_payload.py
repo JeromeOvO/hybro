@@ -60,6 +60,76 @@ async def test_resolver_returns_only_explicit_attachment_refs_supported_by_agent
 
 
 @pytest.mark.asyncio
+async def test_resolver_materializes_required_resource_refs_for_dispatch():
+    attachment = UserAttachment(
+        file_id="file-1",
+        s3_key="uploads/room-1/file-1/report.pdf",
+        mime_type="application/pdf",
+        file_name="report.pdf",
+        size_bytes=16,
+    )
+    provider = SimpleNamespace(
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected submission text",
+            )
+        )
+    )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
+        context_refs=[],
+        artifact_refs=[],
+        attachment_refs=[],
+        required_resource_refs=[
+            "ctx:file-file-1:text",
+            "broker-msg:artifact_id:submission",
+            "file:file-1",
+        ],
+        original_attachments=[attachment],
+        resource_provider=provider,
+    )
+
+    assert payload.selected_context_refs == ["ctx:file-file-1:text"]
+    assert payload.selected_artifact_refs == ["broker-msg:artifact_id:submission"]
+    assert payload.selected_attachment_refs == ["file:file-1"]
+    provider.resolve_ref.assert_awaited_once_with(
+        "ctx:file-file-1:text",
+        run_id="run-1",
+        attachments=[attachment],
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_resource_ref_upgrades_matching_optional_ref():
+    optional_ref = DispatchContentRef(
+        kind=DispatchRefKind.CONTEXT,
+        ref_id="missing",
+        required=False,
+    )
+    with pytest.raises(
+        DispatchPayloadValidationError,
+        match="Context ref not found",
+    ) as exc_info:
+        await resolve_dispatch_payload_refs(
+            run_state=_state(),
+            target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+            context_refs=[optional_ref],
+            artifact_refs=[],
+            attachment_refs=[],
+            required_resource_refs=["missing"],
+            original_attachments=[],
+        )
+
+    assert exc_info.value.code == "context_ref_not_found"
+    assert optional_ref.required is False
+
+
+@pytest.mark.asyncio
 async def test_resolver_rejects_unreferenced_original_attachment():
     attachment = UserAttachment(
         file_id="file-1",
