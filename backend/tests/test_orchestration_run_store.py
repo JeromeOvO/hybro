@@ -428,6 +428,22 @@ async def test_reconstruct_from_envelope_builds_schema_v2_state_without_trajecto
 
 
 @pytest.mark.asyncio
+async def test_reconstruct_from_empty_envelope_leaves_candidate_scope_unset():
+    store = InMemoryOrchestrationRunStore()
+
+    state = await store.reconstruct_from_envelope(
+        run_id="run-empty",
+        room_id="room-7",
+        user_message_id="message-9",
+        envelope={},
+        goal="Summarize the latest account notes",
+    )
+
+    assert state.candidate_agent_ids == []
+    assert state.candidate_scope is None
+
+
+@pytest.mark.asyncio
 async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
     store = InMemoryOrchestrationRunStore()
 

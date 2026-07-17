@@ -413,12 +413,14 @@ def _candidate_scope_from_legacy_envelope(
     room_id: str,
     envelope: Mapping[str, Any],
     candidate_agent_ids: list[str],
-) -> CandidateScopeSnapshot:
+) -> CandidateScopeSnapshot | None:
     scope_envelope: dict[str, Any] = dict(envelope)
     scope_envelope["candidate_agent_ids"] = candidate_agent_ids
     selected_agent_set = _room_agent_set_from_envelope(scope_envelope)
     if not isinstance(selected_agent_set, Mapping):
         selected_agent_set = None
+    if not candidate_agent_ids and selected_agent_set is None:
+        return None
 
     return candidate_scope_from_legacy_envelope(
         room_id=room_id,
