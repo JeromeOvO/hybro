@@ -900,6 +900,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
             )
+            orchestration_run_store = MongoOrchestrationRunStore(mongo_dal)
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
@@ -914,6 +915,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 task_notifications=HITLTaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
+                orchestration_run_store=orchestration_run_store,
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -984,7 +986,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_rate_limiter = app.state.agent_rate_limiter_factory(
                     runtime.settings, mongo_dal
                 )
-            orchestration_run_store = MongoOrchestrationRunStore(mongo_dal)
             orchestration_planner = RoomSupervisorPlannerAdapter(
                 supervisor_service=room_supervisor_service
             )
@@ -1088,6 +1089,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 client_request_id_resolver=execution_client_request_id_resolver,
             )
             _execution_deps = create_execution_deps(execution_facade)
+            hitl_manager.bind_orchestration_recovery_scheduler(
+                execution_facade.schedule_recovery_orchestration
+            )
 
             async def emit_room_processing_status(**kwargs):
                 return await emit_execution_room_processing_status(
