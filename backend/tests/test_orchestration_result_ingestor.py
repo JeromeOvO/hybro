@@ -185,6 +185,40 @@ def test_sparse_terminal_replay_preserves_richer_result_without_version_bump():
     assert replayed.agent_outputs[0].artifact_keys == [
         "agent-msg-1:artifact_id:artifact-1"
     ]
+    assert replayed.facts == [
+        {
+            "fact_id": "agent-msg-1:text",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "kind": "agent_text",
+            "text": "The agent finished.",
+        }
+    ]
+
+
+def test_sparse_terminal_replay_preserves_artifact_only_result():
+    ingestor = AgentResultIngestor()
+    artifact_only_result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+        artifacts=[{"artifact_id": "artifact-1", "name": "answer"}],
+    )
+    sparse_terminal = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="completed",
+    )
+
+    rich_state = ingestor.ingest(_run_state(), artifact_only_result)
+    replayed = ingestor.ingest(rich_state, sparse_terminal)
+
+    assert replayed is rich_state
+    assert replayed.state_version == 1
+    assert replayed.agent_outputs[0].artifact_keys == [
+        "agent-msg-1:artifact_id:artifact-1"
+    ]
+    assert replayed.artifacts == rich_state.artifacts
 
 
 def test_ingest_projects_text_into_deduplicated_fact():
