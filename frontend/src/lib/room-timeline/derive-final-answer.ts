@@ -1,4 +1,3 @@
-import { isSupervisorSystemAgent } from '@/lib/system-agents'
 import type {
   AgentResultViewModel,
   FinalAnswerHitlViewModel,
@@ -283,6 +282,12 @@ export function deriveFinalAnswer(
     return buildCanceledFinalAnswer()
   }
   if (isFailedMultiAgentTurn(turn, real)) {
+    return buildFailedFinalAnswer()
+  }
+  if (
+    orchestrator?.status === "failed" &&
+    (turn.turnTerminalStatus === "failed" || turn.status === "failed")
+  ) {
     return buildFailedFinalAnswer()
   }
 

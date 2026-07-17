@@ -618,6 +618,74 @@ async def test_planner_adapter_parses_and_validates_against_context_boundary():
 
 
 @pytest.mark.asyncio
+async def test_planner_adapter_supervisor_prompt_satisfies_json_mode_requirement():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "route to scoped specialist",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Handle the request",
+                    }
+                ],
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[_candidate("agent-1", "Agent One")],
+        message_text="Handle this workflow",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    call_kwargs = supervisor_service.call_planner_json.await_args.kwargs
+    combined_prompt = (
+        call_kwargs["system_prompt"] + "\n" + call_kwargs["user_prompt"]
+    ).lower()
+    assert "json" in combined_prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_supervisor_prompt_requires_delegate_target_task():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "route to scoped specialist",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Handle the request",
+                    }
+                ],
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_run_state(candidate_agent_ids=["agent-1"]),
+        candidate_scope=[_candidate("agent-1", "Agent One")],
+        message_text="Handle this workflow",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ]
+    assert '"task"' in system_prompt
+    assert "required" in system_prompt.lower()
+
+
+@pytest.mark.asyncio
 async def test_planner_adapter_keeps_v2_validation_outside_prompt_text():
     seen_prompt_values: list[str] = []
 

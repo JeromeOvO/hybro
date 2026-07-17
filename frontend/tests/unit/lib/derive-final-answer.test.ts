@@ -550,6 +550,30 @@ describe('deriveFinalAnswer', () => {
     })
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('failed')
   })
+
+  it('returns failed when supervisor orchestrator failed before dispatching agents', () => {
+    const turn = makeTurn({
+      status: 'failed',
+      turnTerminalStatus: 'failed',
+      agentResults: [
+        makeAgent({
+          messageId: 'sys-u1',
+          agentId: 'system:hybro',
+          agentName: 'HYBRO AI',
+          status: 'failed',
+          content: '',
+        }),
+      ],
+    })
+
+    const result = deriveFinalAnswer(turn, ['sys-u1'])
+
+    expect(result.kind).toBe('failed')
+    expect(result.failedIntro).toBe(FAILED_TURN_INTRO)
+    expect(
+      result.kind === 'deterministic_done' ? result.deterministicIntro : '',
+    ).not.toContain('0 agents responded')
+  })
 })
 
 describe('derivePrimaryStreamFromFinalAnswer', () => {
