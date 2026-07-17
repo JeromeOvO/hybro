@@ -200,7 +200,9 @@ class RoomSupervisorPlannerAdapter:
             candidate_agent_ids=context.candidate_agent_ids,
             steps_used=context.state_context.current_step.steps_used,
             step_budget=context.state_context.current_step.step_budget,
-            has_agent_output=bool(context.state_context.agent_outputs),
+            has_agent_output=bool(
+                context.state_context.agent_outputs or context.state_context.facts
+            ),
         )
 
     async def _raw_action(
