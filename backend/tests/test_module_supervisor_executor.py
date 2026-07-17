@@ -728,22 +728,16 @@ class TestClarifyCleanupCompensation:
         return cfg
 
     @pytest.mark.asyncio
-    async def test_cancels_requests_when_save_interrupted_state_fails(self, se):
-        """If all questions are created but continuation save fails,
-        all HITL requests and messages must be cleaned up."""
+    async def test_does_not_create_requests_when_save_interrupted_state_fails(self, se):
+        """A failed continuation save must prevent HITL artifacts from being created."""
         from models.supervisor import (
             ActionType,
             ClarifyQuestion,
             SupervisorAction,
         )
 
-        req_a = MagicMock()
-        req_a.request_id = "req-a"
-        req_b = MagicMock()
-        req_b.request_id = "req-b"
-
         hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(side_effect=[req_a, req_b])
+        hitl_mock.request_input = AsyncMock()
         hitl_mock.cancel_request = AsyncMock()
 
         agent_msg = MagicMock(message_id="msg-agent-1")
@@ -775,9 +769,9 @@ class TestClarifyCleanupCompensation:
         )
 
         assert result.status == "failed"
-        assert hitl_mock.cancel_request.await_count == 2
-        hitl_mock.cancel_request.assert_any_await("req-a", "room-1")
-        hitl_mock.cancel_request.assert_any_await("req-b", "room-1")
+        hitl_mock.request_input.assert_not_awaited()
+        hitl_mock.cancel_request.assert_not_awaited()
+        assert se.room_runtime.create_agent_message.call_count == 1
 
     @pytest.mark.asyncio
     async def test_cancels_prior_requests_when_request_input_returns_none(self, se):

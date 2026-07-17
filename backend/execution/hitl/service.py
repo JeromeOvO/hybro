@@ -451,6 +451,7 @@ class HITLService:
                             request_id=request.request_id,
                             room_id=request.room_id,
                             clear_answer=True,
+                            clear_group=group_id is not None,
                         )
                     try:
                         canceled = await self.persistence.update_hitl_request(
@@ -522,6 +523,7 @@ class HITLService:
         request_id: str,
         room_id: str,
         clear_answer: bool = True,
+        clear_group: bool = False,
     ) -> None:
         try:
             reverted_state = await self.persistence.update_agent_message_task_state(
@@ -547,6 +549,34 @@ class HITLService:
                 },
                 exc_info=True,
             )
+
+        if clear_group:
+            try:
+                cleared_group = await self.persistence.persist_hitl_group_metadata(
+                    display_message_id,
+                    group_id=None,
+                    group_total=None,
+                    group_index=None,
+                )
+                if not cleared_group:
+                    logger.warning(
+                        "Failed to clear supervisor HITL group metadata during rollback",
+                        extra={
+                            "hitl_request_id": request_id,
+                            "room_id": room_id,
+                            "display_message_id": display_message_id,
+                        },
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to clear supervisor HITL group metadata during rollback",
+                    extra={
+                        "hitl_request_id": request_id,
+                        "room_id": room_id,
+                        "display_message_id": display_message_id,
+                    },
+                    exc_info=True,
+                )
 
         if not clear_answer:
             return

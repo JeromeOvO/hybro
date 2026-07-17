@@ -2283,11 +2283,22 @@ class SupervisorExecutor:
             and question.get("status") in {"open", "creating"}
             and not question.get("resolved")
         ]
-        if recovered:
+        if len(recovered) == 1:
             return recovered
-        return cls._supervisor_hitl_questions_from_resumed_trajectory(
+        trajectory_questions = cls._supervisor_hitl_questions_from_resumed_trajectory(
             resumed_trajectory
         )
+        if len(trajectory_questions) != 1:
+            return []
+        if not recovered:
+            return trajectory_questions
+        recovered_prompt = trajectory_questions[0].get("prompt")
+        matching = [
+            question
+            for question in recovered
+            if question.get("prompt") == recovered_prompt
+        ]
+        return matching if len(matching) == 1 else []
 
     async def _resolve_v2_hitl_if_answered(
         self,
@@ -2296,6 +2307,8 @@ class SupervisorExecutor:
         user_message=None,
         resumed_trajectory: SupervisorTrajectory | None = None,
     ) -> OrchestrationRunState:
+        if state.status in TERMINAL_ORCHESTRATION_STATUSES:
+            return state
         answer = self._hitl_answer_from_run_request(
             user_message=user_message,
             resumed_trajectory=resumed_trajectory,
@@ -2336,10 +2349,14 @@ class SupervisorExecutor:
                         question.get("request_id") in resolved_request_ids
                     )
                 else:
+                    recovered_question = recovered_supervisor_questions[0]
                     matches_question = (
                         question.get("source") == "supervisor"
                         and question.get("status") in {"open", "creating"}
                         and not question.get("resolved")
+                        and question.get("prompt")
+                        == recovered_question.get("prompt")
+                        and question.get("step") == recovered_question.get("step")
                     )
                 if not matches_question:
                     continue
@@ -2654,7 +2671,6 @@ class SupervisorExecutor:
         ]
         prompt_by_request_id: dict[str, str | None] = {}
         extra_by_request_id: dict[str, dict[str, Any]] = {}
-        last_request = None
         client_req_id = state.client_request_id or (
             await self.task_state_store.resolve_client_request_id_for_message_id(
                 user_message_id
@@ -2730,6 +2746,9 @@ class SupervisorExecutor:
                 failed_cancel_request_ids=list(
                     cleanup_failures.get("request_ids", [])
                 ),
+                failed_delete_message_ids=list(
+                    cleanup_failures.get("message_ids", [])
+                ),
                 source="supervisor",
                 prompt_by_request_id=prompt_by_request_id,
                 extra_by_request_id=extra_by_request_id,
@@ -2742,7 +2761,9 @@ class SupervisorExecutor:
             question: ClarifyQuestion,
             message_id: str,
         ) -> None:
-            updated.status = OrchestrationStatus.AWAITING_USER
+            # The request can be persisted before its continuation. Keep the run
+            # non-answerable until continuation recovery is durable.
+            updated.status = OrchestrationStatus.INGESTING
             updated.steps_used = max(updated.steps_used, step_number)
             if request_id not in updated.pending_hitl_request_ids:
                 updated.pending_hitl_request_ids.append(request_id)
@@ -2764,15 +2785,61 @@ class SupervisorExecutor:
                         "prompt": question.prompt,
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
-                        "status": "open",
+                        "status": "creating",
                         "display_message_id": message_id,
                         "created_at": utcnow().isoformat(),
                     }
                 )
             else:
-                existing["status"] = "open"
+                existing["status"] = "creating"
                 existing["display_message_id"] = message_id
             self._clear_stale_pending_hitl_request_ids(updated)
+
+        try:
+            saved = await self._save_interrupted_state(
+                kind=InterruptKind.HITL_SUPERVISOR,
+                trajectory=trajectory,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                request_user_id=request_user_id,
+                quoted_text=quoted_text,
+                hitl_request_id=pending_request_ids[-1],
+                message_id=user_message_id,
+            )
+        except Exception:
+            await self._clear_continuation_state(
+                message_id=user_message_id,
+                to_user_message=True,
+            )
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 supervisor HITL continuation",
+                mutate=lambda updated: mark_failed_supervisor_cleanup(updated, {}),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
+        if not saved:
+            trajectory.status = TrajectoryStatus.FAILED
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason="failed to save v2 HITL continuation",
+                mutate=lambda updated: mark_failed_supervisor_cleanup(updated, {}),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
 
         for qi, question in enumerate(questions):
             prompt_type = HITLPromptType.TEXT
@@ -2830,8 +2897,6 @@ class SupervisorExecutor:
                     "choices": question.choices,
                     "display_message_id": hitl_agent_message.message_id,
                 }
-                last_request = request
-
                 def persist_request_open(
                     updated: OrchestrationRunState,
                     *,
@@ -2850,7 +2915,7 @@ class SupervisorExecutor:
                     state,
                     event_type=OrchestrationEventType.HITL_REQUESTED,
                     payload={
-                        "status": OrchestrationStatus.AWAITING_USER.value,
+                        "status": OrchestrationStatus.INGESTING.value,
                         "request_ids": [request.request_id],
                         "phase": "request_created",
                     },
@@ -2899,72 +2964,6 @@ class SupervisorExecutor:
                     ),
                 )
 
-        try:
-            saved = await self._save_interrupted_state(
-                kind=InterruptKind.HITL_SUPERVISOR,
-                trajectory=trajectory,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-                hitl_request_id=last_request.request_id if last_request else None,
-                message_id=user_message_id,
-            )
-        except Exception:
-            await self._clear_continuation_state(
-                message_id=user_message_id,
-                to_user_message=True,
-            )
-            cleanup_failures = await cleanup_created_artifacts()
-            trajectory.status = TrajectoryStatus.FAILED
-
-            def mark_failed_continuation_save(
-                updated: OrchestrationRunState,
-            ) -> None:
-                mark_failed_supervisor_cleanup(updated, cleanup_failures)
-
-            state = await self._mark_v2_terminal(
-                state,
-                OrchestrationStatus.FAILED,
-                reason="failed to save v2 supervisor HITL continuation",
-                mutate=mark_failed_continuation_save,
-            )
-            return await self._log_state_and_return(
-                room_id,
-                state,
-                self._state_run_result(
-                    status=RunStatus.FAILED,
-                    state=state,
-                ),
-            )
-        if not saved:
-            cleanup_failures = await cleanup_created_artifacts()
-            trajectory.status = TrajectoryStatus.FAILED
-
-            def mark_failed_unsaved_continuation(
-                updated: OrchestrationRunState,
-            ) -> None:
-                mark_failed_supervisor_cleanup(updated, cleanup_failures)
-
-            state = await self._mark_v2_terminal(
-                state,
-                OrchestrationStatus.FAILED,
-                reason="failed to save v2 HITL continuation",
-                mutate=mark_failed_unsaved_continuation,
-            )
-            return await self._log_state_and_return(
-                room_id,
-                state,
-                self._state_run_result(
-                    status=RunStatus.FAILED,
-                    state=state,
-                ),
-            )
-
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
             updated.steps_used = max(updated.steps_used, step_number)
@@ -2975,6 +2974,9 @@ class SupervisorExecutor:
                     question.get("request_id") == request_id
                     for question in updated.open_questions
                 ):
+                    for question_record in updated.open_questions:
+                        if question_record.get("request_id") == request_id:
+                            question_record["status"] = "open"
                     continue
                 question = questions[min(index, len(questions) - 1)]
                 updated.open_questions.append(
@@ -3667,6 +3669,7 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         *,
         request_ids: list[str],
+        pending_request_ids: set[str] | None = None,
         source: str,
         prompt_by_request_id: Mapping[str, str | None] | None = None,
         extra_by_request_id: Mapping[str, Mapping[str, Any]] | None = None,
@@ -3680,8 +3683,12 @@ class SupervisorExecutor:
             if isinstance(question, Mapping)
             and isinstance(question.get("request_id"), str)
         }
+        pending_request_ids = pending_request_ids or set()
         for request_id in request_ids:
-            if request_id not in state.pending_hitl_request_ids:
+            if (
+                request_id in pending_request_ids
+                and request_id not in state.pending_hitl_request_ids
+            ):
                 state.pending_hitl_request_ids.append(request_id)
             question = existing_by_request_id.get(request_id)
             if question is None:
@@ -3694,6 +3701,8 @@ class SupervisorExecutor:
             question["status"] = "cleanup_failed"
             question["cleanup_failed"] = True
             question["cleanup_failed_at"] = failed_at
+            # This is an operational recovery breadcrumb. It is intentionally
+            # not treated as an answerable question by _has_open_pending_hitl.
             if prompt_by_request_id is not None:
                 prompt = prompt_by_request_id.get(request_id)
                 if isinstance(prompt, str) and prompt:
@@ -3710,6 +3719,7 @@ class SupervisorExecutor:
         *,
         created_request_ids: list[str],
         failed_cancel_request_ids: list[str],
+        failed_delete_message_ids: list[str] | None = None,
         source: str,
         prompt_by_request_id: Mapping[str, str | None] | None = None,
         extra_by_request_id: Mapping[str, Mapping[str, Any]] | None = None,
@@ -3717,12 +3727,40 @@ class SupervisorExecutor:
         failed_cancel_set = set(failed_cancel_request_ids)
         removable_request_ids = set(created_request_ids) - failed_cancel_set
         cls._remove_hitl_request_refs(state, removable_request_ids)
+        cleanup_extra_by_request_id = {
+            request_id: dict(extra)
+            for request_id, extra in (extra_by_request_id or {}).items()
+        }
+        failed_ref_ids = list(failed_cancel_request_ids)
+        for message_id in failed_delete_message_ids or []:
+            request_id = next(
+                (
+                    candidate_request_id
+                    for candidate_request_id, extra in cleanup_extra_by_request_id.items()
+                    if extra.get("display_message_id") == message_id
+                ),
+                (
+                    message_id.removesuffix(":message")
+                    if message_id.endswith(":message")
+                    else message_id
+                ),
+            )
+            if request_id not in failed_ref_ids:
+                failed_ref_ids.append(request_id)
+            cleanup_extra = cleanup_extra_by_request_id.setdefault(request_id, {})
+            cleanup_extra.setdefault("display_message_id", message_id)
+            failed_message_ids = cleanup_extra.setdefault(
+                "cleanup_failed_message_ids", []
+            )
+            if message_id not in failed_message_ids:
+                failed_message_ids.append(message_id)
         cls._record_hitl_cleanup_failed_refs(
             state,
-            request_ids=failed_cancel_request_ids,
+            request_ids=failed_ref_ids,
+            pending_request_ids=failed_cancel_set,
             source=source,
             prompt_by_request_id=prompt_by_request_id,
-            extra_by_request_id=extra_by_request_id,
+            extra_by_request_id=cleanup_extra_by_request_id,
         )
 
     def _clear_stale_pending_hitl_request_ids(
@@ -3731,17 +3769,17 @@ class SupervisorExecutor:
     ) -> None:
         if not state.pending_hitl_request_ids:
             return
-        open_request_ids = {
+        retained_request_ids = {
             question.get("request_id")
             for question in state.open_questions
             if isinstance(question, Mapping)
-            and question.get("status") == "open"
+            and question.get("status") in {"open", "creating", "cleanup_failed"}
             and isinstance(question.get("request_id"), str)
         }
         state.pending_hitl_request_ids = [
             request_id
             for request_id in state.pending_hitl_request_ids
-            if request_id in open_request_ids
+            if request_id in retained_request_ids
         ]
 
     # ------------------------------------------------------------------

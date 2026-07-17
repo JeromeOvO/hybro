@@ -539,12 +539,23 @@ class HITLRuntimeStorePart:
         self,
         message_id: str,
         *,
-        group_id: str,
+        group_id: str | None,
         group_total: int | None,
         group_index: int | None,
     ) -> bool:
         try:
             await self._ensure_message_task_metadata(message_id)
+            if group_id is None:
+                return await self._room_agent_messages.update_one(
+                    {"message_id": message_id},
+                    {
+                        "$unset": {
+                            "message_content.message_task.metadata.hitl_group_id": "",
+                            "message_content.message_task.metadata.hitl_group_total": "",
+                            "message_content.message_task.metadata.hitl_group_index": "",
+                        }
+                    },
+                )
             updates: dict[str, Any] = {
                 "message_content.message_task.metadata.hitl_group_id": group_id,
             }

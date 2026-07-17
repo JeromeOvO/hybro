@@ -671,6 +671,45 @@ class TestRequestInput:
         mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_supervisor_hitl_group_projection_failure_clears_group_metadata(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        mock_hitl_db_service.persist_hitl_group_metadata = AsyncMock(
+            side_effect=[False, True]
+        )
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Need confirmation",
+            prompt_type=HITLPromptType.CHOICE,
+            choices=["yes", "no"],
+            continuation_message_id="user-msg-456",
+            display_message_id="supervisor-msg-456",
+            group_id="group-1",
+            group_total=2,
+            group_index=0,
+        )
+
+        assert result is None
+        assert mock_hitl_db_service.persist_hitl_group_metadata.await_count == 2
+        clear_call = (
+            mock_hitl_db_service.persist_hitl_group_metadata.await_args_list[-1]
+        )
+        assert clear_call.kwargs == {
+            "group_id": None,
+            "group_total": None,
+            "group_index": None,
+        }
+        mock_hitl_delivery.emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_supervisor_hitl_projection_compensation_failure_raises_request_id_error(
         self,
         hitl_service,
