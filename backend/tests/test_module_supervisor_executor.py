@@ -1302,6 +1302,10 @@ class TestProcessingStatusLifecycleOrder:
             message_text="hello",
             agent_registry=[],
             room_config=RoomConfig(),
+            user_message=_state_unification_user_message(
+                "msg-1",
+                {"orchestration_step_budget": 1},
+            ),
         )
 
         assert result.status == RunStatus.FAILED
@@ -1327,6 +1331,10 @@ class TestProcessingStatusLifecycleOrder:
             message_text="hello",
             agent_registry=[],
             room_config=RoomConfig(),
+            user_message=_state_unification_user_message(
+                "msg-1",
+                {"orchestration_step_budget": 1},
+            ),
         )
 
         assert result.status == RunStatus.FAILED

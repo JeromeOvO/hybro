@@ -25,6 +25,17 @@ _NON_BLOCKING_REFERENCE_FAILURE_CODES = frozenset(
 class PlannerActionValidationError(ValueError):
     """Raised when a planner action is not valid for the current run state."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "planner_action_invalid",
+        recoverable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.recoverable = recoverable
+
 
 class PlannerActionValidator:
     """Validate v2 planner actions against runtime orchestration constraints."""
@@ -80,7 +91,8 @@ class PlannerActionValidator:
         evidence = action.completion_evidence
         if evidence is None:
             raise PlannerActionValidationError(
-                "complete action requires completion evidence"
+                "complete action requires completion evidence",
+                code="completion_evidence_invalid",
             )
         _validate_completion_blockers(run_state, evidence)
         _validate_completion_references(run_state, evidence)
@@ -88,7 +100,8 @@ class PlannerActionValidator:
             not criterion.strip() for criterion in evidence.satisfied_criteria
         ):
             raise PlannerActionValidationError(
-                "complete action requires satisfied criteria"
+                "complete action requires satisfied criteria",
+                code="completion_evidence_invalid",
             )
 
 
@@ -104,7 +117,9 @@ def _validate_step_budget(
     ):
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} is not allowed after "
-            "the step budget is exhausted"
+            "the step budget is exhausted",
+            code="step_budget_exhausted",
+            recoverable=False,
         )
 
 
@@ -116,17 +131,20 @@ def _validate_delegate(
 ) -> None:
     if not action.targets:
         raise PlannerActionValidationError(
-            "delegate action requires at least one target"
+            "delegate action requires at least one target",
+            code="delegate_target_missing",
         )
     candidate_ids = set(candidate_agent_ids)
     for target in action.targets:
         if target.agent_id not in candidate_ids:
             raise PlannerActionValidationError(
-                f"delegate target {target.agent_id!r} is not in candidate_agent_ids"
+                f"delegate target {target.agent_id!r} is not in candidate_agent_ids",
+                code="target_out_of_scope",
             )
         if not target.task.strip():
             raise PlannerActionValidationError(
-                f"delegate target {target.agent_id!r} requires a non-empty task"
+                f"delegate target {target.agent_id!r} requires a non-empty task",
+                code="delegate_task_empty",
             )
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)
@@ -151,13 +169,17 @@ def _validate_completion_blockers(
     evidence: CompletionEvidence,
 ) -> None:
     if run_state.pending_hitl_request_ids:
-        raise PlannerActionValidationError("complete action is blocked by pending HITL")
+        raise PlannerActionValidationError(
+            "complete action is blocked by pending HITL",
+            code="completion_evidence_invalid",
+        )
     if any(
         item.status not in {"completed", "failed", "canceled", "rejected"}
         for item in run_state.active_dispatches
     ):
         raise PlannerActionValidationError(
-            "complete action is blocked by active dispatches"
+            "complete action is blocked by active dispatches",
+            code="completion_evidence_invalid",
         )
     has_unresolved_question = any(
         not isinstance(question, Mapping)
@@ -169,11 +191,13 @@ def _validate_completion_blockers(
     )
     if has_unresolved_question or evidence.unresolved_questions:
         raise PlannerActionValidationError(
-            "complete action is blocked by unresolved questions"
+            "complete action is blocked by unresolved questions",
+            code="completion_evidence_invalid",
         )
     if not run_state.agent_outputs and not run_state.facts:
         raise PlannerActionValidationError(
-            "complete action requires agent output or facts"
+            "complete action requires agent output or facts",
+            code="completion_evidence_invalid",
         )
 
 
@@ -183,16 +207,19 @@ def _validate_no_blocking_recoverable_failures(
 ) -> None:
     if any(
         failure.recoverable
+        and failure.source != "planner_validator"
         and failure.status == "open"
         and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
         for failure in run_state.open_failures
     ):
         if action.action == PlannerActionType.COMPLETE:
             raise PlannerActionValidationError(
-                "complete action is blocked by open recoverable failure"
+                "complete action is blocked by open recoverable failure",
+                code="completion_blocked_by_recoverable_failure",
             )
         raise PlannerActionValidationError(
-            f"{action.action.value} action is blocked by open recoverable failure"
+            f"{action.action.value} action is blocked by open recoverable failure",
+            code="completion_blocked_by_recoverable_failure",
         )
 
 
@@ -213,12 +240,14 @@ def _validate_completion_references(
     for fact_id in evidence.referenced_fact_ids:
         if fact_id not in fact_ids:
             raise PlannerActionValidationError(
-                f"complete action references unknown fact {fact_id!r}"
+                f"complete action references unknown fact {fact_id!r}",
+                code="completion_evidence_invalid",
             )
     for artifact_key in evidence.referenced_artifact_keys:
         if artifact_key not in artifact_keys:
             raise PlannerActionValidationError(
-                f"complete action references unknown artifact {artifact_key!r}"
+                f"complete action references unknown artifact {artifact_key!r}",
+                code="completion_evidence_invalid",
             )
 
 
@@ -235,5 +264,6 @@ def _validate_required_artifact_refs(
         if ref.required and ref.ref_id not in artifact_keys:
             raise PlannerActionValidationError(
                 f"delegate target {target.agent_id!r} references "
-                f"unknown artifact {ref.ref_id!r}"
+                f"unknown artifact {ref.ref_id!r}",
+                code="artifact_ref_not_found",
             )
