@@ -2878,7 +2878,10 @@ class SupervisorExecutor:
                 cleanup_failures = await cleanup_created_artifacts()
                 trajectory.status = TrajectoryStatus.FAILED
 
-                def mark_failed_create(updated: OrchestrationRunState) -> None:
+                def mark_failed_create(
+                    updated: OrchestrationRunState,
+                    cleanup_failures: Mapping[str, list[str]] = cleanup_failures,
+                ) -> None:
                     mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
                 state = await self._mark_v2_terminal(

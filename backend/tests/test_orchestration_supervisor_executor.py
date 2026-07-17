@@ -1839,7 +1839,7 @@ async def test_run_ask_user_message_creation_failure_clears_synthetic_pending_st
     assert result.status == RunStatus.FAILED
     executor.hitl_coordinator.request_input.assert_not_awaited()
     failed_message_id = (
-        executor.message_writer.add_room_agent_message.await_args_list[-1]
+        executor.message_writer.upsert_room_agent_message.await_args_list[-1]
         .args[0]
         .message_id
     )
