@@ -110,7 +110,10 @@ async def test_resolver_rejects_incompatible_explicit_attachment_ref():
 
 @pytest.mark.asyncio
 async def test_resolver_rejects_unknown_required_artifact_ref():
-    with pytest.raises(DispatchPayloadValidationError, match="unknown artifact"):
+    with pytest.raises(
+        DispatchPayloadValidationError,
+        match="unknown artifact",
+    ) as exc_info:
         await resolve_dispatch_payload_refs(
             run_state=_state(),
             target_agent_card=SimpleNamespace(default_input_modes=["text"]),
@@ -121,6 +124,31 @@ async def test_resolver_rejects_unknown_required_artifact_ref():
             attachment_refs=[],
             original_attachments=[],
         )
+
+    assert exc_info.value.code == "artifact_ref_not_found"
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_unknown_required_context_ref():
+    with pytest.raises(
+        DispatchPayloadValidationError,
+        match="Context ref not found",
+    ) as exc_info:
+        await resolve_dispatch_payload_refs(
+            run_state=_state(),
+            target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+            context_refs=[
+                DispatchContentRef(
+                    kind=DispatchRefKind.CONTEXT,
+                    ref_id="missing",
+                )
+            ],
+            artifact_refs=[],
+            attachment_refs=[],
+            original_attachments=[],
+        )
+
+    assert exc_info.value.code == "context_ref_not_found"
 
 
 @pytest.mark.asyncio

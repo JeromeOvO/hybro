@@ -52,6 +52,12 @@ class PlannerActionValidator:
                 run_state=run_state,
             )
         _validate_terminal_output(action, has_agent_output=has_agent_output)
+        if (
+            run_state is not None
+            and action.action
+            in (PlannerActionType.SYNTHESIZE, PlannerActionType.COMPLETE)
+        ):
+            _validate_no_unresolved_recoverable_failures(action, run_state)
         if action.action == PlannerActionType.COMPLETE and run_state is not None:
             PlannerActionValidator._validate_completion(action, run_state)
 
@@ -138,13 +144,6 @@ def _validate_completion_blockers(
     if run_state.pending_hitl_request_ids:
         raise PlannerActionValidationError("complete action is blocked by pending HITL")
     if any(
-        failure.status == "open" and failure.recoverable
-        for failure in run_state.open_failures
-    ):
-        raise PlannerActionValidationError(
-            "complete action is blocked by open recoverable failure"
-        )
-    if any(
         item.status not in {"completed", "failed", "canceled", "rejected"}
         for item in run_state.active_dispatches
     ):
@@ -166,6 +165,25 @@ def _validate_completion_blockers(
     if not run_state.agent_outputs and not run_state.facts:
         raise PlannerActionValidationError(
             "complete action requires agent output or facts"
+        )
+
+
+def _validate_no_unresolved_recoverable_failures(
+    action: PlannerAction,
+    run_state: OrchestrationRunState,
+) -> None:
+    if any(
+        failure.recoverable and failure.status != "resolved"
+        for failure in run_state.open_failures
+    ):
+        if action.action == PlannerActionType.COMPLETE:
+            raise PlannerActionValidationError(
+                "complete action is blocked by open recoverable failure "
+                "or unresolved recoverable failure"
+            )
+        raise PlannerActionValidationError(
+            f"{action.action.value} action is blocked by unresolved "
+            "recoverable failure"
         )
 
 

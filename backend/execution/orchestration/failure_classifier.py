@@ -44,6 +44,17 @@ def classify_agent_failure(
 def _error_code(*, error: str | None, status_message: str | None) -> str | None:
     combined = f"{status_message or ''}\n{error or ''}".lower()
     if (
+        "attachment_ref_not_found" in combined
+        or "attachment ref not found" in combined
+    ):
+        return "attachment_ref_not_found"
+    if "context_ref_not_found" in combined or "context ref not found" in combined:
+        return "context_ref_not_found"
+    if "artifact_ref_not_found" in combined or "unknown artifact ref" in combined:
+        return "artifact_ref_not_found"
+    if "dispatch_payload_ref_unresolved" in combined:
+        return "dispatch_payload_ref_unresolved"
+    if (
         "agent_does_not_accept_file_type" in combined
         or "does not accept the uploaded file type" in combined
     ):
@@ -62,6 +73,10 @@ def _error_code(*, error: str | None, status_message: str | None) -> str | None:
 def _is_recoverable(code: str) -> bool:
     return code in {
         "agent_does_not_accept_file_type",
+        "attachment_ref_not_found",
+        "context_ref_not_found",
+        "artifact_ref_not_found",
+        "dispatch_payload_ref_unresolved",
         "rate_limited",
         "agent_unavailable",
         "timeout",
@@ -72,6 +87,13 @@ def _is_recoverable(code: str) -> bool:
 def _recovery_hints(code: str) -> list[str]:
     if code == "agent_does_not_accept_file_type":
         return ["retry_without_unsupported_attachments"]
+    if code in {
+        "attachment_ref_not_found",
+        "context_ref_not_found",
+        "artifact_ref_not_found",
+        "dispatch_payload_ref_unresolved",
+    }:
+        return ["retry_with_available_refs"]
     if code == "rate_limited":
         return ["retry_different_agent"]
     if code == "agent_unavailable":

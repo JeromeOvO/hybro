@@ -490,6 +490,29 @@ def _complete_action(**evidence_overrides):
     )
 
 
+def _synthesize_action():
+    return PlannerAction(
+        action=PlannerActionType.SYNTHESIZE,
+        reasoning="Summarize the completed work.",
+        synthesis_instruction="Write the final answer.",
+    )
+
+
+def _failure(status: str, *, recoverable: bool = True) -> OpenFailureRecord:
+    return OpenFailureRecord(
+        failure_id=f"failure-{status}-{recoverable}",
+        fingerprint=f"fp-{status}-{recoverable}",
+        source="a2a_adapter",
+        agent_id="agent-1",
+        agent_message_id="agent-msg-2",
+        error_code="timeout",
+        error_message="Timed out",
+        recoverable=recoverable,
+        status=status,
+        recovery_hints=["retry_same_agent_with_smaller_context"],
+    )
+
+
 def test_complete_requires_structured_evidence():
     action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
 
@@ -548,6 +571,47 @@ def test_complete_rejected_when_recoverable_failure_is_open():
 
     with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
         PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
+def test_complete_rejected_when_recoverable_failure_is_abandoned():
+    state = _complete_run_state(open_failures=[_failure("abandoned")])
+
+    with pytest.raises(
+        PlannerActionValidationError,
+        match="unresolved recoverable failure",
+    ):
+        PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
+@pytest.mark.parametrize("status", ["open", "abandoned"])
+def test_synthesize_rejected_when_recoverable_failure_is_unresolved(status):
+    state = _complete_run_state(open_failures=[_failure(status)])
+
+    with pytest.raises(
+        PlannerActionValidationError,
+        match="unresolved recoverable failure",
+    ):
+        PlannerActionValidator.validate(_synthesize_action(), run_state=state)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _failure("resolved"),
+        _failure("open", recoverable=False),
+        _failure("abandoned", recoverable=False),
+    ],
+)
+def test_synthesize_allows_resolved_or_nonrecoverable_failures(failure):
+    action = _synthesize_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(open_failures=[failure]),
+        )
+        is action
+    )
 
 
 def test_complete_accepts_rejected_active_dispatch_reference():
