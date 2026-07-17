@@ -124,8 +124,13 @@ def test_budget_exhaustion_rejects_delegate_and_complete():
     delegate = _action(PlannerActionType.DELEGATE, targets=[_target()])
     complete = _action(PlannerActionType.COMPLETE)
 
-    with pytest.raises(PlannerActionValidationError, match="step budget"):
+    with pytest.raises(
+        PlannerActionValidationError,
+        match="step budget",
+    ) as delegate_error:
         _validate(delegate, steps_used=8, step_budget=8)
+    assert delegate_error.value.code == "step_budget_exhausted"
+    assert delegate_error.value.recoverable is False
 
     with pytest.raises(PlannerActionValidationError, match="step budget"):
         _validate(
@@ -571,6 +576,26 @@ def test_complete_rejected_when_recoverable_failure_is_open():
 
     with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
         PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
+def test_synthesize_allows_open_planner_validation_failure():
+    state = _complete_run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="planner-failure-1",
+                fingerprint="planner-validator-fp",
+                source="planner_validator",
+                error_code="planner_output_invalid",
+                error_message="planner output was invalid",
+                recoverable=True,
+                status="open",
+                recovery_hints=["replan_with_valid_schema"],
+            )
+        ]
+    )
+    action = _synthesize_action()
+
+    assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
 def test_complete_allows_abandoned_recoverable_failure():

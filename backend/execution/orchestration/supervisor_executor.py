@@ -49,6 +49,10 @@ from execution.orchestration.planner import (
     OrchestrationPlanner,
     RoomSupervisorPlannerAdapter,
 )
+from execution.orchestration.planner_recovery import (
+    record_recoverable_planner_rejection,
+    resolve_open_planner_validation_failures,
+)
 from execution.orchestration.resources import OrchestrationResourceProvider
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
@@ -797,19 +801,44 @@ class SupervisorExecutor:
                     ),
                 )
             except (PlannerActionValidationError, ValueError) as exc:
-                state = await self._mark_v2_terminal(
+                if (
+                    isinstance(exc, PlannerActionValidationError)
+                    and not exc.recoverable
+                ):
+                    terminal_status = (
+                        OrchestrationStatus.BUDGET_EXHAUSTED
+                        if exc.code == "step_budget_exhausted"
+                        else OrchestrationStatus.FAILED
+                    )
+                    state = await self._mark_v2_terminal(
+                        state,
+                        terminal_status,
+                        reason=str(exc),
+                    )
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                    )
+                state, exhausted = await self._record_v2_planner_rejection(
                     state,
-                    OrchestrationStatus.FAILED,
-                    reason=str(exc),
+                    error_code=getattr(exc, "code", "planner_output_invalid"),
+                    error_message=str(exc),
+                    planner_action=None,
+                    stage="adapter",
                 )
-                return await self._log_state_and_return(
-                    room_id,
-                    state,
-                    self._state_run_result(
-                        status=RunStatus.FAILED,
-                        state=state,
-                    ),
-                )
+                if exhausted or state.steps_used >= state.step_budget:
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason=str(exc),
+                    )
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                    )
+                continue
 
             planner_action = self._apply_participant_turn_policy(
                 state,
@@ -821,19 +850,41 @@ class SupervisorExecutor:
                     run_state=state,
                 )
             except PlannerActionValidationError as exc:
-                state = await self._mark_v2_terminal(
+                if not exc.recoverable:
+                    terminal_status = (
+                        OrchestrationStatus.BUDGET_EXHAUSTED
+                        if exc.code == "step_budget_exhausted"
+                        else OrchestrationStatus.FAILED
+                    )
+                    state = await self._mark_v2_terminal(
+                        state,
+                        terminal_status,
+                        reason=str(exc),
+                    )
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                    )
+                state, exhausted = await self._record_v2_planner_rejection(
                     state,
-                    OrchestrationStatus.FAILED,
-                    reason=str(exc),
+                    error_code=exc.code,
+                    error_message=str(exc),
+                    planner_action=planner_action,
+                    stage="state_validation",
                 )
-                return await self._log_state_and_return(
-                    room_id,
-                    state,
-                    self._state_run_result(
-                        status=RunStatus.FAILED,
-                        state=state,
-                    ),
-                )
+                if exhausted or state.steps_used >= state.step_budget:
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason=str(exc),
+                    )
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                    )
+                continue
             state = await self._record_v2_planner_action(state, planner_action)
 
             match planner_action.action:
@@ -1390,6 +1441,7 @@ class SupervisorExecutor:
         )
 
         def mutate(updated: OrchestrationRunState) -> None:
+            resolve_open_planner_validation_failures(updated)
             updated.decision_log.append(
                 {
                     "action": planner_action.action.value,
@@ -1409,6 +1461,48 @@ class SupervisorExecutor:
             mutate=mutate,
         )
         return saved
+
+    async def _record_v2_planner_rejection(
+        self,
+        state: OrchestrationRunState,
+        *,
+        error_code: str,
+        error_message: str,
+        planner_action: PlannerAction | None,
+        stage: str,
+    ) -> tuple[OrchestrationRunState, bool]:
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "error_code": error_code,
+        }
+        outcome: dict[str, bool] = {}
+
+        def mutate(updated: OrchestrationRunState) -> None:
+            failure, exhausted = record_recoverable_planner_rejection(
+                updated,
+                error_code=error_code,
+                error_message=error_message,
+                planner_action=planner_action,
+                stage=stage,
+            )
+            payload.update(
+                {
+                    "failure_id": failure.failure_id,
+                    "retry_count": failure.retry_count,
+                    "exhausted": exhausted,
+                }
+            )
+            if planner_action is not None:
+                payload["action"] = planner_action.action.value
+            outcome["exhausted"] = exhausted
+
+        saved = await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.PLANNER_ACTION_REJECTED,
+            payload=payload,
+            mutate=mutate,
+        )
+        return saved, outcome["exhausted"]
 
     @staticmethod
     def _v2_pending_hitl_planner_action(

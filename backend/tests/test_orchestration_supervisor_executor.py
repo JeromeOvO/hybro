@@ -7,6 +7,7 @@ import pytest
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
+from execution.orchestration.action_validator import PlannerActionValidationError
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -784,7 +785,7 @@ async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
 
 
 @pytest.mark.asyncio
-async def test_run_validates_complete_against_run_state_after_dispatch():
+async def test_run_replans_after_invalid_complete_action():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -814,6 +815,11 @@ async def test_run_validates_complete_against_run_state_after_dispatch():
             action=PlannerActionType.COMPLETE,
             reasoning="Done without structured evidence",
         ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="Stop after the invalid completion was rejected.",
+            failure_reason="test stop",
+        ),
     )
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
@@ -832,7 +838,9 @@ async def test_run_validates_complete_against_run_state_after_dispatch():
     state = await store.get_latest_by_user_message_id("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.FAILED
-    assert state.terminal_reason == "complete action requires completion evidence"
+    assert state.terminal_reason == "test stop"
+    assert state.open_failures[0].error_code == "completion_evidence_invalid"
+    assert state.open_failures[0].status == "resolved"
 
 
 @pytest.mark.asyncio
@@ -2256,7 +2264,12 @@ async def test_run_records_supervisor_hitl_reply_from_resumed_trajectory_without
             action=PlannerActionType.SYNTHESIZE,
             reasoning="answer was provided",
             synthesis_instruction="Use the clarified account",
-        )
+        ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="Stop after the invalid synthesis was rejected.",
+            failure_reason="test stop",
+        ),
     )
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
@@ -5962,7 +5975,7 @@ async def test_run_supervisor_hitl_reply_is_consumed_before_next_hitl_round():
 
 
 @pytest.mark.asyncio
-async def test_run_invalid_planner_action_marks_sidecar_failed():
+async def test_run_invalid_planner_action_fails_after_retry_exhaustion():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -5976,18 +5989,21 @@ async def test_run_invalid_planner_action_marks_sidecar_failed():
             "client_request_id": "client-1",
         },
     )
+    invalid_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="invalid target",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                agent_name="Agent Two",
+                task="Not in scope",
+            )
+        ],
+    )
     planner = RecordingPlanner(
-        PlannerAction(
-            action=PlannerActionType.DELEGATE,
-            reasoning="invalid target",
-            targets=[
-                PlannedDelegateTarget(
-                    agent_id="agent-2",
-                    agent_name="Agent Two",
-                    task="Not in scope",
-                )
-            ],
-        )
+        invalid_action,
+        invalid_action.model_copy(deep=True),
+        invalid_action.model_copy(deep=True),
     )
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
@@ -6007,6 +6023,8 @@ async def test_run_invalid_planner_action_marks_sidecar_failed():
     assert state is not None
     assert state.status == OrchestrationStatus.FAILED
     assert "not in candidate_agent_ids" in (state.terminal_reason or "")
+    assert state.open_failures[0].retry_count == 2
+    assert state.open_failures[0].status == "abandoned"
 
 
 @pytest.mark.asyncio
@@ -7077,3 +7095,142 @@ def test_execution_orchestration_v2_flag_parses_legacy_values(raw, expected):
     settings = Settings(_env_file=None, execution_orchestration_v2=raw)
 
     assert settings.execution_orchestration_v2 is expected
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejection_replans_and_resolves_failure_after_valid_action():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need coordination"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = SimpleNamespace(
+        plan=AsyncMock(
+            side_effect=[
+                ValueError("planner adapter expected a JSON object"),
+                PlannerAction(
+                    action=PlannerActionType.DELEGATE,
+                    reasoning="Use the selected agent after recovery.",
+                    targets=[
+                        PlannedDelegateTarget(
+                            agent_id="agent-1",
+                            task="Handle the request.",
+                        )
+                    ],
+                ),
+                PlannerAction(
+                    action=PlannerActionType.SYNTHESIZE,
+                    reasoning="The agent output supports a final response.",
+                    synthesis_instruction="Summarize the agent output.",
+                ),
+            ]
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Need coordination",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert planner.plan.await_count == 3
+    assert result.run_state.open_failures[0].source == "planner_validator"
+    assert result.run_state.open_failures[0].status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_state_validation_rejection_replans_with_failure_context():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need coordination"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Choose an invalid target first.",
+            targets=[
+                PlannedDelegateTarget(agent_id="agent-2", task="Handle the request.")
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="Stop after observing the rejection.",
+            failure_reason="test stop",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id=user_message.message_id,
+        message_text="Need coordination",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert len(planner.contexts) == 2
+    assert planner.contexts[1].state_context.open_failures[0]["error_code"] == (
+        "target_out_of_scope"
+    )
+    assert result.run_state.open_failures[0].status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_nonrecoverable_adapter_validation_error_is_terminal():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need coordination"),
+    )
+    planner = SimpleNamespace(
+        plan=AsyncMock(
+            side_effect=PlannerActionValidationError(
+                "step budget exhausted",
+                code="step_budget_exhausted",
+                recoverable=False,
+            )
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id=user_message.message_id,
+        message_text="Need coordination",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.run_state.status == OrchestrationStatus.BUDGET_EXHAUSTED
+    assert result.run_state.open_failures == []
