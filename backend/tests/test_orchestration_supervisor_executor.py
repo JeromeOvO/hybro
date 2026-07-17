@@ -108,6 +108,50 @@ async def test_run_rejects_state_bound_to_another_request(
 
 
 @pytest.mark.asyncio
+async def test_blocking_resume_logs_state_result_before_returning():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope={},
+        goal="Coordinate this",
+    )
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._resolve_v2_hitl_if_answered = AsyncMock(return_value=state)
+    executor._sync_v2_resumed_trajectory = AsyncMock(
+        return_value=(state, RunStatus.AWAITING_INPUT)
+    )
+    executor._log_state_and_return = AsyncMock(
+        side_effect=lambda _room_id, _state, result: result
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        resumed_trajectory=SupervisorTrajectory(),
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor._log_state_and_return.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_run_builds_resource_catalog_before_planning():
     user_message = RoomUserMessage(
         room_id="room-1",

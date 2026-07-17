@@ -2850,9 +2850,13 @@ class SupervisorExecutor:
                 resumed_trajectory,
             )
             if blocking_resume_status is not None:
-                return self._state_run_result(
-                    status=blocking_resume_status,
-                    state=state,
+                return await self._log_state_and_return(
+                    room_id,
+                    state,
+                    self._state_run_result(
+                        status=blocking_resume_status,
+                        state=state,
+                    ),
                 )
 
         return await self._execute_orchestration_loop(
