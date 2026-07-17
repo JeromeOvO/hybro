@@ -21,6 +21,7 @@ _AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
     "explicit_selection": "explicit_selection",
     "mention": "mention",
 }
+SUPPORTED_CANDIDATE_SCOPE_SOURCES = frozenset(_AUTHORIZATION_KIND_BY_SOURCE)
 
 
 def normalize_candidate_scope(

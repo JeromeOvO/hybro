@@ -614,6 +614,54 @@ async def test_saved_group_requires_selected_agent_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_unknown_candidate_scope_mode_is_rejected_before_persistence():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="room-1",
+            room_name="Room",
+            room_owner_id="user-1",
+            room_owner_name="User",
+            room_agent_set={"agent-1": "Agent One"},
+            extend_info={"use_supervisor": True},
+        )
+    )
+    svc.delivery = SimpleNamespace(create_token=MagicMock(return_value=object()))
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    svc._persist_user_message = AsyncMock(return_value=True)
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="room-1",
+            user_id="user-1",
+            message=RoomUserMessage(
+                room_id="room-1",
+                message_id="message-1",
+                user_id="user-1",
+                message_content=MessageContent(message_text="Coordinate this"),
+            ),
+            extend_info={
+                "mode": "supervisor",
+                "selected_agent_ids": ["agent-1"],
+                "candidate_scope_mode": "saved_groups",
+                "orchestration_schema_version": 2,
+            },
+        )
+    )
+
+    assert response.success is False
+    assert response.status_code == 400
+    assert response.scope_resolution_error is not None
+    assert response.scope_resolution_error.code == "invalid_target"
+    assert "Unsupported candidate_scope_mode 'saved_groups'" in (response.error or "")
+    assert context is None
+    svc._persist_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_v2_mentions_must_be_subset_of_selected_candidates():
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()

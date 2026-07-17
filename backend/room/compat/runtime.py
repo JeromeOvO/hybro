@@ -38,7 +38,10 @@ from common.utils.context_utils import (
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from context_memory.projection import _human_size, build_turn_content
-from execution.orchestration.candidate_scope import normalize_candidate_scope
+from execution.orchestration.candidate_scope import (
+    SUPPORTED_CANDIDATE_SCOPE_SOURCES,
+    normalize_candidate_scope,
+)
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
@@ -2305,6 +2308,31 @@ class RoomServices:
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
             candidate_scope_mode = "explicit_selection"
+        candidate_scope_mode = candidate_scope_mode.strip() or "explicit_selection"
+
+        if (
+            orchestration_requested
+            and candidate_scope_mode not in SUPPORTED_CANDIDATE_SCOPE_SOURCES
+        ):
+            supported_modes = ", ".join(sorted(SUPPORTED_CANDIDATE_SCOPE_SOURCES))
+            error_msg = (
+                f"Unsupported candidate_scope_mode {candidate_scope_mode!r}; "
+                f"expected one of: {supported_modes}"
+            )
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=error_msg,
+                    scope_resolution_error=ScopeResolutionError(
+                        code="invalid_target",
+                        message=error_msg,
+                    ),
+                    status_code=400,
+                ),
+                None,
+            )
 
         if (
             orchestration_requested
