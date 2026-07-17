@@ -115,6 +115,7 @@ logger = get_logger(__name__)
 
 
 DEFAULT_DEBATE_ROUNDS = 2
+DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 
 
 class SupervisorExecutor:
@@ -3484,6 +3485,23 @@ class SupervisorExecutor:
         user_message_id: str,
         token: CancellationToken | None,
     ) -> SupervisorRunResult:
+        try:
+            PlannerActionValidator.validate(planner_action, run_state=state)
+        except PlannerActionValidationError as exc:
+            state = await self._mark_v2_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason=str(exc),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(
+                    status=RunStatus.FAILED,
+                    state=state,
+                ),
+            )
+
         trajectory = self._compat_trajectory_from_state(state)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
@@ -4554,6 +4572,185 @@ class SupervisorExecutor:
             completed_at=utcnow(),
         )
 
+    @staticmethod
+    def _raw_dispatch_payload_refs(target: DelegateTarget) -> dict[str, list[dict]]:
+        return {
+            "context_refs": [
+                ref.model_dump(mode="json")
+                for ref in getattr(target, "context_refs", [])
+            ],
+            "artifact_refs": [
+                ref.model_dump(mode="json")
+                for ref in getattr(target, "artifact_refs", [])
+            ],
+            "attachment_refs": [
+                ref.model_dump(mode="json")
+                for ref in getattr(target, "attachment_refs", [])
+            ],
+            "expected_outputs": [
+                output.model_dump(mode="json")
+                for output in getattr(target, "expected_outputs", [])
+            ],
+        }
+
+    @staticmethod
+    def _resolved_dispatch_payload_refs(
+        payload: ResolvedDispatchPayload | None,
+    ) -> dict[str, list]:
+        if payload is None:
+            return {
+                "context_refs": [],
+                "artifact_refs": [],
+                "attachment_refs": [],
+                "resource_payloads": [],
+            }
+        return {
+            "context_refs": list(payload.selected_context_refs),
+            "artifact_refs": list(payload.selected_artifact_refs),
+            "attachment_refs": list(payload.selected_attachment_refs),
+            "resource_payloads": [
+                resource.model_dump(mode="json")
+                for resource in payload.resource_payloads
+            ],
+        }
+
+    @staticmethod
+    def _dispatch_payload_failure_result(
+        *,
+        target: DelegateTarget,
+        step_number: int,
+        planned_message_id: str | None,
+        error_message: str,
+        status_message: str,
+    ) -> StepResult:
+        return StepResult(
+            step_number=step_number,
+            agent_id=target.agent_id,
+            agent_name=target.agent_name,
+            task=target.task,
+            response_text="",
+            success=False,
+            status=StepStatus.FAILED,
+            error_message=error_message,
+            agent_message_id=planned_message_id,
+            status_message=status_message,
+        )
+
+    @staticmethod
+    def _dispatch_task_with_ref_projection(
+        *,
+        task: str,
+        target: DelegateTarget,
+        run_state: OrchestrationRunState | None,
+        resolved_payload: ResolvedDispatchPayload | None,
+    ) -> str:
+        if run_state is None or resolved_payload is None:
+            return task
+
+        lines: list[str] = []
+        context_lines = SupervisorExecutor._context_ref_projection_lines(
+            target,
+            resolved_payload,
+            run_state,
+        )
+        artifact_lines = SupervisorExecutor._artifact_ref_projection_lines(
+            resolved_payload,
+            run_state,
+        )
+        if context_lines:
+            lines.append("Selected context refs:")
+            lines.extend(context_lines)
+        if artifact_lines:
+            lines.append("Selected artifact refs:")
+            lines.extend(artifact_lines)
+        if not lines:
+            return task
+
+        projection = "\n".join(lines)
+        if len(projection) > DISPATCH_REF_PROJECTION_MAX_CHARS:
+            projection = (
+                projection[: DISPATCH_REF_PROJECTION_MAX_CHARS - 3].rstrip()
+                + "..."
+            )
+        return f"{task.rstrip()}\n\n[Backend-selected references]\n{projection}"
+
+    @staticmethod
+    def _context_ref_projection_lines(
+        target: DelegateTarget,
+        payload: ResolvedDispatchPayload,
+        run_state: OrchestrationRunState,
+    ) -> list[str]:
+        fact_by_id = {
+            str(fact.get("fact_id")): fact
+            for fact in run_state.facts
+            if isinstance(fact, dict) and fact.get("fact_id") is not None
+        }
+        selected = set(payload.selected_context_refs)
+        lines: list[str] = []
+        for ref in getattr(target, "context_refs", []):
+            if ref.ref_id not in selected:
+                continue
+            fact = fact_by_id.get(ref.ref_id)
+            parts = [f"ref={ref.ref_id}"]
+            if ref.source_agent_message_id:
+                parts.append(f"source={ref.source_agent_message_id}")
+            if ref.mime_type:
+                parts.append(f"mime={ref.mime_type}")
+            if fact is not None:
+                summary = fact.get("summary") or fact.get("text")
+                if summary is not None:
+                    parts.append(
+                        "summary="
+                        + SupervisorExecutor._bounded_projection_value(summary, 240)
+                    )
+            lines.append("- " + "; ".join(parts))
+        return lines
+
+    @staticmethod
+    def _artifact_ref_projection_lines(
+        payload: ResolvedDispatchPayload,
+        run_state: OrchestrationRunState,
+    ) -> list[str]:
+        artifact_by_key = {
+            str(artifact.get("artifact_key")): artifact
+            for artifact in run_state.artifacts
+            if isinstance(artifact, dict) and artifact.get("artifact_key") is not None
+        }
+        lines: list[str] = []
+        for artifact_key in payload.selected_artifact_refs:
+            artifact = artifact_by_key.get(artifact_key)
+            if artifact is None:
+                continue
+            fields = [
+                ("key", artifact.get("artifact_key")),
+                ("name", artifact.get("name") or artifact.get("title")),
+                (
+                    "mime",
+                    artifact.get("mime_type") or artifact.get("mimeType"),
+                ),
+                ("summary", artifact.get("summary")),
+                (
+                    "source",
+                    artifact.get("source_agent_message_id")
+                    or artifact.get("source_agent_id"),
+                ),
+            ]
+            parts = [
+                f"{name}={SupervisorExecutor._bounded_projection_value(value, 240)}"
+                for name, value in fields
+                if value is not None and str(value).strip()
+            ]
+            if parts:
+                lines.append("- " + "; ".join(parts))
+        return lines
+
+    @staticmethod
+    def _bounded_projection_value(value: Any, max_chars: int) -> str:
+        text = " ".join(str(value).split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3].rstrip() + "..."
+
     async def _dispatch_targets(
         self,
         targets: list[DelegateTarget],
@@ -4676,27 +4873,31 @@ class SupervisorExecutor:
                             resource_provider=self.orchestration_resource_provider,
                         )
                     except DispatchPayloadValidationError as exc:
-                        return StepResult(
+                        return self._dispatch_payload_failure_result(
+                            target=target,
                             step_number=step_number,
-                            agent_id=target.agent_id,
-                            agent_name=target.agent_name,
-                            task=target.task,
-                            response_text="",
-                            success=False,
-                            status=StepStatus.FAILED,
+                            planned_message_id=planned_message_id,
                             error_message=str(exc),
+                            status_message=exc.code,
                         )
+
+                dispatch_task = self._dispatch_task_with_ref_projection(
+                    task=target.task,
+                    target=target,
+                    run_state=run_state,
+                    resolved_payload=resolved_payload,
+                )
 
                 # Create RoomAgentMessage only after validation passes
                 message = self.room_runtime.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
                     agent_id=target.agent_id,
-                    content=target.task,
+                    content=dispatch_task,
                     user_id=request_user_id,
                     step_number=step_number,
                     total_steps=None,
-                    task_content=target.task,
+                    task_content=dispatch_task,
                     client_request_id=await self.task_state_store.resolve_client_request_id_for_message_id(
                         user_message_id
                     ),
@@ -4708,44 +4909,14 @@ class SupervisorExecutor:
                     if getattr(target, "attachment_policy", None)
                     else "explicit_refs_only"
                 )
-                message.extend_info["dispatch_payload_refs"] = {
-                    "context_refs": [
-                        ref.model_dump(mode="json")
-                        for ref in getattr(target, "context_refs", [])
-                    ],
-                    "artifact_refs": [
-                        ref.model_dump(mode="json")
-                        for ref in getattr(target, "artifact_refs", [])
-                    ],
-                    "attachment_refs": [
-                        ref.model_dump(mode="json")
-                        for ref in getattr(target, "attachment_refs", [])
-                    ],
-                    "expected_outputs": [
-                        output.model_dump(mode="json")
-                        for output in getattr(target, "expected_outputs", [])
-                    ],
-                }
+                message.extend_info["dispatch_payload_refs"] = (
+                    self._raw_dispatch_payload_refs(target)
+                )
+                message.extend_info["resolved_dispatch_payload_refs"] = (
+                    self._resolved_dispatch_payload_refs(resolved_payload)
+                )
                 if planned_message_id:
                     message.message_id = planned_message_id
-                if resolved_payload is not None:
-                    if not isinstance(message.extend_info, dict):
-                        message.extend_info = {}
-                    message.extend_info["resolved_dispatch_payload_refs"] = {
-                        "context_refs": list(
-                            resolved_payload.selected_context_refs
-                        ),
-                        "artifact_refs": list(
-                            resolved_payload.selected_artifact_refs
-                        ),
-                        "attachment_refs": list(
-                            resolved_payload.selected_attachment_refs
-                        ),
-                        "resource_payloads": [
-                            payload.model_dump(mode="json")
-                            for payload in resolved_payload.resource_payloads
-                        ],
-                    }
                 inserted = await self.message_writer.add_room_agent_message(message)
                 if inserted is False:
                     existing = (

@@ -13,7 +13,12 @@ from models.room import UserAttachment
 class DispatchPayloadValidationError(ValueError):
     """Raised when planner-selected refs cannot be resolved."""
 
-    def __init__(self, message: str, *, code: str = "dispatch_payload_invalid"):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "dispatch_payload_ref_unresolved",
+    ) -> None:
         super().__init__(message)
         self.code = code
 
@@ -60,7 +65,10 @@ async def resolve_dispatch_payload_refs(
     )
     for ref in artifact_refs:
         if ref.required and ref.ref_id not in artifact_keys:
-            raise DispatchPayloadValidationError(f"unknown artifact ref: {ref.ref_id}")
+            raise DispatchPayloadValidationError(
+                f"unknown artifact ref: {ref.ref_id}",
+                code="artifact_ref_not_found",
+            )
 
     selected_attachment_refs, attachment_failures = _resolve_attachment_refs(
         target_agent_card=target_agent_card,

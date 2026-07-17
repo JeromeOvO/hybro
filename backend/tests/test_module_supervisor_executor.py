@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.utils.time import utcnow
+from execution.orchestration.dispatch_payload import ResolvedDispatchPayload
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
@@ -64,6 +65,10 @@ def _make_supervisor_executor():
     se.room_memory = MagicMock()
     se.rate_limit_service = MagicMock()
     se.hitl_coordinator = MagicMock()
+    se.orchestration_resource_provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+        resolve_ref=AsyncMock(return_value=None),
+    )
 
     async def raw_action_provider(_context):
         result = se.supervisor_service.decide_next()
@@ -109,6 +114,7 @@ def _state_unification_user_message(message_id="msg-1", extend_info=None):
 def _make_resolved_agent():
     return SimpleNamespace(
         agent_id="agent-1",
+        agent_card=SimpleNamespace(default_input_modes=["text"]),
         rate_limit_per_user_per_hour=100,
         rate_limit_system_per_hour=1000,
     )
@@ -229,6 +235,291 @@ async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_re
         "attachment_refs": [],
         "expected_outputs": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatch):
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    target = _make_dispatch_target()
+    target.context_refs = [
+        DispatchContentRef(kind=DispatchRefKind.CONTEXT, ref_id="room-background")
+    ]
+    target.artifact_refs = [
+        DispatchContentRef(kind=DispatchRefKind.ARTIFACT, ref_id="artifact-1")
+    ]
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Use selected refs",
+        candidate_agent_ids=["agent-1"],
+        artifacts=[
+            {
+                "artifact_key": "artifact-1",
+                "name": "Broker submission",
+                "mime_type": "application/json",
+                "summary": "Structured facts for underwriting.",
+                "source_agent_message_id": "agent-msg-source",
+            }
+        ],
+    )
+    calls = []
+
+    async def fake_resolve_dispatch_payload_refs(**kwargs):
+        calls.append(kwargs)
+        return ResolvedDispatchPayload(
+            selected_context_refs=["room-background"],
+            selected_artifact_refs=["artifact-1"],
+            selected_attachment_refs=[],
+            attachment_failures=[],
+        )
+
+    monkeypatch.setattr(
+        "execution.orchestration.supervisor_executor.resolve_dispatch_payload_refs",
+        fake_resolve_dispatch_payload_refs,
+        raising=False,
+    )
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.rate_limit_service = None
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Agent completed.",
+        )
+    )
+
+    result = await se._dispatch_targets(
+        [target],
+        [_make_agent_profile()],
+        "room-1",
+        "user-msg-1",
+        1,
+        None,
+        "user-1",
+        None,
+        run_state=state,
+        original_attachments=[],
+    )
+
+    assert result[0].success is True
+    assert len(calls) == 1
+    assert calls[0]["run_state"] is state
+    create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    assert "artifact-1" in create_kwargs["content"]
+    assert "Broker submission" in create_kwargs["task_content"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_dispatch_missing_required_context_ref_fails_before_processing():
+    se = _make_supervisor_executor()
+    target = _make_dispatch_target()
+    target.context_refs = [
+        DispatchContentRef(kind=DispatchRefKind.CONTEXT, ref_id="missing-fact")
+    ]
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Use selected context",
+        candidate_agent_ids=["agent-1"],
+        facts=[
+            {
+                "fact_id": "fact-1",
+                "text": "Known context.",
+            }
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="run-1:step-1",
+                step_target_id="run-1:step-1:target-1",
+                dispatch_intent_id="run-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Read the context.",
+                task_hash="hash",
+                context_refs=target.context_refs,
+            )
+        ],
+    )
+    se.run_store = InMemoryOrchestrationRunStore()
+    await se.run_store.create_run(state)
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    se.rate_limit_service = None
+    se.room_runtime.create_agent_message = MagicMock()
+    se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
+    se.agent_message_processor.process_single_message = AsyncMock()
+
+    result = await se._dispatch_targets(
+        [target],
+        [_make_agent_profile()],
+        "room-1",
+        "user-msg-1",
+        1,
+        None,
+        "user-1",
+        None,
+        planned_message_ids=["agent-msg-1"],
+        run_state=state,
+        original_attachments=[],
+    )
+
+    assert result[0].status == StepStatus.FAILED
+    assert result[0].success is False
+    assert result[0].agent_message_id == "agent-msg-1"
+    assert result[0].status_message == "context_ref_not_found"
+    assert result[0].error_message == "Context ref not found: missing-fact."
+    se.room_runtime.create_agent_message.assert_not_called()
+    se.agent_message_processor.process_single_message.assert_not_awaited()
+
+    updated = await se._ingest_v2_results(
+        state,
+        result,
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert len(updated.open_failures) == 1
+    assert updated.open_failures[0].status == "open"
+    assert updated.open_failures[0].error_code == "context_ref_not_found"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_dispatch_projects_valid_context_ref_into_agent_task():
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    target = _make_dispatch_target()
+    target.task = "Use the selected context."
+    target.context_refs = [
+        DispatchContentRef(kind=DispatchRefKind.CONTEXT, ref_id="fact-1")
+    ]
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Use selected context",
+        candidate_agent_ids=["agent-1"],
+        facts=[
+            {
+                "fact_id": "fact-1",
+                "summary": "Replacement cost is 1.2M from the broker submission.",
+            }
+        ],
+    )
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.rate_limit_service = None
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Agent completed.",
+        )
+    )
+
+    result = await se._dispatch_targets(
+        [target],
+        [_make_agent_profile()],
+        "room-1",
+        "user-msg-1",
+        1,
+        None,
+        "user-1",
+        None,
+        run_state=state,
+        original_attachments=[],
+    )
+
+    assert result[0].success is True
+    create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    assert "[Backend-selected references]" in create_kwargs["task_content"]
+    assert "Selected context refs:" in create_kwargs["task_content"]
+    assert "ref=fact-1" in create_kwargs["task_content"]
+    assert "Replacement cost is 1.2M" in create_kwargs["task_content"]
+    assert message.extend_info["resolved_dispatch_payload_refs"] == {
+        "context_refs": ["fact-1"],
+        "artifact_refs": [],
+        "attachment_refs": [],
+        "resource_payloads": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_dispatch_missing_required_attachment_ref_fails_before_processing():
+    se = _make_supervisor_executor()
+    target = _make_dispatch_target()
+    target.attachment_refs = [
+        DispatchContentRef(kind=DispatchRefKind.ATTACHMENT, ref_id="missing-file")
+    ]
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Use selected refs",
+        candidate_agent_ids=["agent-1"],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="run-1:step-1",
+                step_target_id="run-1:step-1:target-1",
+                dispatch_intent_id="run-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Read the attachment.",
+                task_hash="hash",
+                attachment_refs=target.attachment_refs,
+            )
+        ],
+    )
+    se.run_store = InMemoryOrchestrationRunStore()
+    await se.run_store.create_run(state)
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    se.rate_limit_service = None
+    se.room_runtime.create_agent_message = MagicMock()
+    se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
+    se.agent_message_processor.process_single_message = AsyncMock()
+
+    result = await se._dispatch_targets(
+        [target],
+        [_make_agent_profile()],
+        "room-1",
+        "user-msg-1",
+        1,
+        None,
+        "user-1",
+        None,
+        planned_message_ids=["agent-msg-1"],
+        run_state=state,
+        original_attachments=[],
+    )
+
+    assert result[0].status == StepStatus.FAILED
+    assert result[0].success is False
+    assert result[0].agent_message_id == "agent-msg-1"
+    assert result[0].status_message == "attachment_ref_not_found"
+    assert result[0].error_message == "Attachment ref not found: missing-file."
+    se.room_runtime.create_agent_message.assert_not_called()
+    se.agent_message_processor.process_single_message.assert_not_awaited()
+
+    updated = await se._ingest_v2_results(
+        state,
+        result,
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert len(updated.open_failures) == 1
+    assert updated.open_failures[0].status == "open"
+    assert updated.open_failures[0].error_code == "attachment_ref_not_found"
 
 
 @pytest.mark.asyncio
