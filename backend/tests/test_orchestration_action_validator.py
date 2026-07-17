@@ -590,6 +590,22 @@ def test_complete_accepts_valid_evidence_with_facts_only():
     )
 
 
+@pytest.mark.asyncio
+async def test_planner_adapter_accepts_completion_with_facts_only():
+    action = _complete_action()
+    state = _state_for_validation(agent_outputs=[])
+    context = build_orchestration_planner_context(
+        run_state=state,
+        candidate_scope=["agent-1"],
+        message_text="Summarize the collected facts",
+    )
+    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
+
+    result = await adapter.plan(context)
+
+    assert result is action
+
+
 @pytest.mark.parametrize(
     ("legacy_action", "planner_action"),
     [
