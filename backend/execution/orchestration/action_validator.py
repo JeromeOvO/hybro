@@ -12,6 +12,15 @@ from models.orchestration import (
     PlannerActionType,
 )
 
+_NON_BLOCKING_REFERENCE_FAILURE_CODES = frozenset(
+    {
+        "attachment_ref_not_found",
+        "context_ref_not_found",
+        "artifact_ref_not_found",
+        "dispatch_payload_ref_unresolved",
+    }
+)
+
 
 class PlannerActionValidationError(ValueError):
     """Raised when a planner action is not valid for the current run state."""
@@ -57,7 +66,7 @@ class PlannerActionValidator:
             and action.action
             in (PlannerActionType.SYNTHESIZE, PlannerActionType.COMPLETE)
         ):
-            _validate_no_unresolved_recoverable_failures(action, run_state)
+            _validate_no_blocking_recoverable_failures(action, run_state)
         if action.action == PlannerActionType.COMPLETE and run_state is not None:
             PlannerActionValidator._validate_completion(action, run_state)
 
@@ -168,22 +177,22 @@ def _validate_completion_blockers(
         )
 
 
-def _validate_no_unresolved_recoverable_failures(
+def _validate_no_blocking_recoverable_failures(
     action: PlannerAction,
     run_state: OrchestrationRunState,
 ) -> None:
     if any(
-        failure.recoverable and failure.status != "resolved"
+        failure.recoverable
+        and failure.status == "open"
+        and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
         for failure in run_state.open_failures
     ):
         if action.action == PlannerActionType.COMPLETE:
             raise PlannerActionValidationError(
-                "complete action is blocked by open recoverable failure "
-                "or unresolved recoverable failure"
+                "complete action is blocked by open recoverable failure"
             )
         raise PlannerActionValidationError(
-            f"{action.action.value} action is blocked by unresolved "
-            "recoverable failure"
+            f"{action.action.value} action is blocked by open recoverable failure"
         )
 
 

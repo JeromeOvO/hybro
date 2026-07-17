@@ -573,24 +573,18 @@ def test_complete_rejected_when_recoverable_failure_is_open():
         PlannerActionValidator.validate(_complete_action(), run_state=state)
 
 
-def test_complete_rejected_when_recoverable_failure_is_abandoned():
+def test_complete_allows_abandoned_recoverable_failure():
     state = _complete_run_state(open_failures=[_failure("abandoned")])
 
-    with pytest.raises(
-        PlannerActionValidationError,
-        match="unresolved recoverable failure",
-    ):
-        PlannerActionValidator.validate(_complete_action(), run_state=state)
+    action = _complete_action()
+
+    assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
-@pytest.mark.parametrize("status", ["open", "abandoned"])
-def test_synthesize_rejected_when_recoverable_failure_is_unresolved(status):
-    state = _complete_run_state(open_failures=[_failure(status)])
+def test_synthesize_rejected_when_recoverable_failure_is_open():
+    state = _complete_run_state(open_failures=[_failure("open")])
 
-    with pytest.raises(
-        PlannerActionValidationError,
-        match="unresolved recoverable failure",
-    ):
+    with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
         PlannerActionValidator.validate(_synthesize_action(), run_state=state)
 
 
@@ -598,12 +592,40 @@ def test_synthesize_rejected_when_recoverable_failure_is_unresolved(status):
     "failure",
     [
         _failure("resolved"),
+        _failure("abandoned"),
         _failure("open", recoverable=False),
         _failure("abandoned", recoverable=False),
     ],
 )
 def test_synthesize_allows_resolved_or_nonrecoverable_failures(failure):
     action = _synthesize_action()
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(open_failures=[failure]),
+        )
+        is action
+    )
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "attachment_ref_not_found",
+        "context_ref_not_found",
+        "artifact_ref_not_found",
+        "dispatch_payload_ref_unresolved",
+    ],
+)
+@pytest.mark.parametrize("action_factory", [_synthesize_action, _complete_action])
+def test_terminal_action_allows_open_reference_failure(
+    error_code,
+    action_factory,
+):
+    failure = _failure("open")
+    failure.error_code = error_code
+    action = action_factory()
 
     assert (
         PlannerActionValidator.validate(
