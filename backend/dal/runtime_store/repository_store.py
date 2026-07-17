@@ -734,7 +734,7 @@ class RuntimeRepositoryStore:
         self,
         message_id: str,
         *,
-        group_id: str,
+        group_id: str | None,
         group_total: int | None,
         group_index: int | None,
     ) -> bool:

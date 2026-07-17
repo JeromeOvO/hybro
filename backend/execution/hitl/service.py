@@ -401,15 +401,19 @@ class HITLService:
                     return None
             else:
                 projection_ok = False
+                supervisor_task_state_projected = False
+                supervisor_answer_cleared = False
                 try:
                     update_state = await self.persistence.update_agent_message_task_state(
                         display_projection_message_id,
                         "input-required",
                     )
+                    supervisor_task_state_projected = bool(update_state)
                     update_answer = await self.persistence.persist_hitl_user_answer(
                         display_projection_message_id,
                         None,
                     )
+                    supervisor_answer_cleared = bool(update_answer)
                     projection_ok = bool(update_state and update_answer)
                     if group_id is not None:
                         group_written = (
@@ -441,6 +445,14 @@ class HITLService:
                             "display_message_id": display_projection_message_id,
                         },
                     )
+                    if supervisor_task_state_projected or supervisor_answer_cleared:
+                        await self._revert_supervisor_hitl_projection(
+                            display_message_id=display_projection_message_id,
+                            request_id=request.request_id,
+                            room_id=request.room_id,
+                            clear_answer=True,
+                            clear_group=group_id is not None,
+                        )
                     try:
                         canceled = await self.persistence.update_hitl_request(
                             request.request_id,
@@ -503,6 +515,95 @@ class HITLService:
                 },
             )
         return request
+
+    async def _revert_supervisor_hitl_projection(
+        self,
+        *,
+        display_message_id: str,
+        request_id: str,
+        room_id: str,
+        clear_answer: bool = True,
+        clear_group: bool = False,
+    ) -> None:
+        try:
+            reverted_state = await self.persistence.update_agent_message_task_state(
+                display_message_id,
+                "canceled",
+            )
+            if not reverted_state:
+                logger.warning(
+                    "Failed to revert supervisor HITL display task state",
+                    extra={
+                        "hitl_request_id": request_id,
+                        "room_id": room_id,
+                        "display_message_id": display_message_id,
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "Failed to revert supervisor HITL display task state",
+                extra={
+                    "hitl_request_id": request_id,
+                    "room_id": room_id,
+                    "display_message_id": display_message_id,
+                },
+                exc_info=True,
+            )
+
+        if clear_group:
+            try:
+                cleared_group = await self.persistence.persist_hitl_group_metadata(
+                    display_message_id,
+                    group_id=None,
+                    group_total=None,
+                    group_index=None,
+                )
+                if not cleared_group:
+                    logger.warning(
+                        "Failed to clear supervisor HITL group metadata during rollback",
+                        extra={
+                            "hitl_request_id": request_id,
+                            "room_id": room_id,
+                            "display_message_id": display_message_id,
+                        },
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to clear supervisor HITL group metadata during rollback",
+                    extra={
+                        "hitl_request_id": request_id,
+                        "room_id": room_id,
+                        "display_message_id": display_message_id,
+                    },
+                    exc_info=True,
+                )
+
+        if not clear_answer:
+            return
+        try:
+            cleared_answer = await self.persistence.persist_hitl_user_answer(
+                display_message_id,
+                None,
+            )
+            if not cleared_answer:
+                logger.warning(
+                    "Failed to clear supervisor HITL display answer during rollback",
+                    extra={
+                        "hitl_request_id": request_id,
+                        "room_id": room_id,
+                        "display_message_id": display_message_id,
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "Failed to clear supervisor HITL display answer during rollback",
+                extra={
+                    "hitl_request_id": request_id,
+                    "room_id": room_id,
+                    "display_message_id": display_message_id,
+                },
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Handle user response

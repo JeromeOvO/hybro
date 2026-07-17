@@ -363,6 +363,9 @@ class SupervisorExecutor:
             error_message=error_message,
             agent_message_id=output.agent_message_id,
             completed_at=utcnow(),
+            a2a_task_id=output.a2a_task_id,
+            a2a_context_id=output.a2a_context_id,
+            status_message=output.status_message,
         )
 
     @staticmethod
@@ -1983,6 +1986,10 @@ class SupervisorExecutor:
             awaiting_result.agent_message_id
             or awaiting_result.paused_message_id
         )
+        hitl_prompt = (
+            awaiting_result.status_message
+            or "The agent needs additional information."
+        )
         if not continuation_message_id:
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
@@ -1994,10 +2001,10 @@ class SupervisorExecutor:
 
         request: SimpleNamespace | None = None
 
-        async def cleanup_hitl_request(request_id: str) -> None:
+        async def cleanup_hitl_request(request_id: str) -> bool:
             cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
             if cancel_request is None:
-                return
+                return True
             try:
                 await cancel_request(request_id, room_id)
             except Exception:
@@ -2005,16 +2012,46 @@ class SupervisorExecutor:
                     "Failed to cancel orphaned v2 agent HITL request %s",
                     request_id,
                 )
+                return False
+            return True
+
+        def failed_agent_cleanup_mutation(
+            failed_cancel_request_ids: list[str],
+        ):
+            created_request_ids = [request.request_id] if request is not None else []
+            prompt_by_request_id = {
+                request_id: hitl_prompt for request_id in created_request_ids
+            }
+            extra_by_request_id = {
+                request_id: {
+                    "agent_id": awaiting_result.agent_id,
+                    "agent_name": awaiting_result.agent_name,
+                    "continuation_message_id": continuation_message_id,
+                    "display_message_id": display_message_id,
+                    "a2a_task_id": awaiting_result.a2a_task_id,
+                    "a2a_context_id": awaiting_result.a2a_context_id,
+                }
+                for request_id in created_request_ids
+            }
+
+            def mutate(updated: OrchestrationRunState) -> None:
+                self._mark_failed_hitl_cleanup_state(
+                    updated,
+                    created_request_ids=created_request_ids,
+                    failed_cancel_request_ids=failed_cancel_request_ids,
+                    source="agent",
+                    prompt_by_request_id=prompt_by_request_id,
+                    extra_by_request_id=extra_by_request_id,
+                )
+
+            return mutate
 
         try:
             request = await self.hitl_coordinator.request_input(
                 room_id=room_id,
                 user_message_id=user_message_id,
                 source="agent",
-                prompt=(
-                    awaiting_result.status_message
-                    or "The agent needs additional information."
-                ),
+                prompt=hitl_prompt,
                 agent_id=awaiting_result.agent_id,
                 agent_name=awaiting_result.agent_name,
                 a2a_task_id=awaiting_result.a2a_task_id,
@@ -2028,21 +2065,17 @@ class SupervisorExecutor:
             request_id = getattr(exc, "request_id", None)
             if request_id is not None:
                 request = SimpleNamespace(request_id=request_id)
+            failed_cancel_request_ids: list[str] = []
             if request is not None:
-                cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
-                if cancel_request is not None:
-                    try:
-                        await cancel_request(request.request_id, room_id)
-                    except Exception:
-                        logger.warning(
-                            "Failed to cancel orphaned v2 agent HITL request %s",
-                            request.request_id,
-                        )
+                canceled = await cleanup_hitl_request(request.request_id)
+                if not canceled:
+                    failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to create v2 agent HITL request",
+                mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
         if request is None:
@@ -2070,30 +2103,38 @@ class SupervisorExecutor:
                 hitl_request_id=request.request_id,
             )
         except Exception:
+            failed_cancel_request_ids: list[str] = []
             if request is not None:
                 await self._clear_continuation_state(
                     message_id=continuation_message_id,
                 )
-                await cleanup_hitl_request(request.request_id)
+                canceled = await cleanup_hitl_request(request.request_id)
+                if not canceled:
+                    failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to save v2 agent HITL continuation",
+                mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
 
         if not saved:
+            failed_cancel_request_ids: list[str] = []
             if request is not None:
                 await self._clear_continuation_state(
                     message_id=continuation_message_id,
                 )
-                await cleanup_hitl_request(request.request_id)
+                canceled = await cleanup_hitl_request(request.request_id)
+                if not canceled:
+                    failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_v2_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to save v2 agent HITL continuation",
+                mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
 
@@ -2131,15 +2172,10 @@ class SupervisorExecutor:
                 mutate=mark_awaiting_user,
             )
         except Exception:
-            cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
-            if cancel_request is not None:
-                try:
-                    await cancel_request(request.request_id, room_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel orphaned v2 agent HITL request %s",
-                        request.request_id,
-                    )
+            failed_cancel_request_ids: list[str] = []
+            canceled = await cleanup_hitl_request(request.request_id)
+            if not canceled:
+                failed_cancel_request_ids.append(request.request_id)
             await self._clear_continuation_state(
                 message_id=continuation_message_id,
             )
@@ -2148,6 +2184,7 @@ class SupervisorExecutor:
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to persist v2 agent HITL state",
+                mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
 
@@ -2191,6 +2228,78 @@ class SupervisorExecutor:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _supervisor_hitl_questions_from_resumed_trajectory(
+        resumed_trajectory: SupervisorTrajectory | None,
+    ) -> list[dict[str, Any]]:
+        if resumed_trajectory is None:
+            return []
+
+        recovered: list[dict[str, Any]] = []
+        for entry in resumed_trajectory.entries:
+            action = entry.action
+            if action.action != ActionType.CLARIFY:
+                continue
+            questions = list(action.questions or [])
+            if not questions and action.clarification_question:
+                questions.append(
+                    ClarifyQuestion(
+                        prompt=action.clarification_question,
+                        prompt_type=action.prompt_type,
+                        choices=action.choices,
+                    )
+                )
+            for question in questions:
+                if not question.prompt:
+                    continue
+                recovered.append(
+                    {
+                        "source": "supervisor",
+                        "step": entry.step_number,
+                        "prompt": question.prompt,
+                        "prompt_type": question.prompt_type,
+                        "choices": question.choices,
+                        "status": "open",
+                        "created_at": (
+                            entry.started_at.isoformat()
+                            if entry.started_at
+                            else utcnow().isoformat()
+                        ),
+                    }
+                )
+        return recovered
+
+    @classmethod
+    def _recoverable_supervisor_hitl_questions(
+        cls,
+        state: OrchestrationRunState,
+        resumed_trajectory: SupervisorTrajectory | None,
+    ) -> list[dict[str, Any]]:
+        recovered = [
+            dict(question)
+            for question in state.open_questions
+            if isinstance(question, Mapping)
+            and question.get("source") == "supervisor"
+            and question.get("status") in {"open", "creating"}
+            and not question.get("resolved")
+        ]
+        if len(recovered) == 1:
+            return recovered
+        trajectory_questions = cls._supervisor_hitl_questions_from_resumed_trajectory(
+            resumed_trajectory
+        )
+        if len(trajectory_questions) != 1:
+            return []
+        if not recovered:
+            return trajectory_questions
+        recovered_prompt = trajectory_questions[0].get("prompt")
+        matching = [
+            question
+            for question in recovered
+            if question.get("prompt") == recovered_prompt
+        ]
+        return matching if len(matching) == 1 else []
+
     async def _resolve_v2_hitl_if_answered(
         self,
         state: OrchestrationRunState,
@@ -2198,7 +2307,7 @@ class SupervisorExecutor:
         user_message=None,
         resumed_trajectory: SupervisorTrajectory | None = None,
     ) -> OrchestrationRunState:
-        if not state.pending_hitl_request_ids:
+        if state.status in TERMINAL_ORCHESTRATION_STATUSES:
             return state
         answer = self._hitl_answer_from_run_request(
             user_message=user_message,
@@ -2208,6 +2317,17 @@ class SupervisorExecutor:
             return state
 
         resolved_request_ids = list(state.pending_hitl_request_ids)
+        recovered_supervisor_questions: list[dict[str, Any]] = []
+        if not resolved_request_ids:
+            recovered_supervisor_questions = (
+                self._recoverable_supervisor_hitl_questions(
+                    state,
+                    resumed_trajectory,
+                )
+            )
+            if not recovered_supervisor_questions:
+                return state
+
         resolved_at = utcnow().isoformat()
         resolved_recoverable_status = (
             OrchestrationStatus.WAITING_AGENT
@@ -2217,16 +2337,46 @@ class SupervisorExecutor:
 
         def resolve_hitl(updated: OrchestrationRunState) -> None:
             prompts: list[str] = []
+            recovered_prompts: list[str] = []
+            for recovered_question in recovered_supervisor_questions:
+                prompt = recovered_question.get("prompt")
+                if isinstance(prompt, str) and prompt:
+                    recovered_prompts.append(prompt)
+            resolved_existing = False
             for question in updated.open_questions:
-                if question.get("request_id") not in resolved_request_ids:
+                if resolved_request_ids:
+                    matches_question = (
+                        question.get("request_id") in resolved_request_ids
+                    )
+                else:
+                    recovered_question = recovered_supervisor_questions[0]
+                    matches_question = (
+                        question.get("source") == "supervisor"
+                        and question.get("status") in {"open", "creating"}
+                        and not question.get("resolved")
+                        and question.get("prompt")
+                        == recovered_question.get("prompt")
+                        and question.get("step") == recovered_question.get("step")
+                    )
+                if not matches_question:
                     continue
                 question["status"] = "resolved"
                 question["resolved"] = True
                 question["answer"] = answer
                 question["resolved_at"] = resolved_at
+                resolved_existing = True
                 prompt = question.get("prompt")
                 if isinstance(prompt, str) and prompt:
                     prompts.append(prompt)
+            if not resolved_request_ids and not resolved_existing:
+                for recovered_question in recovered_supervisor_questions:
+                    resolved_question = dict(recovered_question)
+                    resolved_question["status"] = "resolved"
+                    resolved_question["resolved"] = True
+                    resolved_question["answer"] = answer
+                    resolved_question["resolved_at"] = resolved_at
+                    updated.open_questions.append(resolved_question)
+                prompts.extend(recovered_prompts)
             updated.facts.append(
                 {
                     "fact_id": (
@@ -2519,7 +2669,8 @@ class SupervisorExecutor:
             f"{state.run_id}:step-{step_number}:supervisor-hitl-{index}"
             for index in range(1, len(questions) + 1)
         ]
-        last_request = None
+        prompt_by_request_id: dict[str, str | None] = {}
+        extra_by_request_id: dict[str, dict[str, Any]] = {}
         client_req_id = state.client_request_id or (
             await self.task_state_store.resolve_client_request_id_for_message_id(
                 user_message_id
@@ -2545,7 +2696,9 @@ class SupervisorExecutor:
                 mutate=mark_pending_hitl,
             )
 
-        async def cleanup_created_artifacts() -> None:
+        async def cleanup_created_artifacts() -> dict[str, list[str]]:
+            failed_request_ids: list[str] = []
+            failed_message_ids: list[str] = []
             cancel_request = getattr(self.hitl_coordinator, "cancel_request", None)
             if cancel_request is not None:
                 for request_id in created_request_ids:
@@ -2556,6 +2709,7 @@ class SupervisorExecutor:
                             "Failed to cancel orphaned v2 HITL request %s",
                             request_id,
                         )
+                        failed_request_ids.append(request_id)
             for message_id in created_messages:
                 delete_message = getattr(
                     self.message_writer,
@@ -2565,12 +2719,81 @@ class SupervisorExecutor:
                 if delete_message is None:
                     continue
                 try:
-                    await delete_message(message_id)
+                    deleted = await delete_message(message_id)
+                    if deleted is False:
+                        failed_message_ids.append(message_id)
                 except Exception:
                     logger.warning(
                         "Failed to delete orphaned v2 HITL agent message %s",
                         message_id,
                     )
+                    failed_message_ids.append(message_id)
+            return {
+                "request_ids": failed_request_ids,
+                "message_ids": failed_message_ids,
+            }
+
+        def mark_failed_supervisor_cleanup(
+            updated: OrchestrationRunState,
+            cleanup_failures: Mapping[str, list[str]],
+        ) -> None:
+            self._mark_failed_hitl_cleanup_state(
+                updated,
+                created_request_ids=[
+                    *pending_request_ids,
+                    *created_request_ids,
+                ],
+                failed_cancel_request_ids=list(
+                    cleanup_failures.get("request_ids", [])
+                ),
+                failed_delete_message_ids=list(
+                    cleanup_failures.get("message_ids", [])
+                ),
+                source="supervisor",
+                prompt_by_request_id=prompt_by_request_id,
+                extra_by_request_id=extra_by_request_id,
+            )
+
+        def mark_supervisor_request_open(
+            updated: OrchestrationRunState,
+            *,
+            request_id: str,
+            question: ClarifyQuestion,
+            message_id: str,
+        ) -> None:
+            # The request can be persisted before its continuation. Keep the run
+            # non-answerable until continuation recovery is durable.
+            updated.status = OrchestrationStatus.INGESTING
+            updated.steps_used = max(updated.steps_used, step_number)
+            if request_id not in updated.pending_hitl_request_ids:
+                updated.pending_hitl_request_ids.append(request_id)
+            existing = next(
+                (
+                    item
+                    for item in updated.open_questions
+                    if isinstance(item, Mapping)
+                    and item.get("request_id") == request_id
+                ),
+                None,
+            )
+            if existing is None:
+                updated.open_questions.append(
+                    {
+                        "request_id": request_id,
+                        "source": "supervisor",
+                        "step": step_number,
+                        "prompt": question.prompt,
+                        "prompt_type": question.prompt_type,
+                        "choices": question.choices,
+                        "status": "creating",
+                        "display_message_id": message_id,
+                        "created_at": utcnow().isoformat(),
+                    }
+                )
+            else:
+                existing["status"] = "creating"
+                existing["display_message_id"] = message_id
+            self._clear_stale_pending_hitl_request_ids(updated)
 
         for qi, question in enumerate(questions):
             prompt_type = HITLPromptType.TEXT
@@ -2581,6 +2804,7 @@ class SupervisorExecutor:
                     pass
 
             request = None
+            hitl_agent_message = None
             try:
                 hitl_agent_message = self.room_runtime.create_agent_message(
                     room_id=room_id,
@@ -2593,10 +2817,10 @@ class SupervisorExecutor:
                     client_request_id=client_req_id,
                 )
                 hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
+                created_messages.append(hitl_agent_message.message_id)
                 await self.message_writer.upsert_room_agent_message(
                     hitl_agent_message
                 )
-                created_messages.append(hitl_agent_message.message_id)
 
                 request = await self.hitl_coordinator.request_input(
                     room_id=room_id,
@@ -2619,20 +2843,71 @@ class SupervisorExecutor:
                 )
                 if request is None:
                     raise RuntimeError("failed to create v2 HITL request")
+                created_request_ids.append(request.request_id)
+                prompt_by_request_id[request.request_id] = question.prompt
+                extra_by_request_id[request.request_id] = {
+                    "step": step_number,
+                    "prompt_type": question.prompt_type,
+                    "choices": question.choices,
+                    "display_message_id": hitl_agent_message.message_id,
+                }
+                def persist_request_open(
+                    updated: OrchestrationRunState,
+                    *,
+                    request_id: str = request.request_id,
+                    question: ClarifyQuestion = question,
+                    message_id: str = hitl_agent_message.message_id,
+                ) -> None:
+                    mark_supervisor_request_open(
+                        updated,
+                        request_id=request_id,
+                        question=question,
+                        message_id=message_id,
+                    )
+
+                state = await self._save_v2_state(
+                    state,
+                    event_type=OrchestrationEventType.HITL_REQUESTED,
+                    payload={
+                        "status": OrchestrationStatus.INGESTING.value,
+                        "request_ids": [request.request_id],
+                        "phase": "request_created",
+                    },
+                    mutate=persist_request_open,
+                )
             except Exception as exc:
                 request_id = getattr(exc, "request_id", None)
                 if isinstance(request_id, str):
                     created_request_ids.append(request_id)
-                await cleanup_created_artifacts()
+                    prompt_by_request_id[request_id] = question.prompt
+                    extra_by_request_id[request_id] = {
+                        "step": step_number,
+                        "prompt_type": question.prompt_type,
+                        "choices": question.choices,
+                        "display_message_id": (
+                            hitl_agent_message.message_id
+                            if hitl_agent_message is not None
+                            else None
+                        ),
+                    }
+                await self._clear_continuation_state(
+                    message_id=user_message_id,
+                    to_user_message=True,
+                )
+                cleanup_failures = await cleanup_created_artifacts()
                 trajectory.status = TrajectoryStatus.FAILED
+
+                def mark_failed_create(
+                    updated: OrchestrationRunState,
+                    cleanup_failures: Mapping[str, list[str]] = cleanup_failures,
+                ) -> None:
+                    mark_failed_supervisor_cleanup(updated, cleanup_failures)
+
                 state = await self._mark_v2_terminal(
                     state,
                     OrchestrationStatus.FAILED,
                     reason="failed to create v2 supervisor HITL request",
-                    mutate=lambda updated: (
-                        setattr(updated, "pending_hitl_request_ids", []),
-                        setattr(updated, "open_questions", []),
-                    ),
+                    mutate=mark_failed_create,
                 )
                 return await self._log_state_and_return(
                     room_id,
@@ -2642,9 +2917,6 @@ class SupervisorExecutor:
                         state=state,
                     ),
                 )
-            if request is not None:
-                created_request_ids.append(request.request_id)
-            last_request = request
 
         try:
             saved = await self._save_interrupted_state(
@@ -2658,7 +2930,7 @@ class SupervisorExecutor:
                 conversation_context=conversation_context,
                 request_user_id=request_user_id,
                 quoted_text=quoted_text,
-                hitl_request_id=last_request.request_id if last_request else None,
+                hitl_request_id=created_request_ids[-1],
                 message_id=user_message_id,
             )
         except Exception:
@@ -2666,48 +2938,49 @@ class SupervisorExecutor:
                 message_id=user_message_id,
                 to_user_message=True,
             )
-            await cleanup_created_artifacts()
+            cleanup_failures = await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
+
+            def mark_failed_continuation_save(
+                updated: OrchestrationRunState,
+            ) -> None:
+                mark_failed_supervisor_cleanup(updated, cleanup_failures)
+
             state = await self._mark_v2_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to save v2 supervisor HITL continuation",
-                mutate=lambda updated: (
-                    setattr(updated, "pending_hitl_request_ids", []),
-                    setattr(updated, "open_questions", []),
-                ),
+                mutate=mark_failed_continuation_save,
             )
             return await self._log_state_and_return(
                 room_id,
                 state,
-                self._state_run_result(
-                    status=RunStatus.FAILED,
-                    state=state,
-                ),
+                self._state_run_result(status=RunStatus.FAILED, state=state),
             )
         if not saved:
-            await cleanup_created_artifacts()
+            cleanup_failures = await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
+
+            def mark_failed_unsaved_continuation(
+                updated: OrchestrationRunState,
+            ) -> None:
+                mark_failed_supervisor_cleanup(updated, cleanup_failures)
+
             state = await self._mark_v2_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="failed to save v2 HITL continuation",
-                mutate=lambda updated: (
-                    setattr(updated, "pending_hitl_request_ids", []),
-                    setattr(updated, "open_questions", []),
-                ),
+                mutate=mark_failed_unsaved_continuation,
             )
             return await self._log_state_and_return(
                 room_id,
                 state,
-                self._state_run_result(
-                    status=RunStatus.FAILED,
-                    state=state,
-                ),
+                self._state_run_result(status=RunStatus.FAILED, state=state),
             )
 
         def mark_awaiting_user(updated: OrchestrationRunState) -> None:
             updated.status = OrchestrationStatus.AWAITING_USER
+            updated.steps_used = max(updated.steps_used, step_number)
             for index, request_id in enumerate(created_request_ids):
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
@@ -2715,6 +2988,9 @@ class SupervisorExecutor:
                     question.get("request_id") == request_id
                     for question in updated.open_questions
                 ):
+                    for question_record in updated.open_questions:
+                        if question_record.get("request_id") == request_id:
+                            question_record["status"] = "open"
                     continue
                 question = questions[min(index, len(questions) - 1)]
                 updated.open_questions.append(
@@ -2745,30 +3021,14 @@ class SupervisorExecutor:
                 message_id=user_message_id,
                 to_user_message=True,
             )
-            await cleanup_created_artifacts()
+            cleanup_failures = await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
             failed_reason = "failed to persist v2 supervisor HITL state"
-            skip_request_ids = set(
-                [*pending_request_ids, *created_request_ids]
-            )
-            created_request_ids_set = set(created_request_ids)
 
             def mark_failed(updated: OrchestrationRunState) -> None:
                 updated.status = OrchestrationStatus.FAILED
                 updated.terminal_reason = failed_reason
-                updated.pending_hitl_request_ids = [
-                    request_id
-                    for request_id in updated.pending_hitl_request_ids
-                    if request_id not in skip_request_ids
-                ]
-                updated.open_questions = [
-                    question
-                    for question in updated.open_questions
-                    if not (
-                        isinstance(question, Mapping)
-                        and question.get("request_id") in created_request_ids_set
-                    )
-                ]
+                mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
             try:
                 state = await self._save_v2_state(
@@ -3397,23 +3657,143 @@ class SupervisorExecutor:
             for intent in state.dispatch_intents
         )
 
+    @staticmethod
+    def _remove_hitl_request_refs(
+        state: OrchestrationRunState,
+        request_ids: set[str],
+    ) -> None:
+        if not request_ids:
+            return
+        state.pending_hitl_request_ids = [
+            request_id
+            for request_id in state.pending_hitl_request_ids
+            if request_id not in request_ids
+        ]
+        state.open_questions = [
+            question
+            for question in state.open_questions
+            if not (
+                isinstance(question, Mapping)
+                and question.get("request_id") in request_ids
+            )
+        ]
+
+    @staticmethod
+    def _record_hitl_cleanup_failed_refs(
+        state: OrchestrationRunState,
+        *,
+        request_ids: list[str],
+        pending_request_ids: set[str] | None = None,
+        source: str,
+        prompt_by_request_id: Mapping[str, str | None] | None = None,
+        extra_by_request_id: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        if not request_ids:
+            return
+        failed_at = utcnow().isoformat()
+        existing_by_request_id = {
+            question.get("request_id"): question
+            for question in state.open_questions
+            if isinstance(question, Mapping)
+            and isinstance(question.get("request_id"), str)
+        }
+        pending_request_ids = pending_request_ids or set()
+        for request_id in request_ids:
+            if (
+                request_id in pending_request_ids
+                and request_id not in state.pending_hitl_request_ids
+            ):
+                state.pending_hitl_request_ids.append(request_id)
+            question = existing_by_request_id.get(request_id)
+            if question is None:
+                question = {
+                    "request_id": request_id,
+                    "source": source,
+                    "created_at": failed_at,
+                }
+                state.open_questions.append(question)
+            question["status"] = "cleanup_failed"
+            question["cleanup_failed"] = True
+            question["cleanup_failed_at"] = failed_at
+            # This is an operational recovery breadcrumb. It is intentionally
+            # not treated as an answerable question by _has_open_pending_hitl.
+            if prompt_by_request_id is not None:
+                prompt = prompt_by_request_id.get(request_id)
+                if isinstance(prompt, str) and prompt:
+                    question["prompt"] = prompt
+            if extra_by_request_id is not None:
+                extra = extra_by_request_id.get(request_id)
+                if isinstance(extra, Mapping):
+                    question.update(dict(extra))
+
+    @classmethod
+    def _mark_failed_hitl_cleanup_state(
+        cls,
+        state: OrchestrationRunState,
+        *,
+        created_request_ids: list[str],
+        failed_cancel_request_ids: list[str],
+        failed_delete_message_ids: list[str] | None = None,
+        source: str,
+        prompt_by_request_id: Mapping[str, str | None] | None = None,
+        extra_by_request_id: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        failed_cancel_set = set(failed_cancel_request_ids)
+        removable_request_ids = set(created_request_ids) - failed_cancel_set
+        cls._remove_hitl_request_refs(state, removable_request_ids)
+        cleanup_extra_by_request_id = {
+            request_id: dict(extra)
+            for request_id, extra in (extra_by_request_id or {}).items()
+        }
+        failed_ref_ids = list(failed_cancel_request_ids)
+        for message_id in failed_delete_message_ids or []:
+            request_id = next(
+                (
+                    candidate_request_id
+                    for candidate_request_id, extra in cleanup_extra_by_request_id.items()
+                    if extra.get("display_message_id") == message_id
+                ),
+                (
+                    message_id.removesuffix(":message")
+                    if message_id.endswith(":message")
+                    else message_id
+                ),
+            )
+            if request_id not in failed_ref_ids:
+                failed_ref_ids.append(request_id)
+            cleanup_extra = cleanup_extra_by_request_id.setdefault(request_id, {})
+            cleanup_extra.setdefault("display_message_id", message_id)
+            failed_message_ids = cleanup_extra.setdefault(
+                "cleanup_failed_message_ids", []
+            )
+            if message_id not in failed_message_ids:
+                failed_message_ids.append(message_id)
+        cls._record_hitl_cleanup_failed_refs(
+            state,
+            request_ids=failed_ref_ids,
+            pending_request_ids=failed_cancel_set,
+            source=source,
+            prompt_by_request_id=prompt_by_request_id,
+            extra_by_request_id=cleanup_extra_by_request_id,
+        )
+
     def _clear_stale_pending_hitl_request_ids(
         self,
         state: OrchestrationRunState,
     ) -> None:
         if not state.pending_hitl_request_ids:
             return
-        open_request_ids = {
+        retained_request_ids = {
             question.get("request_id")
             for question in state.open_questions
             if isinstance(question, Mapping)
-            and question.get("status") == "open"
+            and question.get("status") in {"open", "creating", "cleanup_failed"}
             and isinstance(question.get("request_id"), str)
         }
         state.pending_hitl_request_ids = [
             request_id
             for request_id in state.pending_hitl_request_ids
-            if request_id in open_request_ids
+            if request_id in retained_request_ids
         ]
 
     # ------------------------------------------------------------------
