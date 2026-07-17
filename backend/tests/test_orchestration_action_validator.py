@@ -183,6 +183,32 @@ def test_multi_target_delegate_without_parallel_group_is_rejected():
     assert exc_info.value.code == "parallel_dependency_unspecified"
 
 
+@pytest.mark.parametrize("parallel_group", ["", "  "])
+def test_multi_target_delegate_with_blank_parallel_group_is_rejected(
+    parallel_group,
+):
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Summarize section A.",
+                parallel_group=parallel_group,
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Summarize section B.",
+                parallel_group=parallel_group,
+            ),
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        _validate(action, candidate_agent_ids=["agent-1", "agent-2"])
+
+    assert exc_info.value.code == "parallel_dependency_unspecified"
+
+
 def test_multi_target_delegate_with_shared_parallel_group_is_allowed():
     action = _action(
         PlannerActionType.DELEGATE,

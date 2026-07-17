@@ -136,7 +136,10 @@ def _validate_delegate(
         )
     if len(action.targets) > 1:
         parallel_groups = {target.parallel_group for target in action.targets}
-        has_single_group = len(parallel_groups) == 1 and None not in parallel_groups
+        has_single_group = len(parallel_groups) == 1 and all(
+            isinstance(group, str) and bool(group.strip())
+            for group in parallel_groups
+        )
         has_intra_action_dependency = any(
             target.depends_on for target in action.targets
         )
