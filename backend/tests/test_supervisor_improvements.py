@@ -195,6 +195,11 @@ def _make_executor() -> SupervisorExecutor:
                             agent_id=target.agent_id,
                             agent_name=target.agent_name,
                             task=target.task,
+                            depends_on=list(target.depends_on),
+                            parallel_group=target.parallel_group,
+                            required_resource_refs=list(
+                                target.required_resource_refs
+                            ),
                         )
                         for target in action.targets
                     ],
@@ -262,9 +267,24 @@ class TestSupervisorSSEStageNotifications:
                 action=ActionType.DELEGATE,
                 reasoning="delegate",
                 targets=[
-                    DelegateTarget(agent_id="a1", agent_name="Agent1", task="t1"),
-                    DelegateTarget(agent_id="a2", agent_name="Agent2", task="t2"),
-                    DelegateTarget(agent_id="a3", agent_name="Agent3", task="t3"),
+                    DelegateTarget(
+                        agent_id="a1",
+                        agent_name="Agent1",
+                        task="t1",
+                        parallel_group="fanout-1",
+                    ),
+                    DelegateTarget(
+                        agent_id="a2",
+                        agent_name="Agent2",
+                        task="t2",
+                        parallel_group="fanout-1",
+                    ),
+                    DelegateTarget(
+                        agent_id="a3",
+                        agent_name="Agent3",
+                        task="t3",
+                        parallel_group="fanout-1",
+                    ),
                 ],
             ),
             SupervisorAction(action=ActionType.DONE, reasoning="done"),

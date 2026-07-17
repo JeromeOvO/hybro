@@ -168,6 +168,65 @@ def test_delegate_rejects_empty_targets():
         _validate(action)
 
 
+def test_multi_target_delegate_without_parallel_group_is_rejected():
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            _target(agent_id="agent-1"),
+            _target(agent_id="agent-2"),
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        _validate(action, candidate_agent_ids=["agent-1", "agent-2"])
+
+    assert exc_info.value.code == "parallel_dependency_unspecified"
+
+
+def test_multi_target_delegate_with_shared_parallel_group_is_allowed():
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Summarize section A.",
+                parallel_group="fanout-1",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Summarize section B.",
+                parallel_group="fanout-1",
+            ),
+        ],
+    )
+
+    assert _validate(action, candidate_agent_ids=["agent-1", "agent-2"]) is action
+
+
+def test_multi_target_delegate_with_intra_action_dependency_is_rejected():
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce the upstream artifact.",
+                parallel_group="fanout-1",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Use the upstream artifact.",
+                parallel_group="fanout-1",
+                depends_on=["agent-1"],
+            ),
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        _validate(action, candidate_agent_ids=["agent-1", "agent-2"])
+
+    assert exc_info.value.code == "parallel_dependency_unspecified"
+
+
 def test_delegate_rejects_empty_target_task():
     action = _action(
         PlannerActionType.DELEGATE,
@@ -357,9 +416,11 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     class FakeSupervisorService:
         def __init__(self):
             self.schema = None
+            self.system_prompt = None
 
         async def call_planner_json(self, *, system_prompt, user_prompt, schema=None):
             self.schema = schema
+            self.system_prompt = system_prompt
             return {
                 "action": "delegate",
                 "reasoning": "Use selected agent.",
@@ -397,6 +458,14 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     expected_outputs_schema = target_schema["properties"]["expected_outputs"]
     assert expected_outputs_schema["items"]["type"] == "object"
     assert "kind" in expected_outputs_schema["items"]["required"]
+    dependency_fields = {
+        "parallel_group",
+        "depends_on",
+        "required_resource_refs",
+    }
+    assert dependency_fields <= target_schema["properties"].keys()
+    assert dependency_fields <= set(target_schema["required"])
+    assert "shared non-null parallel_group" in supervisor_service.system_prompt
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():

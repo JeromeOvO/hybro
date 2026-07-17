@@ -43,6 +43,15 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "agent_id": {"type": "string"},
                     "agent_name": {"type": ["string", "null"]},
                     "task": {"type": "string"},
+                    "parallel_group": {"type": ["string", "null"]},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "required_resource_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "context_refs": {
                         "type": "array",
                         "items": {"$ref": "#/$defs/dispatch_ref"},
@@ -73,6 +82,9 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "agent_id",
                     "agent_name",
                     "task",
+                    "parallel_group",
+                    "depends_on",
+                    "required_resource_refs",
                     "context_refs",
                     "artifact_refs",
                     "attachment_refs",
@@ -249,6 +261,12 @@ class RoomSupervisorPlannerAdapter:
             "attachment_policy; supervisor dispatch always uses "
             "explicit_refs_only. expected_outputs must be an array of objects "
             "with kind, required, and description; do not use plain strings.\n\n"
+            "Every delegate target must include parallel_group, depends_on, "
+            "and required_resource_refs. For a single target, parallel_group may "
+            "be null. For multiple targets, use one shared non-null parallel_group "
+            "and leave depends_on empty because all targets must be independent. "
+            "Use required_resource_refs for resource IDs that must be available "
+            "before dispatch.\n\n"
             "Valid action values are delegate, synthesize, complete, ask_user, "
             "fail, plus legacy aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."

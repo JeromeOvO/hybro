@@ -91,6 +91,9 @@ class DelegateTarget(BaseModel):
     agent_id: str
     agent_name: str
     task: str
+    depends_on: list[str] = Field(default_factory=list)
+    parallel_group: str | None = None
+    required_resource_refs: list[str] = Field(default_factory=list)
     context_refs: list[DispatchContentRef] = Field(default_factory=list)
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)

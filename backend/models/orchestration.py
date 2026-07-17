@@ -106,6 +106,9 @@ class PlannedDelegateTarget(BaseModel):
     agent_id: str
     task: str
     agent_name: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    parallel_group: str | None = None
+    required_resource_refs: list[str] = Field(default_factory=list)
     context_refs: list[DispatchContentRef] = Field(default_factory=list)
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
@@ -221,6 +224,9 @@ class DispatchIntent(BaseModel):
     task: str
     task_hash: str
     status: str = "planned"
+    depends_on: list[str] = Field(default_factory=list)
+    parallel_group: str | None = None
+    required_resource_refs: list[str] = Field(default_factory=list)
     context_refs: list[DispatchContentRef] = Field(default_factory=list)
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
