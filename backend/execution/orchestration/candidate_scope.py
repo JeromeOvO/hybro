@@ -275,37 +275,73 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
         agent_id = _optional_str(_first_mapping_value(raw_item, "agent_id", "id"))
         if agent_id is None:
             return None
+        agent_card = _first_mapping_value(raw_item, "agent_card")
+        name = _optional_str(_first_mapping_value(raw_item, "name", "agent_name"))
+        role = _optional_str(_first_mapping_value(raw_item, "role"))
+        capability_summary = _capability_summary_from_mapping(raw_item)
+        if agent_card is not None:
+            name = name or _optional_str(_first_card_value(agent_card, "name", "agent_name"))
+            role = role or _optional_str(_first_card_value(agent_card, "role"))
+            if not capability_summary:
+                card_capabilities = _skill_list(_first_card_value(agent_card, "skills"))
+                if card_capabilities:
+                    capability_summary = ", ".join(card_capabilities)
+                else:
+                    capability_summary = _optional_str(
+                        _first_card_value(agent_card, "capability_summary")
+                    ) or _optional_str(_first_card_value(agent_card, "description"))
+            input_modes = sorted(agent_input_modes(agent_card))
+            output_modes = _string_list(
+                _first_card_value(
+                    agent_card, "default_output_modes", "defaultOutputModes"
+                )
+            )
+            supports_file_upload = agent_supports_any_file(agent_card)
+        else:
+            input_modes = ["text"]
+            output_modes = []
+            supports_file_upload = False
+        direct_input_modes = _candidate_modes_from_mapping(
+            raw_item,
+            "input_modes",
+            "default_input_modes",
+            "defaultInputModes",
+            default=[],
+        )
+        if direct_input_modes:
+            input_modes = direct_input_modes
+        direct_output_modes = _candidate_modes_from_mapping(
+            raw_item,
+            "output_modes",
+            "default_output_modes",
+            "defaultOutputModes",
+            default=[],
+        )
+        if direct_output_modes:
+            output_modes = direct_output_modes
+        direct_supports_file_upload = _first_mapping_value(
+            raw_item,
+            "supports_file_upload",
+            "supportsFileUpload",
+        )
+        if direct_supports_file_upload is not None:
+            supports_file_upload = bool(direct_supports_file_upload)
+        capabilities = _string_list(
+            _first_mapping_value(raw_item, "capabilities", "skills")
+        )
+        if not capabilities and agent_card is not None:
+            capabilities = _skill_list(_first_card_value(agent_card, "skills"))
         return CandidateAgentSnapshot(
             agent_id=agent_id,
-            name=_optional_str(_first_mapping_value(raw_item, "name", "agent_name")),
-            role=_optional_str(_first_mapping_value(raw_item, "role")),
-            capability_summary=_capability_summary_from_mapping(raw_item),
+            name=name,
+            role=role,
+            capability_summary=capability_summary,
             status=_status_from_mapping(raw_item),
             source=_optional_str(_first_mapping_value(raw_item, "source")),
-            capabilities=_string_list(
-                _first_mapping_value(raw_item, "capabilities", "skills")
-            ),
-            input_modes=_candidate_modes_from_mapping(
-                raw_item,
-                "input_modes",
-                "default_input_modes",
-                "defaultInputModes",
-                default=["text"],
-            ),
-            output_modes=_candidate_modes_from_mapping(
-                raw_item,
-                "output_modes",
-                "default_output_modes",
-                "defaultOutputModes",
-                default=[],
-            ),
-            supports_file_upload=bool(
-                _first_mapping_value(
-                    raw_item,
-                    "supports_file_upload",
-                    "supportsFileUpload",
-                )
-            ),
+            capabilities=capabilities,
+            input_modes=input_modes,
+            output_modes=output_modes,
+            supports_file_upload=supports_file_upload,
             success_rate=_optional_float(
                 _first_mapping_value(raw_item, "success_rate")
             ),
@@ -320,19 +356,19 @@ def _candidate_agent_snapshot(raw_item: Any) -> CandidateAgentSnapshot | None:
     role = _optional_str(_first_attr_value(raw_item, "role"))
     capability_summary = _capability_summary_from_object(raw_item)
     if agent_card is not None:
-        name = name or _optional_str(getattr(agent_card, "name", None))
-        role = role or _optional_str(getattr(agent_card, "role", None))
+        name = name or _optional_str(_first_card_value(agent_card, "name", "agent_name"))
+        role = role or _optional_str(_first_card_value(agent_card, "role"))
         if not capability_summary:
-            card_capabilities = _skill_list(_first_attr_value(agent_card, "skills"))
+            card_capabilities = _skill_list(_first_card_value(agent_card, "skills"))
             if card_capabilities:
                 capability_summary = ", ".join(card_capabilities)
             else:
                 capability_summary = _optional_str(
-                    getattr(agent_card, "capability_summary", None)
-                ) or _optional_str(getattr(agent_card, "description", None))
+                    _first_card_value(agent_card, "capability_summary")
+                ) or _optional_str(_first_card_value(agent_card, "description"))
         input_modes = sorted(agent_input_modes(agent_card))
         output_modes = _string_list(
-            _first_attr_value(agent_card, "default_output_modes", "defaultOutputModes")
+            _first_card_value(agent_card, "default_output_modes", "defaultOutputModes")
         )
         supports_file_upload = agent_supports_any_file(agent_card)
     else:
@@ -534,3 +570,9 @@ def _first_attr_value(value: Any, *attrs: str) -> Any | None:
         if hasattr(value, attr):
             return getattr(value, attr)
     return None
+
+
+def _first_card_value(card: Any, *keys: str) -> Any | None:
+    if isinstance(card, Mapping):
+        return _first_mapping_value(card, *keys)
+    return _first_attr_value(card, *keys)
