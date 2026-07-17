@@ -1412,16 +1412,6 @@ class SupervisorExecutor:
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details=f"Delegating to {len(action.targets)} agent(s)...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
             step_number=step_number,
@@ -1486,16 +1476,6 @@ class SupervisorExecutor:
         )
         entry.results = results
         entry.completed_at = utcnow()
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details="Evaluating agent results...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
 
         for result in results:
             if result.status == StepStatus.SUCCESS and result.success:
@@ -3459,16 +3439,6 @@ class SupervisorExecutor:
         token: CancellationToken | None,
     ) -> SupervisorRunResult:
         trajectory = self._compat_trajectory_from_state(state)
-        try:
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.PROCESSING,
-                message_id=user_message_id,
-                lifecycle_message_id=user_message_id,
-                details="Synthesizing responses...",
-            )
-        except Exception:
-            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
             action=self._v2_supervisor_action(planner_action, []),
