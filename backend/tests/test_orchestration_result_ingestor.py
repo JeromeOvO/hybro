@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
+from execution.orchestration.failure_classifier import classify_agent_failure
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
     AgentResultRead,
@@ -1081,6 +1082,148 @@ def test_ingest_attachment_free_retry_resolves_only_related_open_failure():
     assert second_failure.dispatch_intent_id == "intent-2"
     assert second_failure.status == "open"
     assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_ingest_cross_agent_retry_resolves_unique_lineage_failure():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+        ]
+    )
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent rate limit exceeded.",
+            status_message="rate_limited",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-2",
+            status="completed",
+            text="Recovered with alternate underwriter.",
+        ),
+    )
+
+    assert recovered.open_failures[0].status == "resolved"
+    assert recovered.open_failures[0].resolved_by_agent_message_id == "agent-msg-2"
+
+
+def test_ingest_unrelated_cross_agent_success_keeps_failure_open():
+    ingestor = AgentResultIngestor()
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Underwrite submission A",
+                task_hash="hash-a",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-a",
+                    }
+                ],
+            ),
+            DispatchIntent(
+                step_id="step-2",
+                step_target_id="step-2:target-1",
+                dispatch_intent_id="intent-2",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Underwrite submission B",
+                task_hash="hash-b",
+                artifact_refs=[
+                    {
+                        "kind": "artifact",
+                        "ref_id": "broker-msg:artifact_id:submission-b",
+                    }
+                ],
+            ),
+        ]
+    )
+    failed = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="failed",
+            error="Agent rate limit exceeded.",
+            status_message="rate_limited",
+        ),
+    )
+
+    recovered = ingestor.ingest(
+        failed,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-2",
+            status="completed",
+            text="Completed unrelated submission B.",
+        ),
+    )
+
+    assert recovered.open_failures[0].status == "open"
+    assert recovered.open_failures[0].resolved_by_agent_message_id is None
+
+
+def test_failure_hints_only_advertise_supported_recovery_paths():
+    rate_limited = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="agent-msg-1",
+        error="Agent rate limit exceeded.",
+        status_message="rate_limited",
+    )
+    generic = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="agent-msg-2",
+        error="Agent execution failed.",
+        status_message=None,
+    )
+
+    assert rate_limited is not None
+    assert rate_limited.recovery_hints == ["retry_different_agent"]
+    assert generic is not None
+    assert generic.recovery_hints == ["retry_with_refined_task"]
 
 
 def test_ingest_unrelated_attachment_free_success_does_not_resolve_lone_attachment_failure():

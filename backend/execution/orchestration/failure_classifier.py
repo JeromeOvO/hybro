@@ -73,12 +73,12 @@ def _recovery_hints(code: str) -> list[str]:
     if code == "agent_does_not_accept_file_type":
         return ["retry_without_unsupported_attachments"]
     if code == "rate_limited":
-        return ["retry_different_agent", "ask_user"]
+        return ["retry_different_agent"]
     if code == "agent_unavailable":
-        return ["retry_different_agent", "ask_user"]
+        return ["retry_different_agent"]
     if code == "timeout":
         return ["retry_same_agent_with_smaller_context", "retry_different_agent"]
-    return ["retry_with_refined_task", "ask_user"]
+    return ["retry_with_refined_task"]
 
 
 def _fingerprint_message(message: str) -> str:

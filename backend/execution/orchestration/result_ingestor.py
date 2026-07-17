@@ -445,21 +445,21 @@ def _matching_open_failures_for_completed_result(
     matched_intent: DispatchIntent | None,
     dispatch_intents: list[DispatchIntent],
 ) -> list[OpenFailureRecord]:
-    open_failures_for_agent = [
+    unresolved_recoverable_failures = [
         failure
         for failure in open_failures
-        if failure.status in {"open", "abandoned"} and failure.agent_id == result.agent_id
+        if failure.status in {"open", "abandoned"} and failure.recoverable
     ]
     if matched_intent is not None:
         same_intent_failures = [
             failure
-            for failure in open_failures_for_agent
+            for failure in unresolved_recoverable_failures
             if failure.dispatch_intent_id == matched_intent.dispatch_intent_id
         ]
         if same_intent_failures:
             return same_intent_failures
         retried_failure = _related_open_failure_for_dispatch_intent(
-            open_failures_for_agent,
+            unresolved_recoverable_failures,
             retry_intent=matched_intent,
             dispatch_intents=dispatch_intents,
         )
@@ -467,7 +467,7 @@ def _matching_open_failures_for_completed_result(
             return [retried_failure]
     return [
         failure
-        for failure in open_failures_for_agent
+        for failure in unresolved_recoverable_failures
         if failure.agent_message_id == result.agent_message_id
     ]
 
@@ -517,8 +517,6 @@ def _related_open_failure_for_dispatch_intent(
         if open_failure.status not in allowed_statuses:
             continue
         if not open_failure.recoverable:
-            continue
-        if open_failure.agent_id != retry_intent.agent_id:
             continue
         if error_code is not None and open_failure.error_code != error_code:
             continue
