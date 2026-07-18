@@ -148,8 +148,6 @@ def validate_hitl_answered_blockers(
     answer_text = str(answer_fact.get("text") or "").strip()
     if not answer_text:
         return
-    if _answer_is_insufficient(answer_text):
-        return
     answer_fact_id = str(answer_fact.get("fact_id") or "").strip()
     for question in state.open_questions:
         if not _is_resolved_hitl_question(question, resolved_request_ids):
@@ -181,11 +179,16 @@ def _resolve_answered_question_blockers(
     answer_fact_id: str,
 ) -> None:
     blocker_keys = question.get("blocker_keys") or []
+    allow_value_only = len(blocker_keys) == 1
     for blocker in state.blockers:
         if blocker.key not in blocker_keys or blocker.status != "open":
             continue
-        obligations = _question_obligations(question, blocker.key)
-        if not _answer_satisfies_obligations(answer_text, obligations):
+        obligations = _question_obligations(state, question, blocker)
+        if not _answer_satisfies_obligations(
+            answer_text,
+            obligations,
+            allow_value_only=allow_value_only,
+        ):
             continue
         blocker.status = "resolved"
         if answer_fact_id and answer_fact_id not in blocker.evidence_refs:
@@ -193,44 +196,109 @@ def _resolve_answered_question_blockers(
 
 
 def _question_obligations(
+    state: OrchestrationRunState,
     question: Mapping[str, object],
-    blocker_key: str,
+    blocker: BlockerRecord,
 ) -> object:
     blocker_obligations = question.get("blocker_obligations")
-    if blocker_obligations is None:
-        return question.get("required_obligation_keys") or []
-    if isinstance(blocker_obligations, Mapping):
-        return blocker_obligations.get(blocker_key)
-    return None
+    if isinstance(blocker_obligations, Mapping) and blocker_obligations:
+        return blocker_obligations.get(blocker.key)
+    shared_obligations = question.get("required_obligation_keys")
+    if isinstance(shared_obligations, list) and shared_obligations:
+        return shared_obligations
+    return _required_obligations_for_blocker(state, blocker)
 
 
-def _answer_satisfies_obligations(answer_text: str, obligations: object) -> bool:
-    if not isinstance(obligations, list) or not obligations:
+def _required_obligations_for_blocker(
+    state: OrchestrationRunState,
+    blocker: BlockerRecord,
+) -> list[str]:
+    blocked_outputs = set(blocker.blocked_output_keys)
+    for outcome in reversed(state.delegation_outcomes):
+        obligations = [
+            obligation
+            for obligation in outcome.remaining_required_obligations
+            if not blocked_outputs
+            or obligation.split(":", 1)[0] in blocked_outputs
+        ]
+        if obligations:
+            return sorted(dict.fromkeys(obligations))
+    return []
+
+
+def _answer_satisfies_obligations(
+    answer_text: str,
+    obligations: object,
+    *,
+    allow_value_only: bool,
+) -> bool:
+    if obligations is None or not isinstance(obligations, list):
         return False
-    if _answer_is_insufficient(answer_text):
-        return False
-    normalized = _normalize_answer_text(answer_text)
+    if not obligations:
+        return not _answer_is_insufficient(answer_text)
+    answer_segments = _answer_segments(answer_text)
     for obligation in obligations:
         if not isinstance(obligation, str) or ":" not in obligation:
             return False
-        field_key = obligation.split(":", 1)[1]
-        if field_key == "$present":
-            continue
+        output_key, field_key = obligation.split(":", 1)
+        match_key = output_key if field_key == "$present" else field_key
         field_tokens = {
             token
-            for token in field_key.replace(".", "_").split("_")
+            for token in match_key.replace(".", "_").split("_")
             if token and token not in {"requested"}
         }
-        if field_tokens and not field_tokens <= normalized:
+        matching_segments = [
+            segment
+            for segment in answer_segments
+            if field_tokens <= _normalize_answer_text(segment)
+        ]
+        if not matching_segments and allow_value_only:
+            matching_segments = [answer_text]
+        if not matching_segments:
             return False
-        if field_tokens and not _answer_has_field_value(normalized, field_tokens):
+        if not any(
+            not _answer_is_insufficient(segment)
+            and _answer_has_field_value(
+                _normalize_answer_text(segment),
+                field_tokens,
+            )
+            for segment in matching_segments
+        ):
             return False
     return True
 
 
 def _answer_is_insufficient(answer_text: str) -> bool:
-    normalized_answer = " ".join(answer_text.lower().split())
-    return any(marker in normalized_answer for marker in _INSUFFICIENT_ANSWER_MARKERS)
+    answer_tokens = re.findall(r"[a-z0-9]+", answer_text.lower())
+    return any(
+        _contains_token_sequence(
+            answer_tokens,
+            re.findall(r"[a-z0-9]+", marker.lower()),
+        )
+        for marker in _INSUFFICIENT_ANSWER_MARKERS
+    )
+
+
+def _contains_token_sequence(tokens: list[str], sequence: list[str]) -> bool:
+    if not sequence:
+        return False
+    width = len(sequence)
+    return any(
+        tokens[index : index + width] == sequence
+        for index in range(len(tokens) - width + 1)
+    )
+
+
+def _answer_segments(answer_text: str) -> list[str]:
+    return [
+        segment.strip()
+        for segment in re.split(
+            r"(?:[.;\n]+|\b(?:and|but)\b)",
+            answer_text,
+            flags=re.IGNORECASE,
+        )
+        if segment.strip()
+    ]
 
 
 def _answer_has_field_value(
