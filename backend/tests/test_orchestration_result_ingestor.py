@@ -161,6 +161,24 @@ def test_ingest_preserves_a2a_routing_metadata():
     assert updated.agent_outputs[0].status_message == "Awaiting confirmation"
 
 
+def test_ingest_preserves_structured_interactive_metadata():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="awaiting_input",
+        interactive_state="auth-required",
+        requires_auth=True,
+        requires_policy=False,
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    output = updated.agent_outputs[0]
+    assert output.interactive_state == "auth-required"
+    assert output.requires_auth is True
+    assert output.requires_policy is False
+
+
 def test_reingesting_updates_a2a_routing_metadata():
     initial = AgentResultRead(
         agent_message_id="agent-msg-1",
@@ -929,6 +947,32 @@ def test_ingest_later_success_resolves_only_matching_open_failure():
     assert second_failure.dispatch_intent_id == "intent-2"
     assert second_failure.status == "open"
     assert second_failure.resolved_by_agent_message_id is None
+
+
+def test_input_required_result_creates_recoverable_open_failure():
+    state = _run_state()
+    ingestor = AgentResultIngestor()
+
+    updated = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="awaiting_input",
+            text=None,
+            status_message="Please provide the selected application text.",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+    )
+
+    assert updated.open_failures[0].error_code == "agent_input_required"
+    assert updated.open_failures[0].recoverable is True
+    assert updated.open_failures[0].recovery_hints == [
+        "retry_with_available_resource_refs",
+        "retry_after_resource_projection",
+        "ask_user_if_missing",
+    ]
 
 
 def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failures():

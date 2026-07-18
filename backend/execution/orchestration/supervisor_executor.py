@@ -207,6 +207,23 @@ class SupervisorExecutor:
         return RunStatus.FAILED
 
     @staticmethod
+    def _awaiting_result_requires_hitl(result: StepResult) -> bool:
+        interactive_state = (
+            (result.interactive_state or "").strip().lower().replace("_", "-")
+        )
+        if (
+            result.requires_auth
+            or result.requires_policy
+            or interactive_state in {"auth-required", "policy-required"}
+        ):
+            return True
+        return not (
+            interactive_state in {"", "input-required"}
+            and bool(result.a2a_task_id)
+            and bool(result.a2a_context_id)
+        )
+
+    @staticmethod
     def _state_run_result(
         *,
         status: RunStatus,
@@ -388,6 +405,9 @@ class SupervisorExecutor:
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
             status_message=output.status_message,
+            interactive_state=output.interactive_state,
+            requires_auth=output.requires_auth,
+            requires_policy=output.requires_policy,
         )
 
     @staticmethod
@@ -1550,6 +1570,10 @@ class SupervisorExecutor:
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
+        state = await self._supersede_unresolved_input_required_outputs(
+            state,
+            chosen_agent_ids={target.agent_id for target in action.targets},
+        )
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
             step_number=step_number,
@@ -1664,50 +1688,48 @@ class SupervisorExecutor:
             ]
 
         if awaiting:
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            hitl_required = [
+                result
+                for result in awaiting
+                if self._awaiting_result_requires_hitl(result)
+            ]
+            if hitl_required:
+                trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                )
+                state, awaiting_status = await self._run_agent_awaiting_input_action(
+                    state=state,
+                    results=results,
+                    awaiting=hitl_required,
+                    trajectory=trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                )
+                return state, awaiting_status
+
             state = await self._ingest_v2_results(
                 state,
                 results,
-                status=OrchestrationStatus.WAITING_AGENT,
-                advance_step=False,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=True,
             )
-            if paused:
-                saved = await self._save_interrupted_state(
-                    kind=InterruptKind.PUSH_NOTIFICATION,
-                    trajectory=trajectory,
-                    paused_results=paused,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                    request_user_id=request_user_id,
-                    message_text=message_text,
-                    agent_registry=agent_registry,
-                    room_config=room_config,
-                    conversation_context=conversation_context,
-                    quoted_text=quoted_text,
-                )
-                if not saved:
-                    trajectory.status = TrajectoryStatus.FAILED
-                    state = await self._mark_v2_terminal(
-                        state,
-                        OrchestrationStatus.FAILED,
-                        reason="failed to save paused v2 continuation",
-                    )
-                    return state, RunStatus.FAILED
-            state, awaiting_status = await self._run_agent_awaiting_input_action(
-                state=state,
-                results=results,
-                awaiting=awaiting,
-                trajectory=trajectory,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
+            logger.info(
+                "orchestration_input_required_recoverable run_id=%s "
+                "awaiting_count=%d",
+                state.run_id,
+                len(awaiting),
             )
-            return state, awaiting_status
+            return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2016,6 +2038,9 @@ class SupervisorExecutor:
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
             status_message=output.status_message,
+            interactive_state=output.interactive_state,
+            requires_auth=output.requires_auth,
+            requires_policy=output.requires_policy,
         )
 
     async def _v2_result_from_committed_agent_message(
@@ -2114,6 +2139,15 @@ class SupervisorExecutor:
             if is_success or is_input_required
             else "Agent task failed",
             status_message=response_status_message,
+            interactive_state=last_state if is_input_required else None,
+            requires_auth=last_state == "auth-required",
+            requires_policy=(
+                last_state == "policy-required"
+                or bool(
+                    task_metadata_dict.get("requires_policy")
+                    or task_metadata_dict.get("policy_required")
+                )
+            ),
             a2a_task_id=_field_from_task(task_metadata_dict, "hitl_a2a_task_id"),
             a2a_context_id=_field_from_task(task_metadata_dict, "hitl_a2a_context_id"),
             agent_message_id=intent.planned_agent_message_id,
@@ -2144,6 +2178,157 @@ class SupervisorExecutor:
             results=results,
             started_at=utcnow(),
             completed_at=utcnow(),
+        )
+
+    async def _continue_agent_task_with_resolved_refs(
+        self,
+        *,
+        awaiting_output: AgentOutputRecord,
+        target: DelegateTarget,
+        resolved_payload: ResolvedDispatchPayload,
+    ) -> StepResult | None:
+        if self.hitl_coordinator is None:
+            return None
+        if not awaiting_output.a2a_task_id or not awaiting_output.a2a_context_id:
+            return None
+        resource_text = "\n\n".join(
+            payload.text
+            for payload in resolved_payload.resource_payloads
+            if isinstance(payload.text, str) and payload.text.strip()
+        ).strip()
+        if not resource_text:
+            return None
+        reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
+            message_id=awaiting_output.agent_message_id,
+            task_id=awaiting_output.a2a_task_id,
+            context_id=awaiting_output.a2a_context_id,
+            user_input=resource_text,
+        )
+        await self._record_a2a_task_recovery(
+            awaiting_output=awaiting_output,
+            resolved_payload=resolved_payload,
+        )
+        task_state = reply_result.get("task_state") or "completed"
+        response_text = reply_result.get("response_text") or ""
+        if task_state in {"input-required", "auth-required"}:
+            return StepResult(
+                step_number=0,
+                agent_id=awaiting_output.agent_id,
+                agent_name=target.agent_name,
+                task=target.task,
+                response_text="",
+                success=True,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id=awaiting_output.agent_message_id,
+                paused_message_id=awaiting_output.agent_message_id,
+                a2a_task_id=awaiting_output.a2a_task_id,
+                a2a_context_id=awaiting_output.a2a_context_id,
+                status_message=response_text,
+                interactive_state=task_state,
+                requires_auth=task_state == "auth-required",
+            )
+        return StepResult(
+            step_number=0,
+            agent_id=awaiting_output.agent_id,
+            agent_name=target.agent_name,
+            task=target.task,
+            response_text=response_text,
+            success=task_state not in {"failed", "canceled", "rejected"},
+            status=(
+                StepStatus.SUCCESS
+                if task_state not in {"failed", "canceled", "rejected"}
+                else StepStatus.FAILED
+            ),
+            agent_message_id=awaiting_output.agent_message_id,
+        )
+
+    @staticmethod
+    def _is_plain_a2a_input_output(output: AgentOutputRecord) -> bool:
+        interactive_state = (output.interactive_state or "").replace("_", "-")
+        return (
+            output.status == StepStatus.AWAITING_INPUT.value
+            and bool(output.a2a_task_id)
+            and bool(output.a2a_context_id)
+            and not output.requires_auth
+            and not output.requires_policy
+            and interactive_state not in {"auth-required", "policy-required"}
+        )
+
+    async def _record_a2a_task_recovery(
+        self,
+        *,
+        awaiting_output: AgentOutputRecord,
+        resolved_payload: ResolvedDispatchPayload,
+    ) -> None:
+        try:
+            message = await self.message_reader.get_room_agent_message_by_message_id(
+                awaiting_output.agent_message_id
+            )
+            if message is None:
+                return
+            if not isinstance(message.extend_info, dict):
+                message.extend_info = {}
+            message.extend_info["orchestration_recovery"] = {
+                "type": "continued_a2a_task",
+                "a2a_task_id": awaiting_output.a2a_task_id,
+                "a2a_context_id": awaiting_output.a2a_context_id,
+                "selected_context_refs": resolved_payload.selected_context_refs,
+                "selected_artifact_refs": resolved_payload.selected_artifact_refs,
+                "selected_attachment_refs": resolved_payload.selected_attachment_refs,
+            }
+            await self.message_writer.update_room_agent_message_by_message_id(
+                awaiting_output.agent_message_id,
+                message,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record A2A task recovery lineage",
+                extra={"agent_message_id": awaiting_output.agent_message_id},
+                exc_info=True,
+            )
+
+    async def _supersede_unresolved_input_required_outputs(
+        self,
+        state: OrchestrationRunState,
+        *,
+        chosen_agent_ids: set[str],
+    ) -> OrchestrationRunState:
+        def mutate(updated: OrchestrationRunState) -> None:
+            superseded_message_ids = {
+                output.agent_message_id
+                for output in updated.agent_outputs
+                if (
+                    output.agent_id not in chosen_agent_ids
+                    and self._is_plain_a2a_input_output(output)
+                    and any(
+                        failure.status == "open"
+                        and failure.recoverable
+                        and failure.error_code == "agent_input_required"
+                        and failure.agent_message_id == output.agent_message_id
+                        for failure in updated.open_failures
+                    )
+                )
+            }
+            for output in updated.agent_outputs:
+                if output.agent_message_id in superseded_message_ids:
+                    output.status = "abandoned"
+            for failure in updated.open_failures:
+                if (
+                    failure.agent_message_id in superseded_message_ids
+                    and failure.error_code == "agent_input_required"
+                    and failure.status == "open"
+                ):
+                    failure.status = "abandoned"
+                    failure.updated_at = utcnow()
+
+        return await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={
+                "reason": "input_required_superseded",
+                "chosen_agent_ids": sorted(chosen_agent_ids),
+            },
+            mutate=mutate,
         )
 
     async def _run_agent_awaiting_input_action(
@@ -3021,6 +3206,9 @@ class SupervisorExecutor:
                 a2a_task_id=output.a2a_task_id,
                 a2a_context_id=output.a2a_context_id,
                 status_message=output.status_message,
+                interactive_state=output.interactive_state,
+                requires_auth=output.requires_auth,
+                requires_policy=output.requires_policy,
             )
         if not any(
             result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
@@ -3757,7 +3945,7 @@ class SupervisorExecutor:
         fallback_intents: list[DispatchIntent],
     ) -> DispatchIntent | None:
         if result.agent_message_id:
-            return next(
+            matched_message_intent = next(
                 (
                     intent
                     for intent in fallback_intents
@@ -3765,6 +3953,8 @@ class SupervisorExecutor:
                 ),
                 None,
             )
+            if matched_message_intent is not None:
+                return matched_message_intent
         return next(
             (
                 intent
@@ -3967,6 +4157,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     ),
                 )
 
@@ -4236,6 +4429,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     )
                     state.agent_outputs.append(output)
                     outputs_by_message_id[output_message_id] = output
@@ -5174,6 +5370,27 @@ class SupervisorExecutor:
                             status_message=exc.code,
                         )
 
+                awaiting_output = None
+                if run_state is not None and resolved_payload is not None:
+                    awaiting_output = next(
+                        (
+                            output
+                            for output in reversed(run_state.agent_outputs)
+                            if output.agent_id == target.agent_id
+                            and self._is_plain_a2a_input_output(output)
+                        ),
+                        None,
+                    )
+                if awaiting_output is not None:
+                    continued = await self._continue_agent_task_with_resolved_refs(
+                        awaiting_output=awaiting_output,
+                        target=target,
+                        resolved_payload=resolved_payload,
+                    )
+                    if continued is not None:
+                        continued.step_number = step_number
+                        return continued
+
                 dispatch_task = self._dispatch_task_with_ref_projection(
                     task=target.task,
                     target=target,
@@ -5319,6 +5536,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     )
 
                 if result.status == ProcessingStatus.SUCCESS and request_user_id and self.rate_limit_service:

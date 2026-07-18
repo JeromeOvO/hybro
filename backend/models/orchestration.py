@@ -352,6 +352,9 @@ class AgentOutputRecord(BaseModel):
     a2a_task_id: str | None = None
     a2a_context_id: str | None = None
     status_message: str | None = None
+    interactive_state: str | None = None
+    requires_auth: bool = False
+    requires_policy: bool = False
 
 
 class DelegationOutcomeRecord(BaseModel):
