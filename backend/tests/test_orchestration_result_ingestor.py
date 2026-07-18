@@ -13,6 +13,7 @@ from execution.orchestration.result_ingestor import (
 )
 from models.orchestration import (
     AgentOutputRecord,
+    BlockerRecord,
     DispatchIntent,
     OrchestrationRunState,
 )
@@ -303,6 +304,16 @@ def test_ingest_projects_text_into_deduplicated_fact():
 
     assert updated.facts == [
         {
+            "fact_id": "agent-msg-1:text_evidence",
+            "kind": "agent_text_evidence",
+            "semantic_key": "agent_text_evidence:agent-msg-1",
+            "value": "Carrier A can quote the risk.",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "evidence_refs": ["agent-msg-1", "agent-msg-1:text_or_status"],
+            "trusted_for_blocker_keys": False,
+        },
+        {
             "fact_id": "agent-msg-1:text",
             "source_agent_message_id": "agent-msg-1",
             "source_agent_id": "agent-1",
@@ -324,8 +335,31 @@ def test_reingesting_same_text_does_not_duplicate_fact():
     once = ingestor.ingest(_run_state(), result)
     twice = ingestor.ingest(once, result)
 
-    assert len(twice.facts) == 1
-    assert twice.facts[0]["fact_id"] == "agent-msg-1:text"
+    assert len(twice.facts) == 2
+    assert {fact["fact_id"] for fact in twice.facts} == {
+        "agent-msg-1:text",
+        "agent-msg-1:text_evidence",
+    }
+
+
+def test_ingest_preserves_untrusted_text_evidence_for_awaiting_input():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="awaiting_input",
+            status_message="Need the requested limit before continuing.",
+        ),
+    )
+
+    assert [fact["fact_id"] for fact in updated.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert updated.facts[0]["value"] == (
+        "Need the requested limit before continuing."
+    )
+    assert updated.facts[0]["trusted_for_blocker_keys"] is False
 
 
 def test_ingest_artifact_records_source_and_summary():
@@ -418,13 +452,24 @@ def test_reingesting_changed_text_updates_existing_fact():
     once = ingestor.ingest(_run_state(), first)
     twice = ingestor.ingest(once, changed)
 
-    assert len(twice.facts) == 1
-    assert twice.facts[0] == {
+    assert len(twice.facts) == 2
+    facts_by_id = {fact["fact_id"]: fact for fact in twice.facts}
+    assert facts_by_id["agent-msg-1:text"] == {
         "fact_id": "agent-msg-1:text",
         "source_agent_message_id": "agent-msg-1",
         "source_agent_id": "agent-2",
         "kind": "agent_text",
         "text": "Carrier B declined the risk.",
+    }
+    assert facts_by_id["agent-msg-1:text_evidence"] == {
+        "fact_id": "agent-msg-1:text_evidence",
+        "kind": "agent_text_evidence",
+        "semantic_key": "agent_text_evidence:agent-msg-1",
+        "value": "Carrier B declined the risk.",
+        "source_agent_message_id": "agent-msg-1",
+        "source_agent_id": "agent-2",
+        "evidence_refs": ["agent-msg-1", "agent-msg-1:text_or_status"],
+        "trusted_for_blocker_keys": False,
     }
 
 
@@ -706,7 +751,7 @@ def test_reingesting_artifacts_replaces_current_keys_and_removes_stale_records()
         for artifact in with_one.artifacts
     )
 
-def test_reingesting_failed_or_canceled_text_removes_existing_fact():
+def test_reingesting_failed_or_canceled_text_keeps_only_untrusted_evidence():
     ingestor = AgentResultIngestor()
     first = AgentResultRead(
         agent_message_id="agent-msg-1",
@@ -731,8 +776,16 @@ def test_reingesting_failed_or_canceled_text_removes_existing_fact():
     failed_update = ingestor.ingest(once, failed)
     canceled_update = ingestor.ingest(once, canceled)
 
-    assert failed_update.facts == []
-    assert canceled_update.facts == []
+    assert [fact["fact_id"] for fact in failed_update.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert failed_update.facts[0]["value"] == "Partial carrier response."
+    assert failed_update.facts[0]["trusted_for_blocker_keys"] is False
+    assert [fact["fact_id"] for fact in canceled_update.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert canceled_update.facts[0]["value"] == "Stopped before completion."
+    assert canceled_update.facts[0]["trusted_for_blocker_keys"] is False
 
 
 def test_ingest_artifact_summary_falls_back_to_description():
@@ -1547,3 +1600,155 @@ def test_ingest_replan_success_resolves_related_timeout_without_broad_same_agent
     assert first_failure.resolved_by_agent_message_id == "agent-msg-3"
     assert second_failure.dispatch_intent_id == "intent-2"
     assert second_failure.status == "open"
+
+
+def test_ingest_projects_agent_observation_unknowns_and_candidate_blockers():
+    state = _run_state()
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "client": {"name": "Example Inc", "industry": None},
+                                "missing_fields": ["client.industry"],
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    assert [item.key for item in updated.unknowns] == [
+        "agent_missing:agent-1:client.industry"
+    ]
+    assert [item.key for item in updated.blockers] == [
+        "agent_blocker:agent-1:client.industry"
+    ]
+    blocker = updated.blockers[0]
+    assert blocker.source == "agent"
+    assert blocker.claimed_user_only is False
+    assert blocker.validated_user_only is False
+    assert blocker.validation_status == "candidate"
+    assert updated.facts[0]["kind"] == "agent_observation"
+    assert updated.facts[0]["semantic_key"] == (
+        "agent_observation:agent-msg-1:submission:client.name"
+    )
+
+
+def test_ingest_ignores_optional_nulls_without_explicit_missing_signal():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "optional_note": None,
+                                "optional_endorsement": None,
+                                "optional_reference": None,
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    assert updated.facts == []
+    assert updated.unknowns == []
+    assert updated.blockers == []
+
+
+def test_ingest_sanitizes_external_blocker_validation_flags():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "artifact-1",
+                    "name": "submission",
+                    "blockers": [
+                        {
+                            "key": "external-blocker",
+                            "description": "Agent says the user must answer.",
+                            "blocked_output_keys": ["quote"],
+                            "source": "agent",
+                            "claimed_user_only": True,
+                            "validated_user_only": True,
+                            "validation_status": "validated",
+                        }
+                    ],
+                    "parts": [{"kind": "data", "data": {"value": 1}}],
+                }
+            ],
+        ),
+    )
+
+    external = next(item for item in updated.blockers if item.key == "external-blocker")
+    assert external.claimed_user_only is False
+    assert external.validated_user_only is False
+    assert external.validation_status == "candidate"
+    assert external.evidence_refs == ["agent-msg-1:artifact_id:artifact-1"]
+
+
+def test_ingest_does_not_downgrade_existing_validated_blocker_on_replay():
+    state = _run_state()
+    state.blockers = [
+        BlockerRecord(
+            key="agent_blocker:agent-1:client.industry",
+            description="Agent reported missing input: client.industry",
+            blocked_output_keys=["broker_submission"],
+            source="agent",
+            evidence_refs=["agent-msg-1:artifact_id:submission"],
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+            status="open",
+        )
+    ]
+
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {"missing_fields": ["client.industry"]},
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    blocker = updated.blockers[0]
+    assert blocker.validation_status == "validated"
+    assert blocker.validated_user_only is True
+    assert blocker.claimed_user_only is True
