@@ -1168,6 +1168,28 @@ def _validation_code(action, state):
     return exc_info.value.code
 
 
+def test_disabled_guardrails_skip_retry_policy_evaluation(monkeypatch):
+    action = _guardrail_action([_guardrail_target()])
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("disabled guardrails must not evaluate retry policy")
+
+    monkeypatch.setattr(
+        "execution.orchestration.action_validator.evaluate_retry",
+        fail_if_called,
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_guardrail_state(),
+            guardrails_enabled=False,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
 def test_duplicate_delegate_pair_rejected_before_intents_exist():
     targets = [
         _guardrail_target().model_copy(update={"parallel_group": "parallel-1"}),

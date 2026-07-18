@@ -125,7 +125,7 @@ class PlannerActionValidator:
         resource_fingerprints: Mapping[str, str],
         guardrails_enabled: bool,
     ) -> None:
-        if run_state is None:
+        if run_state is None or not guardrails_enabled:
             return
 
         target_fingerprints = [
@@ -155,8 +155,6 @@ class PlannerActionValidator:
                 )
             ],
         ]
-        if not guardrails_enabled:
-            return
         if code := next((code for code in decisions if code is not None), None):
             raise PlannerActionValidationError(
                 f"delegate action violates outcome policy: {code}",
