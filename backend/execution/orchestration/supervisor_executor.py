@@ -208,13 +208,20 @@ class SupervisorExecutor:
 
     @staticmethod
     def _awaiting_result_requires_hitl(result: StepResult) -> bool:
-        interactive_state = (result.interactive_state or "").strip().lower()
-        return result.requires_auth or result.requires_policy or interactive_state in {
-            "auth_required",
-            "auth-required",
-            "policy_required",
-            "policy-required",
-        }
+        interactive_state = (
+            (result.interactive_state or "").strip().lower().replace("_", "-")
+        )
+        if (
+            result.requires_auth
+            or result.requires_policy
+            or interactive_state in {"auth-required", "policy-required"}
+        ):
+            return True
+        return not (
+            interactive_state in {"", "input-required"}
+            and bool(result.a2a_task_id)
+            and bool(result.a2a_context_id)
+        )
 
     @staticmethod
     def _state_run_result(

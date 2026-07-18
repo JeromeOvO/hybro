@@ -7753,6 +7753,35 @@ def test_awaiting_result_requires_hitl_from_structured_metadata(
     assert SupervisorExecutor._awaiting_result_requires_hitl(result) is True
 
 
+def test_plain_a2a_input_required_is_recoverable_only_with_task_ownership():
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Handle the request",
+        response_text="",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        interactive_state="input-required",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
+    )
+
+    assert SupervisorExecutor._awaiting_result_requires_hitl(result) is False
+    assert (
+        SupervisorExecutor._awaiting_result_requires_hitl(
+            result.model_copy(update={"a2a_task_id": None})
+        )
+        is True
+    )
+    assert (
+        SupervisorExecutor._awaiting_result_requires_hitl(
+            result.model_copy(update={"interactive_state": None})
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_same_agent_retry_continues_existing_input_required_task():
     user_message = RoomUserMessage(
