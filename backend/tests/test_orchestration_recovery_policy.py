@@ -145,6 +145,72 @@ def test_rejected_delegate_falls_back_to_ask_user_for_validated_blocker():
     ]
 
 
+def test_rejected_delegate_maps_obligations_from_structured_blocker_fields():
+    state = _state()
+    state.delegation_outcomes[-1].remaining_required_obligations = [
+        "quote:industry",
+        "quote:requested_limit",
+    ]
+    state.blockers = [
+        BlockerRecord(
+            key="agent_blocker:agent-1:client.industry",
+            description="Need industry and requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        ),
+        BlockerRecord(
+            key="agent_blocker:agent-1:requested_coverage.limit",
+            description="Need industry and requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        ),
+    ]
+
+    action = action_for_rejected_delegate(
+        state,
+        error_code="delegate_blocked_pending_user",
+    )
+
+    assert action is not None
+    assert action.questions[0].blocker_obligations == {
+        "agent_blocker:agent-1:client.industry": ["quote:industry"],
+        "agent_blocker:agent-1:requested_coverage.limit": [
+            "quote:requested_limit"
+        ],
+    }
+
+
+def test_rejected_delegate_preserves_presence_only_obligation():
+    state = _state()
+    state.blockers = [
+        BlockerRecord(
+            key="agent_blocker:agent-1:quote",
+            description="Need the quote.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+
+    action = action_for_rejected_delegate(
+        state,
+        error_code="delegate_blocked_pending_user",
+    )
+
+    assert action is not None
+    assert action.questions[0].blocker_obligations == {
+        "agent_blocker:agent-1:quote": ["quote:$present"]
+    }
+
+
 def test_does_not_set_repair_lineage_for_failed_operational_retry():
     state = _state(status="failed")
     action = PlannerAction(

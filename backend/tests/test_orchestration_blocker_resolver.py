@@ -642,6 +642,95 @@ def test_resolves_only_addressed_blocker_for_multi_blocker_answer():
     assert state.blockers[1].status == "open"
 
 
+def _multi_blocker_answer_state() -> OrchestrationRunState:
+    return OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[
+            _validated_blocker("limit-blocker"),
+            _validated_blocker("industry-blocker"),
+        ],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["limit-blocker", "industry-blocker"],
+                "blocker_obligations": {
+                    "limit-blocker": ["quote:requested_limit"],
+                    "industry-blocker": ["quote:industry"],
+                },
+            }
+        ],
+    )
+
+
+def test_resolves_merged_multi_blocker_question_when_each_field_is_answered():
+    state = _multi_blocker_answer_state()
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={
+            "fact_id": "fact-1",
+            "text": "Requested limit is 5M. Industry is construction.",
+        },
+    )
+
+    assert [blocker.status for blocker in state.blockers] == [
+        "resolved",
+        "resolved",
+    ]
+
+
+def test_keeps_merged_multi_blocker_question_open_for_ambiguous_bare_value():
+    state = _multi_blocker_answer_state()
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": "$5,000,000"},
+    )
+
+    assert [blocker.status for blocker in state.blockers] == ["open", "open"]
+
+
+def test_resolves_presence_only_blocker_when_output_is_supplied():
+    blocker = _validated_blocker()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "blocker_keys": ["blocker-1"],
+                "blocker_obligations": {
+                    "blocker-1": ["quote:$present"],
+                },
+            }
+        ],
+    )
+
+    validate_hitl_answered_blockers(
+        state,
+        resolved_request_ids={"hitl-1"},
+        answer_fact={"fact_id": "fact-1", "text": "Quote is attached."},
+    )
+
+    assert state.blockers[0].status == "resolved"
+
+
 def test_insufficient_markers_do_not_match_inside_other_words():
     blocker = _validated_blocker()
     state = OrchestrationRunState(

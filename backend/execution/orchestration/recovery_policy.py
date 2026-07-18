@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from execution.orchestration.blocker_matching import (
+    agent_blocker_field_key,
+    match_tokens,
+    normalize_match_text,
+)
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from models.orchestration import (
@@ -104,13 +109,23 @@ def _required_obligations_for_blocker(
 ) -> list[str]:
     blocked_outputs = set(blocker.blocked_output_keys)
     for outcome in reversed(state.delegation_outcomes):
-        obligations = [
+        candidates = [
             obligation
             for obligation in outcome.remaining_required_obligations
-            if _obligation_matches_blocker(
-                blocker,
+            if not blocked_outputs
+            or obligation.partition(":")[0] in blocked_outputs
+        ]
+        if not candidates:
+            continue
+        blocker_field_key = agent_blocker_field_key(blocker.key)
+        if blocker_field_key is None:
+            return sorted(dict.fromkeys(candidates))
+        obligations = [
+            obligation
+            for obligation in candidates
+            if _obligation_matches_blocker_field(
+                blocker_field_key,
                 obligation,
-                blocked_outputs=blocked_outputs,
             )
         ]
         if obligations:
@@ -118,38 +133,19 @@ def _required_obligations_for_blocker(
     return []
 
 
-def _obligation_matches_blocker(
-    blocker: BlockerRecord,
+def _obligation_matches_blocker_field(
+    blocker_field_key: str,
     obligation: str,
-    *,
-    blocked_outputs: set[str],
 ) -> bool:
     output_key, separator, field_key = obligation.partition(":")
-    if blocked_outputs and output_key not in blocked_outputs:
+    if not separator:
         return False
-    if not separator or field_key == "$present":
-        return False
-
-    blocker_text = _normalize_match_text(f"{blocker.key} {blocker.description}")
-    normalized_field = _normalize_match_text(field_key)
-    if normalized_field in blocker_text:
-        return True
-    field_tokens = _match_tokens(normalized_field)
-    return bool(field_tokens) and field_tokens <= _match_tokens(blocker_text)
-
-
-def _normalize_match_text(value: str) -> str:
-    return (
-        value.lower()
-        .replace(".", "_")
-        .replace("-", "_")
-        .replace(":", "_")
-        .replace(" ", "_")
-    )
-
-
-def _match_tokens(value: str) -> set[str]:
-    return {token for token in value.split("_") if token}
+    if field_key == "$present":
+        return normalize_match_text(blocker_field_key) == normalize_match_text(
+            output_key
+        )
+    field_tokens = match_tokens(field_key)
+    return bool(field_tokens) and field_tokens <= match_tokens(blocker_field_key)
 
 
 def normalize_delegate_repair_lineage(
