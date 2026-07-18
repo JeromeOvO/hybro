@@ -17,8 +17,10 @@ from models.orchestration import (
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
+    DelegationOutcomeRecord,
     DispatchContentRef,
     DispatchExpectedOutput,
+    DispatchIntent,
     DispatchRefKind,
     OpenFailureRecord,
     OrchestrationRunState,
@@ -1110,3 +1112,312 @@ def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
                 "targets": [target],
             }
         )
+
+
+def _guardrail_target(agent_id="agent-1", repair_of=None):
+    ref = DispatchContentRef(
+        kind=DispatchRefKind.CONTEXT,
+        ref_id="ctx-1",
+        source_agent_message_id="i1:message",
+    )
+    return PlannedDelegateTarget(
+        agent_id=agent_id,
+        task="produce quote",
+        context_refs=[ref],
+        repair_of_intent_id=repair_of,
+        expected_outputs=[
+            DispatchExpectedOutput(
+                output_key="quote",
+                kind="artifact",
+                artifact_name="quote",
+                required=True,
+            )
+        ],
+    )
+
+
+def _guardrail_action(targets):
+    return PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="delegate",
+        targets=list(targets),
+    )
+
+
+def _guardrail_state(*, outcomes=None, intents=None, failures=None):
+    return OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="produce quote",
+        candidate_agent_ids=["agent-1", "agent-2"],
+        delegation_outcomes=list(outcomes or []),
+        dispatch_intents=list(intents or []),
+        open_failures=list(failures or []),
+    )
+
+
+def _validation_code(action, state):
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+    return exc_info.value.code
+
+
+def test_disabled_guardrails_skip_retry_policy_evaluation(monkeypatch):
+    action = _guardrail_action([_guardrail_target()])
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("disabled guardrails must not evaluate retry policy")
+
+    monkeypatch.setattr(
+        "execution.orchestration.action_validator.evaluate_retry",
+        fail_if_called,
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_guardrail_state(),
+            guardrails_enabled=False,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+def test_duplicate_delegate_pair_rejected_before_intents_exist():
+    targets = [
+        _guardrail_target().model_copy(update={"parallel_group": "parallel-1"}),
+        _guardrail_target().model_copy(update={"parallel_group": "parallel-1"}),
+    ]
+    action = _guardrail_action(targets)
+    assert _validation_code(action, _guardrail_state()) == (
+        "duplicate_delegate_goal_target"
+    )
+
+
+def test_delegate_structural_errors_precede_outcome_policy_when_guardrails_enabled():
+    action = _guardrail_action([_guardrail_target(), _guardrail_target()])
+
+    assert _validation_code(action, _guardrail_state()) == (
+        "parallel_dependency_unspecified"
+    )
+
+
+def test_fulfilled_revision_repeat_is_rejected():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="fulfilled",
+    )
+    state = _guardrail_state(outcomes=[outcome])
+    assert _validation_code(_guardrail_action([_guardrail_target()]), state) == (
+        "delegate_goal_already_fulfilled"
+    )
+
+
+def test_fulfilled_revision_repeat_is_allowed_when_guardrails_are_disabled():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="fulfilled",
+    )
+    action = _guardrail_action([_guardrail_target()])
+
+    assert PlannerActionValidator.validate(
+        action,
+        run_state=_guardrail_state(outcomes=[outcome]),
+        resource_fingerprints={},
+    ) is action
+
+
+def test_exhausted_failed_retry_is_rejected_without_repair_lineage():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    intent = DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        status="failed",
+        context_refs=_guardrail_target().context_refs,
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="failed",
+        remaining_required_obligations=["quote:$present"],
+        open_failure_ids=["f1"],
+    )
+    failure = OpenFailureRecord(
+        failure_id="f1",
+        fingerprint="runtime-failure",
+        source="runtime",
+        agent_id="agent-1",
+        agent_message_id="i1:message",
+        dispatch_intent_id="i1",
+        error_code="transport_error",
+        error_message="connection reset",
+        recoverable=True,
+        retry_count=2,
+        max_retries=2,
+    )
+    state = _guardrail_state(
+        outcomes=[outcome], intents=[intent], failures=[failure]
+    )
+    assert _validation_code(_guardrail_action([_guardrail_target()]), state) == (
+        "recovery_retry_exhausted"
+    )
+
+
+def test_failed_retry_with_remaining_budget_is_allowed_without_repair_lineage():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    intent = DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        status="failed",
+        context_refs=_guardrail_target().context_refs,
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="failed",
+        remaining_required_obligations=["quote:$present"],
+        open_failure_ids=["f1"],
+    )
+    failure = OpenFailureRecord(
+        failure_id="f1",
+        fingerprint="runtime-failure",
+        source="runtime",
+        agent_id="agent-1",
+        agent_message_id="i1:message",
+        dispatch_intent_id="i1",
+        error_code="transport_error",
+        error_message="connection reset",
+        recoverable=True,
+        retry_count=0,
+        max_retries=2,
+    )
+    state = _guardrail_state(
+        outcomes=[outcome], intents=[intent], failures=[failure]
+    )
+    action = _guardrail_action([_guardrail_target()])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+def test_no_progress_repeat_is_rejected_for_same_attempt_chain():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    intent = DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        context_refs=_guardrail_target().context_refs,
+        repair_of_intent_id="i0",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="no_progress",
+        remaining_required_obligations=["quote:$present"],
+    )
+    state = _guardrail_state(outcomes=[outcome], intents=[intent])
+
+    assert _validation_code(
+        _guardrail_action([_guardrail_target(repair_of="i1")]), state
+    ) == "delegate_no_progress_repeat"
+
+
+def test_unresolved_revision_allows_an_alternate_agent_attempt_chain():
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(
+        _guardrail_target(), {}
+    )
+    intent = DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        context_refs=_guardrail_target().context_refs,
+        repair_of_intent_id="i0",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="o1",
+        dispatch_intent_id="i1",
+        agent_id="agent-1",
+        goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+        goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+        attempt_fingerprint="attempt-1",
+        status="no_progress",
+        remaining_required_obligations=["quote:$present"],
+    )
+    state = _guardrail_state(outcomes=[outcome], intents=[intent])
+    action = _guardrail_action([_guardrail_target(agent_id="agent-2")])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )

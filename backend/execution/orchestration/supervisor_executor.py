@@ -137,6 +137,21 @@ DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 
 
+def _resource_fingerprints(resources: Sequence[Any]) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    for resource in resources:
+        resource_id = getattr(resource, "ref_id", None)
+        fingerprint = getattr(resource, "content_fingerprint", None)
+        if resource_id and fingerprint:
+            fingerprints[resource_id] = fingerprint
+        for projection in getattr(resource, "projections", []):
+            projection_id = getattr(projection, "ref_id", None)
+            projection_fingerprint = getattr(projection, "content_fingerprint", None)
+            if projection_id and projection_fingerprint:
+                fingerprints[projection_id] = projection_fingerprint
+    return fingerprints
+
+
 class SupervisorExecutor:
     """Executes the Supervisor's adaptive loop for a single user message."""
 
@@ -789,6 +804,7 @@ class SupervisorExecutor:
                     candidate_agents=self._v2_candidate_scope(state, agent_registry),
                 )
             )
+            resource_fingerprints = _resource_fingerprints(available_resources)
             logger.info(
                 "orchestration_resource_catalog_built room_id=%s run_id=%s "
                 "user_message_id=%s resource_count=%d",
@@ -887,6 +903,8 @@ class SupervisorExecutor:
                 planner_action = PlannerActionValidator.validate(
                     planner_action,
                     run_state=state,
+                    resource_fingerprints=resource_fingerprints,
+                    guardrails_enabled=_settings.orchestration_outcome_guardrails,
                 )
             except PlannerActionValidationError as exc:
                 if not exc.recoverable:
@@ -941,6 +959,7 @@ class SupervisorExecutor:
                         request_user_id=request_user_id,
                         quoted_text=quoted_text,
                         user_message=user_message,
+                        resource_fingerprints=resource_fingerprints,
                     )
                     if paused_status is not None:
                         return await self._log_state_and_return(
@@ -1575,6 +1594,7 @@ class SupervisorExecutor:
         request_user_id: str | None,
         quoted_text: str | None,
         user_message,
+        resource_fingerprints: Mapping[str, str] | None = None,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
@@ -1596,6 +1616,7 @@ class SupervisorExecutor:
                 step_number=step_number,
                 target_index=index,
                 target=target,
+                resource_fingerprints=resource_fingerprints or {},
             )
             for index, target in enumerate(action.targets, start=1)
         ]
@@ -4537,9 +4558,9 @@ class SupervisorExecutor:
                         matched_intent,
                         output,
                         selected_resource_fingerprints=(
-                            self._v2_selected_resource_fingerprints(
-                                current,
-                                matched_intent,
+                            matched_intent.selected_resource_fingerprints
+                            or self._v2_selected_resource_fingerprints(
+                                current, matched_intent
                             )
                         ),
                     )
@@ -4880,6 +4901,7 @@ class SupervisorExecutor:
         step_number: int,
         target_index: int,
         target: DelegateTarget,
+        resource_fingerprints: Mapping[str, str] | None = None,
     ) -> DispatchIntent:
         step_id = f"{run_id}:step-{step_number}"
         step_target_id = f"{step_id}:target-{target_index}"
@@ -4897,6 +4919,17 @@ class SupervisorExecutor:
             context_refs=list(target.context_refs),
             artifact_refs=list(target.artifact_refs),
             attachment_refs=list(target.attachment_refs),
+            selected_resource_fingerprints=sorted(
+                {
+                    (resource_fingerprints or {})[ref.ref_id]
+                    for ref in (
+                        *target.context_refs,
+                        *target.artifact_refs,
+                        *target.attachment_refs,
+                    )
+                    if ref.ref_id in (resource_fingerprints or {})
+                }
+            ),
             expected_outputs=list(target.expected_outputs),
             attachment_policy=target.attachment_policy,
         )
