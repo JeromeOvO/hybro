@@ -191,16 +191,29 @@ def _output_artifacts(
     state: OrchestrationRunState,
     expected_output: DispatchExpectedOutput,
     agent_output: AgentOutputRecord,
+    *,
+    allow_name_fallback: bool,
 ) -> list[dict[str, Any]]:
     if expected_output.kind != "artifact":
         return []
     artifact_keys = set(agent_output.artifact_keys)
-    return [
+    owned_artifacts = [
         artifact
         for artifact in state.artifacts
         if isinstance(artifact, dict)
         and artifact.get("artifact_key") in artifact_keys
     ]
+    if not expected_output.artifact_name or allow_name_fallback:
+        return owned_artifacts
+    return [
+        artifact
+        for artifact in owned_artifacts
+        if artifact.get("name") == expected_output.artifact_name
+    ]
+
+
+def _allow_artifact_name_fallback(outputs: list[DispatchExpectedOutput]) -> bool:
+    return sum(output.kind == "artifact" for output in outputs) == 1
 
 
 def _output_fact_map(
@@ -225,17 +238,28 @@ def _freshly_satisfied_obligations(
     satisfied: set[str] = set()
     before_facts = _output_fact_map(before_state, agent_output)
     after_facts = _output_fact_map(after_state, agent_output)
+    allow_name_fallback = _allow_artifact_name_fallback(outputs)
     for output in outputs:
         if not output.required:
             continue
         key = effective_output_key(output)
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
-            for artifact in _output_artifacts(before_state, output, agent_output)
+            for artifact in _output_artifacts(
+                before_state,
+                output,
+                agent_output,
+                allow_name_fallback=allow_name_fallback,
+            )
         }
         fresh_artifacts = [
             artifact
-            for artifact in _output_artifacts(after_state, output, agent_output)
+            for artifact in _output_artifacts(
+                after_state,
+                output,
+                agent_output,
+                allow_name_fallback=allow_name_fallback,
+            )
             if canonical_content_fingerprint(artifact)
             not in before_artifact_fingerprints
         ]
@@ -262,11 +286,17 @@ def _satisfied_obligations(
 ) -> set[str]:
     satisfied: set[str] = set()
     facts = _output_fact_map(state, agent_output)
+    allow_name_fallback = _allow_artifact_name_fallback(outputs)
     for output in outputs:
         if not output.required:
             continue
         key = effective_output_key(output)
-        artifacts = _output_artifacts(state, output, agent_output)
+        artifacts = _output_artifacts(
+            state,
+            output,
+            agent_output,
+            allow_name_fallback=allow_name_fallback,
+        )
         values = [data for artifact in artifacts for data in _artifact_data(artifact)]
         if artifacts or key in facts:
             satisfied.add(f"{key}:$present")
@@ -297,8 +327,14 @@ def _has_matching_output_evidence(
     agent_output: AgentOutputRecord,
 ) -> bool:
     facts = _output_fact_map(state, agent_output)
+    allow_name_fallback = _allow_artifact_name_fallback(outputs)
     return any(
-        _output_artifacts(state, output, agent_output)
+        _output_artifacts(
+            state,
+            output,
+            agent_output,
+            allow_name_fallback=allow_name_fallback,
+        )
         if output.kind == "artifact"
         else effective_output_key(output) in facts
         for output in outputs

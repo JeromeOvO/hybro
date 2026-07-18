@@ -534,6 +534,34 @@ def test_output_owned_artifact_presence_counts_when_artifact_name_differs():
     ]
 
 
+def test_one_named_artifact_does_not_satisfy_multiple_named_outputs():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="quote",
+            kind="artifact",
+            artifact_name="quote",
+            required=True,
+        ),
+        DispatchExpectedOutput(
+            output_key="report",
+            kind="artifact",
+            artifact_name="report",
+            required=True,
+        ),
+    ]
+    after = _state(artifacts=[_artifact("agent-msg-1", {"quote": "ready"})])
+
+    outcome = evaluator.evaluate(
+        _state(), after, intent, _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "partial"
+    assert outcome.newly_satisfied_required_obligations == ["quote:$present"]
+    assert outcome.remaining_required_obligations == ["report:$present"]
+
+
 def test_required_output_presence_is_retained_from_prior_outcome():
     evaluator = DelegationOutcomeEvaluator()
     intent = _intent("agent-msg-1")

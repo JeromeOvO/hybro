@@ -54,6 +54,47 @@ def test_goal_progress_aggregates_by_goal_family_revision():
     ]
 
 
+def test_goal_progress_carries_satisfied_obligations_across_revisions():
+    first = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="broker-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        newly_satisfied_required_obligations=["quote:$present"],
+    )
+    latest = first.model_copy(
+        update={
+            "outcome_id": "outcome-2",
+            "dispatch_intent_id": "intent-2",
+            "goal_revision_fingerprint": "revision-2",
+            "attempt_fingerprint": "attempt-2",
+            "status": "fulfilled",
+            "newly_satisfied_required_obligations": ["quote:limit"],
+            "remaining_required_obligations": [],
+        }
+    )
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Broker to insurer workflow",
+        candidate_agent_ids=["broker-agent"],
+        delegation_outcomes=[first, latest],
+    )
+
+    progress = rebuild_goal_progress(state).goal_progress[0]
+
+    assert progress.through_goal_revision_fingerprint == "revision-2"
+    assert progress.satisfied_required_obligations == [
+        "quote:$present",
+        "quote:limit",
+    ]
+    assert progress.remaining_required_obligations == []
+
+
 def test_goal_progress_reopens_invalidated_required_evidence():
     state = OrchestrationRunState(
         run_id="run-1",
@@ -89,6 +130,50 @@ def test_goal_progress_reopens_invalidated_required_evidence():
 
     assert updated.goal_progress[0].satisfied_required_obligations == []
     assert updated.goal_progress[0].remaining_required_obligations == ["quote:$present"]
+
+
+def test_goal_progress_scopes_invalidations_to_their_goal_family():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Broker to insurer workflow",
+        candidate_agent_ids=["broker-agent", "insurer-agent"],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id=f"outcome-{family}",
+                dispatch_intent_id=f"intent-{family}",
+                agent_id="broker-agent",
+                goal_family_fingerprint=family,
+                goal_revision_fingerprint=f"revision-{family}",
+                attempt_fingerprint=f"attempt-{family}",
+                status="fulfilled",
+                newly_satisfied_required_obligations=["quote:$present"],
+            )
+            for family in ("family-1", "family-2")
+        ],
+    )
+    invalidated, _ = invalidate_required_evidence(
+        state,
+        goal_family_fingerprint="family-1",
+        evidence_key="quote-evidence",
+        obligation_keys=["quote:$present"],
+        reason="The first quote is no longer valid.",
+        source_event_id="event-1",
+    )
+
+    progress_by_family = {
+        progress.goal_family_fingerprint: progress
+        for progress in rebuild_goal_progress(invalidated).goal_progress
+    }
+
+    assert progress_by_family["family-1"].remaining_required_obligations == [
+        "quote:$present"
+    ]
+    assert progress_by_family["family-2"].satisfied_required_obligations == [
+        "quote:$present"
+    ]
+    assert progress_by_family["family-2"].remaining_required_obligations == []
 
 
 def test_goal_progress_allows_later_satisfaction_to_supersede_invalidation():
@@ -171,3 +256,20 @@ def test_goal_progress_excludes_disposed_latest_revision():
     updated = rebuild_goal_progress(state)
 
     assert updated.goal_progress == []
+
+
+def test_rebuild_goal_progress_does_not_deep_copy_run_payloads():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Broker to insurer workflow",
+        candidate_agent_ids=["broker-agent"],
+        facts=[{"fact_id": "fact-1", "value": {"nested": "value"}}],
+    )
+
+    updated = rebuild_goal_progress(state)
+
+    assert updated is not state
+    assert updated.facts is state.facts
+    assert state.goal_progress == []
