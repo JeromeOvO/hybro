@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from common.utils.time import utcnow
 
@@ -47,6 +49,12 @@ class OrchestrationEventType(StrEnum):
     RUN_TERMINAL = "run_terminal"
     RUN_RECOVERED = "run_recovered"
     PUBLIC_LIFECYCLE_PROJECTED = "public_lifecycle_projected"
+    OUTCOME_EVALUATED = "outcome_evaluated"
+    REQUIRED_EVIDENCE_INVALIDATED = "required_evidence_invalidated"
+    CONTINUATION_CLAIMED = "continuation_claimed"
+    CONTINUATION_RESOLVED = "continuation_resolved"
+    CONTINUATION_ABANDONED = "continuation_abandoned"
+    GOAL_FAMILY_DISPOSED = "goal_family_disposed"
 
 
 class PlannerActionType(StrEnum):
@@ -72,9 +80,91 @@ class DispatchContentRef(BaseModel):
 
 
 class DispatchExpectedOutput(BaseModel):
+    output_key: str | None = None
     kind: str
     required: bool = True
     description: str | None = None
+    artifact_name: str | None = None
+    required_fields: list[str] = Field(default_factory=list)
+    allow_partial: bool = True
+
+    @model_validator(mode="after")
+    def _ensure_stable_output_key(self) -> DispatchExpectedOutput:
+        if self.output_key is not None and self.output_key.strip():
+            self.output_key = self.output_key.strip()
+            return self
+
+        contract = {
+            "kind": " ".join(self.kind.split()),
+            "artifact_name": (
+                " ".join(self.artifact_name.split())
+                if self.artifact_name is not None
+                else None
+            ),
+            "required_fields": sorted(
+                " ".join(field.split()) for field in self.required_fields
+            ),
+            "description": (
+                " ".join(self.description.split())
+                if self.description is not None
+                else None
+            ),
+        }
+        payload = json.dumps(
+            contract,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self.output_key = f"legacy:{digest[:20]}"
+        return self
+
+
+class AssumptionRecord(BaseModel):
+    key: str
+    description: str
+    source_agent_message_id: str | None = None
+    applies_to_output_keys: list[str] = Field(default_factory=list)
+
+
+class UnknownRecord(BaseModel):
+    key: str
+    description: str
+    source_agent_message_id: str | None = None
+    applies_to_output_keys: list[str] = Field(default_factory=list)
+
+
+class BlockerResolutionAttempt(BaseModel):
+    kind: Literal["resource", "agent", "conditional_result"]
+    reference_id: str
+    outcome: Literal["unavailable", "insufficient", "failed", "resolved"]
+
+
+class BlockerRecord(BaseModel):
+    key: str
+    description: str
+    blocked_output_keys: list[str] = Field(default_factory=list)
+    source: Literal["agent", "planner", "executor"]
+    evidence_refs: list[str] = Field(default_factory=list)
+    claimed_user_only: bool = False
+    validation_status: Literal["candidate", "validated"] = Field(
+        default="candidate",
+        description=(
+            "Authoritative user-only validation state. The validated_user_only "
+            "compatibility field is derived from this value."
+        ),
+    )
+    status: Literal["open", "resolved", "waived"] = "open"
+    resolution_attempts: list[BlockerResolutionAttempt] = Field(default_factory=list)
+
+    @computed_field(
+        description="Compatibility mirror derived from validation_status.",
+        return_type=bool,
+    )
+    @property
+    def validated_user_only(self) -> bool:
+        return self.validation_status == "validated"
 
 
 class OpenFailureRecord(BaseModel):
@@ -113,6 +203,7 @@ class PlannedDelegateTarget(BaseModel):
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
     expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
+    repair_of_intent_id: str | None = None
     attachment_policy: Literal["explicit_refs_only", "compatible_only"] = (
         "explicit_refs_only"
     )
@@ -122,6 +213,8 @@ class PlannerQuestion(BaseModel):
     prompt: str
     prompt_type: Literal["text", "choice", "confirmation"] = "text"
     choices: list[str] | None = None
+    reason: Literal["initial_clarification", "blocker"] = "initial_clarification"
+    blocker_keys: list[str] = Field(default_factory=list)
 
 
 class AuthorizationBasis(BaseModel):
@@ -176,6 +269,12 @@ class ParticipantSnapshot(BaseModel):
     completed_agent_ids: list[str] = Field(default_factory=list)
 
 
+class WaivedOutputEvidence(BaseModel):
+    output_key: str
+    reason: str
+    blocker_keys: list[str] = Field(default_factory=list)
+
+
 class CompletionEvidence(BaseModel):
     satisfied_criteria: list[str] = Field(default_factory=list)
     referenced_fact_ids: list[str] = Field(default_factory=list)
@@ -183,6 +282,11 @@ class CompletionEvidence(BaseModel):
     unresolved_questions: list[str] = Field(default_factory=list)
     final_answer_intent: str
     confidence: float
+    satisfied_output_keys: list[str] = Field(default_factory=list)
+    waived_outputs: list[WaivedOutputEvidence] = Field(default_factory=list)
+    abandoned_goal_disposition_event_ids: list[str] = Field(default_factory=list)
+    assumption_keys: list[str] = Field(default_factory=list)
+    unresolved_non_blocking_unknown_keys: list[str] = Field(default_factory=list)
 
     @field_validator("confidence")
     @classmethod
@@ -231,6 +335,7 @@ class DispatchIntent(BaseModel):
     artifact_refs: list[DispatchContentRef] = Field(default_factory=list)
     attachment_refs: list[DispatchContentRef] = Field(default_factory=list)
     expected_outputs: list[DispatchExpectedOutput] = Field(default_factory=list)
+    repair_of_intent_id: str | None = None
     attachment_policy: Literal["explicit_refs_only", "compatible_only"] = (
         "explicit_refs_only"
     )
@@ -246,6 +351,51 @@ class AgentOutputRecord(BaseModel):
     a2a_task_id: str | None = None
     a2a_context_id: str | None = None
     status_message: str | None = None
+
+
+class DelegationOutcomeRecord(BaseModel):
+    outcome_id: str
+    dispatch_intent_id: str
+    agent_id: str
+    goal_family_fingerprint: str
+    goal_revision_fingerprint: str
+    attempt_fingerprint: str
+    result_fingerprint: str | None = None
+    status: Literal["fulfilled", "partial", "blocked", "no_progress", "failed"]
+    satisfied_output_keys: list[str] = Field(default_factory=list)
+    missing_output_keys: list[str] = Field(default_factory=list)
+    remaining_required_obligations: list[str] = Field(default_factory=list)
+    newly_satisfied_required_obligations: list[str] = Field(default_factory=list)
+    changed_artifact_keys: list[str] = Field(default_factory=list)
+    changed_fact_keys: list[str] = Field(default_factory=list)
+    open_failure_ids: list[str] = Field(default_factory=list)
+    assumptions: list[AssumptionRecord] = Field(default_factory=list)
+    unknowns: list[UnknownRecord] = Field(default_factory=list)
+    blockers: list[BlockerRecord] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class PendingAgentContinuation(BaseModel):
+    continuation_id: str
+    source_intent_id: str
+    source_agent_message_id: str
+    agent_id: str
+    goal_family_fingerprint: str
+    goal_revision_fingerprint: str
+    a2a_task_id: str
+    a2a_context_id: str
+    attempted_resource_fingerprints: list[str] = Field(default_factory=list)
+    status: Literal["open", "resuming", "resolved", "abandoned"] = "open"
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class GoalFamilyDispositionRecord(BaseModel):
+    event_id: str
+    goal_family_fingerprint: str
+    through_goal_revision_fingerprint: str
+    status: Literal["abandoned", "superseded"]
+    reason: str
+    replacement_goal_family_fingerprint: str | None = None
 
 
 class OrchestrationRunState(BaseModel):
@@ -283,6 +433,16 @@ class OrchestrationRunState(BaseModel):
     completion_evidence: CompletionEvidence | None = None
     terminal_reason: str | None = None
     open_failures: list[OpenFailureRecord] = Field(default_factory=list)
+    delegation_outcomes: list[DelegationOutcomeRecord] = Field(default_factory=list)
+    pending_agent_continuations: list[PendingAgentContinuation] = Field(
+        default_factory=list
+    )
+    goal_family_dispositions: list[GoalFamilyDispositionRecord] = Field(
+        default_factory=list
+    )
+    assumptions: list[AssumptionRecord] = Field(default_factory=list)
+    unknowns: list[UnknownRecord] = Field(default_factory=list)
+    blockers: list[BlockerRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
