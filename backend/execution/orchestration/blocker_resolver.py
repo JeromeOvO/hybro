@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
+from collections.abc import Mapping
 
 from execution.orchestration.outcome_policy import BlockerPolicyValidator
 from models.orchestration import (
@@ -152,29 +152,56 @@ def validate_hitl_answered_blockers(
         return
     answer_fact_id = str(answer_fact.get("fact_id") or "").strip()
     for question in state.open_questions:
-        if not isinstance(question, Mapping):
+        if not _is_resolved_hitl_question(question, resolved_request_ids):
             continue
-        if question.get("request_id") not in resolved_request_ids:
+        _resolve_answered_question_blockers(
+            state,
+            question=question,
+            answer_text=answer_text,
+            answer_fact_id=answer_fact_id,
+        )
+
+
+def _is_resolved_hitl_question(
+    question: object,
+    resolved_request_ids: set[str],
+) -> bool:
+    return (
+        isinstance(question, Mapping)
+        and question.get("request_id") in resolved_request_ids
+        and question.get("resolved") is True
+    )
+
+
+def _resolve_answered_question_blockers(
+    state: OrchestrationRunState,
+    *,
+    question: Mapping[str, object],
+    answer_text: str,
+    answer_fact_id: str,
+) -> None:
+    blocker_keys = question.get("blocker_keys") or []
+    for blocker in state.blockers:
+        if blocker.key not in blocker_keys or blocker.status != "open":
             continue
-        if question.get("resolved") is not True:
+        obligations = _question_obligations(question, blocker.key)
+        if not _answer_satisfies_obligations(answer_text, obligations):
             continue
-        blocker_keys = question.get("blocker_keys") or []
-        shared_obligations = question.get("required_obligation_keys") or []
-        blocker_obligations = question.get("blocker_obligations")
-        for blocker in state.blockers:
-            if blocker.key not in blocker_keys or blocker.status != "open":
-                continue
-            if blocker_obligations is None:
-                obligations = shared_obligations
-            elif isinstance(blocker_obligations, Mapping):
-                obligations = blocker_obligations.get(blocker.key)
-            else:
-                obligations = None
-            if not _answer_satisfies_obligations(answer_text, obligations):
-                continue
-            blocker.status = "resolved"
-            if answer_fact_id and answer_fact_id not in blocker.evidence_refs:
-                blocker.evidence_refs.append(answer_fact_id)
+        blocker.status = "resolved"
+        if answer_fact_id and answer_fact_id not in blocker.evidence_refs:
+            blocker.evidence_refs.append(answer_fact_id)
+
+
+def _question_obligations(
+    question: Mapping[str, object],
+    blocker_key: str,
+) -> object:
+    blocker_obligations = question.get("blocker_obligations")
+    if blocker_obligations is None:
+        return question.get("required_obligation_keys") or []
+    if isinstance(blocker_obligations, Mapping):
+        return blocker_obligations.get(blocker_key)
+    return None
 
 
 def _answer_satisfies_obligations(answer_text: str, obligations: object) -> bool:
