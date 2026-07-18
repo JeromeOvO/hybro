@@ -6890,6 +6890,15 @@ async def test_agent_missing_fields_stop_repeat_delegate_and_create_hitl():
     assert {
         blocker.key for blocker in result.run_state.delegation_outcomes[-1].blockers
     } == set(result.run_state.open_questions[-1]["blocker_keys"])
+    pending_question = result.run_state.open_questions[-1]
+    assert pending_question["blocker_obligations"] == {
+        "agent_blocker:broker-agent:client.industry": [
+            "broker_submission:industry",
+        ],
+        "agent_blocker:broker-agent:requested_coverage.limit": [
+            "broker_submission:requested_limit",
+        ],
+    }
 
 
 @pytest.mark.asyncio

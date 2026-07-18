@@ -103,15 +103,53 @@ def _required_obligations_for_blocker(
     blocker: BlockerRecord,
 ) -> list[str]:
     blocked_outputs = set(blocker.blocked_output_keys)
-    obligations: list[str] = []
     for outcome in reversed(state.delegation_outcomes):
-        for obligation in outcome.remaining_required_obligations:
-            output_key = obligation.split(":", 1)[0]
-            if not blocked_outputs or output_key in blocked_outputs:
-                obligations.append(obligation)
+        obligations = [
+            obligation
+            for obligation in outcome.remaining_required_obligations
+            if _obligation_matches_blocker(
+                blocker,
+                obligation,
+                blocked_outputs=blocked_outputs,
+            )
+        ]
         if obligations:
-            break
-    return sorted(dict.fromkeys(obligations))
+            return sorted(dict.fromkeys(obligations))
+    return []
+
+
+def _obligation_matches_blocker(
+    blocker: BlockerRecord,
+    obligation: str,
+    *,
+    blocked_outputs: set[str],
+) -> bool:
+    output_key, separator, field_key = obligation.partition(":")
+    if blocked_outputs and output_key not in blocked_outputs:
+        return False
+    if not separator or field_key == "$present":
+        return False
+
+    blocker_text = _normalize_match_text(f"{blocker.key} {blocker.description}")
+    normalized_field = _normalize_match_text(field_key)
+    if normalized_field in blocker_text:
+        return True
+    field_tokens = _match_tokens(normalized_field)
+    return bool(field_tokens) and field_tokens <= _match_tokens(blocker_text)
+
+
+def _normalize_match_text(value: str) -> str:
+    return (
+        value.lower()
+        .replace(".", "_")
+        .replace("-", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+    )
+
+
+def _match_tokens(value: str) -> set[str]:
+    return {token for token in value.split("_") if token}
 
 
 def normalize_delegate_repair_lineage(
