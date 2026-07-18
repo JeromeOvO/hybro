@@ -14,6 +14,7 @@ from execution.orchestration.room_supervisor_service import RoomSupervisorServic
 from models.orchestration import (
     ActiveDispatchRef,
     AgentOutputRecord,
+    BlockerRecord,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
@@ -32,13 +33,17 @@ from models.orchestration import (
 )
 
 
-def _state_for_validation() -> OrchestrationRunState:
+def _state_for_validation(
+    *,
+    open_questions: list[dict] | None = None,
+) -> OrchestrationRunState:
     return OrchestrationRunState(
         run_id="run-1",
         room_id="room-1",
         user_message_id="message-1",
         goal="Coordinate this",
         candidate_agent_ids=["agent-1"],
+        open_questions=list(open_questions or []),
     )
 
 
@@ -267,6 +272,377 @@ def test_delegate_rejects_empty_target_task():
         _validate(action)
 
 
+def test_ask_user_rejects_repeating_answered_supervisor_questions():
+    state = _state_for_validation(
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "prompt": "Which account should we use?",
+                "status": "resolved",
+                "resolved": True,
+                "answer": "Enterprise",
+            }
+        ],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Need the same input again.",
+        questions=[
+            PlannerQuestion(
+                prompt="  Which account should we use? ",
+                prompt_type="text",
+            )
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+
+    assert exc_info.value.code == "duplicate_answered_question"
+    assert exc_info.value.recoverable is True
+
+
+def test_ask_user_allows_new_question_after_answered_supervisor_question():
+    state = _state_for_validation(
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "prompt": "Which account should we use?",
+                "status": "resolved",
+                "resolved": True,
+                "answer": "Enterprise",
+            }
+        ],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Need a new input.",
+        questions=[
+            PlannerQuestion(
+                prompt="What deductible should we target?",
+                prompt_type="text",
+            )
+        ],
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+        is action
+    )
+
+
+def _question_action(reason: str, blocker_keys: list[str]) -> PlannerAction:
+    return PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing required value",
+                reason=reason,
+                blocker_keys=list(blocker_keys),
+            )
+        ],
+    )
+
+
+def _completed_quote_intent() -> DispatchIntent:
+    return DispatchIntent(
+        step_id="i1",
+        step_target_id="i1:target",
+        dispatch_intent_id="i1",
+        planned_agent_message_id="i1:message",
+        agent_id="agent-1",
+        task="produce quote",
+        task_hash="task-hash",
+        status="completed",
+        expected_outputs=[
+            DispatchExpectedOutput(
+                output_key="quote",
+                kind="artifact",
+                required=True,
+            )
+        ],
+    )
+
+
+def _validated_quote_blocker(key: str) -> BlockerRecord:
+    return BlockerRecord(
+        key=key,
+        description="The user must provide the required quote input.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+
+
+def test_initial_clarification_uses_dispatch_history_not_steps_used():
+    state = _guardrail_state()
+    state.steps_used = 1
+    action = _question_action("initial_clarification", [])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+def test_initial_clarification_rejects_duplicate_question_in_same_action():
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(prompt="Which account should we use?"),
+            PlannerQuestion(prompt="  Which account should we use?  "),
+        ],
+    )
+
+    assert _validation_code(action, _guardrail_state()) == "duplicate_question_in_action"
+
+
+def test_post_dispatch_question_requires_blocker_keys():
+    state = _guardrail_state(intents=[_completed_quote_intent()])
+
+    assert _validation_code(_question_action("blocker", []), state) == (
+        "ask_user_blocker_keys_required"
+    )
+
+
+def test_post_dispatch_question_rejects_candidate_only_blocker():
+    blocker = _validated_quote_blocker("quote-input").model_copy(
+        update={
+            "validated_user_only": False,
+            "validation_status": "candidate",
+        }
+    )
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+
+    assert _validation_code(_question_action("blocker", [blocker.key]), state) == (
+        "ask_user_blocker_not_validated"
+    )
+
+
+def test_post_dispatch_question_accepts_validated_blocker():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = _question_action("blocker", [blocker.key])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+@pytest.mark.parametrize("status", ["creating", "open", "resolved"])
+def test_post_dispatch_question_rejects_pending_or_answered_duplicate(status: str):
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "source": "supervisor",
+                "prompt": "Provide the missing required value",
+                "status": status,
+                "resolved": status == "resolved",
+            }
+        ],
+    )
+
+    assert _validation_code(_question_action("blocker", [blocker.key]), state) == (
+        "duplicate_answered_question"
+        if status == "resolved"
+        else "duplicate_pending_question"
+    )
+
+
+def test_post_dispatch_duplicate_question_is_allowed_when_guardrails_disabled():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "source": "supervisor",
+                "prompt": "Provide the missing required value",
+                "status": "open",
+            }
+        ],
+    )
+    action = _question_action("blocker", [blocker.key])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
+def test_post_dispatch_empty_question_list_requires_blocker_keys():
+    state = _guardrail_state(intents=[_completed_quote_intent()])
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[],
+    )
+
+    assert _validation_code(action, state) == "ask_user_blocker_keys_required"
+
+
+def test_post_dispatch_whitespace_only_question_requires_normalized_prompt():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt=" \t ",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+
+    assert _validation_code(action, state) == "ask_user_blocker_keys_required"
+
+
+def test_post_dispatch_rejects_duplicate_question_in_same_action():
+    quote_blocker = _validated_quote_blocker("quote-input")
+    terms_blocker = _validated_quote_blocker("quote-terms")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[quote_blocker, terms_blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing required value",
+                reason="blocker",
+                blocker_keys=[quote_blocker.key],
+            ),
+            PlannerQuestion(
+                prompt="  Provide the missing required value  ",
+                reason="blocker",
+                blocker_keys=[terms_blocker.key],
+            ),
+        ],
+    )
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
+def test_post_dispatch_rejects_duplicate_blocker_in_same_action():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="request required user input",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing required value",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            ),
+            PlannerQuestion(
+                prompt="Which carrier should receive the quote request?",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            ),
+        ],
+    )
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
+def test_post_dispatch_rejects_duplicate_blocker_within_one_question():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+    )
+    action = _question_action("blocker", [blocker.key, blocker.key])
+
+    assert _validation_code(action, state) == "duplicate_question_in_action"
+
+
+def test_post_dispatch_question_rejects_blocker_already_pending_under_new_prompt():
+    blocker = _validated_quote_blocker("quote-input")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[blocker],
+        open_questions=[
+            {
+                "source": "supervisor",
+                "prompt": "Which carrier should receive the quote request?",
+                "blocker_keys": [blocker.key],
+                "status": "open",
+            }
+        ],
+    )
+
+    assert _validation_code(_question_action("blocker", [blocker.key]), state) == (
+        "duplicate_pending_question"
+    )
+
+
+def test_post_dispatch_question_accepts_two_validated_blockers_in_one_request():
+    quote_blocker = _validated_quote_blocker("quote-input")
+    terms_blocker = _validated_quote_blocker("quote-terms")
+    state = _guardrail_state(
+        intents=[_completed_quote_intent()],
+        blockers=[quote_blocker, terms_blocker],
+    )
+    action = _question_action("blocker", [quote_blocker.key, terms_blocker.key])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )
 @pytest.mark.asyncio
 async def test_planner_adapter_accepts_artifact_refs_without_run_state():
     action = PlannerAction(
@@ -1144,7 +1520,14 @@ def _guardrail_action(targets):
     )
 
 
-def _guardrail_state(*, outcomes=None, intents=None, failures=None):
+def _guardrail_state(
+    *,
+    outcomes=None,
+    intents=None,
+    failures=None,
+    blockers=None,
+    open_questions=None,
+):
     return OrchestrationRunState(
         run_id="run-1",
         room_id="room-1",
@@ -1154,6 +1537,8 @@ def _guardrail_state(*, outcomes=None, intents=None, failures=None):
         delegation_outcomes=list(outcomes or []),
         dispatch_intents=list(intents or []),
         open_failures=list(failures or []),
+        blockers=list(blockers or []),
+        open_questions=list(open_questions or []),
     )
 
 
