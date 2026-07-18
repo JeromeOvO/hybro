@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +47,29 @@ _PROJECTION_OWNED_ARTIFACT_FIELDS = {
     "source_agent_id",
     "summary",
 }
+
+
+def _input_required_failure(result: AgentResultRead) -> OpenFailureRecord:
+    message = result.status_message or "Agent requested additional input."
+    return OpenFailureRecord(
+        failure_id=uuid4().hex,
+        fingerprint=f"{result.agent_id}:{result.agent_message_id}:agent_input_required",
+        source="a2a_adapter",
+        agent_id=result.agent_id,
+        agent_message_id=result.agent_message_id,
+        error_code="agent_input_required",
+        error_message=message,
+        recoverable=True,
+        retry_count=0,
+        max_retries=2,
+        status="open",
+        recovery_hints=[
+            "retry_with_available_resource_refs",
+            "retry_after_resource_projection",
+            "ask_user_if_missing",
+        ],
+        updated_at=utcnow(),
+    )
 
 
 def canonical_artifact_key(
@@ -353,6 +377,23 @@ class AgentResultIngestor:
                     else:
                         state.open_failures.append(failure)
                         return True
+        elif result.status == "awaiting_input":
+            failure = _input_required_failure(result)
+            existing_failure = next(
+                (
+                    item
+                    for item in state.open_failures
+                    if item.fingerprint == failure.fingerprint
+                    and item.status == "open"
+                ),
+                None,
+            )
+            if existing_failure is None:
+                state.open_failures.append(failure)
+            else:
+                existing_failure.error_message = failure.error_message
+                existing_failure.updated_at = utcnow()
+            return True
         elif result.status == "completed":
             changed = False
             for failure in _matching_open_failures_for_completed_result(

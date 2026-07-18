@@ -1755,7 +1755,7 @@ async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_i
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-1:message",
-                status_message="Authenticate account.",
+                status_message="auth_required",
             ),
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
@@ -3051,7 +3051,7 @@ async def test_run_agent_awaiting_input_creates_hitl_prompt_and_continuation():
             message_id="message-1:step-1:target-1:message",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
-            status_message="Please authenticate.",
+            status_message="auth_required",
         )
     )
     executor.hitl_coordinator = SimpleNamespace(
@@ -3073,7 +3073,7 @@ async def test_run_agent_awaiting_input_creates_hitl_prompt_and_continuation():
     executor.hitl_coordinator.request_input.assert_awaited_once()
     hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
     assert hitl_kwargs["source"] == "agent"
-    assert hitl_kwargs["prompt"] == "Please authenticate."
+    assert hitl_kwargs["prompt"] == "auth_required"
     assert hitl_kwargs["continuation_message_id"] == (
         "message-1:step-1:target-1:message"
     )
@@ -3127,7 +3127,7 @@ async def test_run_agent_awaiting_input_request_input_exception_cancels_and_fail
             message_id="message-1:step-1:target-1:message",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
-            status_message="Please authenticate.",
+            status_message="auth_required",
         )
     )
     request_error = RuntimeError("agent request input failed")
@@ -3194,7 +3194,7 @@ async def test_run_agent_awaiting_input_save_interrupted_state_exception_cancels
             message_id="message-1:step-1:target-1:message",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
-            status_message="Please authenticate.",
+            status_message="auth_required",
         )
     )
     executor.hitl_coordinator = SimpleNamespace(
@@ -3336,7 +3336,7 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-2:message",
-                status_message="Need approval.",
+                status_message="auth_required",
             ),
         ]
     )
@@ -3361,7 +3361,7 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
     assert result.status == RunStatus.AWAITING_INPUT
     executor.hitl_coordinator.request_input.assert_awaited_once()
     hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
-    assert hitl_kwargs["prompt"] == "Need approval."
+    assert hitl_kwargs["prompt"] == "auth_required"
     assert hitl_kwargs["continuation_message_id"] == (
         "message-1:step-1:target-2:message"
     )
@@ -3369,7 +3369,7 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
         call.kwargs["kind"].value
         for call in executor._save_interrupted_state.await_args_list
     ]
-    assert save_kinds == ["push_notification", "hitl_agent"]
+    assert save_kinds == ["hitl_agent"]
     state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.AWAITING_USER
@@ -3418,7 +3418,7 @@ async def test_run_multiple_awaiting_input_results_keep_secondary_awaiting_input
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-1:message",
-                status_message="Authenticate account.",
+                status_message="auth_required",
             ),
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
@@ -7626,3 +7626,63 @@ async def test_nonrecoverable_adapter_validation_error_is_terminal():
     assert result.status == RunStatus.FAILED
     assert result.run_state.status == OrchestrationStatus.BUDGET_EXHAUSTED
     assert result.run_state.open_failures == []
+    assert not [
+        failure
+        for failure in result.run_state.open_failures
+        if failure.error_code == "step_budget_exhausted"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_input_required_replans_without_user_facing_awaiting_input():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="ask broker",
+            targets=[PlannedDelegateTarget(agent_id="agent-1", task="Read input")],
+        ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="stop after observing failure",
+            failure_reason="test stop",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.AWAITING_INPUT,
+            response_text="",
+            message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Need the selected text projection.",
+        )
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status != RunStatus.AWAITING_INPUT
+    assert result.run_state.open_failures[0].error_code == "agent_input_required"
+    assert result.run_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value

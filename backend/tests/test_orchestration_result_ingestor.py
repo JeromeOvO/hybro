@@ -931,6 +931,32 @@ def test_ingest_later_success_resolves_only_matching_open_failure():
     assert second_failure.resolved_by_agent_message_id is None
 
 
+def test_input_required_result_creates_recoverable_open_failure():
+    state = _run_state()
+    ingestor = AgentResultIngestor()
+
+    updated = ingestor.ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="awaiting_input",
+            text=None,
+            status_message="Please provide the selected application text.",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+    )
+
+    assert updated.open_failures[0].error_code == "agent_input_required"
+    assert updated.open_failures[0].recoverable is True
+    assert updated.open_failures[0].recovery_hints == [
+        "retry_with_available_resource_refs",
+        "retry_after_resource_projection",
+        "ask_user_if_missing",
+    ]
+
+
 def test_ingest_same_error_for_different_dispatches_creates_distinct_open_failures():
     ingestor = AgentResultIngestor()
     state = _run_state(

@@ -207,6 +207,15 @@ class SupervisorExecutor:
         return RunStatus.FAILED
 
     @staticmethod
+    def _awaiting_result_requires_hitl(result: StepResult) -> bool:
+        status_message = (result.status_message or "").strip().lower()
+        return status_message in {
+            "auth_required",
+            "auth-required",
+            "authentication required",
+        }
+
+    @staticmethod
     def _state_run_result(
         *,
         status: RunStatus,
@@ -1664,50 +1673,48 @@ class SupervisorExecutor:
             ]
 
         if awaiting:
-            trajectory.status = TrajectoryStatus.AWAITING_INPUT
+            hitl_required = [
+                result
+                for result in awaiting
+                if self._awaiting_result_requires_hitl(result)
+            ]
+            if hitl_required:
+                trajectory.status = TrajectoryStatus.AWAITING_INPUT
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.WAITING_AGENT,
+                    advance_step=False,
+                )
+                state, awaiting_status = await self._run_agent_awaiting_input_action(
+                    state=state,
+                    results=results,
+                    awaiting=hitl_required,
+                    trajectory=trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                )
+                return state, awaiting_status
+
             state = await self._ingest_v2_results(
                 state,
                 results,
-                status=OrchestrationStatus.WAITING_AGENT,
-                advance_step=False,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=True,
             )
-            if paused:
-                saved = await self._save_interrupted_state(
-                    kind=InterruptKind.PUSH_NOTIFICATION,
-                    trajectory=trajectory,
-                    paused_results=paused,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                    request_user_id=request_user_id,
-                    message_text=message_text,
-                    agent_registry=agent_registry,
-                    room_config=room_config,
-                    conversation_context=conversation_context,
-                    quoted_text=quoted_text,
-                )
-                if not saved:
-                    trajectory.status = TrajectoryStatus.FAILED
-                    state = await self._mark_v2_terminal(
-                        state,
-                        OrchestrationStatus.FAILED,
-                        reason="failed to save paused v2 continuation",
-                    )
-                    return state, RunStatus.FAILED
-            state, awaiting_status = await self._run_agent_awaiting_input_action(
-                state=state,
-                results=results,
-                awaiting=awaiting,
-                trajectory=trajectory,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
+            logger.info(
+                "orchestration_input_required_recoverable run_id=%s "
+                "awaiting_count=%d",
+                state.run_id,
+                len(awaiting),
             )
-            return state, awaiting_status
+            return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2144,6 +2151,62 @@ class SupervisorExecutor:
             results=results,
             started_at=utcnow(),
             completed_at=utcnow(),
+        )
+
+    async def _continue_agent_task_with_resolved_refs(
+        self,
+        *,
+        awaiting_output: AgentOutputRecord,
+        target: DelegateTarget,
+        resolved_payload: ResolvedDispatchPayload,
+    ) -> StepResult | None:
+        if self.hitl_coordinator is None:
+            return None
+        if not awaiting_output.a2a_task_id or not awaiting_output.a2a_context_id:
+            return None
+        resource_text = "\n\n".join(
+            payload.text
+            for payload in resolved_payload.resource_payloads
+            if isinstance(payload.text, str) and payload.text.strip()
+        ).strip()
+        if not resource_text:
+            return None
+        reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
+            message_id=awaiting_output.agent_message_id,
+            task_id=awaiting_output.a2a_task_id,
+            context_id=awaiting_output.a2a_context_id,
+            user_input=resource_text,
+        )
+        task_state = reply_result.get("task_state") or "completed"
+        response_text = reply_result.get("response_text") or ""
+        if task_state in {"input-required", "auth-required"}:
+            return StepResult(
+                step_number=0,
+                agent_id=awaiting_output.agent_id,
+                agent_name=target.agent_name,
+                task=target.task,
+                response_text="",
+                success=True,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id=awaiting_output.agent_message_id,
+                paused_message_id=awaiting_output.agent_message_id,
+                a2a_task_id=awaiting_output.a2a_task_id,
+                a2a_context_id=awaiting_output.a2a_context_id,
+                status_message=response_text,
+            )
+        return StepResult(
+            step_number=0,
+            agent_id=awaiting_output.agent_id,
+            agent_name=target.agent_name,
+            task=target.task,
+            response_text=response_text,
+            success=task_state not in {"failed", "canceled", "rejected"},
+            status=(
+                StepStatus.SUCCESS
+                if task_state not in {"failed", "canceled", "rejected"}
+                else StepStatus.FAILED
+            ),
+            agent_message_id=awaiting_output.agent_message_id,
         )
 
     async def _run_agent_awaiting_input_action(
