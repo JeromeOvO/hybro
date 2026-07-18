@@ -766,6 +766,51 @@ def test_generic_agents_cover_conditional_no_progress_and_failed_retry_contracts
     assert alternate.allowed is True
 
 
+def test_blocker_context_tracks_run_wide_attempted_agents():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate agents."),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    state = _run_state(
+        candidate_agent_ids=["agent-1", "agent-2"],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+                remaining_required_obligations=["result:$present"],
+            )
+        ],
+    )
+
+    attempted = executor._attempted_agent_ids_for_blocker_context(
+        state,
+        current_agent_ids={"agent-2"},
+    )
+    eligible = executor._eligible_alternate_agent_ids_for_blocker_context(
+        state=state,
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        attempted_agent_ids=attempted,
+    )
+
+    assert attempted == {"agent-1", "agent-2"}
+    assert eligible == set()
+
+
 def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat():
     producer = "generic-producer"
     consumer = "generic-consumer"

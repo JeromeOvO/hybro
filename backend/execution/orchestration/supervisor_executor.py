@@ -1903,11 +1903,15 @@ class SupervisorExecutor:
         entry.completed_at = utcnow()
 
         blocker_available_resource_refs = set(resource_fingerprints)
-        blocker_attempted_agent_ids = {target.agent_id for target in action.targets}
+        blocker_attempted_agent_ids = (
+            self._attempted_agent_ids_for_blocker_context(
+                state,
+                current_agent_ids={target.agent_id for target in action.targets},
+            )
+        )
         blocker_eligible_alternate_agent_ids = (
             self._eligible_alternate_agent_ids_for_blocker_context(
                 state=state,
-                planner_action=planner_action,
                 agent_registry=agent_registry,
                 attempted_agent_ids=blocker_attempted_agent_ids,
             )
@@ -5542,15 +5546,23 @@ class SupervisorExecutor:
             for agent_id in state.candidate_agent_ids
         ]
 
+    @staticmethod
+    def _attempted_agent_ids_for_blocker_context(
+        state: OrchestrationRunState,
+        *,
+        current_agent_ids: set[str],
+    ) -> set[str]:
+        return current_agent_ids | {
+            outcome.agent_id for outcome in state.delegation_outcomes
+        }
+
     def _eligible_alternate_agent_ids_for_blocker_context(
         self,
         *,
         state: OrchestrationRunState,
-        planner_action: PlannerAction,
         agent_registry: list[AgentProfile],
         attempted_agent_ids: set[str],
     ) -> set[str]:
-        del planner_action
         return {
             agent.agent_id
             for agent in self._v2_candidate_scope(state, agent_registry)
