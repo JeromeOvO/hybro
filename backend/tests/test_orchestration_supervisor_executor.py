@@ -4516,11 +4516,15 @@ async def test_sync_v2_resumed_trajectory_clears_pending_hitl_request_ids_after_
     assert persisted_state is not None
     assert persisted_state.pending_hitl_request_ids == []
     events = store._events_by_run["message-1"]
-    assert [event.payload["agent_message_id"] for event in events] == [
+    result_events = [
+        event
+        for event in events
+        if event.type == OrchestrationEventType.AGENT_RESULT_INGESTED
+    ]
+    assert [event.payload["agent_message_id"] for event in result_events] == [
         "message-1:step-1:target-1:message",
     ]
-    assert events[0].state_version == 1
-    assert events[0].type == OrchestrationEventType.AGENT_RESULT_INGESTED
+    assert result_events[0].state_version == 1
 
 
 @pytest.mark.asyncio
@@ -5764,6 +5768,7 @@ async def test_invalidate_v2_required_evidence_persists_exact_event_payload():
 
     saved = await executor._invalidate_v2_required_evidence(
         await store.get_run("run-1"),
+        goal_family_fingerprint="family-1",
         evidence_key="evidence-1",
         obligation_keys=["quote:$present"],
         reason="source_retracted",
@@ -5774,6 +5779,7 @@ async def test_invalidate_v2_required_evidence_persists_exact_event_payload():
     assert event.type == OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED
     assert event.payload == {
         "code": "required_evidence_invalidated",
+        "goal_family_fingerprint": "family-1",
         "evidence_key": "evidence-1",
         "obligation_keys": ["quote:$present"],
         "reason": "source_retracted",
@@ -5796,6 +5802,7 @@ async def test_invalidate_v2_required_evidence_surfaces_event_append_failures(mo
     with pytest.raises(RuntimeError, match="oops"):
         await executor._invalidate_v2_required_evidence(
             await store.get_run("run-1"),
+            goal_family_fingerprint="family-1",
             evidence_key="evidence-1",
             obligation_keys=["quote:$present"],
             reason="source_retracted",
@@ -5808,7 +5815,7 @@ async def test_invalidate_v2_required_evidence_surfaces_event_append_failures(mo
 
 
 @pytest.mark.asyncio
-async def test_ingest_v2_results_distinguishes_changed_error_code():
+async def test_ingest_v2_results_distinguishes_changed_error_message():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
         store=store,
@@ -5833,19 +5840,18 @@ async def test_ingest_v2_results_distinguishes_changed_error_code():
         response_text="failed",
         success=False,
         status=StepStatus.FAILED,
-        error_message="Agent failed",
         agent_message_id="run-1:step-1:target-1:message",
     )
 
     await executor._ingest_v2_results(
         await store.get_run("run-1"),
-        [StepResult(**base, error_code="upstream_timeout")],
+        [StepResult(**base, error_message="Upstream timeout")],
         status=OrchestrationStatus.RUNNING,
         advance_step=True,
     )
     await executor._ingest_v2_results(
         await store.get_run("run-1"),
-        [StepResult(**base, error_code="invalid_request")],
+        [StepResult(**base, error_message="Invalid request")],
         status=OrchestrationStatus.RUNNING,
         advance_step=False,
     )

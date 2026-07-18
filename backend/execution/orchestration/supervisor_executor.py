@@ -3884,23 +3884,15 @@ class SupervisorExecutor:
         output_message_id: str,
         artifacts: list[dict[str, Any]],
     ) -> str:
-        return canonical_content_fingerprint(
+        payload = result.model_dump(mode="json", exclude={"completed_at"})
+        payload.update(
             {
                 "agent_message_id": output_message_id,
-                "agent_id": result.agent_id,
                 "status": cls._v2_result_status_to_agent_result_status(result),
-                "text": result.response_text,
-                "error": result.error_message,
-                "error_code": result.error_code,
                 "artifacts": artifacts,
-                "a2a_task_id": result.a2a_task_id,
-                "a2a_context_id": result.a2a_context_id,
-                "status_message": result.status_message,
-                "interactive_state": result.interactive_state,
-                "requires_auth": result.requires_auth,
-                "requires_policy": result.requires_policy,
             }
         )
+        return canonical_content_fingerprint(payload)
 
     async def _ingest_v2_results(
         self,
@@ -3993,7 +3985,12 @@ class SupervisorExecutor:
                 )
                 if output is not None:
                     history = OutcomeHistoryView.from_state(current)
-                    evaluated = self.delegation_outcome_evaluator.evaluate(
+                    evaluator = getattr(
+                        self,
+                        "delegation_outcome_evaluator",
+                        None,
+                    ) or DelegationOutcomeEvaluator()
+                    evaluated = evaluator.evaluate(
                         current,
                         next_state,
                         matched_intent,
@@ -4068,6 +4065,7 @@ class SupervisorExecutor:
         self,
         state: OrchestrationRunState,
         *,
+        goal_family_fingerprint: str,
         evidence_key: str,
         obligation_keys: list[str],
         reason: str,
@@ -4076,6 +4074,7 @@ class SupervisorExecutor:
         expected_version = state.state_version
         updated, payload = invalidate_required_evidence(
             state,
+            goal_family_fingerprint=goal_family_fingerprint,
             evidence_key=evidence_key,
             obligation_keys=obligation_keys,
             reason=reason,
