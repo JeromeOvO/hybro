@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from execution.orchestration.outcome_evaluator import (
-    effective_output_key,
-    goal_fingerprints,
-)
+from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
+from execution.orchestration.outcome_evaluator import effective_output_key
 from execution.orchestration.outcome_policy import (
     active_completion_scope,
     duplicate_delegate_target_code,
@@ -199,22 +197,7 @@ class PlannerActionValidator:
         target: PlannedDelegateTarget,
         resource_fingerprints: Mapping[str, str],
     ):
-        selected_content_fingerprints = [
-            resource_fingerprints[ref.ref_id]
-            for ref in (
-                *target.context_refs,
-                *target.artifact_refs,
-                *target.attachment_refs,
-            )
-            if ref.ref_id in resource_fingerprints
-        ]
-        return goal_fingerprints(
-            agent_id=target.agent_id,
-            expected_outputs=list(target.expected_outputs),
-            selected_content_fingerprints=selected_content_fingerprints,
-            dependency_family_fingerprints=[],
-            upstream_output_fingerprints=[],
-        )
+        return target_goal_fingerprints(target, resource_fingerprints)
 
     @staticmethod
     def _validate_ask_user(

@@ -216,6 +216,8 @@ class PlannerQuestion(BaseModel):
     choices: list[str] | None = None
     reason: Literal["initial_clarification", "blocker"] = "initial_clarification"
     blocker_keys: list[str] = Field(default_factory=list)
+    required_obligation_keys: list[str] = Field(default_factory=list)
+    blocker_obligations: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AuthorizationBasis(BaseModel):

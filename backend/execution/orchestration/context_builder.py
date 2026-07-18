@@ -12,6 +12,7 @@ from execution.orchestration.candidate_scope import (
     enrich_candidate_scope_snapshot,
 )
 from execution.orchestration.outcome_policy import OutcomeHistoryView
+from execution.orchestration.recovery_policy import recovery_directives
 from execution.orchestration.resources import ResourceRef
 from models.orchestration import OrchestrationRunState
 
@@ -145,6 +146,7 @@ class OrchestrationStateContext(BaseModel):
     dispositions: list[dict[str, Any]] = Field(default_factory=list)
     blockers: list[dict[str, Any]] = Field(default_factory=list)
     attempt_chain_views: list[dict[str, Any]] = Field(default_factory=list)
+    recovery_directives: list[dict[str, Any]] = Field(default_factory=list)
     participant_snapshot: dict[str, Any] | None = None
     system_agent_message_id: str | None = None
     active_dispatches: list[dict[str, Any]] = Field(default_factory=list)
@@ -504,6 +506,7 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         dispositions=_stable_model_list(run_state.goal_family_dispositions),
         blockers=_stable_model_list(run_state.blockers),
         attempt_chain_views=_attempt_chain_views(outcome_history),
+        recovery_directives=recovery_directives(run_state),
         participant_snapshot=(
             _stable_data(run_state.participant_snapshot)
             if run_state.participant_snapshot is not None
