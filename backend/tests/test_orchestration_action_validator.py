@@ -1,4 +1,5 @@
 import pytest
+from jsonschema import ValidationError, validate
 
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
@@ -25,6 +26,7 @@ from models.orchestration import (
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
+    PlannerQuestion,
 )
 
 
@@ -390,6 +392,90 @@ def test_planner_schema_does_not_expose_attachment_policy():
     assert "attachment_policy" not in target_schema["required"]
 
 
+def test_planner_schema_requires_v2_outcome_policy_fields():
+    target_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["targets"]["items"]
+    expected_output_schema = target_schema["properties"]["expected_outputs"]["items"]
+    question_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["questions"]["items"]
+
+    assert set(target_schema["required"]) == {
+        "agent_id",
+        "agent_name",
+        "task",
+        "parallel_group",
+        "depends_on",
+        "required_resource_refs",
+        "context_refs",
+        "artifact_refs",
+        "attachment_refs",
+        "expected_outputs",
+        "repair_of_intent_id",
+    }
+    assert set(expected_output_schema["required"]) == {
+        "output_key",
+        "kind",
+        "required",
+        "description",
+        "artifact_name",
+        "required_fields",
+        "allow_partial",
+    }
+    assert set(question_schema["required"]) == {
+        "prompt",
+        "prompt_type",
+        "choices",
+        "reason",
+        "blocker_keys",
+    }
+    with pytest.raises(ValidationError, match="repair_of_intent_id"):
+        validate(
+            {
+                "action": "delegate",
+                "reasoning": "Use the selected specialist.",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Provide a summary.",
+                        "parallel_group": None,
+                        "depends_on": [],
+                        "required_resource_refs": [],
+                        "context_refs": [],
+                        "artifact_refs": [],
+                        "attachment_refs": [],
+                        "expected_outputs": [],
+                    }
+                ],
+                "questions": [],
+                "synthesis_instruction": None,
+                "failure_reason": None,
+                "completion_evidence": None,
+            },
+            PLANNER_ACTION_RESPONSE_SCHEMA,
+        )
+
+
+def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
+    action = RoomSupervisorService._parse_legacy_action_as_planner_action(
+        {
+            "action": "delegate",
+            "reasoning": "Use the selected specialist.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "task": "Provide a summary.",
+                    "expected_outputs": [{"kind": "summary"}],
+                }
+            ],
+            "questions": [{"prompt": "What should we prioritize?"}],
+        }
+    )
+
+    target = action.targets[0]
+    assert target.repair_of_intent_id is None
+    assert target.expected_outputs[0] == DispatchExpectedOutput(kind="summary")
+    assert action.questions[0] == PlannerQuestion(prompt="What should we prioritize?")
+
+
 @pytest.mark.asyncio
 async def test_planner_adapter_defaults_missing_attachment_policy_to_explicit_refs_only():
     raw_action = {
@@ -492,6 +578,10 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     assert dependency_fields <= target_schema["properties"].keys()
     assert dependency_fields <= set(target_schema["required"])
     assert "shared non-null parallel_group" in supervisor_service.system_prompt
+    assert (
+        "output_key, kind, required, description, artifact_name, required_fields, "
+        "and allow_partial"
+    ) in supervisor_service.system_prompt
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():

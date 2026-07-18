@@ -312,3 +312,20 @@ async def test_supervisor_service_uses_default_supervisor_model_for_json_text_an
     assert gateway.structured_calls[0][1]["model"] == "supervisor_model"
     assert gateway.generate_calls[0][1]["model"] == "supervisor_model"
     assert gateway.stream_calls[0][1]["model"] == "supervisor_model"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_service_preserves_strict_schema_for_gateway_validation():
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"action": {"type": "string"}, "reason": {"type": "string"}},
+        "required": ["action", "reason"],
+    }
+    gateway = FakeWorkflowGateway(structured_data={"action": "delegate"})
+    service = SupervisorLLMService(gateway)
+
+    await service.call_json("system", "user", schema=schema)
+
+    submitted_schema = gateway.structured_calls[0][1]["schema"]
+    assert submitted_schema["additionalProperties"] is False

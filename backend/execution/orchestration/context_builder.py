@@ -11,6 +11,7 @@ from execution.orchestration.candidate_scope import (
     candidate_scope_items,
     enrich_candidate_scope_snapshot,
 )
+from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.resources import ResourceRef
 from models.orchestration import OrchestrationRunState
 
@@ -139,6 +140,11 @@ class OrchestrationStateContext(BaseModel):
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
     pending_hitl_request_ids: list[str] = Field(default_factory=list)
     open_failures: list[dict[str, Any]] = Field(default_factory=list)
+    outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    continuations: list[dict[str, Any]] = Field(default_factory=list)
+    dispositions: list[dict[str, Any]] = Field(default_factory=list)
+    blockers: list[dict[str, Any]] = Field(default_factory=list)
+    attempt_chain_views: list[dict[str, Any]] = Field(default_factory=list)
     participant_snapshot: dict[str, Any] | None = None
     system_agent_message_id: str | None = None
     active_dispatches: list[dict[str, Any]] = Field(default_factory=list)
@@ -471,6 +477,7 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         steps_remaining=steps_remaining,
         next_step_number=run_state.steps_used + 1,
     )
+    outcome_history = OutcomeHistoryView.from_state(run_state)
 
     return OrchestrationStateContext(
         run=run_metadata,
@@ -492,6 +499,11 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         open_failures=[
             failure.model_dump(mode="json") for failure in run_state.open_failures
         ],
+        outcomes=_stable_model_list(outcome_history.outcomes),
+        continuations=_stable_model_list(run_state.pending_agent_continuations),
+        dispositions=_stable_model_list(run_state.goal_family_dispositions),
+        blockers=_stable_model_list(run_state.blockers),
+        attempt_chain_views=_attempt_chain_views(outcome_history),
         participant_snapshot=(
             _stable_data(run_state.participant_snapshot)
             if run_state.participant_snapshot is not None
@@ -512,6 +524,34 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         summary_intent_id=run_state.summary_intent_id,
         summary_message_id=run_state.summary_message_id,
     )
+
+
+def _attempt_chain_views(history: OutcomeHistoryView) -> list[dict[str, Any]]:
+    seen_keys: set[tuple[str, str]] = set()
+    views: list[dict[str, Any]] = []
+    for outcome in history.outcomes:
+        key = (outcome.agent_id, outcome.goal_revision_fingerprint)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        chain = history.chain(*key)
+        views.append(
+            {
+                "agent_id": chain.agent_id,
+                "goal_revision_fingerprint": chain.goal_revision_fingerprint,
+                "same_agent_attempt_number": chain.same_agent_attempt_number,
+                "required_progress_epoch": chain.required_progress_epoch,
+                "no_progress_repair_used_in_epoch": (
+                    chain.no_progress_repair_used_in_epoch
+                ),
+                "latest_outcome_id": (
+                    chain.latest_outcome.outcome_id
+                    if chain.latest_outcome is not None
+                    else None
+                ),
+            }
+        )
+    return views
 
 
 def _stable_model_list(values: Iterable[BaseModel]) -> list[dict[str, Any]]:

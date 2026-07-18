@@ -19,14 +19,18 @@ from execution.orchestration.room_supervisor_service import RoomSupervisorServic
 from models.orchestration import (
     AgentOutputRecord,
     AuthorizationBasis,
+    BlockerRecord,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
+    DelegationOutcomeRecord,
     DispatchIntent,
+    GoalFamilyDispositionRecord,
     OpenFailureRecord,
     OrchestrationRunState,
     OrchestrationStatus,
     ParticipantSnapshot,
+    PendingAgentContinuation,
     PlannerActionRecord,
     PlannerActionType,
 )
@@ -420,6 +424,89 @@ def test_context_builder_exposes_open_failures_to_planner():
 
     assert context.state_context.open_failures[0]["failure_id"] == "failure-1"
     assert context.state_context.open_failures[0]["recoverable"] is True
+
+
+def test_context_builder_exposes_immutable_outcome_policy_views_without_artifacts():
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        missing_output_keys=["summary"],
+        remaining_required_obligations=["summary"],
+        blockers=[
+            BlockerRecord(
+                key="blocker-1",
+                description="Need a required input.",
+                blocked_output_keys=["summary"],
+                source="agent",
+            )
+        ],
+    )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="planned-1",
+                agent_id="agent-1",
+                task="Summarize the request.",
+                task_hash="task-1",
+                status="completed",
+            )
+        ],
+        delegation_outcomes=[outcome],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="continuation-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-message-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        goal_family_dispositions=[
+            GoalFamilyDispositionRecord(
+                event_id="disposition-1",
+                goal_family_fingerprint="family-1",
+                through_goal_revision_fingerprint="revision-1",
+                status="superseded",
+                reason="A replacement plan is active.",
+            )
+        ],
+        blockers=outcome.blockers,
+        artifacts=[{"key": "artifact-1", "payload": {"sensitive": "value"}}],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Continue the workflow",
+    )
+    state.delegation_outcomes[0].status = "fulfilled"
+    payload = context.prompt_payload()["state_context"]
+
+    assert payload["outcomes"][0]["status"] == "partial"
+    assert payload["continuations"][0]["continuation_id"] == "continuation-1"
+    assert payload["dispositions"][0]["event_id"] == "disposition-1"
+    assert payload["blockers"][0]["key"] == "blocker-1"
+    assert payload["attempt_chain_views"] == [
+        {
+            "agent_id": "agent-1",
+            "goal_revision_fingerprint": "revision-1",
+            "same_agent_attempt_number": 1,
+            "required_progress_epoch": 0,
+            "no_progress_repair_used_in_epoch": False,
+            "latest_outcome_id": "outcome-1",
+        }
+    ]
+    assert "payload" not in payload["attempt_chain_views"][0]
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
