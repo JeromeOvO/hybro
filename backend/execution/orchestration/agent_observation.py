@@ -57,16 +57,6 @@ def extract_agent_observation(  # noqa: C901
                         )
                     continue
                 if value is None:
-                    _record_missing(
-                        unknowns_by_key,
-                        blockers_by_key,
-                        agent_message_id=agent_message_id,
-                        source_agent_message_id=agent_message_id,
-                        source_agent_id=agent_id,
-                        missing_key=path,
-                        description=f"Agent result has no value for {path}.",
-                        evidence_refs=evidence_refs,
-                    )
                     continue
                 facts.append(
                     {

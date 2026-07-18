@@ -1645,6 +1645,37 @@ def test_ingest_projects_agent_observation_unknowns_and_candidate_blockers():
     )
 
 
+def test_ingest_ignores_optional_nulls_without_explicit_missing_signal():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "optional_note": None,
+                                "optional_endorsement": None,
+                                "optional_reference": None,
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    assert updated.facts == []
+    assert updated.unknowns == []
+    assert updated.blockers == []
+
+
 def test_ingest_sanitizes_external_blocker_validation_flags():
     updated = AgentResultIngestor().ingest(
         _run_state(),

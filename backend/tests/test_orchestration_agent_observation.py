@@ -114,6 +114,36 @@ def test_does_not_create_missing_unknown_for_false_zero_or_empty_list():
     }
 
 
+def test_ignores_null_values_without_an_explicit_missing_signal():
+    observation = extract_agent_observation(
+        agent_message_id="agent-msg-4",
+        agent_id="agent-1",
+        status="completed",
+        text=None,
+        status_message=None,
+        artifact_records=[
+            {
+                "artifact_key": "agent-msg-4:artifact_id:quote",
+                "name": "quote",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "optional_note": None,
+                            "optional_endorsement": None,
+                            "optional_reference": None,
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert observation.facts == []
+    assert observation.unknowns == []
+    assert observation.blocker_candidates == []
+
+
 def test_records_completed_text_as_untrusted_evidence_only():
     observation = extract_agent_observation(
         agent_message_id="agent-msg-4",
