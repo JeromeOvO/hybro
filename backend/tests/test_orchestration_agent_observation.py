@@ -128,7 +128,7 @@ def test_records_completed_text_as_untrusted_evidence_only():
     assert observation.blocker_candidates == []
     assert observation.facts == [
         {
-            "fact_id": "agent-msg-4:text",
+            "fact_id": "agent-msg-4:text_evidence",
             "kind": "agent_text_evidence",
             "semantic_key": "agent_text_evidence:agent-msg-4",
             "value": "Submission is partial. Missing fields: industry, requested limit.",

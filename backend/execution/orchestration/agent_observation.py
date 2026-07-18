@@ -87,7 +87,7 @@ def extract_agent_observation(  # noqa: C901
     if text_evidence is not None and not artifact_records:
         facts.append(
             {
-                "fact_id": f"{agent_message_id}:text",
+                "fact_id": f"{agent_message_id}:text_evidence",
                 "kind": "agent_text_evidence",
                 "semantic_key": f"agent_text_evidence:{agent_message_id}",
                 "value": text_evidence,

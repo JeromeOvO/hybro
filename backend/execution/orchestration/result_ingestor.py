@@ -249,6 +249,17 @@ class AgentResultIngestor:
         result: AgentResultRead,
         result_artifact_keys: list[str],
     ) -> bool:
+        existing_output = next(
+            (
+                output
+                for output in state.agent_outputs
+                if output.agent_message_id == result.agent_message_id
+            ),
+            None,
+        )
+        if _is_sparse_terminal_replay(existing_output, result):
+            return False
+
         artifact_key_set = set(result_artifact_keys)
         observation_artifacts = [
             artifact
@@ -264,10 +275,30 @@ class AgentResultIngestor:
             status_message=result.status_message,
             artifact_records=observation_artifacts,
         )
+        observation_fact_ids = {fact["fact_id"] for fact in observation.facts}
+        retained_facts = [
+            fact
+            for fact in state.facts
+            if not (
+                isinstance(fact, dict)
+                and fact.get("source_agent_message_id") == result.agent_message_id
+                and fact.get("kind")
+                in {"agent_observation", "agent_text_evidence"}
+                and fact.get("fact_id") not in observation_fact_ids
+            )
+        ]
+        stale_facts_removed = retained_facts != state.facts
+        if stale_facts_removed:
+            state.facts = retained_facts
         facts_changed = _upsert_observation_facts(state, observation.facts)
         unknowns_changed = _upsert_unknowns(state, observation.unknowns)
         blockers_changed = _upsert_blockers(state, observation.blocker_candidates)
-        return facts_changed or unknowns_changed or blockers_changed
+        return (
+            stale_facts_removed
+            or facts_changed
+            or unknowns_changed
+            or blockers_changed
+        )
 
     @staticmethod
     def _merge_output(

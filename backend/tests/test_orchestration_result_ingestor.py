@@ -304,6 +304,16 @@ def test_ingest_projects_text_into_deduplicated_fact():
 
     assert updated.facts == [
         {
+            "fact_id": "agent-msg-1:text_evidence",
+            "kind": "agent_text_evidence",
+            "semantic_key": "agent_text_evidence:agent-msg-1",
+            "value": "Carrier A can quote the risk.",
+            "source_agent_message_id": "agent-msg-1",
+            "source_agent_id": "agent-1",
+            "evidence_refs": ["agent-msg-1", "agent-msg-1:text_or_status"],
+            "trusted_for_blocker_keys": False,
+        },
+        {
             "fact_id": "agent-msg-1:text",
             "source_agent_message_id": "agent-msg-1",
             "source_agent_id": "agent-1",
@@ -325,8 +335,31 @@ def test_reingesting_same_text_does_not_duplicate_fact():
     once = ingestor.ingest(_run_state(), result)
     twice = ingestor.ingest(once, result)
 
-    assert len(twice.facts) == 1
-    assert twice.facts[0]["fact_id"] == "agent-msg-1:text"
+    assert len(twice.facts) == 2
+    assert {fact["fact_id"] for fact in twice.facts} == {
+        "agent-msg-1:text",
+        "agent-msg-1:text_evidence",
+    }
+
+
+def test_ingest_preserves_untrusted_text_evidence_for_awaiting_input():
+    updated = AgentResultIngestor().ingest(
+        _run_state(),
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="awaiting_input",
+            status_message="Need the requested limit before continuing.",
+        ),
+    )
+
+    assert [fact["fact_id"] for fact in updated.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert updated.facts[0]["value"] == (
+        "Need the requested limit before continuing."
+    )
+    assert updated.facts[0]["trusted_for_blocker_keys"] is False
 
 
 def test_ingest_artifact_records_source_and_summary():
@@ -419,13 +452,24 @@ def test_reingesting_changed_text_updates_existing_fact():
     once = ingestor.ingest(_run_state(), first)
     twice = ingestor.ingest(once, changed)
 
-    assert len(twice.facts) == 1
-    assert twice.facts[0] == {
+    assert len(twice.facts) == 2
+    facts_by_id = {fact["fact_id"]: fact for fact in twice.facts}
+    assert facts_by_id["agent-msg-1:text"] == {
         "fact_id": "agent-msg-1:text",
         "source_agent_message_id": "agent-msg-1",
         "source_agent_id": "agent-2",
         "kind": "agent_text",
         "text": "Carrier B declined the risk.",
+    }
+    assert facts_by_id["agent-msg-1:text_evidence"] == {
+        "fact_id": "agent-msg-1:text_evidence",
+        "kind": "agent_text_evidence",
+        "semantic_key": "agent_text_evidence:agent-msg-1",
+        "value": "Carrier B declined the risk.",
+        "source_agent_message_id": "agent-msg-1",
+        "source_agent_id": "agent-2",
+        "evidence_refs": ["agent-msg-1", "agent-msg-1:text_or_status"],
+        "trusted_for_blocker_keys": False,
     }
 
 
@@ -707,7 +751,7 @@ def test_reingesting_artifacts_replaces_current_keys_and_removes_stale_records()
         for artifact in with_one.artifacts
     )
 
-def test_reingesting_failed_or_canceled_text_removes_existing_fact():
+def test_reingesting_failed_or_canceled_text_keeps_only_untrusted_evidence():
     ingestor = AgentResultIngestor()
     first = AgentResultRead(
         agent_message_id="agent-msg-1",
@@ -732,8 +776,16 @@ def test_reingesting_failed_or_canceled_text_removes_existing_fact():
     failed_update = ingestor.ingest(once, failed)
     canceled_update = ingestor.ingest(once, canceled)
 
-    assert failed_update.facts == []
-    assert canceled_update.facts == []
+    assert [fact["fact_id"] for fact in failed_update.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert failed_update.facts[0]["value"] == "Partial carrier response."
+    assert failed_update.facts[0]["trusted_for_blocker_keys"] is False
+    assert [fact["fact_id"] for fact in canceled_update.facts] == [
+        "agent-msg-1:text_evidence"
+    ]
+    assert canceled_update.facts[0]["value"] == "Stopped before completion."
+    assert canceled_update.facts[0]["trusted_for_blocker_keys"] is False
 
 
 def test_ingest_artifact_summary_falls_back_to_description():
