@@ -161,6 +161,24 @@ def test_ingest_preserves_a2a_routing_metadata():
     assert updated.agent_outputs[0].status_message == "Awaiting confirmation"
 
 
+def test_ingest_preserves_structured_interactive_metadata():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="awaiting_input",
+        interactive_state="auth-required",
+        requires_auth=True,
+        requires_policy=False,
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    output = updated.agent_outputs[0]
+    assert output.interactive_state == "auth-required"
+    assert output.requires_auth is True
+    assert output.requires_policy is False
+
+
 def test_reingesting_updates_a2a_routing_metadata():
     initial = AgentResultRead(
         agent_message_id="agent-msg-1",

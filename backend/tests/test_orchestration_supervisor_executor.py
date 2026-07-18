@@ -1714,7 +1714,19 @@ async def test_v2_result_without_message_id_updates_fallback_intents_in_order():
 
 
 @pytest.mark.asyncio
-async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_ids(monkeypatch):
+@pytest.mark.parametrize(
+    ("interactive_state", "requires_auth", "requires_policy"),
+    [
+        ("auth-required", True, False),
+        ("policy-required", False, True),
+    ],
+)
+async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_ids(
+    monkeypatch,
+    interactive_state: str,
+    requires_auth: bool,
+    requires_policy: bool,
+):
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1755,7 +1767,10 @@ async def test_run_awaiting_input_status_is_not_persisted_without_hitl_request_i
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-1:message",
-                status_message="auth_required",
+                status_message="Please complete the requested action.",
+                interactive_state=interactive_state,
+                requires_auth=requires_auth,
+                requires_policy=requires_policy,
             ),
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
@@ -3052,6 +3067,8 @@ async def test_run_agent_awaiting_input_creates_hitl_prompt_and_continuation():
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
             status_message="auth_required",
+            interactive_state="auth-required",
+            requires_auth=True,
         )
     )
     executor.hitl_coordinator = SimpleNamespace(
@@ -3128,6 +3145,8 @@ async def test_run_agent_awaiting_input_request_input_exception_cancels_and_fail
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
             status_message="auth_required",
+            interactive_state="auth-required",
+            requires_auth=True,
         )
     )
     request_error = RuntimeError("agent request input failed")
@@ -3195,6 +3214,8 @@ async def test_run_agent_awaiting_input_save_interrupted_state_exception_cancels
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
             status_message="auth_required",
+            interactive_state="auth-required",
+            requires_auth=True,
         )
     )
     executor.hitl_coordinator = SimpleNamespace(
@@ -3337,6 +3358,8 @@ async def test_run_mixed_paused_and_awaiting_input_creates_hitl_prompt():
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-2:message",
                 status_message="auth_required",
+                interactive_state="auth-required",
+                requires_auth=True,
             ),
         ]
     )
@@ -3419,6 +3442,8 @@ async def test_run_multiple_awaiting_input_results_keep_secondary_awaiting_input
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="message-1:step-1:target-1:message",
                 status_message="auth_required",
+                interactive_state="auth-required",
+                requires_auth=True,
             ),
             ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
@@ -4879,6 +4904,8 @@ async def test_run_resumed_pending_awaiting_input_without_dispatch_intents_does_
                         a2a_task_id="task-1",
                         a2a_context_id="ctx-1",
                         status_message="Provide missing details",
+                        interactive_state="auth-required",
+                        requires_auth=True,
                     )
                 ],
                 started_at=utcnow(),
@@ -7686,3 +7713,37 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
     assert result.status != RunStatus.AWAITING_INPUT
     assert result.run_state.open_failures[0].error_code == "agent_input_required"
     assert result.run_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+    assert len(planner.contexts) == 2
+    assert (
+        planner.contexts[1].state_context.open_failures[0]["error_code"]
+        == "agent_input_required"
+    )
+
+
+@pytest.mark.parametrize(
+    ("interactive_state", "requires_auth", "requires_policy"),
+    [
+        ("auth-required", True, False),
+        ("policy-required", False, True),
+    ],
+)
+def test_awaiting_result_requires_hitl_from_structured_metadata(
+    interactive_state: str,
+    requires_auth: bool,
+    requires_policy: bool,
+):
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Handle the request",
+        response_text="",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        status_message="Please complete the requested action.",
+        interactive_state=interactive_state,
+        requires_auth=requires_auth,
+        requires_policy=requires_policy,
+    )
+
+    assert SupervisorExecutor._awaiting_result_requires_hitl(result) is True

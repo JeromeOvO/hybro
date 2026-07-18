@@ -31,6 +31,9 @@ class AgentResultRead(BaseModel):
     a2a_task_id: str | None = None
     a2a_context_id: str | None = None
     status_message: str | None = None
+    interactive_state: str | None = None
+    requires_auth: bool = False
+    requires_policy: bool = False
 
 
 _STABLE_ID_FIELDS = (
@@ -251,6 +254,9 @@ class AgentResultIngestor:
                     a2a_task_id=result.a2a_task_id,
                     a2a_context_id=result.a2a_context_id,
                     status_message=result.status_message,
+                    interactive_state=result.interactive_state,
+                    requires_auth=result.requires_auth,
+                    requires_policy=result.requires_policy,
                 )
             )
             changed = True
@@ -259,12 +265,19 @@ class AgentResultIngestor:
                 existing_output,
                 result,
             )
-            if existing_output.agent_id != result.agent_id:
-                existing_output.agent_id = result.agent_id
-                changed = True
-            if existing_output.status != result.status:
-                existing_output.status = result.status
-                changed = True
+            for field, value in (
+                ("agent_id", result.agent_id),
+                ("status", result.status),
+                ("a2a_task_id", result.a2a_task_id),
+                ("a2a_context_id", result.a2a_context_id),
+                ("status_message", result.status_message),
+                ("interactive_state", result.interactive_state),
+                ("requires_auth", result.requires_auth),
+                ("requires_policy", result.requires_policy),
+            ):
+                if getattr(existing_output, field) != value:
+                    setattr(existing_output, field, value)
+                    changed = True
             if result.text is not None and existing_output.text != result.text:
                 existing_output.text = result.text
                 changed = True
@@ -276,15 +289,6 @@ class AgentResultIngestor:
                 and existing_output.artifact_keys != result_artifact_keys
             ):
                 existing_output.artifact_keys = result_artifact_keys
-                changed = True
-            if existing_output.a2a_task_id != result.a2a_task_id:
-                existing_output.a2a_task_id = result.a2a_task_id
-                changed = True
-            if existing_output.a2a_context_id != result.a2a_context_id:
-                existing_output.a2a_context_id = result.a2a_context_id
-                changed = True
-            if existing_output.status_message != result.status_message:
-                existing_output.status_message = result.status_message
                 changed = True
 
         return changed

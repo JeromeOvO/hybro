@@ -330,6 +330,15 @@ class DirectTransport(AgentTransport):
                     a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
                     a2a_context_id=task.context_id if hasattr(task, "context_id") else task_data.get("contextId"),
                     status_message=status_msg,
+                    interactive_state=state_str(task.status.state),
+                    requires_auth=(
+                        state_str(task.status.state)
+                        == CommonTaskState.AUTH_REQUIRED.value
+                    ),
+                    requires_policy=bool(
+                        (task_data.get("metadata") or {}).get("requires_policy")
+                        or (task_data.get("metadata") or {}).get("policy_required")
+                    ),
                 )
 
             logger.info(

@@ -208,11 +208,12 @@ class SupervisorExecutor:
 
     @staticmethod
     def _awaiting_result_requires_hitl(result: StepResult) -> bool:
-        status_message = (result.status_message or "").strip().lower()
-        return status_message in {
+        interactive_state = (result.interactive_state or "").strip().lower()
+        return result.requires_auth or result.requires_policy or interactive_state in {
             "auth_required",
             "auth-required",
-            "authentication required",
+            "policy_required",
+            "policy-required",
         }
 
     @staticmethod
@@ -397,6 +398,9 @@ class SupervisorExecutor:
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
             status_message=output.status_message,
+            interactive_state=output.interactive_state,
+            requires_auth=output.requires_auth,
+            requires_policy=output.requires_policy,
         )
 
     @staticmethod
@@ -2023,6 +2027,9 @@ class SupervisorExecutor:
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
             status_message=output.status_message,
+            interactive_state=output.interactive_state,
+            requires_auth=output.requires_auth,
+            requires_policy=output.requires_policy,
         )
 
     async def _v2_result_from_committed_agent_message(
@@ -2121,6 +2128,15 @@ class SupervisorExecutor:
             if is_success or is_input_required
             else "Agent task failed",
             status_message=response_status_message,
+            interactive_state=last_state if is_input_required else None,
+            requires_auth=last_state == "auth-required",
+            requires_policy=(
+                last_state == "policy-required"
+                or bool(
+                    task_metadata_dict.get("requires_policy")
+                    or task_metadata_dict.get("policy_required")
+                )
+            ),
             a2a_task_id=_field_from_task(task_metadata_dict, "hitl_a2a_task_id"),
             a2a_context_id=_field_from_task(task_metadata_dict, "hitl_a2a_context_id"),
             agent_message_id=intent.planned_agent_message_id,
@@ -3084,6 +3100,9 @@ class SupervisorExecutor:
                 a2a_task_id=output.a2a_task_id,
                 a2a_context_id=output.a2a_context_id,
                 status_message=output.status_message,
+                interactive_state=output.interactive_state,
+                requires_auth=output.requires_auth,
+                requires_policy=output.requires_policy,
             )
         if not any(
             result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
@@ -4030,6 +4049,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     ),
                 )
 
@@ -4299,6 +4321,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     )
                     state.agent_outputs.append(output)
                     outputs_by_message_id[output_message_id] = output
@@ -5382,6 +5407,9 @@ class SupervisorExecutor:
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
                         status_message=result.status_message,
+                        interactive_state=result.interactive_state,
+                        requires_auth=result.requires_auth,
+                        requires_policy=result.requires_policy,
                     )
 
                 if result.status == ProcessingStatus.SUCCESS and request_user_id and self.rate_limit_service:
