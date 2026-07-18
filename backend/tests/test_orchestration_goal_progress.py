@@ -78,6 +78,7 @@ def test_goal_progress_reopens_invalidated_required_evidence():
 
     invalidated, _ = invalidate_required_evidence(
         state,
+        goal_family_fingerprint="family-1",
         evidence_key="quote-evidence",
         obligation_keys=["quote:$present"],
         reason="The quote evidence is no longer valid.",
@@ -111,6 +112,7 @@ def test_goal_progress_allows_later_satisfaction_to_supersede_invalidation():
     )
     invalidated, _ = invalidate_required_evidence(
         state,
+        goal_family_fingerprint="family-1",
         evidence_key="quote-evidence",
         obligation_keys=["quote:$present"],
         reason="The original quote evidence is no longer valid.",
