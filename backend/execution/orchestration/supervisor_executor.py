@@ -1594,7 +1594,7 @@ class SupervisorExecutor:
         request_user_id: str | None,
         quoted_text: str | None,
         user_message,
-        resource_fingerprints: Mapping[str, str],
+        resource_fingerprints: Mapping[str, str] | None = None,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
@@ -1616,7 +1616,7 @@ class SupervisorExecutor:
                 step_number=step_number,
                 target_index=index,
                 target=target,
-                resource_fingerprints=resource_fingerprints,
+                resource_fingerprints=resource_fingerprints or {},
             )
             for index, target in enumerate(action.targets, start=1)
         ]

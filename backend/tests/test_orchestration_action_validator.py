@@ -1252,6 +1252,7 @@ def test_exhausted_failed_retry_is_rejected_without_repair_lineage():
         attempt_fingerprint="attempt-1",
         status="failed",
         remaining_required_obligations=["quote:$present"],
+        open_failure_ids=["f1"],
     )
     failure = OpenFailureRecord(
         failure_id="f1",
@@ -1298,6 +1299,7 @@ def test_failed_retry_with_remaining_budget_is_allowed_without_repair_lineage():
         attempt_fingerprint="attempt-1",
         status="failed",
         remaining_required_obligations=["quote:$present"],
+        open_failure_ids=["f1"],
     )
     failure = OpenFailureRecord(
         failure_id="f1",
