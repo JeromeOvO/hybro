@@ -8567,14 +8567,16 @@ async def test_persisted_resource_fingerprints_seed_continuation_attempts():
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         return_value=SimpleNamespace(
             extend_info={
-                "resolved_dispatch_resource_payloads": [
-                    {
-                        "ref_id": "ctx:file-1:text",
-                        "kind": "context",
-                        "mime_type": "text/plain",
-                        "text": "Projected input",
-                    }
-                ]
+                "resolved_dispatch_payload_refs": {
+                    "resource_payloads": [
+                        {
+                            "ref_id": "ctx:file-1:text",
+                            "kind": "context",
+                            "mime_type": "text/plain",
+                            "text": "Projected input",
+                        }
+                    ]
+                }
             }
         )
     )

@@ -4336,9 +4336,14 @@ class SupervisorExecutor:
             output_message_id
         )
         extend_info = getattr(message, "extend_info", None) if message else None
-        payloads = (
-            extend_info.get("resolved_dispatch_resource_payloads")
+        resolved_payload_refs = (
+            extend_info.get("resolved_dispatch_payload_refs")
             if isinstance(extend_info, Mapping)
+            else {}
+        )
+        payloads = (
+            resolved_payload_refs.get("resource_payloads")
+            if isinstance(resolved_payload_refs, Mapping)
             else None
         )
         if not isinstance(payloads, list):
