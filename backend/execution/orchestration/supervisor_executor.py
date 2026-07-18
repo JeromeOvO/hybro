@@ -2417,16 +2417,13 @@ class SupervisorExecutor:
             return claimed
         return None
 
-    async def _reconcile_persisted_continuation(
+    def _continuation_reconciliation_update(
         self,
         *,
-        state: OrchestrationRunState,
+        current: OrchestrationRunState,
         continuation_id: str,
         status: str,
-    ) -> OrchestrationRunState:
-        current = await self.orchestration_run_store.get_run(state.run_id)
-        if current is None:
-            return state
+    ) -> tuple[OrchestrationRunState, PendingAgentContinuation] | None:
         continuation = next(
             (
                 item
@@ -2436,10 +2433,10 @@ class SupervisorExecutor:
             None,
         )
         if continuation is None:
-            return current
+            return None
         reconciled = reconcile_continuation(continuation, status=status)
         if reconciled == continuation:
-            return current
+            return None
 
         lineage_intent_ids = self._lineage_intent_ids(
             current,
@@ -2491,24 +2488,50 @@ class SupervisorExecutor:
                         failure.updated_at = utcnow()
         updated.state_version = current.state_version + 1
         updated.updated_at = utcnow()
-        saved = await self.orchestration_run_store.save_state(
-            updated,
-            expected_version=current.state_version,
-        )
-        if status in {"resolved", "abandoned"}:
-            await self._append_v2_event(
-                saved,
-                (
-                    OrchestrationEventType.CONTINUATION_RESOLVED
-                    if status == "resolved"
-                    else OrchestrationEventType.CONTINUATION_ABANDONED
-                ),
-                payload={
-                    "continuation_id": continuation_id,
-                    "source_intent_id": continuation.source_intent_id,
-                },
+        return updated, continuation
+
+    async def _reconcile_persisted_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation_id: str,
+        status: str,
+    ) -> OrchestrationRunState:
+        for _attempt in range(2):
+            current = await self.orchestration_run_store.get_run(state.run_id)
+            if current is None:
+                return state
+            update = self._continuation_reconciliation_update(
+                current=current,
+                continuation_id=continuation_id,
+                status=status,
             )
-        return saved
+            if update is None:
+                return current
+            updated, continuation = update
+            try:
+                saved = await self.orchestration_run_store.save_state(
+                    updated,
+                    expected_version=current.state_version,
+                )
+            except OrchestrationStoreConflict:
+                continue
+            if status in {"resolved", "abandoned"}:
+                await self._append_v2_event(
+                    saved,
+                    (
+                        OrchestrationEventType.CONTINUATION_RESOLVED
+                        if status == "resolved"
+                        else OrchestrationEventType.CONTINUATION_ABANDONED
+                    ),
+                    payload={
+                        "continuation_id": continuation_id,
+                        "source_intent_id": continuation.source_intent_id,
+                    },
+                )
+            return saved
+        latest = await self.orchestration_run_store.get_run(state.run_id)
+        return latest or state
 
     async def _record_a2a_task_recovery(
         self,

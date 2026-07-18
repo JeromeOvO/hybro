@@ -8654,6 +8654,61 @@ async def test_resolving_continuation_completes_nonterminal_lineage():
 
 
 @pytest.mark.asyncio
+async def test_reconciling_continuation_retries_store_conflict(monkeypatch):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Continue"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+                status="resuming",
+            )
+        ],
+    )
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    original_save_state = store.save_state
+    save_attempts = 0
+
+    async def save_with_one_conflict(updated, *, expected_version):
+        nonlocal save_attempts
+        save_attempts += 1
+        if save_attempts == 1:
+            raise OrchestrationStoreConflict("competing continuation update")
+        return await original_save_state(
+            updated,
+            expected_version=expected_version,
+        )
+
+    monkeypatch.setattr(store, "save_state", save_with_one_conflict)
+
+    saved = await executor._reconcile_persisted_continuation(
+        state=state,
+        continuation_id="cont-1",
+        status="resolved",
+    )
+
+    assert save_attempts == 2
+    assert saved.pending_agent_continuations[0].status == "resolved"
+
+
+@pytest.mark.asyncio
 async def test_plain_continuation_preserves_auth_required_classification():
     user_message = RoomUserMessage(
         room_id="room-1",
