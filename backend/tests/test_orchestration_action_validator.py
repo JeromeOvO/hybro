@@ -33,13 +33,17 @@ from models.orchestration import (
 )
 
 
-def _state_for_validation() -> OrchestrationRunState:
+def _state_for_validation(
+    *,
+    open_questions: list[dict] | None = None,
+) -> OrchestrationRunState:
     return OrchestrationRunState(
         run_id="run-1",
         room_id="room-1",
         user_message_id="message-1",
         goal="Coordinate this",
         candidate_agent_ids=["agent-1"],
+        open_questions=list(open_questions or []),
     )
 
 

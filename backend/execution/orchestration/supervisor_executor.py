@@ -3344,8 +3344,6 @@ class SupervisorExecutor:
                     RunStatus.AWAITING_INPUT
                     if has_awaiting_input
                     else RunStatus.PAUSED
-                    if has_paused_pending
-                    else None
                 )
                 if synced.status != pending_status:
                     synced = await self._save_v2_state(
