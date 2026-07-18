@@ -135,6 +135,7 @@ def required_obligations(outputs: list[DispatchExpectedOutput]) -> set[str]:
 def invalidate_required_evidence(
     state: OrchestrationRunState,
     *,
+    goal_family_fingerprint: str,
     evidence_key: str,
     obligation_keys: list[str],
     reason: str,
@@ -142,6 +143,7 @@ def invalidate_required_evidence(
 ) -> tuple[OrchestrationRunState, dict[str, object]]:
     payload = {
         "code": "required_evidence_invalidated",
+        "goal_family_fingerprint": goal_family_fingerprint,
         "evidence_key": evidence_key,
         "obligation_keys": sorted(set(obligation_keys)),
         "reason": reason,
@@ -172,28 +174,50 @@ def _artifact_data(artifact: object) -> list[object]:
 
 
 def _output_artifacts(
-    state: OrchestrationRunState, output: DispatchExpectedOutput
+    state: OrchestrationRunState,
+    expected_output: DispatchExpectedOutput,
+    agent_output: AgentOutputRecord,
 ) -> list[dict[str, Any]]:
-    if output.kind != "artifact":
+    if expected_output.kind != "artifact":
         return []
+    artifact_keys = set(agent_output.artifact_keys)
     return [
         artifact
         for artifact in state.artifacts
         if isinstance(artifact, dict)
-        and (not output.artifact_name or artifact.get("name") == output.artifact_name)
+        and artifact.get("artifact_key") in artifact_keys
+        and (
+            not expected_output.artifact_name
+            or artifact.get("name") == expected_output.artifact_name
+        )
     ]
 
 
+def _output_fact_map(
+    state: OrchestrationRunState, agent_output: AgentOutputRecord
+) -> dict[str, object]:
+    return semantic_fact_map(
+        [
+            fact
+            for fact in state.facts
+            if isinstance(fact, dict)
+            and fact.get("source_agent_message_id") == agent_output.agent_message_id
+        ]
+    )
+
+
 def _satisfied_obligations(
-    state: OrchestrationRunState, outputs: list[DispatchExpectedOutput]
+    state: OrchestrationRunState,
+    outputs: list[DispatchExpectedOutput],
+    agent_output: AgentOutputRecord,
 ) -> set[str]:
     satisfied: set[str] = set()
-    facts = semantic_fact_map(state.facts)
+    facts = _output_fact_map(state, agent_output)
     for output in outputs:
         if not output.required:
             continue
         key = effective_output_key(output)
-        artifacts = _output_artifacts(state, output)
+        artifacts = _output_artifacts(state, output, agent_output)
         values = [data for artifact in artifacts for data in _artifact_data(artifact)]
         if artifacts or key in facts:
             satisfied.add(f"{key}:$present")
@@ -206,13 +230,30 @@ def _satisfied_obligations(
     return satisfied
 
 
-def _invalidated_obligations(state: OrchestrationRunState) -> set[str]:
+def _invalidated_obligations(
+    state: OrchestrationRunState, goal_family_fingerprint: str
+) -> set[str]:
     return {
         str(obligation)
         for entry in state.decision_log
         if entry.get("code") == "required_evidence_invalidated"
+        and entry.get("goal_family_fingerprint") == goal_family_fingerprint
         for obligation in entry.get("obligation_keys", [])
     }
+
+
+def _has_matching_output_evidence(
+    state: OrchestrationRunState,
+    outputs: list[DispatchExpectedOutput],
+    agent_output: AgentOutputRecord,
+) -> bool:
+    facts = _output_fact_map(state, agent_output)
+    return any(
+        _output_artifacts(state, output, agent_output)
+        if output.kind == "artifact"
+        else effective_output_key(output) in facts
+        for output in outputs
+    )
 
 
 def _selected_fingerprints(
@@ -258,26 +299,38 @@ class DelegationOutcomeEvaluator:
             if outcome.goal_family_fingerprint == fingerprints.goal_family_fingerprint
             for output_key in outcome.satisfied_output_keys
         )
-        invalidated = _invalidated_obligations(after_state)
-        current_satisfied = _satisfied_obligations(after_state, intent.expected_outputs)
-        satisfied = (prior_satisfied | current_satisfied) - invalidated
+        invalidated = _invalidated_obligations(
+            after_state, fingerprints.goal_family_fingerprint
+        )
+        current_satisfied = _satisfied_obligations(
+            after_state, intent.expected_outputs, output
+        )
+        retained_satisfied = prior_satisfied - invalidated
+        satisfied = retained_satisfied | current_satisfied
         remaining = obligations - satisfied
-        newly_satisfied = sorted(satisfied - prior_satisfied)
+        newly_satisfied = sorted(satisfied - retained_satisfied)
 
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
             for artifact in before_state.artifacts
+            if isinstance(artifact, dict)
+            and artifact.get("artifact_key") in set(output.artifact_keys)
         }
-        changed_artifact_keys = sorted(
-            str(artifact["artifact_key"])
+        output_artifacts = [
+            artifact
             for artifact in after_state.artifacts
             if isinstance(artifact, dict)
-            and artifact.get("artifact_key")
+            and artifact.get("artifact_key") in set(output.artifact_keys)
+        ]
+        changed_artifact_keys = sorted(
+            str(artifact["artifact_key"])
+            for artifact in output_artifacts
+            if artifact.get("artifact_key")
             and canonical_content_fingerprint(artifact)
             not in before_artifact_fingerprints
         )
-        before_facts = semantic_fact_map(before_state.facts)
-        after_facts = semantic_fact_map(after_state.facts)
+        before_facts = _output_fact_map(before_state, output)
+        after_facts = _output_fact_map(after_state, output)
         changed_fact_keys = sorted(
             key for key, value in after_facts.items() if before_facts.get(key) != value
         )
@@ -313,12 +366,23 @@ class DelegationOutcomeEvaluator:
             and outcome.result_fingerprint == legacy_result_fingerprint
             for outcome in before_state.delegation_outcomes
         )
+        has_matching_output_evidence = _has_matching_output_evidence(
+            after_state, intent.expected_outputs, output
+        )
 
         if output.status == "failed" or open_failure_ids:
             status = "failed"
         elif blockers:
             status = "blocked"
-        elif not remaining and (obligations or not prior_legacy_result):
+        elif obligations and not remaining:
+            status = "fulfilled"
+        elif (
+            intent.expected_outputs
+            and not obligations
+            and has_matching_output_evidence
+        ):
+            status = "fulfilled"
+        elif not intent.expected_outputs and not prior_legacy_result:
             status = "fulfilled"
         elif newly_satisfied:
             status = "partial"
@@ -330,9 +394,7 @@ class DelegationOutcomeEvaluator:
             if not intent.expected_outputs
             else canonical_content_fingerprint(
                 {
-                    "artifacts": [
-                        _stable_value(artifact) for artifact in after_state.artifacts
-                    ],
+                    "artifacts": [_stable_value(artifact) for artifact in output_artifacts],
                     "facts": after_facts,
                 }
             )
