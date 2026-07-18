@@ -7,6 +7,7 @@ from execution.orchestration.run_reducer import (
 )
 from models.orchestration import (
     AuthorizationBasis,
+    BlockerResolutionAttempt,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     CompletionEvidence,
@@ -105,6 +106,18 @@ def test_legacy_run_loads_with_outcome_collections_defaulted():
     assert state.assumptions == []
     assert state.unknowns == []
     assert state.blockers == []
+
+
+def test_legacy_blocker_resolution_attempt_defaults_output_key_linkage():
+    attempt = BlockerResolutionAttempt.model_validate(
+        {
+            "kind": "resource",
+            "reference_id": "resource-1",
+            "outcome": "unavailable",
+        }
+    )
+
+    assert attempt.applies_to_output_keys == []
 
 
 def test_outcome_does_not_persist_derived_policy_counters():

@@ -139,6 +139,7 @@ class BlockerResolutionAttempt(BaseModel):
     kind: Literal["resource", "agent", "conditional_result"]
     reference_id: str
     outcome: Literal["unavailable", "insufficient", "failed", "resolved"]
+    applies_to_output_keys: list[str] = Field(default_factory=list)
 
 
 class BlockerRecord(BaseModel):
