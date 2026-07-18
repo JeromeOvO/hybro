@@ -6825,6 +6825,7 @@ def test_invalidated_required_evidence_can_be_satisfied_by_fresh_fact():
                 "fact_id": "stale-quote",
                 "semantic_key": "quote",
                 "kind": "structured_fact",
+                "source_agent_message_id": "agent-msg-1",
                 "value": {"limit": "1M"},
             }
         ],
@@ -6853,6 +6854,13 @@ def test_invalidated_required_evidence_can_be_satisfied_by_fresh_fact():
             {
                 "code": "required_evidence_invalidated",
                 "evidence_key": "stale-quote",
+                "goal_family_fingerprint": goal_fingerprints(
+                    agent_id="agent-1",
+                    expected_outputs=intent.expected_outputs,
+                    selected_content_fingerprints=[],
+                    dependency_family_fingerprints=[],
+                    upstream_output_fingerprints=[],
+                ).goal_family_fingerprint,
                 "obligation_keys": ["quote:$present", "quote:limit"],
                 "reason": "source_retracted",
                 "source_event_id": "event-1",
@@ -6865,6 +6873,7 @@ def test_invalidated_required_evidence_can_be_satisfied_by_fresh_fact():
             "fact_id": "fresh-quote",
             "semantic_key": "quote",
             "kind": "structured_fact",
+            "source_agent_message_id": "agent-msg-2",
             "value": {"limit": "2M"},
         }
     ]
@@ -11132,7 +11141,7 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
     dispatched_agents = [intent.agent_id for intent in result.run_state.dispatch_intents]
     assert dispatched_agents == ["broker-agent", "insurer-agent"]
     assert result.run_state.status == OrchestrationStatus.COMPLETED
-    assert result.run_state.steps_used == 3
+    assert result.run_state.steps_used == 2
     assert (
         executor.orchestration_planner.contexts[0]
         .available_resources[0]

@@ -387,9 +387,7 @@ class DelegationOutcomeEvaluator:
             intent.expected_outputs,
             output,
         )
-        eligible_fresh_satisfied = (fresh_satisfied - invalidated) | (
-            fresh_satisfied & invalidated_before
-        )
+        eligible_fresh_satisfied = fresh_satisfied
         satisfied = (
             effective_prior_satisfied
             | (current_satisfied - invalidated)

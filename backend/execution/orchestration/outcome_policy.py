@@ -177,7 +177,7 @@ def evaluate_retry(
         )
         return RetryDecision(True, kind)
     if latest.status == "failed":
-        return _evaluate_operational_retry(run_state, latest)
+        return _evaluate_operational_retry(run_state, latest, target)
     if target.repair_of_intent_id != latest.dispatch_intent_id:
         return _rejected("delegate_repair_lineage_required")
     if chain.no_progress_repair_used_in_epoch:
@@ -221,6 +221,7 @@ def active_completion_scope(
 def _evaluate_operational_retry(
     run_state: OrchestrationRunState,
     latest: DelegationOutcomeRecord,
+    target: PlannedDelegateTarget,
 ) -> RetryDecision:
     open_failures_by_id = {
         failure.failure_id: failure
@@ -232,6 +233,21 @@ def _evaluate_operational_retry(
         for failure_id in latest.open_failure_ids
         if failure_id in open_failures_by_id
     ]
+    if not failures:
+        prior_intent = next(
+            (
+                intent
+                for intent in run_state.dispatch_intents
+                if intent.dispatch_intent_id == latest.dispatch_intent_id
+            ),
+            None,
+        )
+        if prior_intent is not None and prior_intent.task == target.task:
+            failures = [
+                failure
+                for failure in open_failures_by_id.values()
+                if failure.dispatch_intent_id == latest.dispatch_intent_id
+            ]
     if not failures:
         return _rejected_operational("recovery_retry_unavailable")
     if all(failure.retry_count >= failure.max_retries for failure in failures):

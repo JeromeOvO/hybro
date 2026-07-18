@@ -963,11 +963,6 @@ class SupervisorExecutor:
                     str(exc),
                 )
                 if isinstance(exc, PlannerActionValidationError) and not exc.recoverable:
-                    state = await self._record_v2_rejected_planner_invocation(
-                        state,
-                        stage="adapter",
-                        error_code=exc.code,
-                    )
                     terminal_status = (
                         OrchestrationStatus.BUDGET_EXHAUSTED
                         if exc.code == "step_budget_exhausted"
@@ -1049,11 +1044,6 @@ class SupervisorExecutor:
                     str(exc),
                 )
                 if not getattr(exc, "recoverable", True):
-                    state = await self._record_v2_rejected_planner_invocation(
-                        state,
-                        stage="state_validation",
-                        error_code=exc.code,
-                    )
                     terminal_status = (
                         OrchestrationStatus.BUDGET_EXHAUSTED
                         if exc.code == "step_budget_exhausted"
@@ -1944,8 +1934,8 @@ class SupervisorExecutor:
                 if self._awaiting_result_requires_hitl(result)
             ]
             if not self.guardrails_enabled:
-                # Legacy default-off behavior opens HITL for all A2A input requests.
-                # Outcome ingestion still records shadow decisions before the pause.
+                # Preserve legacy live-dispatch behavior while keeping recovery
+                # scoped to input requests that actually require user action.
                 hitl_required = awaiting
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -2158,10 +2148,6 @@ class SupervisorExecutor:
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
             ]
-            if not self.guardrails_enabled:
-                # Legacy recovery turns every in-flight input request into HITL.
-                # Shadow outcome evaluation still occurs through result ingestion.
-                hitl_required = awaiting
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
                 state = await self._ingest_v2_results(
@@ -3530,10 +3516,8 @@ class SupervisorExecutor:
                 if result.status == StepStatus.AWAITING_INPUT
                 and not self._awaiting_result_requires_hitl(result)
             ]
-            if not self.guardrails_enabled:
-                hitl_required_pending.extend(plain_awaiting_pending)
             has_awaiting_input = bool(hitl_required_pending)
-            has_paused_pending = any(
+            has_paused_pending = bool(plain_awaiting_pending) or any(
                 result.status == StepStatus.PAUSED for result in pending
             )
             terminal_results = [
