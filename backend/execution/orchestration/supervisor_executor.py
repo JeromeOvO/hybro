@@ -1916,6 +1916,9 @@ class SupervisorExecutor:
                 attempted_agent_ids=blocker_attempted_agent_ids,
             )
         )
+        # Conditional-result viability is not derived from runtime state yet.
+        # Keep this explicit stub until a real conditional-result evaluator exists.
+        blocker_conditional_result_viable = False
 
         for result in results:
             if result.status == StepStatus.SUCCESS and result.success:
@@ -1965,7 +1968,7 @@ class SupervisorExecutor:
                     eligible_alternate_agent_ids=(
                         blocker_eligible_alternate_agent_ids
                     ),
-                    conditional_result_viable=False,
+                    conditional_result_viable=blocker_conditional_result_viable,
                 )
                 state, awaiting_status = await self._run_agent_awaiting_input_action(
                     state=state,
@@ -1991,7 +1994,7 @@ class SupervisorExecutor:
                 available_resource_refs=blocker_available_resource_refs,
                 attempted_agent_ids=blocker_attempted_agent_ids,
                 eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
-                conditional_result_viable=False,
+                conditional_result_viable=blocker_conditional_result_viable,
             )
             logger.info(
                 "orchestration_input_required_recoverable run_id=%s "
@@ -2011,7 +2014,7 @@ class SupervisorExecutor:
                 available_resource_refs=blocker_available_resource_refs,
                 attempted_agent_ids=blocker_attempted_agent_ids,
                 eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
-                conditional_result_viable=False,
+                conditional_result_viable=blocker_conditional_result_viable,
             )
             saved = await self._save_interrupted_state(
                 kind=InterruptKind.PUSH_NOTIFICATION,
@@ -2044,7 +2047,7 @@ class SupervisorExecutor:
             available_resource_refs=blocker_available_resource_refs,
             attempted_agent_ids=blocker_attempted_agent_ids,
             eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
-            conditional_result_viable=False,
+            conditional_result_viable=blocker_conditional_result_viable,
         )
         return state, None
 
