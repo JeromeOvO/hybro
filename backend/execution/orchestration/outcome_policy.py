@@ -225,7 +225,7 @@ def _evaluate_operational_retry(
     open_failures_by_id = {
         failure.failure_id: failure
         for failure in run_state.open_failures
-        if failure.status == "open"
+        if failure.status == "open" and failure.recoverable
     }
     failures = [
         open_failures_by_id[failure_id]
@@ -266,6 +266,8 @@ def _resolution_coverage_incomplete(
     coverage_by_reference: dict[str, set[str]],
     required_output_keys: set[str],
 ) -> bool:
+    if not references:
+        return False
     if references - coverage_by_reference.keys():
         return True
     covered_output_keys = set().union(

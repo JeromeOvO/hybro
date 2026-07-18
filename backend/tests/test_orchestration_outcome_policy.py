@@ -260,6 +260,47 @@ def test_failed_retry_resolves_failure_by_outcome_identity_not_lineage_heuristic
     assert decision.kind == "operational_retry"
 
 
+def test_failed_retry_rejects_non_recoverable_open_failure():
+    failure = OpenFailureRecord(
+        failure_id="failure-1",
+        fingerprint="failure-fingerprint",
+        source="runtime",
+        agent_id="agent-1",
+        agent_message_id="i1:message",
+        dispatch_intent_id="i1",
+        error_code="fatal_error",
+        error_message="terminal failure",
+        recoverable=False,
+        retry_count=0,
+        max_retries=2,
+    )
+    state = _state(
+        [
+            _outcome(
+                "o1",
+                "i1",
+                "failed",
+                ["quote:$present"],
+                [],
+                open_failure_ids=["failure-1"],
+            )
+        ],
+        [_intent("i1", "failed")],
+        [failure],
+    )
+
+    decision = evaluate_retry(
+        state,
+        _target(),
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "recovery_retry_unavailable"
+    assert decision.kind == "operational_retry"
+
+
 def test_duplicate_target_pair_is_rejected_inside_one_action():
     assert (
         duplicate_delegate_target_code([_target(), _target()], ["family-1", "family-1"])
@@ -457,6 +498,35 @@ def test_multi_output_blocker_accepts_union_of_output_specific_attempts():
         required_output_keys={"quote", "summary"},
         available_resource_refs={"quote-resource", "summary-resource"},
         eligible_alternate_agent_ids={"quote-agent", "summary-agent"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_user_only_validated"
+
+
+def test_user_only_blocker_accepts_confirmed_empty_resolution_candidates():
+    blocker = BlockerRecord(
+        key="missing-retention",
+        description="Retention requires user input.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="quote",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            )
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote"},
+        available_resource_refs=set(),
+        eligible_alternate_agent_ids=set(),
         conditional_result_viable=False,
     )
 
