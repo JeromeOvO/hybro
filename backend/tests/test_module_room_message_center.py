@@ -913,6 +913,11 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
     )
     state = _completed_state_with_agent_outputs()
     state.status = orchestration_status
+    if run_status == RunStatus.FAILED:
+        state.terminal_summary = {
+            "code": "orchestration_failed",
+            "recommended_next_action": "retry_or_fail",
+        }
     rmc.message_reader = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(return_value=user_message)
     )
@@ -949,6 +954,13 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
     rmc.message_writer.cancel_agent_messages_by_ids.assert_awaited_once_with(
         ["agent-msg-1", "agent-msg-2"]
     )
+    if run_status == RunStatus.FAILED:
+        assert user_message.extend_info["terminal_summary"] == {
+            "code": "orchestration_failed",
+            "recommended_next_action": "retry_or_fail",
+        }
+    else:
+        assert "terminal_summary" not in user_message.extend_info
 
 
 @pytest.mark.asyncio

@@ -263,3 +263,4 @@ class SupervisorRunResult(BaseModel):
     synthesis_text: str | None = None
     clarification_question: str | None = None
     terminal_reason: str | None = None
+    terminal_summary: dict[str, Any] | None = None

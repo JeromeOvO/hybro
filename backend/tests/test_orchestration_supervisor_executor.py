@@ -3061,6 +3061,13 @@ async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
     assert persisted.status == OrchestrationStatus.FAILED
     assert persisted.pending_hitl_request_ids == []
     assert not persisted.open_questions
+    assert persisted.terminal_summary is not None
+    assert persisted.terminal_summary["reason"] == (
+        "failed to persist v2 supervisor HITL state"
+    )
+    terminal_event = store._events_by_run["message-1"][-1]
+    assert terminal_event.type == OrchestrationEventType.RUN_TERMINAL
+    assert terminal_event.payload["terminal_summary"] == persisted.terminal_summary
 
 
 @pytest.mark.asyncio
@@ -11387,3 +11394,78 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
         == "ready"
     )
     content_reader.get_bytes.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_v2_terminal_persists_actionable_terminal_summary():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Finish orchestration."),
+        extend_info={},
+    )
+    state = _run_state()
+    state.blockers = [
+        BlockerRecord(
+            key="blocker-1",
+            description="Need requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    updated = await executor._mark_v2_terminal(
+        state,
+        OrchestrationStatus.FAILED,
+        reason="delegate action violates outcome policy: delegate_no_progress_repeat",
+    )
+
+    events = store._events_by_run[updated.run_id]
+    terminal_event = events[-1]
+    result = executor._state_run_result(status=RunStatus.FAILED, state=updated)
+    assert updated.terminal_summary is not None
+    assert result.terminal_summary == updated.terminal_summary
+    assert terminal_event.payload["terminal_summary"]["recommended_next_action"] == "ask_user"
+    assert terminal_event.payload["terminal_summary"]["validated_blocker_keys"] == ["blocker-1"]
+
+
+@pytest.mark.asyncio
+async def test_mark_v2_terminal_omits_failure_summary_for_completed_status():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Finish orchestration."),
+        extend_info={},
+    )
+    state = _run_state()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+
+    updated = await executor._mark_v2_terminal(
+        state,
+        OrchestrationStatus.COMPLETED,
+        reason="completed",
+    )
+
+    events = store._events_by_run[updated.run_id]
+    result = executor._state_run_result(status=RunStatus.COMPLETED, state=updated)
+    assert updated.terminal_summary is None
+    assert result.terminal_summary is None
+    assert "terminal_summary" not in events[-1].payload

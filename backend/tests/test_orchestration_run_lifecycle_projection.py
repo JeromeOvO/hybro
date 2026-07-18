@@ -330,6 +330,7 @@ async def test_run_lifecycle_adapter_delegates_project_run_state():
         terminal_reason=None,
         causation_id="orch-event-1",
         client_request_id="cr-1",
+        terminal_summary=None,
     )
 
 
@@ -451,6 +452,10 @@ async def test_project_run_state_terminal_projection_keeps_head_consistent(
         terminal_reason="planner failed",
         causation_id="orch-terminal-1",
         client_request_id="cr-1",
+        terminal_summary={
+            "code": "orchestration_failed",
+            "recommended_next_action": "retry_or_fail",
+        },
     )
 
     run_doc = run_repo.docs["public-run-1"]
@@ -458,11 +463,19 @@ async def test_project_run_state_terminal_projection_keeps_head_consistent(
     assert run_doc["seq"] == terminal["seq"] == 3
     assert run_doc["error_code"] == "FAILED"
     assert run_doc["error_message"] == "planner failed"
+    assert run_doc["terminal_summary"] == {
+        "code": "orchestration_failed",
+        "recommended_next_action": "retry_or_fail",
+    }
     assert isinstance(run_doc["ended_at"], datetime)
     assert isinstance(run_doc["updated_at"], datetime)
     assert terminal["payload"] == {
         "error_code": "FAILED",
         "error_message": "planner failed",
+        "terminal_summary": {
+            "code": "orchestration_failed",
+            "recommended_next_action": "retry_or_fail",
+        },
     }
 
 
@@ -480,8 +493,12 @@ async def test_project_run_state_replay_repairs_stale_head_without_appending(
         "run_id": "public-run-1",
         "room_id": "room-1",
         "seq": 3,
-        "type": RunEventType.RUN_COMPLETED.value,
-        "payload": {"error_code": None, "error_message": "done"},
+        "type": RunEventType.RUN_FAILED.value,
+        "payload": {
+            "error_code": "FAILED",
+            "error_message": "planner failed",
+            "terminal_summary": {"code": "orchestration_failed"},
+        },
         "causation_id": "orch-terminal-1",
         "ts": "2026-01-01T00:00:00Z",
     }
@@ -507,17 +524,21 @@ async def test_project_run_state_replay_repairs_stale_head_without_appending(
         room_id="room-1",
         run_id="public-run-1",
         trigger_message_id="trigger-msg-1",
-        target_state=RunState.COMPLETED,
-        terminal_reason="done",
+        target_state=RunState.FAILED,
+        terminal_reason="planner failed",
         causation_id="orch-terminal-1",
         client_request_id="cr-1",
+        terminal_summary={"code": "orchestration_failed"},
     )
 
     assert result["event_id"] == "evt-existing"
     assert event_repo.inserted == []
-    assert run_repo.docs["public-run-1"]["state"] == RunState.COMPLETED.value
+    assert run_repo.docs["public-run-1"]["state"] == RunState.FAILED.value
     assert run_repo.docs["public-run-1"]["seq"] == 3
     assert run_repo.docs["public-run-1"]["ended_at"] == existing_event["ts"]
+    assert run_repo.docs["public-run-1"]["terminal_summary"] == {
+        "code": "orchestration_failed"
+    }
 
 
 @pytest.mark.asyncio
