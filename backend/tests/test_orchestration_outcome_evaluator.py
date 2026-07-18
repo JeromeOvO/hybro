@@ -1,10 +1,86 @@
 from execution.orchestration.outcome_evaluator import (
+    DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
     effective_output_key,
     goal_fingerprints,
+    invalidate_required_evidence,
     semantic_fact_map,
 )
-from models.orchestration import DispatchExpectedOutput
+from models.orchestration import (
+    AgentOutputRecord,
+    DispatchExpectedOutput,
+    DispatchIntent,
+    OrchestrationRunState,
+)
+
+
+def _state(*, facts=None, artifacts=None, outcomes=None, blockers=None, failures=None):
+    return OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="produce a quote artifact",
+        candidate_agent_ids=["agent-1"],
+        facts=list(facts or []),
+        artifacts=list(artifacts or []),
+        delegation_outcomes=list(outcomes or []),
+        blockers=list(blockers or []),
+        open_failures=list(failures or []),
+    )
+
+
+def _intent(message_id, intent_id="intent-1"):
+    return DispatchIntent(
+        step_id="step-1",
+        step_target_id=f"{intent_id}:target",
+        dispatch_intent_id=intent_id,
+        planned_agent_message_id=message_id,
+        agent_id="agent-1",
+        task="Produce the quote artifact",
+        task_hash="task-hash",
+        expected_outputs=[
+            DispatchExpectedOutput(
+                output_key="quote",
+                kind="artifact",
+                artifact_name="quote",
+                required=True,
+                required_fields=[
+                    "requested_coverage.limit",
+                    "requested_coverage.retention",
+                ],
+            )
+        ],
+    )
+
+
+def _output(message_id, text="quote ready"):
+    return AgentOutputRecord(
+        agent_message_id=message_id,
+        agent_id="agent-1",
+        status="completed",
+        text=text,
+        artifact_keys=[f"{message_id}:artifact:quote"],
+    )
+
+
+def _artifact(message_id, data):
+    return {
+        "artifact_key": f"{message_id}:artifact:quote",
+        "source_agent_message_id": message_id,
+        "source_agent_id": "agent-1",
+        "name": "quote",
+        "parts": [{"data": data}],
+    }
+
+
+def _agent_text(message_id, text):
+    return {
+        "fact_id": f"{message_id}:text",
+        "source_agent_message_id": message_id,
+        "source_agent_id": "agent-1",
+        "kind": "agent_text",
+        "text": text,
+    }
 
 
 def test_fingerprint_ignores_volatile_projection_fields_and_mapping_order():
@@ -122,3 +198,313 @@ def test_goal_family_is_stable_when_expected_outputs_are_reordered():
     )
 
     assert first == reordered
+
+
+def test_identical_artifact_new_key_and_new_agent_text_is_no_progress():
+    evaluator = DelegationOutcomeEvaluator()
+    first_after = _state(
+        artifacts=[
+            _artifact(
+                "agent-msg-1",
+                {"requested_coverage": {"limit": 1_000_000, "retention": None}},
+            )
+        ],
+        facts=[_agent_text("agent-msg-1", "quote ready")],
+    )
+    first = evaluator.evaluate(
+        _state(), first_after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+    first_after.delegation_outcomes.append(first)
+    duplicate_after = first_after.model_copy(deep=True)
+    duplicate_after.artifacts.append(
+        _artifact(
+            "agent-msg-2",
+            {"requested_coverage": {"limit": 1_000_000, "retention": None}},
+        )
+    )
+    duplicate_after.facts.append(
+        _agent_text("agent-msg-2", "the quote has been prepared")
+    )
+
+    second = evaluator.evaluate(
+        first_after,
+        duplicate_after,
+        _intent("agent-msg-2", "intent-2"),
+        _output("agent-msg-2", "the quote has been prepared"),
+        {},
+    )
+
+    assert first.status == "partial"
+    assert second.status == "no_progress"
+    assert second.changed_fact_keys == []
+
+
+def test_required_field_reduction_is_partial_progress():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(
+        artifacts=[
+            _artifact(
+                "agent-msg-1",
+                {"requested_coverage": {"limit": 1_000_000, "retention": None}},
+            )
+        ]
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "partial"
+    assert outcome.newly_satisfied_required_obligations == [
+        "quote:$present",
+        "quote:requested_coverage.limit",
+    ]
+    assert outcome.remaining_required_obligations == [
+        "quote:requested_coverage.retention"
+    ]
+
+
+def test_required_obligation_cannot_regress_without_invalidation_event():
+    evaluator = DelegationOutcomeEvaluator()
+    retained = _artifact(
+        "agent-msg-1",
+        {"requested_coverage": {"limit": 1_000_000, "retention": 25_000}},
+    )
+    before = _state(artifacts=[retained])
+    prior = evaluator.evaluate(
+        _state(), before, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+    before.delegation_outcomes.append(prior)
+    after = before.model_copy(deep=True)
+    after.facts.append(_agent_text("agent-msg-2", "no additional fields"))
+
+    outcome = evaluator.evaluate(
+        before,
+        after,
+        _intent("agent-msg-2", "intent-2"),
+        _output("agent-msg-2", "no additional fields"),
+        {},
+    )
+
+    assert "quote:requested_coverage.limit" not in outcome.remaining_required_obligations
+
+
+def test_invalidated_required_evidence_is_not_restored_from_retained_artifact():
+    evaluator = DelegationOutcomeEvaluator()
+    after, _ = invalidate_required_evidence(
+        _state(
+            artifacts=[
+                _artifact(
+                    "agent-msg-1",
+                    {
+                        "requested_coverage": {
+                            "limit": 1_000_000,
+                            "retention": 25_000,
+                        }
+                    },
+                )
+            ]
+        ),
+        evidence_key="quote-evidence",
+        obligation_keys=[
+            "quote:$present",
+            "quote:requested_coverage.limit",
+            "quote:requested_coverage.retention",
+        ],
+        reason="The retained quote evidence is no longer valid.",
+        source_event_id="event-1",
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "no_progress"
+    assert outcome.remaining_required_obligations == [
+        "quote:$present",
+        "quote:requested_coverage.limit",
+        "quote:requested_coverage.retention",
+    ]
+
+
+def test_required_output_presence_is_partial_progress_when_fields_are_missing():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(artifacts=[_artifact("agent-msg-1", {})])
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "partial"
+    assert outcome.newly_satisfied_required_obligations == ["quote:$present"]
+    assert outcome.remaining_required_obligations == [
+        "quote:requested_coverage.limit",
+        "quote:requested_coverage.retention",
+    ]
+
+
+def test_required_output_presence_is_retained_from_prior_outcome():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs[0].required_fields = []
+    first_after = _state(artifacts=[_artifact("agent-msg-1", {"quote": "ready"})])
+    first = evaluator.evaluate(
+        _state(), first_after, intent, _output("agent-msg-1"), {}
+    )
+    before = _state(outcomes=[first])
+    repeated_intent = _intent("agent-msg-2", "intent-2")
+    repeated_intent.expected_outputs[0].required_fields = []
+
+    outcome = evaluator.evaluate(
+        before,
+        _state(outcomes=[first]),
+        repeated_intent,
+        _output("agent-msg-2"),
+        {},
+    )
+
+    assert outcome.status == "fulfilled"
+
+
+def test_all_required_obligations_satisfied_returns_fulfilled():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(
+        artifacts=[
+            _artifact(
+                "agent-msg-1",
+                {"requested_coverage": {"limit": 1_000_000, "retention": 25_000}},
+            )
+        ]
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "fulfilled"
+
+
+def test_validated_user_only_blocker_returns_blocked():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(
+        blockers=[
+            {
+                "key": "missing-user-input",
+                "description": "A user must provide the required information.",
+                "blocked_output_keys": ["quote"],
+                "source": "agent",
+                "claimed_user_only": True,
+                "validation_status": "validated",
+            }
+        ]
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "blocked"
+
+
+def test_transport_failure_returns_failed():
+    evaluator = DelegationOutcomeEvaluator()
+    after = _state(
+        failures=[
+            {
+                "failure_id": "failure-1",
+                "fingerprint": "failure-fingerprint",
+                "source": "a2a_adapter",
+                "agent_id": "agent-1",
+                "agent_message_id": "agent-msg-1",
+                "dispatch_intent_id": "intent-1",
+                "error_code": "transport_error",
+                "error_message": "Agent transport failed.",
+                "recoverable": True,
+            }
+        ]
+    )
+
+    outcome = evaluator.evaluate(
+        _state(), after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+
+    assert outcome.status == "failed"
+
+
+def test_optional_only_change_after_partial_result_returns_no_progress():
+    evaluator = DelegationOutcomeEvaluator()
+    partial_after = _state(
+        artifacts=[
+            _artifact(
+                "agent-msg-1",
+                {"requested_coverage": {"limit": 1_000_000, "retention": None}},
+            )
+        ]
+    )
+    partial = evaluator.evaluate(
+        _state(), partial_after, _intent("agent-msg-1"), _output("agent-msg-1"), {}
+    )
+    partial_after.delegation_outcomes.append(partial)
+    after = partial_after.model_copy(deep=True)
+    after.artifacts.append(_artifact("agent-msg-2", {"optional": "new value"}))
+
+    outcome = evaluator.evaluate(
+        partial_after,
+        after,
+        _intent("agent-msg-2", "intent-2"),
+        _output("agent-msg-2"),
+        {},
+    )
+
+    assert outcome.status == "no_progress"
+
+
+def test_first_legacy_text_only_completed_result_returns_fulfilled():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs = []
+
+    outcome = evaluator.evaluate(
+        _state(), _state(), intent, _output("agent-msg-1", "legacy result"), {}
+    )
+
+    assert outcome.status == "fulfilled"
+
+
+def test_repeated_legacy_text_with_same_normalized_fingerprint_returns_no_progress():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs = []
+    first_after = _state()
+    first = evaluator.evaluate(
+        _state(), first_after, intent, _output("agent-msg-1", "legacy result"), {}
+    )
+    first_after.delegation_outcomes.append(first)
+    duplicate_intent = _intent("agent-msg-2", "intent-2")
+    duplicate_intent.expected_outputs = []
+
+    outcome = evaluator.evaluate(
+        first_after,
+        first_after.model_copy(deep=True),
+        duplicate_intent,
+        _output("agent-msg-2", "  legacy   result  "),
+        {},
+    )
+
+    assert outcome.status == "no_progress"
+
+
+def test_invalidate_required_evidence_records_coded_payload():
+    state = _state()
+
+    updated, payload = invalidate_required_evidence(
+        state,
+        evidence_key="quote-evidence",
+        obligation_keys=["quote:requested_coverage.limit", "quote:$present"],
+        reason="The evidence is no longer valid.",
+        source_event_id="event-1",
+    )
+
+    assert updated is not state
+    assert payload == updated.decision_log[-1]
+    assert payload["code"] == "required_evidence_invalidated"
