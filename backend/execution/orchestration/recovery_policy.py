@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from execution.orchestration.blocker_matching import (
+    agent_blocker_field_key,
+    match_tokens,
+    normalize_match_text,
+)
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from models.orchestration import (
@@ -70,24 +75,30 @@ def action_for_rejected_delegate(
     ]
     if not validated_blockers:
         return None
+    sorted_blockers = sorted(validated_blockers, key=lambda item: item.key)
     blocker_obligations = {
         blocker.key: _required_obligations_for_blocker(state, blocker)
-        for blocker in validated_blockers
+        for blocker in sorted_blockers
     }
+    blocker_keys = [blocker.key for blocker in sorted_blockers]
+    required_obligation_keys = sorted(
+        {
+            obligation
+            for obligations in blocker_obligations.values()
+            for obligation in obligations
+        }
+    )
     return PlannerAction(
         action=PlannerActionType.ASK_USER,
         reasoning="Backend recovery selected HITL because validated user-only blockers are open.",
         questions=[
             PlannerQuestion(
-                prompt=blocker.description,
+                prompt="\n".join(blocker.description for blocker in sorted_blockers),
                 reason="blocker",
-                blocker_keys=[blocker.key],
-                required_obligation_keys=blocker_obligations[blocker.key],
-                blocker_obligations={
-                    blocker.key: blocker_obligations[blocker.key]
-                },
+                blocker_keys=blocker_keys,
+                required_obligation_keys=required_obligation_keys,
+                blocker_obligations=blocker_obligations,
             )
-            for blocker in sorted(validated_blockers, key=lambda item: item.key)
         ],
     )
 
@@ -97,15 +108,44 @@ def _required_obligations_for_blocker(
     blocker: BlockerRecord,
 ) -> list[str]:
     blocked_outputs = set(blocker.blocked_output_keys)
-    obligations: list[str] = []
     for outcome in reversed(state.delegation_outcomes):
-        for obligation in outcome.remaining_required_obligations:
-            output_key = obligation.split(":", 1)[0]
-            if not blocked_outputs or output_key in blocked_outputs:
-                obligations.append(obligation)
+        candidates = [
+            obligation
+            for obligation in outcome.remaining_required_obligations
+            if not blocked_outputs
+            or obligation.partition(":")[0] in blocked_outputs
+        ]
+        if not candidates:
+            continue
+        blocker_field_key = agent_blocker_field_key(blocker.key)
+        if blocker_field_key is None:
+            return sorted(dict.fromkeys(candidates))
+        obligations = [
+            obligation
+            for obligation in candidates
+            if _obligation_matches_blocker_field(
+                blocker_field_key,
+                obligation,
+            )
+        ]
         if obligations:
-            break
-    return sorted(dict.fromkeys(obligations))
+            return sorted(dict.fromkeys(obligations))
+    return []
+
+
+def _obligation_matches_blocker_field(
+    blocker_field_key: str,
+    obligation: str,
+) -> bool:
+    output_key, separator, field_key = obligation.partition(":")
+    if not separator:
+        return False
+    if field_key == "$present":
+        return normalize_match_text(blocker_field_key) == normalize_match_text(
+            output_key
+        )
+    field_tokens = match_tokens(field_key)
+    return bool(field_tokens) and field_tokens <= match_tokens(blocker_field_key)
 
 
 def normalize_delegate_repair_lineage(

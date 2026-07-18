@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from execution.orchestration.blocker_matching import (
+    match_tokens,
+    normalize_match_text,
+)
 from execution.orchestration.outcome_policy import BlockerPolicyValidator
 from models.orchestration import (
     BlockerRecord,
@@ -329,20 +333,20 @@ def _matched_output_keys(
 ) -> set[str]:
     if blocker.blocked_output_keys:
         return set(blocker.blocked_output_keys) & required_output_keys
-    normalized_text = _normalize_match_text(f"{blocker.key} {blocker.description}")
-    blocker_tokens = _match_tokens(normalized_text)
+    normalized_text = normalize_match_text(f"{blocker.key} {blocker.description}")
+    blocker_tokens = match_tokens(normalized_text)
     matched: set[str] = set()
     for obligation in obligations:
         output_key, field_key = _split_obligation(obligation)
         if output_key not in required_output_keys:
             continue
-        if _normalize_match_text(output_key) in normalized_text:
+        if normalize_match_text(output_key) in normalized_text:
             matched.add(output_key)
             continue
-        if field_key and _normalize_match_text(field_key) in normalized_text:
+        if field_key and normalize_match_text(field_key) in normalized_text:
             matched.add(output_key)
             continue
-        if field_key and _match_tokens(field_key) <= blocker_tokens:
+        if field_key and match_tokens(field_key) <= blocker_tokens:
             matched.add(output_key)
     return matched
 
@@ -354,14 +358,6 @@ def _split_obligation(obligation: str) -> tuple[str, str | None]:
         output_key, field_key = obligation.split(":", 1)
         return output_key, field_key
     return obligation, None
-
-
-def _normalize_match_text(value: str) -> str:
-    return value.lower().replace(".", "_").replace("-", "_").replace(" ", "_")
-
-
-def _match_tokens(value: str) -> set[str]:
-    return {token for token in _normalize_match_text(value).split("_") if token}
 
 
 def _output_keys_from_obligations(obligations: list[str]) -> set[str]:
