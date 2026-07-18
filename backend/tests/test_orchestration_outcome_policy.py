@@ -288,8 +288,12 @@ def test_completion_scope_retains_latest_revision_after_disposition():
     )
     state = _state(
         [
-            _outcome("o1", "i1", "partial", ["quote:$present"], [], revision="revision-1"),
-            _outcome("o2", "i2", "partial", ["quote:$present"], [], revision="revision-2"),
+            _outcome(
+                "o1", "i1", "partial", ["quote:$present"], [], revision="revision-1"
+            ),
+            _outcome(
+                "o2", "i2", "partial", ["quote:$present"], [], revision="revision-2"
+            ),
         ],
         [_intent("i1", "completed"), _intent("i2", "completed")],
         dispositions=[disposition],

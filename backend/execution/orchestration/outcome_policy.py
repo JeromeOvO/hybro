@@ -58,9 +58,7 @@ class OutcomeHistoryView:
             ),
         )
 
-    def chain(
-        self, agent_id: str, goal_revision_fingerprint: str
-    ) -> AttemptChainView:
+    def chain(self, agent_id: str, goal_revision_fingerprint: str) -> AttemptChainView:
         chain_outcomes = [
             outcome
             for outcome in self.outcomes
@@ -111,8 +109,6 @@ class BlockerPolicyValidator:
             return BlockerValidationDecision(False, "blocker_not_required_output")
         if not blocker.claimed_user_only or blocker.validation_status != "validated":
             return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
-        if not blocker.validated_user_only:
-            return BlockerValidationDecision(False, "blocker_candidate_unvalidated")
         blocked_required_output_keys = (
             set(blocker.blocked_output_keys) & required_output_keys
         )
@@ -127,7 +123,9 @@ class BlockerPolicyValidator:
         if _uncovered_references(
             resources, attempts_by_kind["resource"], blocked_required_output_keys
         ):
-            return BlockerValidationDecision(False, "blocker_resource_resolution_required")
+            return BlockerValidationDecision(
+                False, "blocker_resource_resolution_required"
+            )
         if eligible_alternate_agent_ids is None:
             return BlockerValidationDecision(
                 False, "blocker_alternate_agent_context_required"
@@ -261,9 +259,7 @@ def _evaluate_operational_retry(
     return RetryDecision(True, "operational_retry")
 
 
-def _revision_index(
-    outcomes: list[DelegationOutcomeRecord], revision: str
-) -> int:
+def _revision_index(outcomes: list[DelegationOutcomeRecord], revision: str) -> int:
     for index in range(len(outcomes) - 1, -1, -1):
         if outcomes[index].goal_revision_fingerprint == revision:
             return index
@@ -302,9 +298,7 @@ def _conditional_result_validation_code(
     coverage_by_reference: dict[str, set[str]],
 ) -> str | None:
     attempted_output_keys = (
-        set().union(*coverage_by_reference.values())
-        if coverage_by_reference
-        else set()
+        set().union(*coverage_by_reference.values()) if coverage_by_reference else set()
     )
     if not coverage_by_reference:
         return "blocker_conditional_result_resolution_required"
