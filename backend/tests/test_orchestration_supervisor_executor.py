@@ -8,6 +8,10 @@ import pytest
 from common.config.settings import Settings
 from common.utils.time import utcnow
 from execution.orchestration.action_validator import PlannerActionValidationError
+from execution.orchestration.dispatch_payload import (
+    ResolvedDispatchPayload,
+    ResolvedResourcePayload,
+)
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -7747,3 +7751,439 @@ def test_awaiting_result_requires_hitl_from_structured_metadata(
     )
 
     assert SupervisorExecutor._awaiting_result_requires_hitl(result) is True
+
+
+@pytest.mark.asyncio
+async def test_same_agent_retry_continues_existing_input_required_task():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    reply_to_task = AsyncMock(
+        return_value={
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Recovered answer",
+        }
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+                status_message="Need projection",
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="agent-1:agent-msg-1:agent_input_required",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Need projection",
+                recoverable=True,
+                recovery_hints=["retry_with_available_resource_refs"],
+            )
+        ],
+    )
+    resolved_payload = ResolvedDispatchPayload(
+        selected_context_refs=["ctx:file-file-1:text"],
+        resource_payloads=[
+            ResolvedResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected input",
+            )
+        ],
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        awaiting_output=state.agent_outputs[0],
+        target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
+        resolved_payload=resolved_payload,
+    )
+
+    assert result.status == StepStatus.SUCCESS
+    assert result.response_text == "Recovered answer"
+    reply_to_task.assert_awaited_once_with(
+        message_id="agent-msg-1",
+        task_id="task-1",
+        context_id="ctx-1",
+        user_input="Projected input",
+    )
+
+
+@pytest.mark.asyncio
+async def test_plain_continuation_preserves_auth_required_classification():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "task_state": "auth-required",
+                    "response_text": "Sign in to continue",
+                }
+            )
+        )
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
+        resolved_payload=ResolvedDispatchPayload(
+            selected_context_refs=["ctx:file-file-1:text"],
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ],
+        ),
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.AWAITING_INPUT
+    assert result.interactive_state == "auth-required"
+    assert result.requires_auth is True
+    assert SupervisorExecutor._awaiting_result_requires_hitl(result) is True
+    assert SupervisorExecutor._is_plain_a2a_input_output(
+        AgentOutputRecord(
+            agent_message_id=result.agent_message_id,
+            agent_id=result.agent_id,
+            status=result.status.value,
+            a2a_task_id=result.a2a_task_id,
+            a2a_context_id=result.a2a_context_id,
+            interactive_state=result.interactive_state,
+            requires_auth=result.requires_auth,
+        )
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_supersede_unresolved_input_required_outputs_for_other_agents():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use another agent"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+            ),
+            AgentOutputRecord(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-2",
+                a2a_context_id="ctx-2",
+            ),
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="agent-1:agent-msg-1:agent_input_required",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            ),
+            OpenFailureRecord(
+                failure_id="failure-2",
+                fingerprint="agent-2:agent-msg-2:agent_input_required",
+                source="a2a_adapter",
+                agent_id="agent-2",
+                agent_message_id="agent-msg-2",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            ),
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_agent_ids={"agent-2"},
+    )
+
+    assert [output.status for output in saved.agent_outputs] == [
+        "abandoned",
+        StepStatus.AWAITING_INPUT.value,
+    ]
+    assert [failure.status for failure in saved.open_failures] == [
+        "abandoned",
+        "open",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use another agent"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    state = _run_state(
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="plain-msg",
+                agent_id="plain-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="plain-task",
+                a2a_context_id="plain-context",
+            ),
+            AgentOutputRecord(
+                agent_message_id="auth-msg",
+                agent_id="auth-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                interactive_state="auth-required",
+                requires_auth=True,
+            ),
+            AgentOutputRecord(
+                agent_message_id="policy-msg",
+                agent_id="policy-agent",
+                status=StepStatus.AWAITING_INPUT.value,
+                interactive_state="policy-required",
+                requires_policy=True,
+            ),
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="plain-failure",
+                fingerprint="plain-agent:plain-msg:agent_input_required",
+                source="a2a_adapter",
+                agent_id="plain-agent",
+                agent_message_id="plain-msg",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            ),
+            OpenFailureRecord(
+                failure_id="auth-failure",
+                fingerprint="auth-agent:auth-msg:auth_required",
+                source="a2a_adapter",
+                agent_id="auth-agent",
+                agent_message_id="auth-msg",
+                error_code="auth_required",
+                error_message="Authorize access",
+                recoverable=True,
+            ),
+            OpenFailureRecord(
+                failure_id="policy-failure",
+                fingerprint="policy-agent:policy-msg:policy_required",
+                source="a2a_adapter",
+                agent_id="policy-agent",
+                agent_message_id="policy-msg",
+                error_code="policy_required",
+                error_message="Approve policy",
+                recoverable=True,
+            ),
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_agent_ids={"chosen-agent"},
+    )
+
+    assert [output.status for output in saved.agent_outputs] == [
+        "abandoned",
+        StepStatus.AWAITING_INPUT.value,
+        StepStatus.AWAITING_INPUT.value,
+    ]
+    assert [failure.status for failure in saved.open_failures] == [
+        "abandoned",
+        "open",
+        "open",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delegate_recovery_reuses_message_and_closes_current_intent():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded text"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope=user_message.extend_info,
+        goal="Use uploaded text",
+    )
+    state.agent_outputs.append(
+        AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        )
+    )
+    state.open_failures.append(
+        OpenFailureRecord(
+            failure_id="failure-1",
+            fingerprint="agent-1:agent-msg-1:agent_input_required",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            agent_message_id="agent-msg-1",
+            error_code="agent_input_required",
+            error_message="Need input",
+            recoverable=True,
+        )
+    )
+    await store.create_run(state)
+    planner_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Continue the existing task.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Use the projected input",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="ctx:file-file-1:text",
+                        source_agent_message_id="source-msg-1",
+                        mime_type="text/plain",
+                    )
+                ],
+            )
+        ],
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = SimpleNamespace(
+        resolve_ref=AsyncMock(
+            return_value=ResolvedResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected input",
+            )
+        )
+    )
+    visible_message = _agent_message("agent-msg-1")
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=visible_message
+    )
+    executor.message_writer.update_room_agent_message_by_message_id = AsyncMock(
+        return_value=True
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "completed",
+                    "response_text": "Recovered answer",
+                }
+            )
+        )
+    )
+
+    saved, status = await executor._run_delegate_action(
+        state=state,
+        planner_action=planner_action,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded text",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert status is None
+    executor.message_writer.add_room_agent_message.assert_not_awaited()
+    assert visible_message.extend_info["orchestration_recovery"] == {
+        "type": "continued_a2a_task",
+        "a2a_task_id": "task-1",
+        "a2a_context_id": "ctx-1",
+        "selected_context_refs": ["ctx:file-file-1:text"],
+        "selected_artifact_refs": [],
+        "selected_attachment_refs": [],
+    }
+    assert saved.agent_outputs[0].status == "completed"
+    assert saved.dispatch_intents[0].status == StepStatus.SUCCESS.value

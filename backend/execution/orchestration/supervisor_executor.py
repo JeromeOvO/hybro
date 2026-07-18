@@ -1563,6 +1563,10 @@ class SupervisorExecutor:
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
         trajectory = self._compat_trajectory_from_state(state)
         action = self._v2_supervisor_action(planner_action, agent_registry)
+        state = await self._supersede_unresolved_input_required_outputs(
+            state,
+            chosen_agent_ids={target.agent_id for target in action.targets},
+        )
         step_number = state.steps_used + 1
         entry = TrajectoryEntry(
             step_number=step_number,
@@ -2193,6 +2197,10 @@ class SupervisorExecutor:
             context_id=awaiting_output.a2a_context_id,
             user_input=resource_text,
         )
+        await self._record_a2a_task_recovery(
+            awaiting_output=awaiting_output,
+            resolved_payload=resolved_payload,
+        )
         task_state = reply_result.get("task_state") or "completed"
         response_text = reply_result.get("response_text") or ""
         if task_state in {"input-required", "auth-required"}:
@@ -2209,6 +2217,8 @@ class SupervisorExecutor:
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
                 status_message=response_text,
+                interactive_state=task_state,
+                requires_auth=task_state == "auth-required",
             )
         return StepResult(
             step_number=0,
@@ -2223,6 +2233,95 @@ class SupervisorExecutor:
                 else StepStatus.FAILED
             ),
             agent_message_id=awaiting_output.agent_message_id,
+        )
+
+    @staticmethod
+    def _is_plain_a2a_input_output(output: AgentOutputRecord) -> bool:
+        interactive_state = (output.interactive_state or "").replace("_", "-")
+        return (
+            output.status == StepStatus.AWAITING_INPUT.value
+            and bool(output.a2a_task_id)
+            and bool(output.a2a_context_id)
+            and not output.requires_auth
+            and not output.requires_policy
+            and interactive_state not in {"auth-required", "policy-required"}
+        )
+
+    async def _record_a2a_task_recovery(
+        self,
+        *,
+        awaiting_output: AgentOutputRecord,
+        resolved_payload: ResolvedDispatchPayload,
+    ) -> None:
+        try:
+            message = await self.message_reader.get_room_agent_message_by_message_id(
+                awaiting_output.agent_message_id
+            )
+            if message is None:
+                return
+            if not isinstance(message.extend_info, dict):
+                message.extend_info = {}
+            message.extend_info["orchestration_recovery"] = {
+                "type": "continued_a2a_task",
+                "a2a_task_id": awaiting_output.a2a_task_id,
+                "a2a_context_id": awaiting_output.a2a_context_id,
+                "selected_context_refs": resolved_payload.selected_context_refs,
+                "selected_artifact_refs": resolved_payload.selected_artifact_refs,
+                "selected_attachment_refs": resolved_payload.selected_attachment_refs,
+            }
+            await self.message_writer.update_room_agent_message_by_message_id(
+                awaiting_output.agent_message_id,
+                message,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record A2A task recovery lineage",
+                extra={"agent_message_id": awaiting_output.agent_message_id},
+                exc_info=True,
+            )
+
+    async def _supersede_unresolved_input_required_outputs(
+        self,
+        state: OrchestrationRunState,
+        *,
+        chosen_agent_ids: set[str],
+    ) -> OrchestrationRunState:
+        def mutate(updated: OrchestrationRunState) -> None:
+            superseded_message_ids = {
+                output.agent_message_id
+                for output in updated.agent_outputs
+                if (
+                    output.agent_id not in chosen_agent_ids
+                    and self._is_plain_a2a_input_output(output)
+                    and any(
+                        failure.status == "open"
+                        and failure.recoverable
+                        and failure.error_code == "agent_input_required"
+                        and failure.agent_message_id == output.agent_message_id
+                        for failure in updated.open_failures
+                    )
+                )
+            }
+            for output in updated.agent_outputs:
+                if output.agent_message_id in superseded_message_ids:
+                    output.status = "abandoned"
+            for failure in updated.open_failures:
+                if (
+                    failure.agent_message_id in superseded_message_ids
+                    and failure.error_code == "agent_input_required"
+                    and failure.status == "open"
+                ):
+                    failure.status = "abandoned"
+                    failure.updated_at = utcnow()
+
+        return await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={
+                "reason": "input_required_superseded",
+                "chosen_agent_ids": sorted(chosen_agent_ids),
+            },
+            mutate=mutate,
         )
 
     async def _run_agent_awaiting_input_action(
@@ -3839,7 +3938,7 @@ class SupervisorExecutor:
         fallback_intents: list[DispatchIntent],
     ) -> DispatchIntent | None:
         if result.agent_message_id:
-            return next(
+            matched_message_intent = next(
                 (
                     intent
                     for intent in fallback_intents
@@ -3847,6 +3946,8 @@ class SupervisorExecutor:
                 ),
                 None,
             )
+            if matched_message_intent is not None:
+                return matched_message_intent
         return next(
             (
                 intent
@@ -5261,6 +5362,27 @@ class SupervisorExecutor:
                             error_message=str(exc),
                             status_message=exc.code,
                         )
+
+                awaiting_output = None
+                if run_state is not None and resolved_payload is not None:
+                    awaiting_output = next(
+                        (
+                            output
+                            for output in reversed(run_state.agent_outputs)
+                            if output.agent_id == target.agent_id
+                            and self._is_plain_a2a_input_output(output)
+                        ),
+                        None,
+                    )
+                if awaiting_output is not None:
+                    continued = await self._continue_agent_task_with_resolved_refs(
+                        awaiting_output=awaiting_output,
+                        target=target,
+                        resolved_payload=resolved_payload,
+                    )
+                    if continued is not None:
+                        continued.step_number = step_number
+                        return continued
 
                 dispatch_task = self._dispatch_task_with_ref_projection(
                     task=target.task,
