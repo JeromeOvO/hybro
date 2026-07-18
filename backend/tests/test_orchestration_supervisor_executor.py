@@ -4659,6 +4659,8 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-2:message",
+                        a2a_task_id="task-2",
+                        a2a_context_id="context-2",
                     ),
                 ],
                 started_at=utcnow(),
@@ -4672,12 +4674,12 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
         synced_trajectory,
     )
 
-    assert blocking_status is None
-    assert restored_state.status == OrchestrationStatus.RUNNING
+    assert blocking_status == RunStatus.PAUSED
+    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.RUNNING
+    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
     assert len(persisted_state.agent_outputs) == 2
     assert [
         output.status
@@ -4751,6 +4753,8 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-1:message",
+                        a2a_task_id="task-1",
+                        a2a_context_id="context-1",
                     )
                 ],
                 started_at=utcnow(),
@@ -4764,12 +4768,12 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
         synced_trajectory,
     )
 
-    assert blocking_status is None
-    assert restored_state.status == OrchestrationStatus.RUNNING
+    assert blocking_status == RunStatus.PAUSED
+    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.RUNNING
+    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
     assert len(persisted_state.agent_outputs) == 1
     assert persisted_state.agent_outputs[0].agent_message_id == (
         "message-1:step-1:target-1:message"
@@ -4832,6 +4836,8 @@ async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persist
                         success=False,
                         status=StepStatus.AWAITING_INPUT,
                         agent_message_id="message-1:step-1:target-1:message",
+                        a2a_task_id="task-1",
+                        a2a_context_id="context-1",
                     )
                 ],
                 started_at=utcnow(),
@@ -4845,12 +4851,12 @@ async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persist
         synced_trajectory,
     )
 
-    assert blocking_status is None
-    assert restored_state.status == OrchestrationStatus.RUNNING
+    assert blocking_status == RunStatus.PAUSED
+    assert restored_state.status == OrchestrationStatus.WAITING_AGENT
     assert restored_state.pending_hitl_request_ids == []
     persisted_state = await store.get_run("message-1")
     assert persisted_state is not None
-    assert persisted_state.status == OrchestrationStatus.RUNNING
+    assert persisted_state.status == OrchestrationStatus.WAITING_AGENT
     assert persisted_state.pending_hitl_request_ids == []
     assert [
         output.agent_message_id for output in persisted_state.agent_outputs
@@ -5196,17 +5202,10 @@ async def test_inflight_recovery_persists_outcome_for_interactive_message_withou
         user_message=user_message,
     )
 
-    assert run_status == RunStatus.AWAITING_INPUT
-    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
-    assert recovered_state.pending_hitl_request_ids == ["hitl-agent-1"]
-    executor.hitl_coordinator.request_input.assert_awaited_once()
-    request_input_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
-    assert request_input_kwargs["a2a_task_id"] == "task-1"
-    assert request_input_kwargs["a2a_context_id"] == "ctx-1"
-    assert (
-        request_input_kwargs["prompt"]
-        == "Please provide missing details."
-    )
+    assert run_status is None
+    assert recovered_state.status == OrchestrationStatus.RUNNING
+    assert recovered_state.pending_hitl_request_ids == []
+    executor.hitl_coordinator.request_input.assert_not_awaited()
     assert recovered_state.agent_outputs
     recovered_output = recovered_state.agent_outputs[0]
     assert recovered_output.a2a_task_id == "task-1"
@@ -8169,6 +8168,8 @@ def test_awaiting_result_requires_hitl_only_for_auth_or_policy():
         response_text="",
         status=StepStatus.AWAITING_INPUT,
         interactive_state="input-required",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
     )
     auth_required = plain_input_required.model_copy(
         update={"interactive_state": "auth-required", "requires_auth": True}
@@ -8334,13 +8335,13 @@ async def test_concurrent_delegate_recovery_claims_before_one_remote_reply():
             targets=[target], agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
             room_id="room-1", user_message_id="message-1", step_number=2, token=None,
             request_user_id="user-1", quoted_text=None, planned_message_ids=["repair-msg"],
-            run_state=state, user_message=user_message,
+            run_state=state, original_attachments=[],
         ),
         executor._dispatch_targets(
             targets=[target], agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
             room_id="room-1", user_message_id="message-1", step_number=2, token=None,
             request_user_id="user-1", quoted_text=None, planned_message_ids=["repair-msg"],
-            run_state=state, user_message=user_message,
+            run_state=state, original_attachments=[],
         ),
     )
 
@@ -9059,6 +9060,18 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         envelope=user_message.extend_info,
         goal="Use uploaded text",
     )
+    state.dispatch_intents.append(
+        DispatchIntent(
+            step_id="step-1",
+            step_target_id="target-1",
+            dispatch_intent_id="intent-1",
+            planned_agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            task="Initial task",
+            task_hash="hash-1",
+            status=StepStatus.AWAITING_INPUT.value,
+        )
+    )
     state.agent_outputs.append(
         AgentOutputRecord(
             agent_message_id="agent-msg-1",
@@ -9080,6 +9093,24 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
             recoverable=True,
         )
     )
+    state.pending_agent_continuations.append(
+        PendingAgentContinuation(
+            continuation_id="continuation-1",
+            source_intent_id="intent-1",
+            source_agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            goal_family_fingerprint=goal_fingerprints(
+                agent_id="agent-1",
+                expected_outputs=[],
+                selected_content_fingerprints=[],
+                dependency_family_fingerprints=[],
+                upstream_output_fingerprints=[],
+            ).goal_family_fingerprint,
+            goal_revision_fingerprint="revision-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        )
+    )
     await store.create_run(state)
     planner_action = PlannerAction(
         action=PlannerActionType.DELEGATE,
@@ -9089,6 +9120,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
                 agent_id="agent-1",
                 agent_name="Agent One",
                 task="Use the projected input",
+                repair_of_intent_id="intent-1",
                 context_refs=[
                     DispatchContentRef(
                         kind=DispatchRefKind.CONTEXT,
@@ -9160,4 +9192,4 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         "selected_attachment_refs": [],
     }
     assert saved.agent_outputs[0].status == "completed"
-    assert saved.dispatch_intents[0].status == StepStatus.SUCCESS.value
+    assert saved.dispatch_intents[0].status == "completed"

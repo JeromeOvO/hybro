@@ -2149,7 +2149,20 @@ class SupervisorExecutor:
             else None
         )
         task_metadata_dict = task_metadata if isinstance(task_metadata, Mapping) else {}
-        status_message = _field_from_task(task, "status", "message", "message_text")
+        status_payload = _field_from_task(task, "status", "message")
+        status_message = _field_from_task(status_payload, "message_text")
+        if not isinstance(status_message, str):
+            parts = _field_from_task(status_payload, "parts")
+            if isinstance(parts, list):
+                part_texts = [
+                    _field_from_task(part, "text")
+                    for part in parts
+                ]
+                status_message = "\n".join(
+                    text.strip()
+                    for text in part_texts
+                    if isinstance(text, str) and text.strip()
+                )
         if not isinstance(status_message, str):
             status_message = _field_from_task(task, "metadata", "hitl_prompt")
         if not isinstance(status_message, str):
@@ -2183,8 +2196,15 @@ class SupervisorExecutor:
                     or task_metadata_dict.get("policy_required")
                 )
             ),
-            a2a_task_id=_field_from_task(task_metadata_dict, "hitl_a2a_task_id"),
-            a2a_context_id=_field_from_task(task_metadata_dict, "hitl_a2a_context_id"),
+            a2a_task_id=(
+                _field_from_task(task_metadata_dict, "hitl_a2a_task_id")
+                or _field_from_task(task, "id")
+            ),
+            a2a_context_id=(
+                _field_from_task(task_metadata_dict, "hitl_a2a_context_id")
+                or _field_from_task(task, "context_id")
+                or _field_from_task(task, "contextId")
+            ),
             agent_message_id=intent.planned_agent_message_id,
             completed_at=utcnow(),
         )
@@ -2258,9 +2278,19 @@ class SupervisorExecutor:
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
         )
-        task_state = reply_result.get("task_state") or "completed"
+        task_state = str(reply_result.get("task_state") or "completed")
+        task_state = task_state.strip().lower().replace("_", "-")
         response_text = reply_result.get("response_text") or ""
-        if task_state in {"input-required", "auth-required"}:
+        requires_policy = bool(
+            reply_result.get("requires_policy")
+            or reply_result.get("policy_required")
+            or task_state == "policy-required"
+        )
+        interactive_state = "policy-required" if requires_policy else task_state
+        if (
+            task_state in {"input-required", "auth-required", "policy-required"}
+            or requires_policy
+        ):
             return StepResult(
                 step_number=0,
                 agent_id=awaiting_output.agent_id,
@@ -2274,8 +2304,9 @@ class SupervisorExecutor:
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
                 status_message=response_text,
-                interactive_state=task_state,
+                interactive_state=interactive_state,
                 requires_auth=task_state == "auth-required",
+                requires_policy=requires_policy,
             )
         if task_state in {"failed", "canceled", "rejected"} and continuation_state is not None:
             await self._reconcile_persisted_continuation(
