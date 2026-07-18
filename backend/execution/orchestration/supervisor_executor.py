@@ -45,6 +45,11 @@ from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     resolve_dispatch_payload_refs,
 )
+from execution.orchestration.outcome_evaluator import (
+    DelegationOutcomeEvaluator,
+    canonical_content_fingerprint,
+)
+from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
     OrchestrationPlanner,
     RoomSupervisorPlannerAdapter,
@@ -61,6 +66,7 @@ from execution.orchestration.result_ingestor import (
 )
 from execution.orchestration.run_reducer import mark_running, mark_terminal
 from execution.orchestration.run_store import (
+    DuplicateEventIdConflict,
     InMemoryOrchestrationRunStore,
     OrchestrationRunStore,
     OrchestrationStoreConflict,
@@ -71,6 +77,7 @@ from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
     AgentOutputRecord,
     DispatchIntent,
+    DispatchRefKind,
     OrchestrationEventType,
     OrchestrationRunEvent,
     OrchestrationRunState,
@@ -148,6 +155,7 @@ class SupervisorExecutor:
         orchestration_run_store: OrchestrationRunStore | None = None,
         orchestration_planner: OrchestrationPlanner | None = None,
         orchestration_resource_provider: OrchestrationResourceProvider | None = None,
+        delegation_outcome_evaluator: DelegationOutcomeEvaluator | None = None,
     ) -> None:
         if event_publisher is None:
             raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
@@ -174,6 +182,9 @@ class SupervisorExecutor:
         )
         self.orchestration_resource_provider = (
             orchestration_resource_provider or OrchestrationResourceProvider()
+        )
+        self.delegation_outcome_evaluator = (
+            delegation_outcome_evaluator or DelegationOutcomeEvaluator()
         )
         self.result_ingestor = AgentResultIngestor()
         self._processing_status_emitter = None
@@ -3866,6 +3877,24 @@ class SupervisorExecutor:
             return "completed"
         return result.status.value
 
+    @classmethod
+    def _v2_result_fingerprint(
+        cls,
+        result: StepResult,
+        *,
+        output_message_id: str,
+        artifacts: list[dict[str, Any]],
+    ) -> str:
+        payload = result.model_dump(mode="json", exclude={"completed_at"})
+        payload.update(
+            {
+                "agent_message_id": output_message_id,
+                "status": cls._v2_result_status_to_agent_result_status(result),
+                "artifacts": artifacts,
+            }
+        )
+        return canonical_content_fingerprint(payload)
+
     async def _ingest_v2_results(
         self,
         state: OrchestrationRunState,
@@ -3914,10 +3943,17 @@ class SupervisorExecutor:
                     fallback_intents=next_state.dispatch_intents,
                 )
             )
+            artifacts: list[dict[str, Any]] = []
+            result_fingerprint: str | None = None
             if output_message_id:
                 artifacts = await self._v2_artifacts_for_output_message(
                     current,
                     output_message_id,
+                )
+                result_fingerprint = self._v2_result_fingerprint(
+                    result,
+                    output_message_id=output_message_id,
+                    artifacts=artifacts,
                 )
                 next_state = self.result_ingestor.ingest(
                     next_state,
@@ -3937,11 +3973,72 @@ class SupervisorExecutor:
             next_state.state_version = expected_version + 1
             next_state.updated_at = utcnow()
 
+            outcome = None
+            raw_result_already_ingested = False
+            if matched_intent is not None and output_message_id:
+                output = next(
+                    (
+                        candidate
+                        for candidate in next_state.agent_outputs
+                        if candidate.agent_message_id == output_message_id
+                    ),
+                    None,
+                )
+                if output is not None:
+                    history = OutcomeHistoryView.from_state(current)
+                    evaluator = getattr(
+                        self,
+                        "delegation_outcome_evaluator",
+                        None,
+                    ) or DelegationOutcomeEvaluator()
+                    evaluated = evaluator.evaluate(
+                        current,
+                        next_state,
+                        matched_intent,
+                        output,
+                        selected_resource_fingerprints=(
+                            self._v2_selected_resource_fingerprints(
+                                current,
+                                matched_intent,
+                            )
+                        ),
+                    )
+                    outcome = evaluated.model_copy(
+                        update={
+                            "outcome_id": "outcome:"
+                            + canonical_content_fingerprint(
+                                {
+                                    "run_id": current.run_id,
+                                    "dispatch_intent_id": (
+                                        matched_intent.dispatch_intent_id
+                                    ),
+                                    "output_message_id": output_message_id,
+                                    "result_status": result.status.value,
+                                    "result_fingerprint": result_fingerprint,
+                                }
+                            )[:20],
+                            "result_fingerprint": result_fingerprint,
+                        }
+                    )
+                    existing_outcome = next(
+                        (
+                            existing
+                            for existing in history.outcomes
+                            if existing.outcome_id == outcome.outcome_id
+                        ),
+                        None,
+                    )
+                    if existing_outcome is None:
+                        next_state.delegation_outcomes.append(outcome)
+                    else:
+                        outcome = existing_outcome
+                    raw_result_already_ingested = existing_outcome is not None
+
             current = await self.run_store.save_state(
                 next_state,
                 expected_version=expected_version,
             )
-            if output_message_id:
+            if output_message_id and not raw_result_already_ingested:
                 await self._append_v2_event(
                     current,
                     OrchestrationEventType.AGENT_RESULT_INGESTED,
@@ -3951,6 +4048,20 @@ class SupervisorExecutor:
                         "status": self._v2_result_status_to_agent_result_status(
                             result
                         ),
+                    },
+                )
+            if outcome is not None:
+                await self._append_v2_event(
+                    current,
+                    OrchestrationEventType.OUTCOME_EVALUATED,
+                    required=True,
+                    event_id=f"outcome-evaluated:{outcome.outcome_id}",
+                    ignore_duplicate_event=True,
+                    payload={
+                        "outcome_id": outcome.outcome_id,
+                        "dispatch_intent_id": outcome.dispatch_intent_id,
+                        "agent_message_id": output_message_id,
+                        "status": outcome.status,
                     },
                 )
 
@@ -3984,9 +4095,15 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         event_type: OrchestrationEventType,
         *,
+        required: bool = False,
+        event_id: str | None = None,
+        ignore_duplicate_event: bool = False,
         payload: dict[str, Any],
     ) -> None:
         try:
+            event_kwargs: dict[str, Any] = {}
+            if event_id is not None:
+                event_kwargs["event_id"] = event_id
             await self.orchestration_run_store.append_event(
                 OrchestrationRunEvent(
                     run_id=state.run_id,
@@ -3994,10 +4111,82 @@ class SupervisorExecutor:
                     type=event_type,
                     state_version=state.state_version,
                     payload=payload,
+                    **event_kwargs,
                 )
             )
-        except Exception:
+        except OrchestrationStoreConflict as exc:
+            if (
+                ignore_duplicate_event
+                and event_id is not None
+                and isinstance(exc, DuplicateEventIdConflict)
+                and exc.event_id == event_id
+            ):
+                return
+            if required:
+                raise
             logger.debug("Failed to append v2 orchestration event", exc_info=True)
+        except Exception:
+            if required:
+                raise
+            logger.debug("Failed to append v2 orchestration event", exc_info=True)
+
+    @staticmethod
+    def _v2_selected_resource_fingerprints(
+        state: OrchestrationRunState,
+        intent: DispatchIntent,
+    ) -> list[str]:
+        facts_by_id = {
+            str(fact.get("fact_id")): fact
+            for fact in state.facts
+            if isinstance(fact, dict) and fact.get("fact_id") is not None
+        }
+        artifacts_by_key = {
+            str(artifact.get("artifact_key")): artifact
+            for artifact in state.artifacts
+            if isinstance(artifact, dict) and artifact.get("artifact_key") is not None
+        }
+        fingerprints: set[str] = set()
+        selected_ref_ids: set[str] = set()
+
+        for ref in [
+            *intent.context_refs,
+            *intent.artifact_refs,
+            *intent.attachment_refs,
+        ]:
+            selected_ref_ids.add(ref.ref_id)
+            selected_content: object | None = None
+            if ref.kind == DispatchRefKind.CONTEXT:
+                fact = facts_by_id.get(ref.ref_id)
+                if fact is not None:
+                    selected_content = {
+                        key: value
+                        for key, value in fact.items()
+                        if key != "fact_id"
+                    }
+            elif ref.kind == DispatchRefKind.ARTIFACT:
+                selected_content = artifacts_by_key.get(ref.ref_id)
+
+            fingerprints.add(
+                canonical_content_fingerprint(
+                    selected_content
+                    if selected_content is not None
+                    else {
+                        "kind": ref.kind.value,
+                        "ref_id": ref.ref_id,
+                        "mime_type": ref.mime_type,
+                    }
+                )
+            )
+
+        for ref_id in intent.required_resource_refs:
+            if ref_id not in selected_ref_ids:
+                fingerprints.add(
+                    canonical_content_fingerprint(
+                        {"required_resource_ref": ref_id}
+                    )
+                )
+
+        return sorted(fingerprints)
 
     @staticmethod
     def _apply_v2_dispatch_intents(

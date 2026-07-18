@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from execution.orchestration.run_store import (
+    DuplicateEventIdConflict,
     InMemoryOrchestrationRunStore,
     MongoOrchestrationRunStore,
     OrchestrationStoreConflict,
@@ -267,8 +268,9 @@ async def test_append_event_rejects_missing_run_duplicate_id_and_future_version(
 
     duplicate = event.model_copy(deep=True)
     duplicate.type = OrchestrationEventType.STATE_REDUCED
-    with pytest.raises(OrchestrationStoreConflict, match="event_id"):
+    with pytest.raises(DuplicateEventIdConflict, match="event_id") as exc_info:
         await store.append_event(duplicate)
+    assert exc_info.value.event_id == "event-1"
 
     future_version = OrchestrationRunEvent(
         event_id="event-2",
@@ -350,8 +352,9 @@ async def test_mongo_store_normalizes_duplicate_event_insert_to_conflict():
         type=OrchestrationEventType.RUN_RECOVERED,
         state_version=0,
     )
-    with pytest.raises(OrchestrationStoreConflict, match="already exists"):
+    with pytest.raises(DuplicateEventIdConflict, match="already exists") as exc_info:
         await store.append_event(event)
+    assert exc_info.value.event_id == "event-1"
 
 
 @pytest.mark.asyncio
