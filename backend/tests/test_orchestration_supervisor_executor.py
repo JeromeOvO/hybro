@@ -766,6 +766,51 @@ def test_generic_agents_cover_conditional_no_progress_and_failed_retry_contracts
     assert alternate.allowed is True
 
 
+def test_blocker_context_tracks_run_wide_attempted_agents():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate agents."),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    state = _run_state(
+        candidate_agent_ids=["agent-1", "agent-2"],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="partial",
+                remaining_required_obligations=["result:$present"],
+            )
+        ],
+    )
+
+    attempted = executor._attempted_agent_ids_for_blocker_context(
+        state,
+        current_agent_ids={"agent-2"},
+    )
+    eligible = executor._eligible_alternate_agent_ids_for_blocker_context(
+        state=state,
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Agent One"),
+            AgentProfile(agent_id="agent-2", agent_name="Agent Two"),
+        ],
+        attempted_agent_ids=attempted,
+    )
+
+    assert attempted == {"agent-1", "agent-2"}
+    assert eligible == set()
+
+
 def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat():
     producer = "generic-producer"
     consumer = "generic-consumer"
@@ -6638,6 +6683,92 @@ async def test_ingest_v2_results_persists_one_idempotent_outcome():
     assert [event.type for event in events].count(
         OrchestrationEventType.OUTCOME_EVALUATED
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_v2_results_validates_agent_missing_fields_as_blocker():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review submission."),
+        extend_info={},
+    )
+    state = _run_state(candidate_agent_ids=["broker-agent"])
+    state.dispatch_intents = [
+        DispatchIntent(
+            step_id="step-1",
+            step_target_id="target-1",
+            dispatch_intent_id="intent-1",
+            planned_agent_message_id="agent-msg-1",
+            agent_id="broker-agent",
+            task="Review submission.",
+            task_hash="hash-1",
+            expected_outputs=[
+                DispatchExpectedOutput(
+                    output_key="broker_submission",
+                    kind="artifact",
+                    required=True,
+                    required_fields=["industry"],
+                )
+            ],
+            context_refs=[
+                DispatchContentRef(
+                    kind=DispatchRefKind.CONTEXT,
+                    ref_id="ctx:file-1:text",
+                )
+            ],
+        )
+    ]
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._v2_artifacts_for_output_message = AsyncMock(
+        return_value=[
+            {
+                "artifact_id": "submission",
+                "name": "submission",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "client": {"industry": None},
+                            "missing_fields": ["client.industry"],
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+
+    updated = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="broker-agent",
+                agent_name="Broker",
+                task="Review submission.",
+                success=True,
+                response_text="Submission is missing industry.",
+                agent_message_id="agent-msg-1",
+            )
+        ],
+        status=OrchestrationStatus.INGESTING,
+        advance_step=False,
+        available_resource_refs={"ctx:file-1:text"},
+        attempted_agent_ids={"broker-agent"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated.delegation_outcomes[-1].status == "blocked"
+    assert updated.blockers[0].validation_status == "validated"
+    assert updated.blockers[0].validated_user_only is True
 
 
 @pytest.mark.asyncio

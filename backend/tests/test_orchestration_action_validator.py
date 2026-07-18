@@ -426,7 +426,7 @@ def test_post_dispatch_question_requires_blocker_keys():
     )
 
 
-def test_post_dispatch_question_rejects_candidate_only_blocker():
+def test_post_dispatch_question_rejects_unvalidated_blocker():
     blocker = _validated_quote_blocker("quote-input").model_copy(
         update={
             "validated_user_only": False,
