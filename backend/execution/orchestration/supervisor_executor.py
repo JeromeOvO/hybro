@@ -37,7 +37,10 @@ from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
 )
-from execution.orchestration.blocker_resolver import resolve_agent_observed_blockers
+from execution.orchestration.blocker_resolver import (
+    resolve_agent_observed_blockers,
+    validate_hitl_answered_blockers,
+)
 from execution.orchestration.candidate_scope import (
     candidate_scope_from_legacy_envelope,
     normalize_candidate_scope,
@@ -3272,6 +3275,16 @@ class SupervisorExecutor:
                         "prompt": question.prompt,
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
+                        "blocker_keys": list(question.blocker_keys),
+                        "required_obligation_keys": list(
+                            question.required_obligation_keys
+                        ),
+                        "blocker_obligations": {
+                            blocker_key: list(obligations)
+                            for blocker_key, obligations in (
+                                question.blocker_obligations.items()
+                            )
+                        },
                         "status": "open",
                         "created_at": (
                             entry.started_at.isoformat()
@@ -3396,17 +3409,21 @@ class SupervisorExecutor:
                     resolved_question["resolved_at"] = resolved_at
                     updated.open_questions.append(resolved_question)
                 prompts.extend(recovered_prompts)
-            updated.facts.append(
-                {
-                    "fact_id": (
-                        f"{state.run_id}:hitl-reply:{state.state_version + 1}"
-                    ),
-                    "source": "hitl_user_reply",
-                    "text": answer,
-                    "request_ids": resolved_request_ids,
-                    "question_prompts": prompts,
-                    "created_at": resolved_at,
-                }
+            answer_fact = {
+                "fact_id": (
+                    f"{state.run_id}:hitl-reply:{state.state_version + 1}"
+                ),
+                "source": "hitl_user_reply",
+                "text": answer,
+                "request_ids": resolved_request_ids,
+                "question_prompts": prompts,
+                "created_at": resolved_at,
+            }
+            updated.facts.append(answer_fact)
+            validate_hitl_answered_blockers(
+                updated,
+                resolved_request_ids=set(resolved_request_ids),
+                answer_fact=answer_fact,
             )
             updated.pending_hitl_request_ids = [
                 request_id
@@ -4050,6 +4067,15 @@ class SupervisorExecutor:
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
                         "blocker_keys": blocker_keys,
+                        "required_obligation_keys": list(
+                            question.required_obligation_keys
+                        ),
+                        "blocker_obligations": {
+                            blocker_key: list(obligations)
+                            for blocker_key, obligations in (
+                                question.blocker_obligations.items()
+                            )
+                        },
                         "status": "creating",
                         "display_message_id": message_id,
                         "created_at": utcnow().isoformat(),
@@ -4064,6 +4090,15 @@ class SupervisorExecutor:
                 existing["prompt_type"] = question.prompt_type
                 existing["choices"] = question.choices
                 existing["blocker_keys"] = blocker_keys
+                existing["required_obligation_keys"] = list(
+                    question.required_obligation_keys
+                )
+                existing["blocker_obligations"] = {
+                    blocker_key: list(obligations)
+                    for blocker_key, obligations in (
+                        question.blocker_obligations.items()
+                    )
+                }
                 existing["display_message_id"] = message_id
             self._clear_stale_pending_hitl_request_ids(updated)
 
@@ -4095,6 +4130,15 @@ class SupervisorExecutor:
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
                         "blocker_keys": blocker_keys,
+                        "required_obligation_keys": list(
+                            question.required_obligation_keys
+                        ),
+                        "blocker_obligations": {
+                            blocker_key: list(obligations)
+                            for blocker_key, obligations in (
+                                question.blocker_obligations.items()
+                            )
+                        },
                         "status": "creating",
                         "display_message_id": message_id,
                         "created_at": utcnow().isoformat(),
@@ -4107,14 +4151,19 @@ class SupervisorExecutor:
                 existing["prompt_type"] = question.prompt_type
                 existing["choices"] = question.choices
                 existing["blocker_keys"] = blocker_keys
+                existing["required_obligation_keys"] = list(
+                    question.required_obligation_keys
+                )
+                existing["blocker_obligations"] = {
+                    blocker_key: list(obligations)
+                    for blocker_key, obligations in (
+                        question.blocker_obligations.items()
+                    )
+                }
                 existing["display_message_id"] = message_id
 
         for qi, question in enumerate(questions):
-            blocker_keys = (
-                list(planner_action.questions[qi].blocker_keys)
-                if qi < len(planner_action.questions)
-                else []
-            )
+            blocker_keys = list(question.blocker_keys)
             prompt_type = HITLPromptType.TEXT
             if question.prompt_type:
                 try:
@@ -4193,6 +4242,16 @@ class SupervisorExecutor:
                     "step": step_number,
                     "prompt_type": question.prompt_type,
                     "choices": question.choices,
+                    "blocker_keys": list(question.blocker_keys),
+                    "required_obligation_keys": list(
+                        question.required_obligation_keys
+                    ),
+                    "blocker_obligations": {
+                        blocker_key: list(obligations)
+                        for blocker_key, obligations in (
+                            question.blocker_obligations.items()
+                        )
+                    },
                     "display_message_id": hitl_agent_message.message_id,
                 }
                 def persist_request_open(
@@ -4230,6 +4289,16 @@ class SupervisorExecutor:
                         "step": step_number,
                         "prompt_type": question.prompt_type,
                         "choices": question.choices,
+                        "blocker_keys": list(question.blocker_keys),
+                        "required_obligation_keys": list(
+                            question.required_obligation_keys
+                        ),
+                        "blocker_obligations": {
+                            blocker_key: list(obligations)
+                            for blocker_key, obligations in (
+                                question.blocker_obligations.items()
+                            )
+                        },
                         "display_message_id": (
                             hitl_agent_message.message_id
                             if hitl_agent_message is not None
@@ -4331,11 +4400,7 @@ class SupervisorExecutor:
                 if request_id not in updated.pending_hitl_request_ids:
                     updated.pending_hitl_request_ids.append(request_id)
                 question = questions[min(index, len(questions) - 1)]
-                blocker_keys = (
-                    list(planner_action.questions[index].blocker_keys)
-                    if index < len(planner_action.questions)
-                    else []
-                )
+                blocker_keys = list(question.blocker_keys)
                 existing = next(
                     (
                         item
@@ -4361,6 +4426,15 @@ class SupervisorExecutor:
                             "prompt_type": question.prompt_type,
                             "choices": question.choices,
                             "blocker_keys": blocker_keys,
+                            "required_obligation_keys": list(
+                                question.required_obligation_keys
+                            ),
+                            "blocker_obligations": {
+                                blocker_key: list(obligations)
+                                for blocker_key, obligations in (
+                                    question.blocker_obligations.items()
+                                )
+                            },
                             "status": "open",
                             "created_at": utcnow().isoformat(),
                         }
@@ -4372,6 +4446,15 @@ class SupervisorExecutor:
                     existing["prompt_type"] = question.prompt_type
                     existing["choices"] = question.choices
                     existing["blocker_keys"] = blocker_keys
+                    existing["required_obligation_keys"] = list(
+                        question.required_obligation_keys
+                    )
+                    existing["blocker_obligations"] = {
+                        blocker_key: list(obligations)
+                        for blocker_key, obligations in (
+                            question.blocker_obligations.items()
+                        )
+                    }
                     existing["status"] = "open"
             self._clear_stale_pending_hitl_request_ids(updated)
 
@@ -5543,6 +5626,16 @@ class SupervisorExecutor:
                     prompt=question.prompt,
                     prompt_type=question.prompt_type,
                     choices=question.choices,
+                    blocker_keys=list(question.blocker_keys),
+                    required_obligation_keys=list(
+                        question.required_obligation_keys
+                    ),
+                    blocker_obligations={
+                        blocker_key: list(obligations)
+                        for blocker_key, obligations in (
+                            question.blocker_obligations.items()
+                        )
+                    },
                 )
                 for question in planner_action.questions
             ]

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
+
 from execution.orchestration.outcome_policy import BlockerPolicyValidator
 from models.orchestration import (
     BlockerRecord,
@@ -95,6 +98,228 @@ def resolve_agent_observed_blockers(
         }
     )
     return updated, updated_outcome
+
+
+_INSUFFICIENT_ANSWER_MARKERS = (
+    "i do not know",
+    "i don't know",
+    "unknown",
+    "not sure",
+    "skip",
+    "n/a",
+)
+
+_ANSWER_VALUE_FILLER = {
+    "a",
+    "an",
+    "are",
+    "be",
+    "is",
+    "of",
+    "the",
+    "to",
+}
+
+_NON_VALUE_ANSWER_TOKENS = {
+    "available",
+    "confirmed",
+    "pending",
+}
+
+_AMOUNT_LIKE_FIELD_TOKENS = {
+    "amount",
+    "cost",
+    "deductible",
+    "limit",
+    "premium",
+    "price",
+    "value",
+}
+
+
+def validate_hitl_answered_blockers(
+    state: OrchestrationRunState,
+    *,
+    resolved_request_ids: set[str],
+    answer_fact: Mapping[str, object],
+) -> None:
+    if not resolved_request_ids:
+        return
+    answer_text = str(answer_fact.get("text") or "").strip()
+    if not answer_text:
+        return
+    answer_fact_id = str(answer_fact.get("fact_id") or "").strip()
+    for question in state.open_questions:
+        if not _is_resolved_hitl_question(question, resolved_request_ids):
+            continue
+        _resolve_answered_question_blockers(
+            state,
+            question=question,
+            answer_text=answer_text,
+            answer_fact_id=answer_fact_id,
+        )
+
+
+def _is_resolved_hitl_question(
+    question: object,
+    resolved_request_ids: set[str],
+) -> bool:
+    return (
+        isinstance(question, Mapping)
+        and question.get("request_id") in resolved_request_ids
+        and question.get("resolved") is True
+    )
+
+
+def _resolve_answered_question_blockers(
+    state: OrchestrationRunState,
+    *,
+    question: Mapping[str, object],
+    answer_text: str,
+    answer_fact_id: str,
+) -> None:
+    blocker_keys = question.get("blocker_keys") or []
+    allow_value_only = len(blocker_keys) == 1
+    for blocker in state.blockers:
+        if blocker.key not in blocker_keys or blocker.status != "open":
+            continue
+        obligations = _question_obligations(state, question, blocker)
+        if not _answer_satisfies_obligations(
+            answer_text,
+            obligations,
+            allow_value_only=allow_value_only,
+        ):
+            continue
+        blocker.status = "resolved"
+        if answer_fact_id and answer_fact_id not in blocker.evidence_refs:
+            blocker.evidence_refs.append(answer_fact_id)
+
+
+def _question_obligations(
+    state: OrchestrationRunState,
+    question: Mapping[str, object],
+    blocker: BlockerRecord,
+) -> object:
+    blocker_obligations = question.get("blocker_obligations")
+    if isinstance(blocker_obligations, Mapping) and blocker_obligations:
+        return blocker_obligations.get(blocker.key)
+    shared_obligations = question.get("required_obligation_keys")
+    if isinstance(shared_obligations, list) and shared_obligations:
+        return shared_obligations
+    return _required_obligations_for_blocker(state, blocker)
+
+
+def _required_obligations_for_blocker(
+    state: OrchestrationRunState,
+    blocker: BlockerRecord,
+) -> list[str]:
+    blocked_outputs = set(blocker.blocked_output_keys)
+    for outcome in reversed(state.delegation_outcomes):
+        obligations = [
+            obligation
+            for obligation in outcome.remaining_required_obligations
+            if not blocked_outputs
+            or obligation.split(":", 1)[0] in blocked_outputs
+        ]
+        if obligations:
+            return sorted(dict.fromkeys(obligations))
+    return []
+
+
+def _answer_satisfies_obligations(
+    answer_text: str,
+    obligations: object,
+    *,
+    allow_value_only: bool,
+) -> bool:
+    if obligations is None or not isinstance(obligations, list):
+        return False
+    if not obligations:
+        return not _answer_is_insufficient(answer_text)
+    answer_segments = _answer_segments(answer_text)
+    for obligation in obligations:
+        if not isinstance(obligation, str) or ":" not in obligation:
+            return False
+        output_key, field_key = obligation.split(":", 1)
+        match_key = output_key if field_key == "$present" else field_key
+        field_tokens = {
+            token
+            for token in match_key.replace(".", "_").split("_")
+            if token and token not in {"requested"}
+        }
+        matching_segments = [
+            segment
+            for segment in answer_segments
+            if field_tokens <= _normalize_answer_text(segment)
+        ]
+        if not matching_segments and allow_value_only:
+            matching_segments = [answer_text]
+        if not matching_segments:
+            return False
+        if not any(
+            not _answer_is_insufficient(segment)
+            and _answer_has_field_value(
+                _normalize_answer_text(segment),
+                field_tokens,
+            )
+            for segment in matching_segments
+        ):
+            return False
+    return True
+
+
+def _answer_is_insufficient(answer_text: str) -> bool:
+    answer_tokens = re.findall(r"[a-z0-9]+", answer_text.lower())
+    return any(
+        _contains_token_sequence(
+            answer_tokens,
+            re.findall(r"[a-z0-9]+", marker.lower()),
+        )
+        for marker in _INSUFFICIENT_ANSWER_MARKERS
+    )
+
+
+def _contains_token_sequence(tokens: list[str], sequence: list[str]) -> bool:
+    if not sequence:
+        return False
+    width = len(sequence)
+    return any(
+        tokens[index : index + width] == sequence
+        for index in range(len(tokens) - width + 1)
+    )
+
+
+def _answer_segments(answer_text: str) -> list[str]:
+    return [
+        segment.strip()
+        for segment in re.split(
+            r"(?:[.;\n]+|\b(?:and|but)\b)",
+            answer_text,
+            flags=re.IGNORECASE,
+        )
+        if segment.strip()
+    ]
+
+
+def _answer_has_field_value(
+    answer_tokens: set[str], field_tokens: set[str]
+) -> bool:
+    value_tokens = (
+        answer_tokens
+        - field_tokens
+        - _ANSWER_VALUE_FILLER
+        - _NON_VALUE_ANSWER_TOKENS
+        - {"requested"}
+    )
+    if not value_tokens:
+        return False
+    if field_tokens & _AMOUNT_LIKE_FIELD_TOKENS:
+        return any(any(character.isdigit() for character in token) for token in value_tokens)
+    return True
+
+
+def _normalize_answer_text(answer_text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", answer_text.lower()))
 
 
 def _matched_output_keys(

@@ -107,6 +107,9 @@ class ClarifyQuestion(BaseModel):
     prompt: str
     prompt_type: str | None = None
     choices: list[str] | None = None
+    blocker_keys: list[str] = Field(default_factory=list)
+    required_obligation_keys: list[str] = Field(default_factory=list)
+    blocker_obligations: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SupervisorAction(BaseModel):

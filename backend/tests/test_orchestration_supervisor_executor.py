@@ -8060,6 +8060,112 @@ async def test_run_supervisor_hitl_resume_clears_pending_request_ids():
 
 
 @pytest.mark.asyncio
+async def test_run_supervisor_hitl_persists_obligations_and_resolves_blocker():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    first_executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.ASK_USER,
+                reasoning="need requested limit",
+                questions=[
+                    PlannerQuestion(
+                        prompt="What is the requested limit?",
+                        reason="blocker",
+                        blocker_keys=["limit-blocker"],
+                        required_obligation_keys=["quote:requested_limit"],
+                        blocker_obligations={
+                            "limit-blocker": ["quote:requested_limit"]
+                        },
+                    )
+                ],
+            )
+        ),
+        user_message=user_message,
+    )
+    first_executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    first_executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    first_result = await first_executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert first_result.status == RunStatus.AWAITING_INPUT
+    state = await store.get_run("message-1")
+    assert state is not None
+    question = state.open_questions[0]
+    assert question["required_obligation_keys"] == ["quote:requested_limit"]
+    assert question["blocker_obligations"] == {
+        "limit-blocker": ["quote:requested_limit"]
+    }
+    updated = state.model_copy(deep=True)
+    updated.blockers = [
+        BlockerRecord(
+            key="limit-blocker",
+            description="Need requested limit.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+            status="open",
+        )
+    ]
+    updated.state_version = state.state_version + 1
+    await store.save_state(updated, expected_version=state.state_version)
+
+    second_executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.FAIL,
+                reasoning="stop after resolving the blocker",
+                failure_reason="test terminal",
+            )
+        ),
+        user_message=user_message,
+    )
+    await second_executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        resumed_trajectory=SupervisorTrajectory(hitl_user_reply="$5,000,000"),
+        user_message=user_message,
+    )
+
+    resolved = await store.get_run("message-1")
+    assert resolved is not None
+    assert resolved.blockers[0].status == "resolved"
+    assert any(
+        evidence_ref.startswith("message-1:hitl-reply:")
+        for evidence_ref in resolved.blockers[0].evidence_refs
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_supervisor_hitl_reply_allows_complete_after_question_resolves():
     user_message = RoomUserMessage(
         room_id="room-1",
