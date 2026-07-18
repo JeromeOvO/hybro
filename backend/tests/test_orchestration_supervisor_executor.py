@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from common.config.settings import Settings
 from common.utils.time import utcnow
@@ -18,11 +21,17 @@ from execution.orchestration.dispatch_payload import (
     ResolvedResourcePayload,
 )
 from execution.orchestration.outcome_evaluator import (
+    DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
     goal_fingerprints,
 )
+from execution.orchestration.outcome_policy import (
+    BlockerPolicyValidator,
+    evaluate_retry,
+)
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.resources import (
+    AttachmentProjectionService,
     OrchestrationResourceProvider,
     ResourcePayload,
     ResourceProjectionRef,
@@ -39,6 +48,8 @@ from models.hitl import InterruptKind
 from models.orchestration import (
     ActiveDispatchRef,
     AgentOutputRecord,
+    BlockerRecord,
+    BlockerResolutionAttempt,
     CompletionEvidence,
     DelegationOutcomeRecord,
     DispatchContentRef,
@@ -54,6 +65,8 @@ from models.orchestration import (
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
+    PlannerQuestion,
+    UnknownRecord,
 )
 from models.processing import ProcessingResult, ProcessingStatus
 from models.response import OrchestrationResponse
@@ -449,11 +462,37 @@ def _claimed_continuation() -> PendingAgentContinuation:
     )
 
 
+def _text_pdf_bytes(text: str) -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {NameObject("/F1"): writer._add_object(font)}
+            )
+        }
+    )
+    content = DecodedStreamObject()
+    content.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode())
+    page[NameObject("/Contents")] = writer._add_object(content)
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def _executor(
     *,
     store: InMemoryOrchestrationRunStore,
     planner: RecordingPlanner,
     user_message: RoomUserMessage,
+    guardrails_enabled: bool | None = None,
 ) -> SupervisorExecutor:
     created_message_ids: list[str] = []
 
@@ -509,10 +548,492 @@ def _executor(
         ),
         orchestration_run_store=store,
         orchestration_planner=planner,
+        guardrails_enabled=guardrails_enabled,
     )
     executor.bind_execution_event_deps(AsyncMock())
     executor._stream_supervisor_synthesis = AsyncMock(return_value="Final summary")
     return executor
+
+
+def _duplicate_generic_delegate_action() -> PlannerAction:
+    return PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Ask the generic producer twice.",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce the requested structured result.",
+                parallel_group="generic-work",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce the requested structured result again.",
+                parallel_group="generic-work",
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrails_enabled", "expected_dispatch_count"),
+    [(False, 2), (True, 0)],
+)
+async def test_injected_outcome_guardrails_atomically_control_duplicate_delegate_enforcement(
+    monkeypatch,
+    caplog,
+    guardrails_enabled: bool,
+    expected_dispatch_count: int,
+):
+    """Shadow mode records generic-agent outcomes without rejecting the action."""
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate generic work."),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1", "agent-2"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            _duplicate_generic_delegate_action(),
+            PlannerAction(
+                action=PlannerActionType.FAIL,
+                reasoning="End the regression fixture.",
+                failure_reason="fixture complete",
+            ),
+        ),
+        user_message=user_message,
+        guardrails_enabled=guardrails_enabled,
+    )
+    monkeypatch.setattr(
+        supervisor_executor_module._settings,
+        "orchestration_outcome_guardrails",
+        not guardrails_enabled,
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate generic work.",
+        agent_registry=[
+            AgentProfile(agent_id="agent-1", agent_name="Generic Producer"),
+            AgentProfile(agent_id="agent-2", agent_name="Generic Consumer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert len(result.run_state.dispatch_intents) == expected_dispatch_count
+    if guardrails_enabled:
+        assert not result.run_state.delegation_outcomes
+        assert "orchestration_delegate_retry_rejected" in caplog.text
+    else:
+        assert len(result.run_state.delegation_outcomes) == 2
+        assert "orchestration_delegate_outcome_evaluated" in caplog.text
+
+
+def test_generic_agents_cover_conditional_no_progress_and_failed_retry_contracts():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    family = "generic-family"
+    revision = "generic-revision"
+    first_intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="producer-msg-1",
+        agent_id=producer,
+        task="Produce a structured generic artifact.",
+        task_hash="producer-task",
+        status="completed",
+    )
+    repeated_intent = first_intent.model_copy(
+        update={
+            "step_id": "step-2",
+            "step_target_id": "target-2",
+            "dispatch_intent_id": "intent-2",
+            "planned_agent_message_id": "producer-msg-2",
+            "status": "completed",
+            "repair_of_intent_id": "intent-1",
+        }
+    )
+    partial = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id=producer,
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+        attempt_fingerprint="producer-attempt-1",
+        status="partial",
+        remaining_required_obligations=["generic:required"],
+        newly_satisfied_required_obligations=["generic:artifact"],
+        unknowns=[
+            UnknownRecord(
+                key="generic:unknown",
+                description="The remaining generic field is unknown.",
+                source_agent_message_id="producer-msg-1",
+            )
+        ],
+    )
+    repeated = partial.model_copy(
+        update={
+            "outcome_id": "outcome-2",
+            "dispatch_intent_id": "intent-2",
+            "attempt_fingerprint": "producer-attempt-2",
+            "status": "no_progress",
+            "newly_satisfied_required_obligations": [],
+        }
+    )
+    state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        dispatch_intents=[first_intent, repeated_intent],
+        delegation_outcomes=[partial, repeated],
+        facts=[
+            {
+                "fact_id": "consumer-msg-1:conditional",
+                "source_agent_id": consumer,
+                "kind": "conditional_result",
+                "text": "The partial artifact is conditionally usable.",
+            }
+        ],
+    )
+
+    assert state.delegation_outcomes[0].unknowns[0].key == "generic:unknown"
+    assert state.facts[0]["source_agent_id"] == consumer
+    no_progress = evaluate_retry(
+        state,
+        PlannedDelegateTarget(
+            agent_id=producer,
+            task=first_intent.task,
+            repair_of_intent_id="intent-2",
+        ),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+    assert no_progress.code == "delegate_no_progress_repeat"
+
+    failed_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        dispatch_intents=[first_intent.model_copy(update={"status": "failed"})],
+        delegation_outcomes=[
+            partial.model_copy(
+                update={
+                    "status": "failed",
+                    "newly_satisfied_required_obligations": [],
+                }
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="transport-failure",
+                fingerprint="generic-transport",
+                source="runtime",
+                agent_id=producer,
+                agent_message_id="producer-msg-1",
+                dispatch_intent_id="intent-1",
+                error_code="transport_error",
+                error_message="Connection reset.",
+                recoverable=True,
+            )
+        ],
+    )
+    retry = evaluate_retry(
+        failed_state,
+        PlannedDelegateTarget(agent_id=producer, task=first_intent.task),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+    alternate = evaluate_retry(
+        state,
+        PlannedDelegateTarget(agent_id=consumer, task=first_intent.task),
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+    )
+
+    assert retry.allowed is True
+    assert retry.kind == "operational_retry"
+    assert alternate.kind == "alternate_agent"
+    assert alternate.allowed is True
+
+
+def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    target = PlannedDelegateTarget(agent_id=producer, task="Produce a generic result.")
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(target, {})
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="generic-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id=consumer,
+                outcome="failed",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="generic-result",
+                outcome="insufficient",
+                applies_to_output_keys=["generic-result"],
+            ),
+        ],
+    )
+    assert BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"generic-result"},
+        available_resource_refs={"generic-resource"},
+        eligible_alternate_agent_ids={consumer},
+        conditional_result_viable=False,
+    ).code == "blocker_user_only_validated"
+
+    ask_user = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Request the one remaining user value.",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing generic value.",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+    blocked_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        blockers=[blocker],
+    )
+    assert PlannerActionValidator.validate(
+        ask_user,
+        run_state=blocked_state,
+        guardrails_enabled=True,
+    ) is ask_user
+    assert len(ask_user.questions) == 1
+
+    fulfilled_state = _run_state(
+        candidate_agent_ids=[producer, consumer],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="fulfilled-outcome",
+                dispatch_intent_id="fulfilled-intent",
+                agent_id=producer,
+                goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+                goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+                attempt_fingerprint="fulfilled-attempt",
+                status="fulfilled",
+            )
+        ],
+    )
+    with pytest.raises(PlannerActionValidationError) as error:
+        PlannerActionValidator.validate(
+            PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="Repeat the fulfilled generic result.",
+                targets=[target],
+            ),
+            run_state=fulfilled_state,
+            guardrails_enabled=True,
+        )
+    assert error.value.code == "delegate_goal_already_fulfilled"
+
+
+def test_completion_open_blocker_is_enforced_only_when_guardrails_enabled():
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+    )
+    action = PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="The available answer is enough in shadow mode.",
+        completion_evidence=CompletionEvidence(
+            satisfied_criteria=["answer_ready"],
+            referenced_fact_ids=[],
+            referenced_artifact_keys=[],
+            unresolved_questions=[],
+            final_answer_intent="answer_user",
+            confidence=0.8,
+        ),
+    )
+    state = _run_state(
+        candidate_agent_ids=["agent-1"],
+        blockers=[blocker],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+                text="Answer ready.",
+            )
+        ],
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+        )
+        is action
+    )
+    with pytest.raises(PlannerActionValidationError) as error:
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+    assert error.value.code == "completion_open_blocker"
+
+
+@pytest.mark.asyncio
+async def test_outcome_guardrails_generic_validated_user_only_blocker_creates_exactly_one_hitl():
+    producer = "generic-producer"
+    consumer = "generic-consumer"
+    blocker = BlockerRecord(
+        key="generic:missing-user-value",
+        description="Only the user can provide the missing value.",
+        blocked_output_keys=["generic-result"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="generic-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id=consumer,
+                outcome="failed",
+                applies_to_output_keys=["generic-result"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="generic-result",
+                outcome="insufficient",
+                applies_to_output_keys=["generic-result"],
+            ),
+        ],
+    )
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate generic work."),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": [producer, consumer],
+            "client_request_id": "client-1",
+        },
+    )
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=[producer, consumer],
+        status=OrchestrationStatus.RUNNING,
+        steps_used=1,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="producer-msg-1",
+                agent_id=producer,
+                task="Produce a generic result.",
+                task_hash="producer-task",
+                status="completed",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="generic-result",
+                        kind="artifact",
+                        required=True,
+                    )
+                ],
+            )
+        ],
+        blockers=[blocker],
+    )
+    ask_user = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Request the one remaining user value.",
+        questions=[
+            PlannerQuestion(
+                prompt="Provide the missing generic value.",
+                reason="blocker",
+                blocker_keys=[blocker.key],
+            )
+        ],
+    )
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(ask_user),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate generic work.",
+        agent_registry=[
+            AgentProfile(agent_id=producer, agent_name="Generic Producer"),
+            AgentProfile(agent_id=consumer, agent_name="Generic Consumer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert hitl_kwargs["source"] == "supervisor"
+    assert hitl_kwargs["prompt"] == "Provide the missing generic value."
+
+    saved = await store.get_run("message-1")
+    assert saved is not None
+    assert saved.pending_hitl_request_ids == ["hitl-1"]
+    assert [
+        question.get("blocker_keys")
+        for question in saved.open_questions
+        if question.get("source") == "supervisor"
+    ] == [[blocker.key]]
 
 
 def _dispatch_refs_payload():
@@ -4619,6 +5140,7 @@ async def test_agent_hitl_resume_persists_outcomes_for_terminal_and_awaiting_res
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -4738,6 +5260,7 @@ async def test_sync_v2_resumed_trajectory_waiting_agent_with_awaiting_input_has_
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -4821,6 +5344,7 @@ async def test_sync_v2_resumed_trajectory_only_pending_awaiting_input_is_persist
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
 
     state = _run_state(
@@ -5097,6 +5621,7 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
     executor._run_agent_awaiting_input_action = AsyncMock()
 
@@ -5174,6 +5699,7 @@ async def test_inflight_recovery_persists_outcome_for_interactive_message_withou
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=False,
     )
     executor.hitl_coordinator = SimpleNamespace(
         request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
@@ -5344,6 +5870,102 @@ async def test_recover_v2_inflight_dispatch_rehydrates_a2a_task_fields_for_auth_
     assert recovered_output.a2a_task_id == "task-from-task"
     assert recovered_output.a2a_context_id == "ctx-from-task"
     assert recovered_output.status_message == "Please provide missing details."
+
+
+@pytest.mark.asyncio
+async def test_recover_v2_inflight_dispatch_rehydrates_policy_required_task_state():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id="message-1:step-1:target-1:message",
+            message_content=SimpleNamespace(
+                message_text="",
+                message_task={
+                    "id": "task-from-task",
+                    "context_id": "ctx-from-task",
+                    "status": {
+                        "state": "policy-required",
+                        "message": {
+                            "parts": [
+                                {
+                                    "kind": "text",
+                                    "text": "Please approve the required policy.",
+                                }
+                            ]
+                        },
+                    },
+                },
+            ),
+        )
+    )
+
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+    )
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="message-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Handle the request",
+            ),
+        )
+    ]
+    await store.create_run(state)
+
+    recovered_state, run_status = await executor._recover_v2_inflight_dispatch(
+        state=state,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+    )
+
+    assert run_status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    request_input_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert request_input_kwargs["a2a_task_id"] == "task-from-task"
+    assert request_input_kwargs["a2a_context_id"] == "ctx-from-task"
+    assert request_input_kwargs["prompt"] == "Please approve the required policy."
+    recovered_output = recovered_state.agent_outputs[0]
+    assert recovered_output.interactive_state == "policy-required"
+    assert recovered_output.requires_policy is True
 
 
 @pytest.mark.asyncio
@@ -6175,6 +6797,185 @@ async def test_append_v2_event_swallows_non_required_store_conflicts(monkeypatch
             required=True,
             payload={},
         )
+
+
+def test_invalidated_required_evidence_can_be_satisfied_by_fresh_fact():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-2",
+        agent_id="agent-1",
+        task="Produce a quote.",
+        task_hash="task-hash",
+        status="completed",
+        expected_outputs=[
+            DispatchExpectedOutput(
+                output_key="quote",
+                kind="fact",
+                required=True,
+                required_fields=["limit"],
+            )
+        ],
+    )
+    before = _run_state(
+        facts=[
+            {
+                "fact_id": "stale-quote",
+                "semantic_key": "quote",
+                "kind": "structured_fact",
+                "source_agent_message_id": "agent-msg-1",
+                "value": {"limit": "1M"},
+            }
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-0",
+                agent_id="agent-1",
+                goal_family_fingerprint=goal_fingerprints(
+                    agent_id="agent-1",
+                    expected_outputs=intent.expected_outputs,
+                    selected_content_fingerprints=[],
+                    dependency_family_fingerprints=[],
+                    upstream_output_fingerprints=[],
+                ).goal_family_fingerprint,
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="fulfilled",
+                newly_satisfied_required_obligations=[
+                    "quote:$present",
+                    "quote:limit",
+                ],
+            )
+        ],
+        decision_log=[
+            {
+                "code": "required_evidence_invalidated",
+                "evidence_key": "stale-quote",
+                "goal_family_fingerprint": goal_fingerprints(
+                    agent_id="agent-1",
+                    expected_outputs=intent.expected_outputs,
+                    selected_content_fingerprints=[],
+                    dependency_family_fingerprints=[],
+                    upstream_output_fingerprints=[],
+                ).goal_family_fingerprint,
+                "obligation_keys": ["quote:$present", "quote:limit"],
+                "reason": "source_retracted",
+                "source_event_id": "event-1",
+            }
+        ],
+    )
+    after = before.model_copy(deep=True)
+    after.facts = [
+        {
+            "fact_id": "fresh-quote",
+            "semantic_key": "quote",
+            "kind": "structured_fact",
+            "source_agent_message_id": "agent-msg-2",
+            "value": {"limit": "2M"},
+        }
+    ]
+
+    outcome = evaluator.evaluate(
+        before,
+        after,
+        intent,
+        AgentOutputRecord(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+        ),
+        {},
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.remaining_required_obligations == []
+    assert outcome.newly_satisfied_required_obligations == [
+        "quote:$present",
+        "quote:limit",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ingest_v2_results_persists_structured_validated_blockers():
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=_state_unification_user_message(message_id="msg-1"),
+    )
+    state = _run_state()
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=1,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Produce quote.",
+            ),
+        )
+    ]
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            message_content=SimpleNamespace(
+                message_task={
+                    "artifacts": [
+                        {
+                            "artifact_id": "blockers",
+                            "blockers": [
+                                {
+                                    "key": "quote:missing-limit",
+                                    "description": (
+                                        "Only the user can provide the limit."
+                                    ),
+                                    "blocked_output_keys": ["quote"],
+                                    "source": "agent",
+                                    "claimed_user_only": True,
+                                    "validated_user_only": True,
+                                    "validation_status": "validated",
+                                    "resolution_attempts": [
+                                        {
+                                            "kind": "resource",
+                                            "reference_id": "submission",
+                                            "outcome": "unavailable",
+                                            "applies_to_output_keys": ["quote"],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+    )
+    await store.create_run(state)
+
+    persisted = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Produce quote.",
+                response_text="",
+                success=True,
+                status=StepStatus.SUCCESS,
+                agent_message_id="run-1:step-1:target-1:message",
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert len(persisted.blockers) == 1
+    assert persisted.blockers[0].key == "quote:missing-limit"
+    assert persisted.blockers[0].source == "agent"
 
 
 @pytest.mark.asyncio
@@ -8587,7 +9388,12 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
         ),
     )
     store = InMemoryOrchestrationRunStore()
-    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor = _executor(
+        store=store,
+        planner=planner,
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
     executor.agent_message_processor.process_single_message = AsyncMock(
         return_value=ProcessingResult(
             ProcessingStatus.AWAITING_INPUT,
@@ -8617,6 +9423,69 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
         planner.contexts[1].state_context.open_failures[0]["error_code"]
         == "agent_input_required"
     )
+
+
+@pytest.mark.asyncio
+async def test_plain_input_required_creates_legacy_hitl_when_guardrails_disabled():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="ask broker",
+            targets=[PlannedDelegateTarget(agent_id="agent-1", task="Read input")],
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=planner,
+        user_message=user_message,
+        guardrails_enabled=False,
+    )
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.AWAITING_INPUT,
+            response_text="",
+            message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Need the selected text projection.",
+        )
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    hitl_kwargs = executor.hitl_coordinator.request_input.await_args.kwargs
+    assert hitl_kwargs["source"] == "agent"
+    assert hitl_kwargs["prompt"] == "Need the selected text projection."
+    assert result.run_state.pending_hitl_request_ids == ["hitl-agent-1"]
+    assert len(planner.contexts) == 1
 
 
 @pytest.mark.parametrize(
@@ -9544,6 +10413,7 @@ async def test_supersede_unresolved_input_required_outputs_for_other_agents():
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
     state = _run_state(
         dispatch_intents=[
@@ -9638,7 +10508,12 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
         message_content=MessageContent(message_text="Start a fresh task"),
     )
     store = InMemoryOrchestrationRunStore()
-    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
     state = _run_state(
         dispatch_intents=[
             DispatchIntent(
@@ -9706,6 +10581,91 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrails_enabled", "expected_status"),
+    [(False, "open"), (True, "abandoned")],
+)
+async def test_continuation_supersession_respects_injected_guardrail_flag(
+    guardrails_enabled: bool,
+    expected_status: str,
+):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Delegate generic work"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=guardrails_enabled,
+    )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Produce a generic artifact",
+                task_hash="hash-1",
+                status="awaiting_input",
+            )
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status=StepStatus.AWAITING_INPUT.value,
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="agent-1:agent-msg-1:agent_input_required",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Need input",
+                recoverable=True,
+            )
+        ],
+    )
+    await store.create_run(state)
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_targets=[PlannedDelegateTarget(agent_id="agent-2", task="Consume it")],
+    )
+
+    assert saved.pending_agent_continuations[0].status == expected_status
+    if guardrails_enabled:
+        assert saved.agent_outputs[0].status == "abandoned"
+        assert saved.open_failures[0].status == "abandoned"
+    else:
+        assert saved.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+        assert saved.open_failures[0].status == "open"
+
+
+@pytest.mark.asyncio
 async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -9718,6 +10678,7 @@ async def test_supersede_preserves_structured_auth_and_policy_hitl_outputs():
         store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
+        guardrails_enabled=True,
     )
     state = _run_state(
         agent_outputs=[
@@ -9820,18 +10781,6 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         envelope=user_message.extend_info,
         goal="Use uploaded text",
     )
-    state.dispatch_intents.append(
-        DispatchIntent(
-            step_id="step-1",
-            step_target_id="target-1",
-            dispatch_intent_id="intent-1",
-            planned_agent_message_id="agent-msg-1",
-            agent_id="agent-1",
-            task="Initial task",
-            task_hash="hash-1",
-            status=StepStatus.AWAITING_INPUT.value,
-        )
-    )
     state.agent_outputs.append(
         AgentOutputRecord(
             agent_message_id="agent-msg-1",
@@ -9853,19 +10802,42 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
             recoverable=True,
         )
     )
+    resource_payload = ResolvedResourcePayload(
+        ref_id="ctx:file-file-1:text",
+        kind="context",
+        mime_type="text/plain",
+        text="Projected input",
+    )
+    resource_fingerprint = canonical_content_fingerprint(
+        resource_payload.model_dump(mode="json")
+    )
+    goal_family_fingerprint = goal_fingerprints(
+        agent_id="agent-1",
+        expected_outputs=[],
+        selected_content_fingerprints=[resource_fingerprint],
+        dependency_family_fingerprints=[],
+        upstream_output_fingerprints=[],
+    ).goal_family_fingerprint
+    state.dispatch_intents.append(
+        DispatchIntent(
+            step_id="step-1",
+            step_target_id="target-1",
+            dispatch_intent_id="intent-1",
+            planned_agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            task="Use uploaded text",
+            task_hash="hash-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            goal_family_fingerprint=goal_family_fingerprint,
+        )
+    )
     state.pending_agent_continuations.append(
         PendingAgentContinuation(
-            continuation_id="continuation-1",
+            continuation_id="cont-1",
             source_intent_id="intent-1",
             source_agent_message_id="agent-msg-1",
             agent_id="agent-1",
-            goal_family_fingerprint=goal_fingerprints(
-                agent_id="agent-1",
-                expected_outputs=[],
-                selected_content_fingerprints=[],
-                dependency_family_fingerprints=[],
-                upstream_output_fingerprints=[],
-            ).goal_family_fingerprint,
+            goal_family_fingerprint=goal_family_fingerprint,
             goal_revision_fingerprint="revision-1",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
@@ -9899,12 +10871,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
     )
     executor.orchestration_resource_provider = SimpleNamespace(
         resolve_ref=AsyncMock(
-            return_value=ResolvedResourcePayload(
-                ref_id="ctx:file-file-1:text",
-                kind="context",
-                mime_type="text/plain",
-                text="Projected input",
-            )
+            return_value=resource_payload
         )
     )
     visible_message = _agent_message("agent-msg-1")
@@ -9939,6 +10906,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         request_user_id="user-1",
         quoted_text=None,
         user_message=user_message,
+        resource_fingerprints={"ctx:file-file-1:text": resource_fingerprint},
     )
 
     assert status is None
@@ -9952,4 +10920,233 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
         "selected_attachment_refs": [],
     }
     assert saved.agent_outputs[0].status == "completed"
-    assert saved.dispatch_intents[0].status == "completed"
+    assert saved.dispatch_intents[-1].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch():
+    pdf_bytes = _text_pdf_bytes("Insured has 250 employees and 50M revenue.")
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use uploaded PDF",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=len(pdf_bytes),
+                )
+            ],
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["broker-agent", "insurer-agent"],
+            "client_request_id": "client-1",
+        },
+    )
+    content_reader = SimpleNamespace(get_bytes=AsyncMock(return_value=pdf_bytes))
+    provider = OrchestrationResourceProvider(
+        projection_service=AttachmentProjectionService(content_reader=content_reader)
+    )
+
+    planner_actions = [
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="extract submission",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="broker-agent",
+                    agent_name="Broker",
+                    task="Extract submission facts from the selected projection.",
+                    context_refs=[
+                        DispatchContentRef(
+                            kind=DispatchRefKind.CONTEXT,
+                            ref_id="ctx:file-file-1:text",
+                            mime_type="text/plain",
+                        )
+                    ],
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            kind="submission_pack",
+                            required=True,
+                            description="Structured submission pack.",
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="assess downstream",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="insurer-agent",
+                    agent_name="Insurer",
+                    task="Assess the upstream submission artifact.",
+                    artifact_refs=[
+                        DispatchContentRef(
+                            kind=DispatchRefKind.ARTIFACT,
+                            ref_id="broker-msg:artifact_id:submission",
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="workflow complete",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["submission extracted", "assessment returned"],
+                referenced_fact_ids=[],
+                referenced_artifact_keys=["broker-msg:artifact_id:submission"],
+                unresolved_questions=[],
+                final_answer_intent="summarize",
+                confidence=0.9,
+            ),
+        ),
+    ]
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(*planner_actions),
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = provider
+
+    def dispatch_intent(
+        run_id: str,
+        step_number: int,
+        target_index: int,
+        target,
+        resource_fingerprints,
+    ):
+        intent = _explicit_dispatch_intent(
+            run_id,
+            step_number,
+            target_index,
+            target,
+        )
+        intent.planned_agent_message_id = (
+            "broker-msg" if step_number == 1 else "insurer-msg"
+        )
+        return intent
+
+    executor._v2_dispatch_intent = MagicMock(side_effect=dispatch_intent)
+    broker_message = _agent_message("broker-msg")
+    broker_message.message_content.message_task = {
+        "artifacts": [
+            {
+                "artifact_id": "submission",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "Insured has 250 employees and 50M revenue.",
+                    }
+                ],
+            }
+        ]
+    }
+
+    async def get_agent_message(message_id: str):
+        return broker_message if message_id == "broker-msg" else None
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=get_agent_message
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        agent_registry=[
+            AgentProfile(agent_id="broker-agent", agent_name="Broker"),
+            AgentProfile(agent_id="insurer-agent", agent_name="Insurer"),
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    dispatched_messages = [
+        call.args[0]
+        for call in executor.agent_message_processor.process_single_message.await_args_list
+    ]
+    broker_dispatch, insurer_dispatch = dispatched_messages
+    assert broker_dispatch.message_id == "broker-msg"
+    assert broker_dispatch.extend_info["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert broker_dispatch.extend_info["resolved_dispatch_payload_refs"] == {
+        "context_refs": ["ctx:file-file-1:text"],
+        "artifact_refs": [],
+        "attachment_refs": [],
+        "resource_payloads": [
+            {
+                "ref_id": "ctx:file-file-1:text",
+                "kind": "context",
+                "mime_type": "text/plain",
+                "text": "Insured has 250 employees and 50M revenue.",
+                "summary": "Extracted 42 characters from 1 PDF page(s).",
+                "metadata": {
+                    "source_ref_id": "file:file-1",
+                    "file_id": "file-1",
+                    "file_name": "submission.pdf",
+                    "char_count": 42,
+                    "page_count": 1,
+                    "is_truncated": False,
+                },
+            }
+        ],
+    }
+    assert broker_dispatch.extend_info["resolved_dispatch_resource_payloads"] == [
+        {
+            "ref_id": "ctx:file-file-1:text",
+            "kind": "context",
+            "mime_type": "text/plain",
+            "text": "Insured has 250 employees and 50M revenue.",
+            "summary": "Extracted 42 characters from 1 PDF page(s).",
+            "metadata": {
+                "source_ref_id": "file:file-1",
+                "file_id": "file-1",
+                "file_name": "submission.pdf",
+                "char_count": 42,
+                "page_count": 1,
+                "is_truncated": False,
+            },
+        }
+    ]
+    assert insurer_dispatch.message_id == "insurer-msg"
+    assert insurer_dispatch.extend_info["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert insurer_dispatch.extend_info["dispatch_payload_refs"]["artifact_refs"] == [
+        {
+            "kind": "artifact",
+            "ref_id": "broker-msg:artifact_id:submission",
+            "source_agent_message_id": None,
+            "mime_type": None,
+            "required": True,
+        }
+    ]
+    assert insurer_dispatch.extend_info["resolved_dispatch_payload_refs"][
+        "artifact_refs"
+    ] == ["broker-msg:artifact_id:submission"]
+
+    dispatched_agents = [intent.agent_id for intent in result.run_state.dispatch_intents]
+    assert dispatched_agents == ["broker-agent", "insurer-agent"]
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.run_state.steps_used == 2
+    assert (
+        executor.orchestration_planner.contexts[0]
+        .available_resources[0]
+        .projections[0]
+        .status
+        == "ready"
+    )
+    content_reader.get_bytes.assert_awaited_once()

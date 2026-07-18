@@ -1305,6 +1305,31 @@ def test_completion_scope_rejections(case, expected_code):
     assert _validation_code(action, state) == expected_code
 
 
+@pytest.mark.parametrize(
+    ("action", "expected_code"),
+    [
+        (_synthesize_action(), "completion_blocked_by_recoverable_failure"),
+        (_complete_action(), "completion_open_failure"),
+    ],
+)
+def test_open_runtime_failures_only_block_terminal_actions_when_guardrails_enabled(
+    action,
+    expected_code,
+):
+    _, state = _completion_case("open_runtime_failure")
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+            resource_fingerprints={},
+        )
+        is action
+    )
+    assert _validation_code(action, state) == expected_code
+
+
 def test_completion_accepts_satisfied_latest_active_revision_obligations():
     state = _complete_run_state(
         delegation_outcomes=[
@@ -1449,8 +1474,12 @@ def test_complete_rejected_when_recoverable_failure_is_open():
         ]
     )
 
-    with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
-        PlannerActionValidator.validate(_complete_action(), run_state=state)
+    with pytest.raises(PlannerActionValidationError, match="open runtime failure"):
+        PlannerActionValidator.validate(
+            _complete_action(),
+            run_state=state,
+            guardrails_enabled=True,
+        )
 
 
 def test_synthesize_allows_open_planner_validation_failure():
@@ -1485,7 +1514,11 @@ def test_synthesize_rejected_when_recoverable_failure_is_open():
     state = _complete_run_state(open_failures=[_failure("open")])
 
     with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
-        PlannerActionValidator.validate(_synthesize_action(), run_state=state)
+        PlannerActionValidator.validate(
+            _synthesize_action(),
+            run_state=state,
+            guardrails_enabled=True,
+        )
 
 
 @pytest.mark.parametrize(

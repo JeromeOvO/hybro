@@ -150,6 +150,20 @@ def invalidate_required_evidence(
         "source_event_id": source_event_id,
     }
     updated = state.model_copy(deep=True)
+    invalidated = set(payload["obligation_keys"])
+    for outcome in updated.delegation_outcomes:
+        if outcome.goal_family_fingerprint != goal_family_fingerprint:
+            continue
+        outcome.newly_satisfied_required_obligations = [
+            obligation
+            for obligation in outcome.newly_satisfied_required_obligations
+            if obligation not in invalidated
+        ]
+        outcome.satisfied_output_keys = [
+            output_key
+            for output_key in outcome.satisfied_output_keys
+            if f"{output_key}:$present" not in invalidated
+        ]
     updated.decision_log.append(payload)
     return updated, payload
 
@@ -206,6 +220,45 @@ def _output_fact_map(
     )
 
 
+def _freshly_satisfied_obligations(
+    before_state: OrchestrationRunState,
+    after_state: OrchestrationRunState,
+    outputs: list[DispatchExpectedOutput],
+    agent_output: AgentOutputRecord,
+) -> set[str]:
+    satisfied: set[str] = set()
+    before_facts = _output_fact_map(before_state, agent_output)
+    after_facts = _output_fact_map(after_state, agent_output)
+    for output in outputs:
+        if not output.required:
+            continue
+        key = effective_output_key(output)
+        before_artifact_fingerprints = {
+            canonical_content_fingerprint(artifact)
+            for artifact in _output_artifacts(before_state, output, agent_output)
+        }
+        fresh_artifacts = [
+            artifact
+            for artifact in _output_artifacts(after_state, output, agent_output)
+            if canonical_content_fingerprint(artifact)
+            not in before_artifact_fingerprints
+        ]
+        before_fact = before_facts.get(key)
+        after_fact = after_facts.get(key)
+        fact_changed = key in after_facts and before_fact != after_fact
+        if fresh_artifacts or fact_changed:
+            satisfied.add(f"{key}:$present")
+        values = [
+            data for artifact in fresh_artifacts for data in _artifact_data(artifact)
+        ]
+        if fact_changed:
+            values.append(after_fact)
+        for path in output.required_fields:
+            if any(_value_at_path(value, path) is not None for value in values):
+                satisfied.add(f"{key}:{path}")
+    return satisfied
+
+
 def _satisfied_obligations(
     state: OrchestrationRunState,
     outputs: list[DispatchExpectedOutput],
@@ -256,6 +309,12 @@ def _has_matching_output_evidence(
     )
 
 
+def _changed_evidence_obligations(outcome: DelegationOutcomeRecord) -> set[str]:
+    if not outcome.changed_fact_keys and not outcome.changed_artifact_keys:
+        return set()
+    return set(outcome.newly_satisfied_required_obligations)
+
+
 def _selected_fingerprints(
     selected_resource_fingerprints: dict[str, object] | list[object] | None,
 ) -> list[str]:
@@ -299,16 +358,45 @@ class DelegationOutcomeEvaluator:
             if outcome.goal_family_fingerprint == fingerprints.goal_family_fingerprint
             for output_key in outcome.satisfied_output_keys
         )
+        invalidated_before = _invalidated_obligations(
+            before_state,
+            fingerprints.goal_family_fingerprint,
+        )
         invalidated = _invalidated_obligations(
-            after_state, fingerprints.goal_family_fingerprint
+            after_state,
+            fingerprints.goal_family_fingerprint,
         )
+        refreshed_prior_satisfied = {
+            obligation
+            for outcome in before_state.delegation_outcomes
+            if outcome.goal_family_fingerprint == fingerprints.goal_family_fingerprint
+            for obligation in _changed_evidence_obligations(outcome)
+            if obligation in invalidated_before
+        }
+        effective_prior_satisfied = (
+            prior_satisfied - invalidated_before
+        ) | refreshed_prior_satisfied
         current_satisfied = _satisfied_obligations(
-            after_state, intent.expected_outputs, output
+            after_state,
+            intent.expected_outputs,
+            output,
         )
-        retained_satisfied = prior_satisfied - invalidated
-        satisfied = retained_satisfied | current_satisfied
+        fresh_satisfied = _freshly_satisfied_obligations(
+            before_state,
+            after_state,
+            intent.expected_outputs,
+            output,
+        )
+        eligible_fresh_satisfied = fresh_satisfied
+        satisfied = (
+            effective_prior_satisfied
+            | (current_satisfied - invalidated)
+            | eligible_fresh_satisfied
+        )
         remaining = obligations - satisfied
-        newly_satisfied = sorted(satisfied - retained_satisfied)
+        newly_satisfied = sorted(
+            satisfied - effective_prior_satisfied
+        )
 
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
