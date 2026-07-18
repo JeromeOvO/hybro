@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from common.utils.a2a_file_modes import mime_type_is_accepted
+from execution.orchestration.outcome_evaluator import canonical_content_fingerprint
 from models.room import UserAttachment
 
 ResourceKind = Literal["attachment", "context", "artifact"]
@@ -22,6 +23,7 @@ class ResourceProjectionRef(BaseModel):
     source_ref_id: str
     mime_type: str
     status: ResourceStatus
+    content_fingerprint: str | None = None
     recommended_for_input_modes: list[str] = Field(default_factory=list)
     summary: str | None = None
     failure_reason: str | None = None
@@ -36,6 +38,7 @@ class ResourceRef(BaseModel):
     file_name: str | None = None
     mime_type: str | None = None
     status: ResourceStatus
+    content_fingerprint: str | None = None
     summary: str | None = None
     token_estimate: int | None = None
     supported_by_agent_ids: list[str] = Field(default_factory=list)
@@ -47,6 +50,7 @@ class ResourcePayload(BaseModel):
     kind: ResourceKind
     mime_type: str | None = None
     text: str | None = None
+    content_fingerprint: str | None = None
     summary: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -157,6 +161,7 @@ class AttachmentProjectionService:
             source_ref_id=source_ref_id,
             mime_type="text/plain",
             status="ready",
+            content_fingerprint=canonical_content_fingerprint(bounded_text),
             recommended_for_input_modes=["text"],
             summary=summary,
         )
@@ -165,6 +170,7 @@ class AttachmentProjectionService:
             kind="context",
             mime_type="text/plain",
             text=bounded_text,
+            content_fingerprint=canonical_content_fingerprint(bounded_text),
             summary=summary,
             metadata={
                 "source_ref_id": source_ref_id,
@@ -233,6 +239,17 @@ def _candidate_needs_text_projection(candidate: Any, source_mime: str) -> bool:
     return accepts_text and not mime_type_is_accepted(source_mime, modes)
 
 
+def _attachment_fingerprint(attachment: UserAttachment) -> str:
+    return canonical_content_fingerprint(
+        {
+            "file_id": attachment.file_id,
+            "s3_key": attachment.s3_key,
+            "size_bytes": attachment.size_bytes,
+            "mime_type": attachment.mime_type,
+        }
+    )
+
+
 class OrchestrationResourceProvider:
     def __init__(
         self,
@@ -293,6 +310,7 @@ class OrchestrationResourceProvider:
                     file_name=attachment.file_name,
                     mime_type=attachment.mime_type,
                     status="ready",
+                    content_fingerprint=_attachment_fingerprint(attachment),
                     summary=_attachment_summary(attachment),
                     supported_by_agent_ids=supported_by_agent_ids,
                     projections=[projection] if projection is not None else [],
@@ -371,6 +389,7 @@ class OrchestrationResourceProvider:
             kind="attachment",
             mime_type=attachment.mime_type,
             text=None,
+            content_fingerprint=_attachment_fingerprint(attachment),
             summary=_attachment_summary(attachment),
             metadata={
                 "file_id": attachment.file_id,
