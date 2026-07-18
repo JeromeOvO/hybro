@@ -578,6 +578,10 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     assert dependency_fields <= target_schema["properties"].keys()
     assert dependency_fields <= set(target_schema["required"])
     assert "shared non-null parallel_group" in supervisor_service.system_prompt
+    assert (
+        "output_key, kind, required, description, artifact_name, required_fields, "
+        "and allow_partial"
+    ) in supervisor_service.system_prompt
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():

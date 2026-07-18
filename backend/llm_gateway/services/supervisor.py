@@ -20,12 +20,13 @@ class SupervisorLLMService:
         system_prompt: str,
         user_prompt: str,
         *,
+        schema: dict[str, Any] | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         response = await self._llm_provider.generate_structured(
             _supervisor_messages(system_prompt, user_prompt),
-            schema=None,
+            schema=schema,
             json_mode=True,
             model=model or self._default_model,
             timeout_seconds=timeout_seconds,
