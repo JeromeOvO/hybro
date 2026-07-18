@@ -22,6 +22,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
@@ -85,6 +86,7 @@ from models.orchestration import (
     AgentOutputRecord,
     DispatchIntent,
     DispatchRefKind,
+    GoalFamilyDispositionRecord,
     OrchestrationEventType,
     OrchestrationRunEvent,
     OrchestrationRunState,
@@ -981,6 +983,37 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
+                    if _settings.orchestration_outcome_guardrails:
+                        disposition_by_event_id = {
+                            disposition.event_id: disposition
+                            for disposition in state.goal_family_dispositions
+                        }
+                        disposition_by_event_id.update(
+                            {
+                                disposition.event_id: disposition
+                                for disposition in (
+                                    planner_action.completion_evidence.requested_goal_family_dispositions
+                                )
+                            }
+                        )
+                        for event_id in (
+                            planner_action.completion_evidence.abandoned_goal_disposition_event_ids
+                        ):
+                            disposition = disposition_by_event_id[event_id]
+                            state = await self._dispose_v2_goal_family(
+                                state,
+                                goal_family_fingerprint=disposition.goal_family_fingerprint,
+                                through_goal_revision_fingerprint=(
+                                    disposition.through_goal_revision_fingerprint
+                                ),
+                                status=disposition.status,
+                                reason=disposition.reason,
+                                replacement_goal_family_fingerprint=(
+                                    disposition.replacement_goal_family_fingerprint
+                                ),
+                                event_id=disposition.event_id,
+                            )
+
                     def record_completion_evidence(
                         updated: OrchestrationRunState,
                         evidence=planner_action.completion_evidence,
@@ -4728,6 +4761,161 @@ class SupervisorExecutor:
 
         return current
 
+    async def _dispose_v2_goal_family(
+        self,
+        state: OrchestrationRunState,
+        *,
+        goal_family_fingerprint: str,
+        through_goal_revision_fingerprint: str,
+        status: str,
+        reason: str,
+        replacement_goal_family_fingerprint: str | None = None,
+        event_id: str | None = None,
+    ) -> OrchestrationRunState:
+        if status not in {"abandoned", "superseded"}:
+            raise ValueError(
+                "goal family disposition status must be abandoned or superseded"
+            )
+        if not reason.strip():
+            raise ValueError("goal family disposition reason must be nonempty")
+
+        family_outcomes = [
+            outcome
+            for outcome in state.delegation_outcomes
+            if outcome.goal_family_fingerprint == goal_family_fingerprint
+        ]
+        through_index = next(
+            (
+                index
+                for index in range(len(family_outcomes) - 1, -1, -1)
+                if family_outcomes[index].goal_revision_fingerprint
+                == through_goal_revision_fingerprint
+            ),
+            None,
+        )
+        if through_index is None:
+            raise ValueError("goal family disposition revision is not known")
+        covered_outcome_intent_ids = {
+            outcome.dispatch_intent_id
+            for outcome in family_outcomes[: through_index + 1]
+        }
+        latest_outcome_by_intent_id = {
+            outcome.dispatch_intent_id: outcome
+            for outcome in state.delegation_outcomes
+        }
+        intents_by_id = {
+            intent.dispatch_intent_id: intent for intent in state.dispatch_intents
+        }
+        child_intents_by_parent_id: dict[str, list[str]] = {}
+        for intent in state.dispatch_intents:
+            if intent.repair_of_intent_id:
+                child_intents_by_parent_id.setdefault(
+                    intent.repair_of_intent_id, []
+                ).append(intent.dispatch_intent_id)
+
+        intent_ids: set[str] = set()
+
+        def add_matching_repair_lineage(intent_id: str) -> None:
+            outcome = latest_outcome_by_intent_id.get(intent_id)
+            if outcome is not None and intent_id not in covered_outcome_intent_ids:
+                return
+            if intent_id in intent_ids:
+                return
+            intent_ids.add(intent_id)
+            for child_intent_id in child_intents_by_parent_id.get(intent_id, []):
+                child_intent = intents_by_id.get(child_intent_id)
+                if child_intent is not None and (
+                    (
+                        child_intent.goal_family_fingerprint is not None
+                        and child_intent.goal_family_fingerprint
+                        != goal_family_fingerprint
+                    )
+                    or (
+                        child_intent.goal_revision_fingerprint is not None
+                        and child_intent.goal_revision_fingerprint
+                        != through_goal_revision_fingerprint
+                    )
+                ):
+                    continue
+                add_matching_repair_lineage(child_intent_id)
+
+        for outcome in family_outcomes[: through_index + 1]:
+            add_matching_repair_lineage(outcome.dispatch_intent_id)
+        event_id = event_id or f"goal-family-disposed:{uuid4().hex}"
+        disposition = GoalFamilyDispositionRecord(
+            event_id=event_id,
+            goal_family_fingerprint=goal_family_fingerprint,
+            through_goal_revision_fingerprint=through_goal_revision_fingerprint,
+            status=status,
+            reason=reason.strip(),
+            replacement_goal_family_fingerprint=replacement_goal_family_fingerprint,
+        )
+        terminal_statuses = {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "expired",
+            "abandoned",
+        }
+
+        def mutate(updated: OrchestrationRunState) -> None:
+            recorded_disposition = next(
+                (
+                    item
+                    for item in updated.goal_family_dispositions
+                    if item.event_id == event_id
+                ),
+                None,
+            )
+            if recorded_disposition is None:
+                updated.goal_family_dispositions.append(disposition)
+            elif recorded_disposition != disposition:
+                raise ValueError("goal family disposition event does not match state")
+            message_ids = {
+                intent.planned_agent_message_id
+                for intent in updated.dispatch_intents
+                if intent.dispatch_intent_id in intent_ids
+            }
+            for intent in updated.dispatch_intents:
+                if (
+                    intent.dispatch_intent_id in intent_ids
+                    and intent.status not in terminal_statuses
+                ):
+                    intent.status = "abandoned"
+            for dispatch in updated.active_dispatches:
+                if (
+                    dispatch.agent_message_id in message_ids
+                    and dispatch.status not in terminal_statuses
+                ):
+                    dispatch.status = "abandoned"
+            for failure in updated.open_failures:
+                if (
+                    failure.status == "open"
+                    and (
+                        failure.dispatch_intent_id in intent_ids
+                        or failure.agent_message_id in message_ids
+                    )
+                ):
+                    failure.status = "abandoned"
+                    failure.updated_at = utcnow()
+
+        return await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.GOAL_FAMILY_DISPOSED,
+            payload={
+                "event_id": event_id,
+                "goal_family_fingerprint": goal_family_fingerprint,
+                "through_goal_revision_fingerprint": through_goal_revision_fingerprint,
+                "status": status,
+                "reason": reason.strip(),
+                "replacement_goal_family_fingerprint": (
+                    replacement_goal_family_fingerprint
+                ),
+            },
+            mutate=mutate,
+        )
+
     async def _mark_v2_terminal(
         self,
         state: OrchestrationRunState,
@@ -4926,6 +5114,24 @@ class SupervisorExecutor:
     ) -> DispatchIntent:
         step_id = f"{run_id}:step-{step_number}"
         step_target_id = f"{step_id}:target-{target_index}"
+        selected_resource_fingerprints = sorted(
+            {
+                (resource_fingerprints or {})[ref.ref_id]
+                for ref in (
+                    *target.context_refs,
+                    *target.artifact_refs,
+                    *target.attachment_refs,
+                )
+                if ref.ref_id in (resource_fingerprints or {})
+            }
+        )
+        fingerprints = goal_fingerprints(
+            agent_id=target.agent_id,
+            expected_outputs=list(target.expected_outputs),
+            selected_content_fingerprints=selected_resource_fingerprints,
+            dependency_family_fingerprints=[],
+            upstream_output_fingerprints=[],
+        )
         return DispatchIntent(
             step_id=step_id,
             step_target_id=step_target_id,
@@ -4934,23 +5140,15 @@ class SupervisorExecutor:
             agent_id=target.agent_id,
             task=target.task,
             task_hash=hashlib.sha256(target.task.encode("utf-8")).hexdigest(),
+            goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+            goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
             depends_on=list(target.depends_on),
             parallel_group=target.parallel_group,
             required_resource_refs=list(target.required_resource_refs),
             context_refs=list(target.context_refs),
             artifact_refs=list(target.artifact_refs),
             attachment_refs=list(target.attachment_refs),
-            selected_resource_fingerprints=sorted(
-                {
-                    (resource_fingerprints or {})[ref.ref_id]
-                    for ref in (
-                        *target.context_refs,
-                        *target.artifact_refs,
-                        *target.attachment_refs,
-                    )
-                    if ref.ref_id in (resource_fingerprints or {})
-                }
-            ),
+            selected_resource_fingerprints=selected_resource_fingerprints,
             expected_outputs=list(target.expected_outputs),
             attachment_policy=target.attachment_policy,
         )

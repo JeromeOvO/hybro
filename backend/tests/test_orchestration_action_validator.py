@@ -23,6 +23,8 @@ from models.orchestration import (
     DispatchExpectedOutput,
     DispatchIntent,
     DispatchRefKind,
+    GoalFamilyDispositionRecord,
+    GoalFamilyDispositionRequest,
     OpenFailureRecord,
     OrchestrationRunState,
     ParticipantSnapshot,
@@ -832,6 +834,124 @@ def test_planner_schema_requires_v2_outcome_policy_fields():
         )
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "event_id",
+        "goal_family_fingerprint",
+        "through_goal_revision_fingerprint",
+        "reason",
+    ],
+)
+def test_completion_disposition_request_rejects_blank_required_fields(field_name):
+    payload = {
+        "event_id": "dispose-1",
+        "goal_family_fingerprint": "family-1",
+        "through_goal_revision_fingerprint": "revision-1",
+        "status": "abandoned",
+        "reason": "The user withdrew the request.",
+    }
+    payload[field_name] = " "
+
+    with pytest.raises(ValueError, match="nonempty"):
+        GoalFamilyDispositionRequest(**payload)
+
+
+def test_planner_schema_rejects_blank_completion_disposition_reason():
+    disposition_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"][
+        "completion_evidence"
+    ]["anyOf"][0]["properties"]["requested_goal_family_dispositions"]["items"]
+
+    with pytest.raises(ValidationError, match="reason"):
+        validate(
+            {
+                "event_id": "dispose-1",
+                "goal_family_fingerprint": "family-1",
+                "through_goal_revision_fingerprint": "revision-1",
+                "status": "abandoned",
+                "reason": " ",
+                "replacement_goal_family_fingerprint": None,
+            },
+            disposition_schema,
+        )
+
+
+def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
+    payload = {
+        "action": "complete",
+        "reasoning": "The quote is ready.",
+        "targets": [],
+        "questions": [],
+        "synthesis_instruction": None,
+        "failure_reason": None,
+        "completion_evidence": {
+            "satisfied_criteria": ["quote_collected"],
+            "referenced_fact_ids": ["fact-1"],
+            "referenced_artifact_keys": ["artifact-1"],
+            "unresolved_questions": [],
+            "final_answer_intent": "answer_user",
+            "confidence": 0.8,
+            "satisfied_output_keys": ["quote"],
+            "waived_outputs": [
+                {
+                    "output_key": "non_required_addendum",
+                    "reason": "The user did not request the addendum.",
+                    "blocker_keys": [],
+                }
+            ],
+        },
+    }
+
+    validate(payload, PLANNER_ACTION_RESPONSE_SCHEMA)
+
+    action = RoomSupervisorPlannerAdapter()._parse_action(payload)
+
+    assert action.completion_evidence.satisfied_output_keys == ["quote"]
+    assert action.completion_evidence.waived_outputs[0].reason == (
+        "The user did not request the addendum."
+    )
+
+
+def test_completion_validator_rejects_constructed_blank_disposition_reason():
+    action = _complete_action()
+    action.completion_evidence.requested_goal_family_dispositions.append(
+        GoalFamilyDispositionRequest.model_construct(
+            event_id="dispose-1",
+            goal_family_fingerprint="family-1",
+            through_goal_revision_fingerprint="revision-1",
+            status="abandoned",
+            reason=" ",
+        )
+    )
+
+    with pytest.raises(PlannerActionValidationError, match="nonempty") as exc_info:
+        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+
+    assert exc_info.value.code == "completion_disposition_request_invalid"
+
+
+def test_completion_validator_rejects_requested_unknown_disposition_revision():
+    action = _complete_action(
+        abandoned_goal_disposition_event_ids=["dispose-1"],
+        requested_goal_family_dispositions=[
+            {
+                "event_id": "dispose-1",
+                "goal_family_fingerprint": "family-1",
+                "through_goal_revision_fingerprint": "unknown-revision",
+                "status": "abandoned",
+                "reason": "The requested revision is no longer needed.",
+            }
+        ],
+    )
+    state = _complete_run_state(
+        delegation_outcomes=[
+            _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+        ]
+    )
+
+    assert _validation_code(action, state) == "completion_disposition_unreferenced"
+
+
 def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
     action = RoomSupervisorService._parse_legacy_action_as_planner_action(
         {
@@ -1081,6 +1201,171 @@ def _failure(status: str, *, recoverable: bool = True) -> OpenFailureRecord:
     )
 
 
+def _completion_outcome(
+    outcome_id: str,
+    intent_id: str,
+    *,
+    family: str = "family-1",
+    revision: str = "revision-1",
+    remaining: list[str] | None = None,
+) -> DelegationOutcomeRecord:
+    return DelegationOutcomeRecord(
+        outcome_id=outcome_id,
+        dispatch_intent_id=intent_id,
+        agent_id="agent-1",
+        goal_family_fingerprint=family,
+        goal_revision_fingerprint=revision,
+        attempt_fingerprint=f"attempt-{outcome_id}",
+        status="partial" if remaining else "fulfilled",
+        remaining_required_obligations=list(remaining or []),
+    )
+
+
+def _completion_case(case: str):
+    action = _complete_action()
+    cases = {
+        "active_missing_obligation": (
+            action,
+            _complete_run_state(
+                delegation_outcomes=[
+                    _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+                ]
+            ),
+        ),
+        "unreferenced_disposition": (
+            action,
+            _complete_run_state(
+                delegation_outcomes=[
+                    _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+                ],
+                goal_family_dispositions=[
+                    GoalFamilyDispositionRecord(
+                        event_id="dispose-1",
+                        goal_family_fingerprint="family-1",
+                        through_goal_revision_fingerprint="revision-1",
+                        status="abandoned",
+                        reason="No longer needed.",
+                    )
+                ],
+            ),
+        ),
+        "open_runtime_failure": (
+            action,
+            _complete_run_state(
+                open_failures=[
+                    OpenFailureRecord(
+                        failure_id="runtime-failure-1",
+                        fingerprint="runtime-fingerprint-1",
+                        source="runtime",
+                        error_code="transport_error",
+                        error_message="Connection reset.",
+                        recoverable=True,
+                        status="open",
+                    )
+                ]
+            ),
+        ),
+        "pending_hitl": (
+            action,
+            _complete_run_state(pending_hitl_request_ids=["hitl-1"]),
+        ),
+        "validated_open_blocker": (
+            action,
+            _complete_run_state(
+                blockers=[
+                    BlockerRecord(
+                        key="missing-quote",
+                        description="Quote cannot be completed without user input.",
+                        blocked_output_keys=["quote"],
+                        source="agent",
+                        claimed_user_only=True,
+                        validated_user_only=True,
+                        validation_status="validated",
+                    )
+                ]
+            ),
+        ),
+    }
+    return cases[case]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_code"),
+    [
+        ("active_missing_obligation", "completion_required_output_missing"),
+        ("unreferenced_disposition", "completion_disposition_unreferenced"),
+        ("open_runtime_failure", "completion_open_failure"),
+        ("pending_hitl", "completion_pending_hitl"),
+        ("validated_open_blocker", "completion_open_blocker"),
+    ],
+)
+def test_completion_scope_rejections(case, expected_code):
+    action, state = _completion_case(case)
+
+    assert _validation_code(action, state) == expected_code
+
+
+def test_completion_accepts_satisfied_latest_active_revision_obligations():
+    state = _complete_run_state(
+        delegation_outcomes=[
+            _completion_outcome(
+                "outcome-1", "intent-1", revision="revision-1", remaining=["quote"]
+            ),
+            _completion_outcome("outcome-2", "intent-2", revision="revision-2"),
+        ]
+    )
+
+    assert PlannerActionValidator.validate(
+        _complete_action(satisfied_output_keys=["quote"]),
+        run_state=state,
+        guardrails_enabled=True,
+    )
+
+
+def test_completion_accepts_referenced_abandoned_family_without_output_waivers():
+    state = _complete_run_state(
+        delegation_outcomes=[
+            _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
+        ],
+        goal_family_dispositions=[
+            GoalFamilyDispositionRecord(
+                event_id="dispose-1",
+                goal_family_fingerprint="family-1",
+                through_goal_revision_fingerprint="revision-1",
+                status="abandoned",
+                reason="The user withdrew the request.",
+            )
+        ],
+    )
+
+    assert PlannerActionValidator.validate(
+        _complete_action(abandoned_goal_disposition_event_ids=["dispose-1"]),
+        run_state=state,
+        guardrails_enabled=True,
+    )
+
+
+@pytest.mark.parametrize("status", ["abandoned", "expired"])
+def test_completion_accepts_terminal_active_dispatch(status):
+    state = _complete_run_state(
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-1",
+                status=status,
+            )
+        ]
+    )
+
+    assert PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
+def test_completion_accepts_abandoned_failure():
+    state = _complete_run_state(open_failures=[_failure("abandoned")])
+
+    assert PlannerActionValidator.validate(_complete_action(), run_state=state)
+
+
 def test_complete_requires_structured_evidence():
     action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
 
@@ -1104,7 +1389,7 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
             run_state=_complete_run_state(pending_hitl_request_ids=["hitl-1"]),
         )
 
-    with pytest.raises(PlannerActionValidationError, match="active dispatch"):
+    with pytest.raises(PlannerActionValidationError, match="active dispatch") as exc_info:
         PlannerActionValidator.validate(
             action,
             run_state=_complete_run_state(
@@ -1117,6 +1402,33 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
                 ]
             ),
         )
+    assert exc_info.value.code == "completion_required_output_missing"
+
+
+@pytest.mark.parametrize(
+    ("state_overrides", "expected_code"),
+    [
+        ({"pending_hitl_request_ids": ["hitl-1"]}, "completion_pending_hitl"),
+        (
+            {
+                "active_dispatches": [
+                    ActiveDispatchRef(
+                        agent_message_id="agent-msg-2",
+                        agent_id="agent-1",
+                        status="running",
+                    )
+                ]
+            },
+            "completion_required_output_missing",
+        ),
+    ],
+)
+def test_complete_state_preconditions_take_priority_without_output(
+    state_overrides, expected_code
+):
+    state = _complete_run_state(agent_outputs=[], facts=[], **state_overrides)
+
+    assert _validation_code(_complete_action(), state) == expected_code
 
 
 def test_complete_rejected_when_recoverable_failure_is_open():

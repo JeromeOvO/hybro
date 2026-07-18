@@ -168,6 +168,70 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         },
                         "final_answer_intent": {"type": "string"},
                         "confidence": {"type": "number"},
+                        "satisfied_output_keys": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "waived_outputs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "output_key": {"type": "string"},
+                                    "reason": {"type": "string", "pattern": "\\S"},
+                                    "blocker_keys": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": [
+                                    "output_key",
+                                    "reason",
+                                    "blocker_keys",
+                                ],
+                            },
+                        },
+                        "abandoned_goal_disposition_event_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "requested_goal_family_dispositions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "event_id": {"type": "string", "pattern": "\\S"},
+                                    "goal_family_fingerprint": {
+                                        "type": "string",
+                                        "pattern": "\\S",
+                                    },
+                                    "through_goal_revision_fingerprint": {
+                                        "type": "string",
+                                        "pattern": "\\S",
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["abandoned", "superseded"],
+                                    },
+                                    "reason": {"type": "string", "pattern": "\\S"},
+                                    "replacement_goal_family_fingerprint": {
+                                        "anyOf": [
+                                            {"type": "string", "pattern": "\\S"},
+                                            {"type": "null"},
+                                        ]
+                                    },
+                                },
+                                "required": [
+                                    "event_id",
+                                    "goal_family_fingerprint",
+                                    "through_goal_revision_fingerprint",
+                                    "status",
+                                    "reason",
+                                ],
+                            },
+                        },
                     },
                     "required": [
                         "satisfied_criteria",

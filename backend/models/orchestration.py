@@ -276,6 +276,33 @@ class WaivedOutputEvidence(BaseModel):
     blocker_keys: list[str] = Field(default_factory=list)
 
 
+class GoalFamilyDispositionRequest(BaseModel):
+    event_id: str
+    goal_family_fingerprint: str
+    through_goal_revision_fingerprint: str
+    status: Literal["abandoned", "superseded"]
+    reason: str
+    replacement_goal_family_fingerprint: str | None = None
+
+    @field_validator(
+        "event_id",
+        "goal_family_fingerprint",
+        "through_goal_revision_fingerprint",
+        "reason",
+        "replacement_goal_family_fingerprint",
+    )
+    @classmethod
+    def _nonempty_request_fields(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                f"completion disposition request {info.field_name} must be nonempty"
+            )
+        return normalized
+
+
 class CompletionEvidence(BaseModel):
     satisfied_criteria: list[str] = Field(default_factory=list)
     referenced_fact_ids: list[str] = Field(default_factory=list)
@@ -286,6 +313,9 @@ class CompletionEvidence(BaseModel):
     satisfied_output_keys: list[str] = Field(default_factory=list)
     waived_outputs: list[WaivedOutputEvidence] = Field(default_factory=list)
     abandoned_goal_disposition_event_ids: list[str] = Field(default_factory=list)
+    requested_goal_family_dispositions: list[GoalFamilyDispositionRequest] = Field(
+        default_factory=list
+    )
     assumption_keys: list[str] = Field(default_factory=list)
     unresolved_non_blocking_unknown_keys: list[str] = Field(default_factory=list)
 
@@ -328,6 +358,8 @@ class DispatchIntent(BaseModel):
     agent_id: str
     task: str
     task_hash: str
+    goal_family_fingerprint: str | None = None
+    goal_revision_fingerprint: str | None = None
     status: str = "planned"
     depends_on: list[str] = Field(default_factory=list)
     parallel_group: str | None = None
