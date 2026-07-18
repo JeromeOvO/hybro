@@ -904,7 +904,7 @@ def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
 
     validate(payload, PLANNER_ACTION_RESPONSE_SCHEMA)
 
-    action = RoomSupervisorPlannerAdapter._parse_action(payload)
+    action = RoomSupervisorPlannerAdapter()._parse_action(payload)
 
     assert action.completion_evidence.satisfied_output_keys == ["quote"]
     assert action.completion_evidence.waived_outputs[0].reason == (
@@ -943,7 +943,7 @@ def test_completion_validator_rejects_requested_unknown_disposition_revision():
             }
         ],
     )
-    state = _state_for_validation(
+    state = _complete_run_state(
         delegation_outcomes=[
             _completion_outcome("outcome-1", "intent-1", remaining=["quote"])
         ]
@@ -1426,7 +1426,7 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
 def test_complete_state_preconditions_take_priority_without_output(
     state_overrides, expected_code
 ):
-    state = _state_for_validation(agent_outputs=[], facts=[], **state_overrides)
+    state = _complete_run_state(agent_outputs=[], facts=[], **state_overrides)
 
     assert _validation_code(_complete_action(), state) == expected_code
 

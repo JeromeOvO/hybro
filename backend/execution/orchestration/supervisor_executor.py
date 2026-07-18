@@ -56,7 +56,6 @@ from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
     goal_fingerprints,
-    invalidate_required_evidence,
 )
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
@@ -4761,37 +4760,6 @@ class SupervisorExecutor:
                         )
 
         return current
-
-    async def _invalidate_v2_required_evidence(
-        self,
-        state: OrchestrationRunState,
-        *,
-        evidence_key: str,
-        obligation_keys: list[str],
-        reason: str,
-        source_event_id: str,
-    ) -> OrchestrationRunState:
-        expected_version = state.state_version
-        updated, payload = invalidate_required_evidence(
-            state,
-            evidence_key=evidence_key,
-            obligation_keys=obligation_keys,
-            reason=reason,
-            source_event_id=source_event_id,
-        )
-        updated.state_version = expected_version + 1
-        updated.updated_at = utcnow()
-        saved = await self.run_store.save_state(
-            updated,
-            expected_version=expected_version,
-        )
-        await self._append_v2_event(
-            saved,
-            OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED,
-            required=True,
-            payload=payload,
-        )
-        return saved
 
     async def _dispose_v2_goal_family(
         self,

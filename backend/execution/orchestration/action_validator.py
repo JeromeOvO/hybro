@@ -644,7 +644,14 @@ def _validate_completion_blockers(
         )
     if any(
         item.status
-        not in {"completed", "failed", "canceled", "rejected", "abandoned"}
+        not in {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "expired",
+            "abandoned",
+        }
         for item in run_state.active_dispatches
     ):
         raise PlannerActionValidationError(
