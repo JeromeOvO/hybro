@@ -54,6 +54,7 @@ class RunLifecycleService:
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,
+        terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if not feature_run_dual_write_enabled():
             return None
@@ -65,6 +66,7 @@ class RunLifecycleService:
             terminal_reason=terminal_reason,
             causation_id=causation_id,
             client_request_id=client_request_id,
+            terminal_summary=terminal_summary,
         )
 
 

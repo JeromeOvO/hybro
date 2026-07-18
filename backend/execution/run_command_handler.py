@@ -164,6 +164,7 @@ class RunCommandHandler:
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,
+        terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if not _feature_run_dual_write_enabled():
             return None
@@ -208,6 +209,7 @@ class RunCommandHandler:
                 error_code=None,
                 error_message=terminal_reason,
                 causation_id=causation_id,
+                terminal_summary=terminal_summary,
             )
         if state == RunState.CANCELED:
             return await self._record_terminal(
@@ -219,6 +221,7 @@ class RunCommandHandler:
                 error_code="CANCELED",
                 error_message=terminal_reason,
                 causation_id=causation_id,
+                terminal_summary=terminal_summary,
             )
         if state == RunState.FAILED:
             return await self._record_terminal(
@@ -230,6 +233,7 @@ class RunCommandHandler:
                 error_code="FAILED",
                 error_message=terminal_reason,
                 causation_id=causation_id,
+                terminal_summary=terminal_summary,
             )
         return None
 
@@ -447,6 +451,7 @@ class RunCommandHandler:
         error_code: str | None,
         error_message: str | None,
         causation_id: str | None = None,
+        terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         run_doc = await self._ensure_run_exists(
             room_id=room_id,
@@ -464,14 +469,17 @@ class RunCommandHandler:
             RunState.FAILED: RunEventType.RUN_FAILED,
             RunState.CANCELED: RunEventType.RUN_CANCELED,
         }
+        payload = {
+            "error_code": error_code,
+            "error_message": error_message,
+        }
+        if terminal_summary is not None:
+            payload["terminal_summary"] = terminal_summary
         return await self._append_event_and_project(
             run_doc=run_doc,
             event_type=terminal_event_map[terminal_state],
             next_state=terminal_state,
-            payload={
-                "error_code": error_code,
-                "error_message": error_message,
-            },
+            payload=payload,
             causation_id=causation_id,
         )
 
@@ -546,6 +554,7 @@ class RunCommandHandler:
             updates["ended_at"] = now
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
+            updates["terminal_summary"] = payload.get("terminal_summary")
 
         await self._runs.update_one(
             {"run_id": run_id},
@@ -687,6 +696,7 @@ class RunCommandHandler:
             updates["ended_at"] = event_doc.get("ts") or utcnow()
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
+            updates["terminal_summary"] = payload.get("terminal_summary")
 
         await self._runs.update_one({"run_id": run_id}, {"$set": updates})
 

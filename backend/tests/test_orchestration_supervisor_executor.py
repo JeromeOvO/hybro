@@ -3061,6 +3061,13 @@ async def test_run_ask_user_cleanup_on_final_state_save_failure(monkeypatch):
     assert persisted.status == OrchestrationStatus.FAILED
     assert persisted.pending_hitl_request_ids == []
     assert not persisted.open_questions
+    assert persisted.terminal_summary is not None
+    assert persisted.terminal_summary["reason"] == (
+        "failed to persist v2 supervisor HITL state"
+    )
+    terminal_event = store._events_by_run["message-1"][-1]
+    assert terminal_event.type == OrchestrationEventType.RUN_TERMINAL
+    assert terminal_event.payload["terminal_summary"] == persisted.terminal_summary
 
 
 @pytest.mark.asyncio

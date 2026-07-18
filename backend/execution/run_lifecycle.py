@@ -44,6 +44,7 @@ class RunLifecycleAdapter:
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,
+        terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         return await self._command_handler.project_run_state(
             room_id=room_id,
@@ -53,6 +54,7 @@ class RunLifecycleAdapter:
             terminal_reason=terminal_reason,
             causation_id=causation_id,
             client_request_id=client_request_id,
+            terminal_summary=terminal_summary,
         )
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:

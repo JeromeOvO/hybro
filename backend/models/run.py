@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -55,6 +56,7 @@ class Run(BaseModel):
     seq: int = 0
     error_code: str | None = None
     error_message: str | None = None
+    terminal_summary: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -71,4 +73,3 @@ class RunEvent(BaseModel):
     correlation_id: str | None = None
     causation_id: str | None = None
     ts: datetime = Field(default_factory=utcnow)
-

@@ -839,6 +839,7 @@ class RunLifecyclePort(Protocol):
         terminal_reason: str | None,
         causation_id: str,
         client_request_id: str | None = None,
+        terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def heal_diverged_runs(self, limit: int = 500) -> int: ...

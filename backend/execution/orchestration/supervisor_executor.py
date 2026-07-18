@@ -4479,24 +4479,28 @@ class SupervisorExecutor:
             trajectory.status = TrajectoryStatus.FAILED
             failed_reason = "failed to persist v2 supervisor HITL state"
 
-            def mark_failed(updated: OrchestrationRunState) -> None:
-                updated.status = OrchestrationStatus.FAILED
-                updated.terminal_reason = failed_reason
+            def mark_failed_cleanup(updated: OrchestrationRunState) -> None:
                 mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
             try:
-                state = await self._save_v2_state(
+                state = await self._mark_v2_terminal(
                     state,
-                    event_type=OrchestrationEventType.RUN_TERMINAL,
-                    payload={
-                        "status": OrchestrationStatus.FAILED.value,
-                        "reason": failed_reason,
-                    },
-                    mutate=mark_failed,
+                    OrchestrationStatus.FAILED,
+                    reason=failed_reason,
+                    mutate=mark_failed_cleanup,
                 )
             except Exception:
                 fallback_state = state.model_copy(deep=True)
-                mark_failed(fallback_state)
+                fallback_state = mark_terminal(
+                    fallback_state,
+                    OrchestrationStatus.FAILED,
+                    reason=failed_reason,
+                )
+                mark_failed_cleanup(fallback_state)
+                fallback_state.terminal_summary = build_terminal_summary(
+                    fallback_state,
+                    reason=failed_reason,
+                )
                 state = fallback_state
                 logger.warning(
                     "Failed to persist failed v2 supervisor HITL state",

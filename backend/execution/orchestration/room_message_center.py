@@ -2398,6 +2398,13 @@ class RoomMessageCenter:
                         user_message.extend_info[
                             "client_request_id"
                         ] = result_run_state.client_request_id
+                terminal_summary = result.terminal_summary
+                if terminal_summary is None and result_run_state is not None:
+                    terminal_summary = result_run_state.terminal_summary
+                if terminal_summary is not None:
+                    user_message.extend_info["terminal_summary"] = (
+                        terminal_summary
+                    )
             elif result_trajectory is None:
                 legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
                 if isinstance(legacy_trajectory, dict):
