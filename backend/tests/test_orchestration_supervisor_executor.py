@@ -16,7 +16,10 @@ from execution.orchestration.resources import (
 )
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.orchestration.room_message_center import RoomMessageCenter
-from execution.orchestration.run_store import InMemoryOrchestrationRunStore
+from execution.orchestration.run_store import (
+    InMemoryOrchestrationRunStore,
+    OrchestrationStoreConflict,
+)
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.agent import AgentStatus
 from models.hitl import InterruptKind
@@ -5757,61 +5760,94 @@ async def test_ingest_v2_results_persists_one_idempotent_outcome():
 
 
 @pytest.mark.asyncio
-async def test_invalidate_v2_required_evidence_persists_exact_event_payload():
+async def test_ingest_v2_results_segments_outcomes_by_selected_resource_content():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
         store=store,
         planner=RecordingPlanner(),
         user_message=_state_unification_user_message(message_id="msg-1"),
     )
-    await store.create_run(_run_state())
+    state = _run_state(candidate_agent_ids=["agent-1"])
+    state.facts = [
+        {"fact_id": "context-1", "kind": "context", "text": "first evidence"},
+        {"fact_id": "context-2", "kind": "context", "text": "second evidence"},
+    ]
+    state.dispatch_intents = [
+        executor._v2_dispatch_intent(
+            run_id="run-1",
+            step_number=index,
+            target_index=1,
+            target=DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="produce quote",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id=f"context-{index}",
+                    )
+                ],
+            ),
+        )
+        for index in (1, 2)
+    ]
+    await store.create_run(state)
 
-    saved = await executor._invalidate_v2_required_evidence(
-        await store.get_run("run-1"),
-        goal_family_fingerprint="family-1",
-        evidence_key="evidence-1",
-        obligation_keys=["quote:$present"],
-        reason="source_retracted",
-        source_event_id="event-1",
-    )
+    for index in (1, 2):
+        await executor._ingest_v2_results(
+            await store.get_run("run-1"),
+            [
+                StepResult(
+                    step_number=index,
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="produce quote",
+                    response_text=f"quote {index}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"run-1:step-{index}:target-1:message",
+                )
+            ],
+            status=OrchestrationStatus.RUNNING,
+            advance_step=True,
+        )
 
-    event = store._events_by_run["run-1"][-1]
-    assert event.type == OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED
-    assert event.payload == {
-        "code": "required_evidence_invalidated",
-        "goal_family_fingerprint": "family-1",
-        "evidence_key": "evidence-1",
-        "obligation_keys": ["quote:$present"],
-        "reason": "source_retracted",
-        "source_event_id": "event-1",
-    }
-    assert saved.decision_log[-1] == event.payload
+    saved = await store.get_run("run-1")
+    assert saved is not None
+    assert len(saved.delegation_outcomes) == 2
+    first, second = saved.delegation_outcomes
+    assert first.goal_family_fingerprint == second.goal_family_fingerprint
+    assert first.goal_revision_fingerprint != second.goal_revision_fingerprint
+    assert first.attempt_fingerprint != second.attempt_fingerprint
 
 
 @pytest.mark.asyncio
-async def test_invalidate_v2_required_evidence_surfaces_event_append_failures(monkeypatch):
+async def test_append_v2_event_swallows_non_required_store_conflicts(monkeypatch):
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
         store=store,
         planner=RecordingPlanner(),
         user_message=_state_unification_user_message(message_id="msg-1"),
     )
-    await store.create_run(_run_state())
-    monkeypatch.setattr(store, "append_event", AsyncMock(side_effect=RuntimeError("oops")))
+    monkeypatch.setattr(
+        store,
+        "append_event",
+        AsyncMock(side_effect=OrchestrationStoreConflict("version conflict")),
+    )
 
-    with pytest.raises(RuntimeError, match="oops"):
-        await executor._invalidate_v2_required_evidence(
-            await store.get_run("run-1"),
-            goal_family_fingerprint="family-1",
-            evidence_key="evidence-1",
-            obligation_keys=["quote:$present"],
-            reason="source_retracted",
-            source_event_id="event-1",
+    await executor._append_v2_event(
+        _run_state(),
+        OrchestrationEventType.STATE_REDUCED,
+        payload={},
+    )
+
+    with pytest.raises(OrchestrationStoreConflict, match="version conflict"):
+        await executor._append_v2_event(
+            _run_state(),
+            OrchestrationEventType.OUTCOME_EVALUATED,
+            required=True,
+            payload={},
         )
-
-    persisted = await store.get_run("run-1")
-    assert persisted is not None
-    assert persisted.decision_log[-1]["code"] == "required_evidence_invalidated"
 
 
 @pytest.mark.asyncio

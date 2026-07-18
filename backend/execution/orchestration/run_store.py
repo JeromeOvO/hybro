@@ -18,6 +18,14 @@ class OrchestrationStoreConflict(RuntimeError):
     """Raised when an orchestration state write loses optimistic concurrency."""
 
 
+class DuplicateEventIdConflict(OrchestrationStoreConflict):
+    """Raised when an orchestration event ID has already been persisted."""
+
+    def __init__(self, event_id: str) -> None:
+        self.event_id = event_id
+        super().__init__(f"event_id {event_id!r} already exists")
+
+
 @runtime_checkable
 class OrchestrationRunStore(Protocol):
     async def create_run(
@@ -136,9 +144,7 @@ class InMemoryOrchestrationRunStore:
         if current is None:
             raise KeyError(f"run_id {event.run_id!r} does not exist")
         if event.event_id in self._event_ids:
-            raise OrchestrationStoreConflict(
-                f"event_id {event.event_id!r} already exists"
-            )
+            raise DuplicateEventIdConflict(event.event_id)
         if event.state_version > current.state_version:
             raise OrchestrationStoreConflict(
                 "event state_version cannot be ahead of current state for "
@@ -308,9 +314,7 @@ class MongoOrchestrationRunStore:
         if current is None:
             raise KeyError(f"run_id {event.run_id!r} does not exist")
         if await self._events.find_one({"event_id": event.event_id}) is not None:
-            raise OrchestrationStoreConflict(
-                f"event_id {event.event_id!r} already exists"
-            )
+            raise DuplicateEventIdConflict(event.event_id)
         current_version = current.get("state_version", 0)
         if event.state_version > current_version:
             raise OrchestrationStoreConflict(
@@ -322,9 +326,7 @@ class MongoOrchestrationRunStore:
             await self._events.insert_one(_event_doc(event))
         except Exception as exc:
             if _is_duplicate_key_error(exc):
-                raise OrchestrationStoreConflict(
-                    f"event_id {event.event_id!r} already exists"
-                ) from exc
+                raise DuplicateEventIdConflict(event.event_id) from exc
             raise
         return _copy_event(event)
 

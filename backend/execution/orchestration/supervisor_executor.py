@@ -48,7 +48,6 @@ from execution.orchestration.dispatch_payload import (
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
-    invalidate_required_evidence,
 )
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from execution.orchestration.planner import (
@@ -67,6 +66,7 @@ from execution.orchestration.result_ingestor import (
 )
 from execution.orchestration.run_reducer import mark_running, mark_terminal
 from execution.orchestration.run_store import (
+    DuplicateEventIdConflict,
     InMemoryOrchestrationRunStore,
     OrchestrationRunStore,
     OrchestrationStoreConflict,
@@ -77,6 +77,7 @@ from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
     AgentOutputRecord,
     DispatchIntent,
+    DispatchRefKind,
     OrchestrationEventType,
     OrchestrationRunEvent,
     OrchestrationRunState,
@@ -3995,7 +3996,12 @@ class SupervisorExecutor:
                         next_state,
                         matched_intent,
                         output,
-                        selected_resource_fingerprints=[],
+                        selected_resource_fingerprints=(
+                            self._v2_selected_resource_fingerprints(
+                                current,
+                                matched_intent,
+                            )
+                        ),
                     )
                     outcome = evaluated.model_copy(
                         update={
@@ -4061,39 +4067,6 @@ class SupervisorExecutor:
 
         return current
 
-    async def _invalidate_v2_required_evidence(
-        self,
-        state: OrchestrationRunState,
-        *,
-        goal_family_fingerprint: str,
-        evidence_key: str,
-        obligation_keys: list[str],
-        reason: str,
-        source_event_id: str,
-    ) -> OrchestrationRunState:
-        expected_version = state.state_version
-        updated, payload = invalidate_required_evidence(
-            state,
-            goal_family_fingerprint=goal_family_fingerprint,
-            evidence_key=evidence_key,
-            obligation_keys=obligation_keys,
-            reason=reason,
-            source_event_id=source_event_id,
-        )
-        updated.state_version = expected_version + 1
-        updated.updated_at = utcnow()
-        saved = await self.run_store.save_state(
-            updated,
-            expected_version=expected_version,
-        )
-        await self._append_v2_event(
-            saved,
-            OrchestrationEventType.REQUIRED_EVIDENCE_INVALIDATED,
-            required=True,
-            payload=payload,
-        )
-        return saved
-
     async def _mark_v2_terminal(
         self,
         state: OrchestrationRunState,
@@ -4145,14 +4118,75 @@ class SupervisorExecutor:
             if (
                 ignore_duplicate_event
                 and event_id is not None
-                and str(exc) == f"event_id {event_id!r} already exists"
+                and isinstance(exc, DuplicateEventIdConflict)
+                and exc.event_id == event_id
             ):
                 return
-            raise
+            if required:
+                raise
+            logger.debug("Failed to append v2 orchestration event", exc_info=True)
         except Exception:
             if required:
                 raise
             logger.debug("Failed to append v2 orchestration event", exc_info=True)
+
+    @staticmethod
+    def _v2_selected_resource_fingerprints(
+        state: OrchestrationRunState,
+        intent: DispatchIntent,
+    ) -> list[str]:
+        facts_by_id = {
+            str(fact.get("fact_id")): fact
+            for fact in state.facts
+            if isinstance(fact, dict) and fact.get("fact_id") is not None
+        }
+        artifacts_by_key = {
+            str(artifact.get("artifact_key")): artifact
+            for artifact in state.artifacts
+            if isinstance(artifact, dict) and artifact.get("artifact_key") is not None
+        }
+        fingerprints: set[str] = set()
+        selected_ref_ids: set[str] = set()
+
+        for ref in [
+            *intent.context_refs,
+            *intent.artifact_refs,
+            *intent.attachment_refs,
+        ]:
+            selected_ref_ids.add(ref.ref_id)
+            selected_content: object | None = None
+            if ref.kind == DispatchRefKind.CONTEXT:
+                fact = facts_by_id.get(ref.ref_id)
+                if fact is not None:
+                    selected_content = {
+                        key: value
+                        for key, value in fact.items()
+                        if key != "fact_id"
+                    }
+            elif ref.kind == DispatchRefKind.ARTIFACT:
+                selected_content = artifacts_by_key.get(ref.ref_id)
+
+            fingerprints.add(
+                canonical_content_fingerprint(
+                    selected_content
+                    if selected_content is not None
+                    else {
+                        "kind": ref.kind.value,
+                        "ref_id": ref.ref_id,
+                        "mime_type": ref.mime_type,
+                    }
+                )
+            )
+
+        for ref_id in intent.required_resource_refs:
+            if ref_id not in selected_ref_ids:
+                fingerprints.add(
+                    canonical_content_fingerprint(
+                        {"required_resource_ref": ref_id}
+                    )
+                )
+
+        return sorted(fingerprints)
 
     @staticmethod
     def _apply_v2_dispatch_intents(
