@@ -76,20 +76,23 @@ def goal_fingerprints(
     dependency_family_fingerprints: list[str],
     upstream_output_fingerprints: list[str],
 ) -> GoalFingerprints:
-    contracts = [
-        {
-            "output_key": effective_output_key(output),
-            "kind": output.kind,
-            "artifact_name": output.artifact_name,
-            "required_fields": sorted(output.required_fields),
-            "description": (
-                output.description
-                if not output.artifact_name and not output.required_fields
-                else None
-            ),
-        }
-        for output in expected_outputs
-    ]
+    contracts = sorted(
+        (
+            {
+                "output_key": effective_output_key(output),
+                "kind": output.kind,
+                "artifact_name": output.artifact_name,
+                "required_fields": sorted(output.required_fields),
+                "description": (
+                    output.description
+                    if not output.artifact_name and not output.required_fields
+                    else None
+                ),
+            }
+            for output in expected_outputs
+        ),
+        key=canonical_content_fingerprint,
+    )
     family = canonical_content_fingerprint(
         {
             "contracts": contracts,

@@ -92,3 +92,33 @@ def test_goal_fingerprints_separate_family_evidence_revision_and_agent_attempt()
     assert first.goal_revision_fingerprint != new_evidence.goal_revision_fingerprint
     assert first.goal_revision_fingerprint == new_agent.goal_revision_fingerprint
     assert first.attempt_fingerprint != new_agent.attempt_fingerprint
+
+
+def test_goal_family_is_stable_when_expected_outputs_are_reordered():
+    quote = DispatchExpectedOutput(
+        output_key="quote",
+        kind="artifact",
+        artifact_name="quote",
+        required_fields=["pricing.premium"],
+    )
+    summary = DispatchExpectedOutput(
+        output_key="summary",
+        kind="summary",
+        description="Summarize the quote.",
+    )
+    first = goal_fingerprints(
+        agent_id="agent-1",
+        expected_outputs=[quote, summary],
+        selected_content_fingerprints=["resource-1"],
+        dependency_family_fingerprints=["dependency-1"],
+        upstream_output_fingerprints=[],
+    )
+    reordered = goal_fingerprints(
+        agent_id="agent-1",
+        expected_outputs=[summary, quote],
+        selected_content_fingerprints=["resource-1"],
+        dependency_family_fingerprints=["dependency-1"],
+        upstream_output_fingerprints=[],
+    )
+
+    assert first == reordered
