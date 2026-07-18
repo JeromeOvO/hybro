@@ -4,13 +4,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from execution.orchestration.result_ingestor import (
-    related_open_failure_for_dispatch_intent,
-)
 from models.orchestration import (
     BlockerRecord,
     DelegationOutcomeRecord,
-    DispatchIntent,
     OrchestrationRunState,
     PlannedDelegateTarget,
 )
@@ -120,7 +116,7 @@ class BlockerPolicyValidator:
                 False, "blocker_resource_resolution_context_required"
             )
         resources = available_resource_refs
-        if _uncovered_references(
+        if _resolution_coverage_incomplete(
             resources, attempts_by_kind["resource"], blocked_required_output_keys
         ):
             return BlockerValidationDecision(
@@ -131,7 +127,7 @@ class BlockerPolicyValidator:
                 False, "blocker_alternate_agent_context_required"
             )
         agents = eligible_alternate_agent_ids
-        if _uncovered_references(
+        if _resolution_coverage_incomplete(
             agents, attempts_by_kind["agent"], blocked_required_output_keys
         ):
             return BlockerValidationDecision(False, "blocker_alternate_agent_available")
@@ -181,7 +177,7 @@ def evaluate_retry(
         )
         return RetryDecision(True, kind)
     if latest.status == "failed":
-        return _evaluate_operational_retry(run_state, target, latest, history)
+        return _evaluate_operational_retry(run_state, latest)
     if target.repair_of_intent_id != latest.dispatch_intent_id:
         return _rejected("delegate_repair_lineage_required")
     if chain.no_progress_repair_used_in_epoch:
@@ -224,37 +220,21 @@ def active_completion_scope(
 
 def _evaluate_operational_retry(
     run_state: OrchestrationRunState,
-    target: PlannedDelegateTarget,
     latest: DelegationOutcomeRecord,
-    history: OutcomeHistoryView,
 ) -> RetryDecision:
-    failed_intent = history.intents_by_id.get(latest.dispatch_intent_id)
-    if failed_intent is None:
+    open_failures_by_id = {
+        failure.failure_id: failure
+        for failure in run_state.open_failures
+        if failure.status == "open"
+    }
+    failures = [
+        open_failures_by_id[failure_id]
+        for failure_id in latest.open_failure_ids
+        if failure_id in open_failures_by_id
+    ]
+    if not failures:
         return _rejected_operational("recovery_retry_unavailable")
-    retry_intent = DispatchIntent(
-        step_id="outcome-policy-retry",
-        step_target_id="outcome-policy-retry:target",
-        dispatch_intent_id="outcome-policy-retry",
-        planned_agent_message_id="outcome-policy-retry:message",
-        agent_id=target.agent_id,
-        task=target.task,
-        task_hash=failed_intent.task_hash,
-        context_refs=[
-            {
-                "kind": "context",
-                "ref_id": failed_intent.planned_agent_message_id,
-                "source_agent_message_id": failed_intent.planned_agent_message_id,
-            }
-        ],
-    )
-    failure = related_open_failure_for_dispatch_intent(
-        run_state.open_failures,
-        retry_intent=retry_intent,
-        dispatch_intents=[*run_state.dispatch_intents, retry_intent],
-    )
-    if failure is None:
-        return _rejected_operational("recovery_retry_unavailable")
-    if failure.retry_count >= failure.max_retries:
+    if all(failure.retry_count >= failure.max_retries for failure in failures):
         return _rejected_operational("recovery_retry_exhausted")
     return RetryDecision(True, "operational_retry")
 
@@ -281,16 +261,17 @@ def _terminal_attempt_coverage(
     return coverage
 
 
-def _uncovered_references(
+def _resolution_coverage_incomplete(
     references: set[str],
     coverage_by_reference: dict[str, set[str]],
     required_output_keys: set[str],
-) -> set[str]:
-    return {
-        reference_id
-        for reference_id in references
-        if not required_output_keys <= coverage_by_reference.get(reference_id, set())
-    }
+) -> bool:
+    if references - coverage_by_reference.keys():
+        return True
+    covered_output_keys = set().union(
+        *(coverage_by_reference[reference_id] for reference_id in references)
+    )
+    return not required_output_keys <= covered_output_keys
 
 
 def _conditional_result_validation_code(

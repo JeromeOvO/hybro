@@ -27,6 +27,7 @@ def _outcome(
     agent_id="agent-1",
     family="family-1",
     revision="revision-1",
+    open_failure_ids=None,
 ):
     return DelegationOutcomeRecord(
         outcome_id=outcome_id,
@@ -36,6 +37,7 @@ def _outcome(
         goal_revision_fingerprint=revision,
         attempt_fingerprint=f"attempt-{agent_id}",
         status=status,
+        open_failure_ids=list(open_failure_ids or []),
         remaining_required_obligations=list(remaining),
         newly_satisfied_required_obligations=list(newly),
     )
@@ -152,7 +154,16 @@ def test_failed_retry_uses_open_failure_budget_without_repair_lineage():
         recovery_hints=["retry_with_refined_task"],
     )
     state = _state(
-        [_outcome("o1", "i1", "failed", ["quote:$present"], [])],
+        [
+            _outcome(
+                "o1",
+                "i1",
+                "failed",
+                ["quote:$present"],
+                [],
+                open_failure_ids=["failure-1"],
+            )
+        ],
         [_intent("i1", "failed")],
         [failure],
     )
@@ -183,7 +194,16 @@ def test_failed_retry_is_blocked_when_budget_exhausted():
         max_retries=2,
     )
     state = _state(
-        [_outcome("o1", "i1", "failed", ["quote:$present"], [])],
+        [
+            _outcome(
+                "o1",
+                "i1",
+                "failed",
+                ["quote:$present"],
+                [],
+                open_failure_ids=["failure-1"],
+            )
+        ],
         [_intent("i1", "failed")],
         [failure],
     )
@@ -197,6 +217,46 @@ def test_failed_retry_is_blocked_when_budget_exhausted():
 
     assert decision.allowed is False
     assert decision.code == "recovery_retry_exhausted"
+    assert decision.kind == "operational_retry"
+
+
+def test_failed_retry_resolves_failure_by_outcome_identity_not_lineage_heuristics():
+    failure = OpenFailureRecord(
+        failure_id="failure-1",
+        fingerprint="failure-fingerprint",
+        source="runtime",
+        agent_id="different-agent",
+        agent_message_id="different-message",
+        dispatch_intent_id="different-intent",
+        error_code="transport_error",
+        error_message="connection reset",
+        recoverable=True,
+        retry_count=0,
+        max_retries=2,
+    )
+    state = _state(
+        [
+            _outcome(
+                "o1",
+                "i1",
+                "failed",
+                ["quote:$present"],
+                [],
+                open_failure_ids=["failure-1"],
+            )
+        ],
+        [_intent("i1", "failed")],
+        [failure],
+    )
+
+    decision = evaluate_retry(
+        state,
+        _target(),
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert decision.allowed is True
     assert decision.kind == "operational_retry"
 
 
@@ -338,6 +398,65 @@ def test_user_only_blocker_requires_exhausted_resolution_paths():
         required_output_keys={"quote"},
         available_resource_refs={"resource-1"},
         eligible_alternate_agent_ids={"agent-2"},
+        conditional_result_viable=False,
+    )
+
+    assert decision.code == "blocker_user_only_validated"
+
+
+def test_multi_output_blocker_accepts_union_of_output_specific_attempts():
+    blocker = BlockerRecord(
+        key="missing-quote-and-summary",
+        description="Quote and summary inputs are unavailable.",
+        blocked_output_keys=["quote", "summary"],
+        source="agent",
+        claimed_user_only=True,
+        validation_status="validated",
+        resolution_attempts=[
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="quote-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="resource",
+                reference_id="summary-resource",
+                outcome="unavailable",
+                applies_to_output_keys=["summary"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id="quote-agent",
+                outcome="failed",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="agent",
+                reference_id="summary-agent",
+                outcome="failed",
+                applies_to_output_keys=["summary"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="quote",
+                outcome="insufficient",
+                applies_to_output_keys=["quote"],
+            ),
+            BlockerResolutionAttempt(
+                kind="conditional_result",
+                reference_id="summary",
+                outcome="insufficient",
+                applies_to_output_keys=["summary"],
+            ),
+        ],
+    )
+
+    decision = BlockerPolicyValidator().validate(
+        blocker,
+        required_output_keys={"quote", "summary"},
+        available_resource_refs={"quote-resource", "summary-resource"},
+        eligible_alternate_agent_ids={"quote-agent", "summary-agent"},
         conditional_result_viable=False,
     )
 
