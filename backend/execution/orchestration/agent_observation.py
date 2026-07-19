@@ -73,8 +73,9 @@ def extract_agent_observation(  # noqa: C901
                     }
                 )
 
+    structured_evidence_extracted = bool(facts or unknowns_by_key or blockers_by_key)
     text_evidence = _nonempty(status_message) or _nonempty(text)
-    if text_evidence is not None and not artifact_records:
+    if text_evidence is not None and not structured_evidence_extracted:
         facts.append(
             {
                 "fact_id": f"{agent_message_id}:text_evidence",

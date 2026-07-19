@@ -170,6 +170,28 @@ def test_records_completed_text_as_untrusted_evidence_only():
     ]
 
 
+def test_records_text_evidence_when_artifacts_have_no_structured_data():
+    observation = extract_agent_observation(
+        agent_message_id="agent-msg-text-artifact",
+        agent_id="agent-1",
+        status="completed",
+        text="The attached narrative explains the partial result.",
+        status_message=None,
+        artifact_records=[
+            {
+                "artifact_key": "agent-msg-text-artifact:artifact_id:narrative",
+                "name": "narrative",
+                "parts": [{"kind": "text", "text": "Narrative only."}],
+            }
+        ],
+    )
+
+    assert [fact["kind"] for fact in observation.facts] == ["agent_text_evidence"]
+    assert observation.facts[0]["value"] == (
+        "The attached narrative explains the partial result."
+    )
+
+
 def test_extracts_status_message_need_as_candidate_only():
     observation = extract_agent_observation(
         agent_message_id="agent-msg-5",
