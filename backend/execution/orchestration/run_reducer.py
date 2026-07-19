@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from common.utils.time import utcnow
 from models.orchestration import (
+    TERMINAL_DISPATCH_STATUSES,
     TERMINAL_ORCHESTRATION_STATUSES,
     ActiveDispatchRef,
     DispatchIntent,
@@ -13,16 +14,6 @@ from models.orchestration import (
     PlannerActionRecord,
 )
 from models.supervisor import StepResult
-
-TERMINAL_DISPATCH_STATUSES = {
-    "success",
-    "completed",
-    "failed",
-    "canceled",
-    "rejected",
-    "expired",
-    "abandoned",
-}
 
 
 class OrchestrationTransitionError(ValueError):

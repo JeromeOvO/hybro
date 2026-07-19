@@ -94,6 +94,7 @@ from execution.orchestration.terminal_summary import build_terminal_summary
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.hitl import HITLPromptType, InterruptKind
 from models.orchestration import (
+    TERMINAL_DISPATCH_STATUSES,
     TERMINAL_ORCHESTRATION_STATUSES,
     AgentOutputRecord,
     DispatchIntent,
@@ -2133,19 +2134,11 @@ class SupervisorExecutor:
         trajectory = self._compat_trajectory_from_state(state)
         step_number = state.steps_used + 1
         step_id = f"{state.run_id}:step-{step_number}"
-        terminal_statuses = {
-            StepStatus.SUCCESS.value,
-            StepStatus.FAILED.value,
-            "completed",
-            "failed",
-            "canceled",
-            "rejected",
-            "expired",
-        }
         current_intents = [
             intent
             for intent in state.dispatch_intents
-            if intent.step_id == step_id and intent.status not in terminal_statuses
+            if intent.step_id == step_id
+            and intent.status not in TERMINAL_DISPATCH_STATUSES
         ]
         if not current_intents:
             return state, None
@@ -5302,15 +5295,6 @@ class SupervisorExecutor:
             reason=reason.strip(),
             replacement_goal_family_fingerprint=replacement_goal_family_fingerprint,
         )
-        terminal_statuses = {
-            "completed",
-            "failed",
-            "canceled",
-            "rejected",
-            "expired",
-            "abandoned",
-        }
-
         def mutate(updated: OrchestrationRunState) -> None:
             recorded_disposition = next(
                 (
@@ -5332,13 +5316,13 @@ class SupervisorExecutor:
             for intent in updated.dispatch_intents:
                 if (
                     intent.dispatch_intent_id in intent_ids
-                    and intent.status not in terminal_statuses
+                    and intent.status not in TERMINAL_DISPATCH_STATUSES
                 ):
                     intent.status = "abandoned"
             for dispatch in updated.active_dispatches:
                 if (
                     dispatch.agent_message_id in message_ids
-                    and dispatch.status not in terminal_statuses
+                    and dispatch.status not in TERMINAL_DISPATCH_STATUSES
                 ):
                     dispatch.status = "abandoned"
             for failure in updated.open_failures:
@@ -5793,16 +5777,9 @@ class SupervisorExecutor:
 
     def _has_current_step_recoverable_intents(self, state: OrchestrationRunState) -> bool:
         step_id = f"{state.run_id}:step-{state.steps_used + 1}"
-        terminal_statuses = {
-            "completed",
-            "failed",
-            "canceled",
-            "rejected",
-            StepStatus.SUCCESS.value,
-            StepStatus.FAILED.value,
-        }
         return any(
-            intent.status not in terminal_statuses and intent.step_id == step_id
+            intent.status not in TERMINAL_DISPATCH_STATUSES
+            and intent.step_id == step_id
             for intent in state.dispatch_intents
         )
 

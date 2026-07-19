@@ -12,6 +12,7 @@ from execution.orchestration.outcome_policy import (
     evaluate_retry,
 )
 from models.orchestration import (
+    TERMINAL_DISPATCH_STATUSES,
     CompletionEvidence,
     GoalFamilyDispositionRecord,
     OrchestrationRunState,
@@ -622,15 +623,7 @@ def _validate_completion_blockers(
             ),
         )
     if any(
-        item.status
-        not in {
-            "completed",
-            "failed",
-            "canceled",
-            "rejected",
-            "expired",
-            "abandoned",
-        }
+        item.status not in TERMINAL_DISPATCH_STATUSES
         for item in run_state.active_dispatches
     ):
         raise PlannerActionValidationError(
