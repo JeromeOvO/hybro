@@ -52,8 +52,9 @@ def _error_code(*, error: str | None, status_message: str | None) -> str | None:
         return "context_ref_not_found"
     if "artifact_ref_not_found" in combined or "unknown artifact ref" in combined:
         return "artifact_ref_not_found"
-    if "dispatch_payload_ref_unresolved" in combined:
-        return "dispatch_payload_ref_unresolved"
+    dispatch_payload_code = _dispatch_payload_error_code(combined)
+    if dispatch_payload_code is not None:
+        return dispatch_payload_code
     if (
         "agent_does_not_accept_file_type" in combined
         or "does not accept the uploaded file type" in combined
@@ -70,9 +71,20 @@ def _error_code(*, error: str | None, status_message: str | None) -> str | None:
     return None
 
 
+def _dispatch_payload_error_code(combined: str) -> str | None:
+    for code in (
+        "dispatch_payload_ref_unresolved",
+        "attachment_projection_unavailable",
+    ):
+        if code in combined:
+            return code
+    return None
+
+
 def _is_recoverable(code: str) -> bool:
     return code in {
         "agent_does_not_accept_file_type",
+        "attachment_projection_unavailable",
         "attachment_ref_not_found",
         "context_ref_not_found",
         "artifact_ref_not_found",
@@ -87,6 +99,8 @@ def _is_recoverable(code: str) -> bool:
 def _recovery_hints(code: str) -> list[str]:
     if code == "agent_does_not_accept_file_type":
         return ["retry_without_unsupported_attachments"]
+    if code == "attachment_projection_unavailable":
+        return ["retry_with_available_refs"]
     if code in {
         "attachment_ref_not_found",
         "context_ref_not_found",

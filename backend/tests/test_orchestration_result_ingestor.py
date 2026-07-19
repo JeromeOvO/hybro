@@ -987,6 +987,27 @@ def test_ingest_failed_attachment_preflight_opens_recoverable_failure():
     assert failure.recovery_hints == ["retry_without_unsupported_attachments"]
 
 
+def test_ingest_projection_bind_failure_uses_available_refs_recovery():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text="",
+        error=(
+            "Attachment projection unavailable for "
+            "report.pdf (application/pdf)."
+        ),
+        status_message="attachment_projection_unavailable",
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    failure = updated.open_failures[0]
+    assert failure.error_code == "attachment_projection_unavailable"
+    assert failure.recoverable is True
+    assert failure.recovery_hints == ["retry_with_available_refs"]
+
+
 def test_ingest_later_success_resolves_only_matching_open_failure():
     ingestor = AgentResultIngestor()
     failed = ingestor.ingest(
