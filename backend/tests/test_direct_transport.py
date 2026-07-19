@@ -286,6 +286,79 @@ def _make_room_agent_message(**overrides):
     return RoomAgentMessage(**defaults)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extend_info", "message_text", "expected_public_label"),
+    [
+        (
+            {"public_task_label": "Public label from extend_info"},
+            "Public label from message",
+            "Public label from extend_info",
+        ),
+        (
+            None,
+            "Public label from message",
+            "Public label from message",
+        ),
+        (
+            None,
+            "   ",
+            "Requesting Insurer",
+        ),
+    ],
+)
+async def test_task_tracking_uses_public_label_policy_without_leaking_private_task(
+    extend_info,
+    message_text,
+    expected_public_label,
+):
+    private_task = "private internal prompt"
+    delivery = MagicMock()
+    delivery.send_task_submitted = AsyncMock()
+    delivery.send_task_update = AsyncMock()
+    transport = DirectTransport(
+        response_handler=MagicMock(),
+        tsm=MagicMock(),
+        a2a_transport=MagicMock(
+            create_task_for_tracking=AsyncMock(
+                return_value={"created_at": "2026-01-01T00:00:00Z"}
+            )
+        ),
+        remote_task_reader=MagicMock(),
+        delivery=delivery,
+        message_reader=MagicMock(),
+        artifact_store=MagicMock(),
+        task_updater=MagicMock(),
+        object_storage=MagicMock(),
+    )
+    message = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-msg-1",
+        related_message_id="user-msg-1",
+        agent_id="agent-1",
+        message_content=MessageContent(message_text=message_text),
+        task_content=private_task,
+        client_request_id="client-1",
+        extend_info=extend_info,
+    )
+    agent_card = MagicMock()
+    agent_card.name = "Insurer"
+
+    await transport._setup_task_tracking(
+        message,
+        agent_card,
+        Message(role=MessageRole.USER, parts=[TextPart(text=private_task)]),
+        "room-1",
+    )
+
+    submitted_kwargs = delivery.send_task_submitted.await_args.kwargs
+    update_kwargs = delivery.send_task_update.await_args.kwargs
+    assert submitted_kwargs["task_content"] == expected_public_label
+    assert update_kwargs["status_message"] == expected_public_label
+    assert private_task not in str(submitted_kwargs)
+    assert private_task not in str(update_kwargs)
+
+
 class TestHandleSyncResponseSuccess:
     """handle_sync_response returns extracted content for a message-type response."""
 
