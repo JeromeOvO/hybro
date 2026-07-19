@@ -9,6 +9,7 @@ from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from models.orchestration import (
     BlockerRecord,
+    DelegationOutcomeRecord,
     OrchestrationRunState,
     PlannedDelegateTarget,
     PlannerAction,
@@ -179,11 +180,25 @@ def _normalize_target_repair_lineage(
         return target
     if latest.status == "failed":
         return target
-    if latest.status == "blocked":
+    if latest.status == "blocked" and _blocked_outcome_has_open_blocker(state, latest):
         return target
-    if latest.status not in {"partial", "no_progress"}:
+    if latest.status not in {"partial", "blocked", "no_progress"}:
         return target
     return target.model_copy(
         update={"repair_of_intent_id": latest.dispatch_intent_id},
         deep=True,
     )
+
+
+def _blocked_outcome_has_open_blocker(
+    state: OrchestrationRunState,
+    outcome: DelegationOutcomeRecord,
+) -> bool:
+    if not outcome.blockers:
+        return True
+    current_by_key = {blocker.key: blocker for blocker in state.blockers}
+    for historical in outcome.blockers:
+        current = current_by_key.get(historical.key, historical)
+        if current.status == "open":
+            return True
+    return False

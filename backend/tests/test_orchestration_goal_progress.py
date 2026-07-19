@@ -1,6 +1,7 @@
 from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.outcome_evaluator import invalidate_required_evidence
 from models.orchestration import (
+    BlockerRecord,
     DelegationOutcomeRecord,
     GoalFamilyDispositionRecord,
     OrchestrationRunState,
@@ -52,6 +53,46 @@ def test_goal_progress_aggregates_by_goal_family_revision():
     assert progress.remaining_required_obligations == [
         "broker_submission:requested_limit"
     ]
+
+
+def test_goal_progress_projects_resolved_blocker_as_repairable_partial():
+    blocker = BlockerRecord(
+        key="blocker-1",
+        description="Need requested limit.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        status="resolved",
+    )
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["broker-agent"],
+        blockers=[blocker],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="broker-agent",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="blocked",
+                remaining_required_obligations=["quote:requested_limit"],
+                blockers=[blocker.model_copy(update={"status": "open"})],
+            )
+        ],
+    )
+
+    updated = rebuild_goal_progress(state)
+
+    assert updated.delegation_outcomes[0].status == "blocked"
+    assert updated.goal_progress[0].status == "partial"
+    assert updated.goal_progress[0].blocker_keys == []
 
 
 def test_goal_progress_carries_satisfied_obligations_across_revisions():
