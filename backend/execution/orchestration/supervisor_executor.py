@@ -56,6 +56,7 @@ from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from execution.orchestration.dispatch_payload import (
     DispatchPayloadValidationError,
     ResolvedDispatchPayload,
+    ResolvedResourcePayload,
     resolve_dispatch_payload_refs,
 )
 from execution.orchestration.goal_progress import rebuild_goal_progress
@@ -2640,6 +2641,20 @@ class SupervisorExecutor:
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
         )
+        if not reply_result.get("blocking", False):
+            return StepResult(
+                step_number=0,
+                agent_id=awaiting_output.agent_id,
+                agent_name=target.agent_name,
+                task=target.task,
+                response_text="",
+                success=False,
+                status=StepStatus.PAUSED,
+                agent_message_id=awaiting_output.agent_message_id,
+                paused_message_id=awaiting_output.agent_message_id,
+                a2a_task_id=awaiting_output.a2a_task_id,
+                a2a_context_id=awaiting_output.a2a_context_id,
+            )
         task_state = str(reply_result.get("task_state") or "completed")
         task_state = task_state.strip().lower().replace("_", "-")
         response_text = reply_result.get("response_text") or ""
@@ -2689,6 +2704,8 @@ class SupervisorExecutor:
                 else StepStatus.FAILED
             ),
             agent_message_id=awaiting_output.agent_message_id,
+            a2a_task_id=awaiting_output.a2a_task_id,
+            a2a_context_id=awaiting_output.a2a_context_id,
         )
 
     @staticmethod
@@ -3067,6 +3084,224 @@ class SupervisorExecutor:
                 return str(value)
         return None
 
+    @staticmethod
+    def _input_required_prompt_tokens(prompt: str) -> set[str]:
+        stop_words = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "that",
+            "this",
+            "need",
+            "needs",
+            "provide",
+            "please",
+            "what",
+            "is",
+            "are",
+            "agent",
+            "input",
+            "required",
+        }
+        return {
+            token
+            for token in "".join(
+                char.lower() if char.isalnum() else " "
+                for char in prompt
+            ).split()
+            if len(token) > 2 and token not in stop_words
+        }
+
+    def _resolved_payload_for_input_required(
+        self,
+        state: OrchestrationRunState,
+        prompt: str,
+    ) -> ResolvedDispatchPayload | None:
+        prompt_tokens = self._input_required_prompt_tokens(prompt)
+        if not prompt_tokens:
+            return None
+        selected_context_refs: list[str] = []
+        resource_payloads: list[ResolvedResourcePayload] = []
+
+        def add_payload(
+            *,
+            ref_id: str,
+            kind: str,
+            text: str,
+            mime_type: str = "text/plain",
+        ) -> None:
+            cleaned = text.strip()
+            if not cleaned or ref_id in selected_context_refs:
+                return
+            selected_context_refs.append(ref_id)
+            resource_payloads.append(
+                ResolvedResourcePayload(
+                    ref_id=ref_id,
+                    kind=kind,
+                    mime_type=mime_type,
+                    text=cleaned,
+                )
+            )
+
+        for fact in reversed(state.facts):
+            if not isinstance(fact, Mapping):
+                continue
+            ref_id = str(
+                fact.get("fact_id") or fact.get("ref_id") or fact.get("key") or ""
+            )
+            text = fact.get("text")
+            value = fact.get("value")
+            if not isinstance(text, str) and value is not None:
+                text = str(value)
+            if not isinstance(text, str):
+                continue
+            key = str(fact.get("key") or fact.get("name") or "").lower()
+            fact_kind = str(fact.get("kind") or "").lower()
+            ref_id_lower = ref_id.lower()
+            key_tokens = self._input_required_prompt_tokens(key.replace("_", " "))
+            is_projection = (
+                ref_id_lower.startswith("ctx:")
+                or "projection" in fact_kind
+                or fact_kind in {"context", "attachment_text"}
+            )
+            text_tokens = self._input_required_prompt_tokens(text)
+            if (
+                prompt_tokens & key_tokens
+                or (is_projection and prompt_tokens & text_tokens)
+            ):
+                add_payload(
+                    ref_id=ref_id or f"fact:{len(resource_payloads) + 1}",
+                    kind="context",
+                    text=text,
+                )
+
+        for artifact in reversed(state.artifacts):
+            if not isinstance(artifact, Mapping):
+                continue
+            ref_id = str(
+                artifact.get("artifact_key")
+                or artifact.get("ref_id")
+                or artifact.get("id")
+                or ""
+            )
+            text = (
+                artifact.get("text")
+                or artifact.get("summary")
+                or artifact.get("content")
+            )
+            if not isinstance(text, str):
+                continue
+            artifact_tokens = self._input_required_prompt_tokens(
+                " ".join(
+                    str(value)
+                    for value in (
+                        artifact.get("artifact_key"),
+                        artifact.get("title"),
+                        artifact.get("name"),
+                        artifact.get("kind"),
+                    )
+                    if value
+                )
+            )
+            text_tokens = self._input_required_prompt_tokens(text)
+            if prompt_tokens & artifact_tokens or prompt_tokens & text_tokens:
+                add_payload(
+                    ref_id=ref_id or f"artifact:{len(resource_payloads) + 1}",
+                    kind="artifact",
+                    text=text,
+                )
+
+        for output in reversed(state.agent_outputs):
+            if output.status in {
+                StepStatus.AWAITING_INPUT.value,
+                StepStatus.PAUSED.value,
+                "input_required",
+            }:
+                continue
+            text = output.text or output.status_message
+            if not isinstance(text, str) or not text.strip():
+                continue
+            output_tokens = self._input_required_prompt_tokens(
+                " ".join(
+                    value
+                    for value in (
+                        output.agent_id,
+                        output.agent_message_id,
+                        output.status,
+                    )
+                    if value
+                )
+            )
+            text_tokens = self._input_required_prompt_tokens(text)
+            if not (prompt_tokens & output_tokens or prompt_tokens & text_tokens):
+                continue
+            add_payload(
+                ref_id=f"agent-output:{output.agent_message_id}",
+                kind="context",
+                text=text,
+            )
+
+        if not resource_payloads:
+            return None
+        return ResolvedDispatchPayload(
+            selected_context_refs=selected_context_refs,
+            resource_payloads=resource_payloads,
+        )
+
+    async def _resolved_payload_from_continuation_refs(
+        self,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation | None,
+        result: StepResult,
+    ) -> ResolvedDispatchPayload | None:
+        if continuation is None:
+            return None
+        source_intent = next(
+            (
+                intent
+                for intent in state.dispatch_intents
+                if intent.dispatch_intent_id == continuation.source_intent_id
+                or intent.planned_agent_message_id
+                == continuation.source_agent_message_id
+            ),
+            None,
+        )
+        if source_intent is None:
+            return None
+        if not (
+            source_intent.context_refs
+            or source_intent.artifact_refs
+            or source_intent.attachment_refs
+        ):
+            return None
+        try:
+            resolved = await resolve_dispatch_payload_refs(
+                run_state=state,
+                target_agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+                context_refs=source_intent.context_refs,
+                artifact_refs=source_intent.artifact_refs,
+                attachment_refs=source_intent.attachment_refs,
+                original_attachments=[],
+                resource_provider=self.orchestration_resource_provider,
+            )
+        except DispatchPayloadValidationError:
+            return None
+        except Exception:
+            logger.debug(
+                "Failed to resolve input-required dispatch refs",
+                extra={
+                    "run_id": state.run_id,
+                    "agent_id": result.agent_id,
+                    "agent_message_id": result.agent_message_id,
+                },
+                exc_info=True,
+            )
+            return None
+        if resolved.resource_payloads:
+            return resolved
+        return None
+
     def _find_or_create_pending_continuation(
         self,
         state: OrchestrationRunState,
@@ -3200,6 +3435,8 @@ class SupervisorExecutor:
     ) -> StepResult:
         prompt = self._extract_input_required_prompt(result)
         continuation = self._find_or_create_pending_continuation(state, result)
+        if self._awaiting_result_requires_hitl(result):
+            return result
         answer = self._find_fact_answer_for_input_required(state, prompt)
         if answer and continuation is not None:
             return await self._resume_agent_continuation_after_hitl_answer(
@@ -3208,6 +3445,47 @@ class SupervisorExecutor:
                 answer=answer,
                 user_message=user_message,
             )
+        resolved_payload = await self._resolved_payload_from_continuation_refs(
+            state,
+            continuation,
+            result,
+        )
+        if resolved_payload is None:
+            resolved_payload = self._resolved_payload_for_input_required(state, prompt)
+        if resolved_payload is not None and continuation is not None:
+            awaiting_output = next(
+                (
+                    output
+                    for output in state.agent_outputs
+                    if output.agent_message_id == continuation.source_agent_message_id
+                ),
+                None,
+            )
+            if awaiting_output is None and result.agent_message_id:
+                awaiting_output = AgentOutputRecord(
+                    agent_message_id=result.agent_message_id,
+                    agent_id=result.agent_id,
+                    status=StepStatus.AWAITING_INPUT.value,
+                    a2a_task_id=result.a2a_task_id,
+                    a2a_context_id=result.a2a_context_id,
+                    status_message=prompt,
+                )
+            if awaiting_output is not None:
+                continued = await self._continue_agent_task_with_resolved_refs(
+                    claimed_continuation=continuation.model_copy(
+                        update={"status": "resuming"}
+                    ),
+                    continuation_state=state,
+                    awaiting_output=awaiting_output,
+                    target=DelegateTarget(
+                        agent_id=result.agent_id,
+                        agent_name=result.agent_name,
+                        task=result.task,
+                    ),
+                    resolved_payload=resolved_payload,
+                )
+                if continued is not None:
+                    return continued
         return result
 
     async def _resolve_agent_input_required_results(
@@ -3868,17 +4146,42 @@ class SupervisorExecutor:
                 for result in entry.results
                 if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
+            follow_up_hitl_message_ids: set[str] = set()
+            if any(result.status == StepStatus.AWAITING_INPUT for result in pending):
+                (
+                    synced,
+                    resolved_results,
+                    follow_up_hitl_message_ids,
+                ) = await self._resolve_agent_input_required_results(
+                    state=synced,
+                    results=entry.results,
+                    user_message=SimpleNamespace(
+                        room_id=room_id or state.room_id,
+                        message_id=user_message_id or state.user_message_id,
+                        user_id=request_user_id,
+                    ),
+                )
+                entry.results = resolved_results
+                pending = [
+                    result
+                    for result in entry.results
+                    if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+                ]
             hitl_required_pending = [
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
-                and self._awaiting_result_requires_hitl(result)
+                and (
+                    self._awaiting_result_requires_hitl(result)
+                    or result.agent_message_id in follow_up_hitl_message_ids
+                )
             ]
             plain_awaiting_pending = [
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
                 and not self._awaiting_result_requires_hitl(result)
+                and result.agent_message_id not in follow_up_hitl_message_ids
             ]
             has_awaiting_input = bool(hitl_required_pending)
             has_paused_pending = bool(plain_awaiting_pending) or any(
