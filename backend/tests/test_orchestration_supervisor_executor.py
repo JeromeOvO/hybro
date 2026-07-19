@@ -9993,7 +9993,6 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
             status_message="Need the selected text projection.",
         )
     )
-
     result = await executor.run(
         room_id="room-1",
         user_message_id="message-1",
@@ -10075,6 +10074,291 @@ async def test_plain_input_required_creates_legacy_hitl_when_guardrails_disabled
     assert hitl_kwargs["prompt"] == "Need the selected text projection."
     assert result.run_state.pending_hitl_request_ids == ["hitl-agent-1"]
     assert len(planner.contexts) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_uses_existing_fact_without_creating_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Get the quote"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            facts=[{"key": "annual_revenue", "value": "$2M", "source": "user"}],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status="input_required",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock())
+    executor.hitl_coordinator.agent_reply = SimpleNamespace(
+        reply_to_task=AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "completed",
+                "response_text": "Continued with annual revenue: $2M",
+            }
+        )
+    )
+
+    result = await executor._handle_agent_input_required(
+        state=state,
+        result=StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Need annual revenue",
+            response_text="What is the annual revenue?",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        user_message=user_message,
+    )
+
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    executor.hitl_coordinator.agent_reply.reply_to_task.assert_awaited_once()
+    reply_kwargs = executor.hitl_coordinator.agent_reply.reply_to_task.await_args.kwargs
+    assert reply_kwargs["task_id"] == "task-1"
+    assert reply_kwargs["context_id"] == "ctx-1"
+    assert "$2M" in reply_kwargs["user_input"]
+    saved = await store.get_run("run-1")
+    assert result.status == StepStatus.SUCCESS
+    assert saved is not None
+    assert saved.pending_hitl_request_ids == []
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_resumes_same_a2a_task_after_answer():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Get the quote"),
+        message_id="msg-1",
+    )
+    continuation = PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.AWAITING_USER,
+            pending_agent_continuations=[continuation],
+        )
+    )
+    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "completed",
+                    "response_text": "Quote ready",
+                }
+            )
+        )
+    )
+
+    resumed = await executor._resume_agent_continuation_after_hitl_answer(
+        state=state,
+        continuation=continuation,
+        answer="$2M",
+        user_message=user_message,
+    )
+
+    assert resumed.status == StepStatus.SUCCESS
+    reply_kwargs = executor.hitl_coordinator.agent_reply.reply_to_task.await_args.kwargs
+    assert reply_kwargs["task_id"] == "task-1"
+    assert reply_kwargs["context_id"] == "ctx-1"
+    assert reply_kwargs["user_input"] == "$2M"
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_nonblocking_reply_remains_paused():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": False,
+                    "task_state": None,
+                    "response_text": None,
+                }
+            )
+        )
+    )
+    continuation = PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+
+    resumed = await executor._resume_agent_continuation_after_hitl_answer(
+        state=_run_state(),
+        continuation=continuation,
+        answer="$2M",
+        user_message=user_message,
+    )
+
+    assert resumed.status == StepStatus.PAUSED
+    assert resumed.success is False
+    assert resumed.paused_message_id == "agent-msg-1"
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_nested_reply_remains_awaiting_input():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": "What is the employee count?",
+                }
+            )
+        )
+    )
+    continuation = PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            facts=[{"key": "annual_revenue", "value": "$2M"}],
+            pending_agent_continuations=[continuation],
+        )
+    )
+    awaiting = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Need annual revenue",
+        response_text="What is the annual revenue?",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id="agent-msg-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+
+    _, [resumed], follow_up_ids = (
+        await executor._resolve_agent_input_required_results(
+            state=state,
+            results=[awaiting],
+            user_message=user_message,
+        )
+    )
+
+    assert resumed.status == StepStatus.AWAITING_INPUT
+    assert resumed.status_message == "What is the employee count?"
+    assert resumed.interactive_state == "input-required"
+    assert follow_up_ids == {"agent-msg-1"}
+
+
+def test_input_required_fact_key_does_not_match_inside_unrelated_word():
+    state = _run_state(facts=[{"key": "id", "value": "unrelated"}])
+
+    assert (
+        SupervisorExecutor._find_fact_answer_for_input_required(
+            state,
+            "Please provide the requested value.",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_input_required_without_continuation_does_not_create_duplicate_hitl():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(
+        _run_state(
+            facts=[{"key": "annual_revenue", "value": "$2M"}],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock())
+    awaiting = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Need annual revenue",
+        response_text="What is the annual revenue?",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id="agent-msg-1",
+    )
+
+    _, resolved, follow_up_ids = (
+        await executor._resolve_agent_input_required_results(
+            state=state,
+            results=[awaiting],
+            user_message=user_message,
+        )
+    )
+
+    assert resolved == [awaiting]
+    assert follow_up_ids == set()
+    executor.hitl_coordinator.request_input.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

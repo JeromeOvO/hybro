@@ -2013,10 +2013,31 @@ class SupervisorExecutor:
             ]
 
         if awaiting:
+            (
+                state,
+                results,
+                follow_up_hitl_message_ids,
+            ) = await self._resolve_agent_input_required_results(
+                state=state,
+                results=results,
+                user_message=user_message,
+            )
+            entry.results = results
+            paused = [
+                result
+                for result in results
+                if result.status == StepStatus.PAUSED
+            ]
+            awaiting = [
+                result
+                for result in results
+                if result.status == StepStatus.AWAITING_INPUT
+            ]
             hitl_required = [
                 result
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
+                or result.agent_message_id in follow_up_hitl_message_ids
             ]
             if not self.guardrails_enabled:
                 # Preserve legacy live-dispatch behavior while keeping recovery
@@ -2051,24 +2072,26 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-
-            state = await self._ingest_v2_results(
-                state,
-                results,
-                status=OrchestrationStatus.RUNNING,
-                advance_step=True,
-                available_resource_refs=blocker_available_resource_refs,
-                attempted_agent_ids=blocker_attempted_agent_ids,
-                eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
-                conditional_result_viable=blocker_conditional_result_viable,
-            )
-            logger.info(
-                "orchestration_input_required_recoverable run_id=%s "
-                "awaiting_count=%d",
-                state.run_id,
-                len(awaiting),
-            )
-            return state, None
+            if awaiting:
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.RUNNING,
+                    advance_step=True,
+                    available_resource_refs=blocker_available_resource_refs,
+                    attempted_agent_ids=blocker_attempted_agent_ids,
+                    eligible_alternate_agent_ids=(
+                        blocker_eligible_alternate_agent_ids
+                    ),
+                    conditional_result_viable=blocker_conditional_result_viable,
+                )
+                logger.info(
+                    "orchestration_input_required_recoverable run_id=%s "
+                    "awaiting_count=%d",
+                    state.run_id,
+                    len(awaiting),
+                )
+                return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2238,10 +2261,30 @@ class SupervisorExecutor:
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
         if awaiting:
+            (
+                state,
+                results,
+                follow_up_hitl_message_ids,
+            ) = await self._resolve_agent_input_required_results(
+                state=state,
+                results=results,
+                user_message=user_message,
+            )
+            paused = [
+                result
+                for result in results
+                if result.status == StepStatus.PAUSED
+            ]
+            awaiting = [
+                result
+                for result in results
+                if result.status == StepStatus.AWAITING_INPUT
+            ]
             hitl_required = [
                 result
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
+                or result.agent_message_id in follow_up_hitl_message_ids
             ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -2289,14 +2332,14 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-
-            state = await self._ingest_v2_results(
-                state,
-                results,
-                status=OrchestrationStatus.RUNNING,
-                advance_step=False,
-            )
-            return state, None
+            if awaiting:
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.RUNNING,
+                    advance_step=False,
+                )
+                return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2986,6 +3029,217 @@ class SupervisorExecutor:
                 len(continuation_ids_to_abandon),
             )
         return saved
+
+    @staticmethod
+    def _extract_input_required_prompt(result: StepResult) -> str:
+        return (
+            result.response_text
+            or result.status_message
+            or result.task
+            or "The agent needs additional information."
+        ).strip()
+
+    @staticmethod
+    def _find_fact_answer_for_input_required(
+        state: OrchestrationRunState,
+        prompt: str,
+    ) -> str | None:
+        normalized_prompt = " ".join(
+            "".join(
+                char.lower() if char.isalnum() else " " for char in prompt
+            ).split()
+        )
+        for fact in reversed(state.facts):
+            if not isinstance(fact, dict):
+                continue
+            key = str(fact.get("key") or fact.get("name") or "")
+            value = fact.get("value")
+            if value is None:
+                continue
+            normalized_key = " ".join(
+                "".join(
+                    char.lower() if char.isalnum() else " " for char in key
+                ).split()
+            )
+            if normalized_key and (
+                f" {normalized_key} " in f" {normalized_prompt} "
+            ):
+                return str(value)
+        return None
+
+    def _find_or_create_pending_continuation(
+        self,
+        state: OrchestrationRunState,
+        result: StepResult,
+    ) -> PendingAgentContinuation | None:
+        if not result.agent_message_id or not result.a2a_task_id or not result.a2a_context_id:
+            return None
+        for continuation in state.pending_agent_continuations:
+            if (
+                continuation.source_agent_message_id == result.agent_message_id
+                and continuation.a2a_task_id == result.a2a_task_id
+                and continuation.a2a_context_id == result.a2a_context_id
+            ):
+                return continuation
+        intent = next(
+            (
+                candidate
+                for candidate in state.dispatch_intents
+                if candidate.planned_agent_message_id == result.agent_message_id
+            ),
+            None,
+        )
+        source_intent_id = (
+            intent.dispatch_intent_id
+            if intent is not None
+            else f"input-required:{result.agent_message_id}"
+        )
+        goal_family_fingerprint = (
+            intent.goal_family_fingerprint
+            if intent is not None and intent.goal_family_fingerprint
+            else f"input-required:{result.agent_id}"
+        )
+        goal_revision_fingerprint = (
+            intent.goal_revision_fingerprint
+            if intent is not None and intent.goal_revision_fingerprint
+            else f"input-required:{result.agent_message_id}"
+        )
+        return PendingAgentContinuation(
+            continuation_id=continuation_id_for(
+                run_id=state.run_id,
+                source_intent_id=source_intent_id,
+                a2a_task_id=result.a2a_task_id,
+                a2a_context_id=result.a2a_context_id,
+            ),
+            source_intent_id=source_intent_id,
+            source_agent_message_id=result.agent_message_id,
+            agent_id=result.agent_id,
+            goal_family_fingerprint=goal_family_fingerprint,
+            goal_revision_fingerprint=goal_revision_fingerprint,
+            a2a_task_id=result.a2a_task_id,
+            a2a_context_id=result.a2a_context_id,
+        )
+
+    async def _resume_agent_continuation_after_hitl_answer(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation,
+        answer: str,
+        user_message,
+    ) -> StepResult:
+        reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
+            message_id=continuation.source_agent_message_id,
+            task_id=continuation.a2a_task_id,
+            context_id=continuation.a2a_context_id,
+            user_input=answer,
+        )
+        if not reply_result.get("blocking", False):
+            return StepResult(
+                step_number=0,
+                agent_id=continuation.agent_id,
+                agent_name=continuation.agent_id,
+                task=answer,
+                response_text="",
+                success=False,
+                status=StepStatus.PAUSED,
+                agent_message_id=continuation.source_agent_message_id,
+                paused_message_id=continuation.source_agent_message_id,
+                a2a_task_id=continuation.a2a_task_id,
+                a2a_context_id=continuation.a2a_context_id,
+            )
+
+        task_state = str(reply_result.get("task_state") or "completed")
+        task_state = task_state.strip().lower().replace("_", "-")
+        response_text = reply_result.get("response_text") or ""
+        failed = task_state in {"failed", "canceled", "rejected"}
+        requires_policy = bool(
+            reply_result.get("requires_policy")
+            or reply_result.get("policy_required")
+            or task_state == "policy-required"
+        )
+        if task_state in {"input-required", "auth-required", "policy-required"}:
+            return StepResult(
+                step_number=0,
+                agent_id=continuation.agent_id,
+                agent_name=continuation.agent_id,
+                task=answer,
+                response_text="",
+                success=False,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id=continuation.source_agent_message_id,
+                paused_message_id=continuation.source_agent_message_id,
+                a2a_task_id=continuation.a2a_task_id,
+                a2a_context_id=continuation.a2a_context_id,
+                status_message=response_text,
+                interactive_state=(
+                    "policy-required" if requires_policy else task_state
+                ),
+                requires_auth=task_state == "auth-required",
+                requires_policy=requires_policy,
+            )
+        return StepResult(
+            step_number=0,
+            agent_id=continuation.agent_id,
+            agent_name=continuation.agent_id,
+            task=answer,
+            response_text=response_text,
+            success=not failed,
+            status=StepStatus.FAILED if failed else StepStatus.SUCCESS,
+            agent_message_id=continuation.source_agent_message_id,
+            a2a_task_id=continuation.a2a_task_id,
+            a2a_context_id=continuation.a2a_context_id,
+        )
+
+    async def _handle_agent_input_required(
+        self,
+        *,
+        state: OrchestrationRunState,
+        result: StepResult,
+        user_message,
+    ) -> StepResult:
+        prompt = self._extract_input_required_prompt(result)
+        continuation = self._find_or_create_pending_continuation(state, result)
+        answer = self._find_fact_answer_for_input_required(state, prompt)
+        if answer and continuation is not None:
+            return await self._resume_agent_continuation_after_hitl_answer(
+                state=state,
+                continuation=continuation,
+                answer=answer,
+                user_message=user_message,
+            )
+        return result
+
+    async def _resolve_agent_input_required_results(
+        self,
+        *,
+        state: OrchestrationRunState,
+        results: list[StepResult],
+        user_message,
+    ) -> tuple[OrchestrationRunState, list[StepResult], set[str]]:
+        current = state
+        resolved_results: list[StepResult] = []
+        follow_up_hitl_message_ids: set[str] = set()
+        for result in results:
+            if result.status != StepStatus.AWAITING_INPUT:
+                resolved_results.append(result)
+                continue
+            resolved = await self._handle_agent_input_required(
+                state=current,
+                result=result,
+                user_message=user_message,
+            )
+            resolved_results.append(resolved)
+            if (
+                resolved is not result
+                and resolved.status == StepStatus.AWAITING_INPUT
+                and resolved.agent_message_id
+            ):
+                follow_up_hitl_message_ids.add(resolved.agent_message_id)
+            persisted = await self.orchestration_run_store.get_run(current.run_id)
+            if persisted is not None:
+                current = persisted
+        return current, resolved_results, follow_up_hitl_message_ids
 
     async def _run_agent_awaiting_input_action(
         self,
