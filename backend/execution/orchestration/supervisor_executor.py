@@ -7339,7 +7339,16 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
+                preflight_failure = (
+                    message.extend_info.get("attachment_preflight_failure")
+                    if isinstance(message.extend_info, dict)
+                    else None
+                )
                 message.extend_info = {"public_task_label": public_task_label}
+                if preflight_failure is not None:
+                    message.extend_info["attachment_preflight_failure"] = (
+                        preflight_failure
+                    )
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)

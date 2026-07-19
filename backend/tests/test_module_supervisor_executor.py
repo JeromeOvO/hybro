@@ -228,13 +228,13 @@ async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_re
     )
 
     assert result[0].success is True
-    assert message.extend_info["attachment_forwarding_policy"] == "explicit_refs_only"
-    assert message.extend_info["dispatch_payload_refs"] == {
-        "context_refs": [],
-        "artifact_refs": [],
-        "attachment_refs": [],
-        "expected_outputs": [],
-    }
+    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
+    processor_call = se.agent_message_processor.process_single_message.await_args
+    assert processor_call.kwargs["attachment_forwarding_policy"] == (
+        "explicit_refs_only"
+    )
+    assert processor_call.kwargs["resolved_resource_payloads"] == []
+    assert processor_call.kwargs["explicit_attachment_refs"] == []
 
 
 @pytest.mark.asyncio
@@ -316,8 +316,11 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
         "artifact-1",
     ]
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
-    assert "artifact-1" in create_kwargs["content"]
-    assert "Broker submission" in create_kwargs["task_content"]
+    assert create_kwargs["content"] == "Requesting Test Agent"
+    assert create_kwargs["task_content"] == "Requesting Test Agent"
+    processor_call = se.agent_message_processor.process_single_message.await_args
+    assert "artifact-1" in processor_call.kwargs["dispatch_task"]
+    assert "Broker submission" in processor_call.kwargs["dispatch_task"]
 
 
 @pytest.mark.asyncio
@@ -446,16 +449,13 @@ async def test_supervisor_dispatch_projects_valid_context_ref_into_agent_task():
 
     assert result[0].success is True
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
-    assert "[Backend-selected references]" in create_kwargs["task_content"]
-    assert "Selected context refs:" in create_kwargs["task_content"]
-    assert "ref=fact-1" in create_kwargs["task_content"]
-    assert "Replacement cost is 1.2M" in create_kwargs["task_content"]
-    assert message.extend_info["resolved_dispatch_payload_refs"] == {
-        "context_refs": ["fact-1"],
-        "artifact_refs": [],
-        "attachment_refs": [],
-        "resource_payloads": [],
-    }
+    assert create_kwargs["task_content"] == "Requesting Test Agent"
+    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
+    processor_call = se.agent_message_processor.process_single_message.await_args
+    assert "[Backend-selected references]" in processor_call.kwargs["dispatch_task"]
+    assert "Selected context refs:" in processor_call.kwargs["dispatch_task"]
+    assert "ref=fact-1" in processor_call.kwargs["dispatch_task"]
+    assert "Replacement cost is 1.2M" in processor_call.kwargs["dispatch_task"]
 
 
 @pytest.mark.asyncio

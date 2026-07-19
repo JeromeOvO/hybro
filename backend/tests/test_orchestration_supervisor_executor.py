@@ -516,12 +516,15 @@ async def test_run_materializes_only_selected_resource_refs_for_dispatch():
     )
 
     assert result.status == RunStatus.COMPLETED
-    dispatched_message = (
-        executor.agent_message_processor.process_single_message.await_args.args[0]
+    processor_call = executor.agent_message_processor.process_single_message.await_args
+    dispatched_message = processor_call.args[0]
+    assert dispatched_message.extend_info == {
+        "public_task_label": "Requesting Agent One"
+    }
+    assert processor_call.kwargs["resolved_resource_payloads"][0]["ref_id"] == (
+        "ctx:file-file-1:text"
     )
-    resolved = dispatched_message.extend_info["resolved_dispatch_payload_refs"]
-    assert resolved["context_refs"] == ["ctx:file-file-1:text"]
-    assert resolved["resource_payloads"][0]["text"] == (
+    assert processor_call.kwargs["resolved_resource_payloads"][0]["text"] == (
         "Projected submission text"
     )
     projection_service.ensure_projection.assert_awaited_once()
@@ -9193,7 +9196,9 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
     assert replayed_call.kwargs["attachment_forwarding_policy"] == (
         "explicit_refs_only"
     )
-    assert replayed_call.kwargs["explicit_attachment_refs"] == ["file-1"]
+    # The replay intent retains the private attachment selector, but a file
+    # absent from the recovered user message must not be forwarded.
+    assert replayed_call.kwargs["explicit_attachment_refs"] == []
     assert replayed_call.kwargs["resolved_resource_payloads"] == []
     assert planner.contexts[0].state_context.current_step.steps_used == 1
 
