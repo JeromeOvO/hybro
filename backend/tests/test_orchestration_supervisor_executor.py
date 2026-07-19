@@ -11673,3 +11673,86 @@ async def test_mark_v2_terminal_omits_failure_summary_for_completed_status():
     assert updated.terminal_summary is None
     assert result.terminal_summary is None
     assert "terminal_summary" not in events[-1].payload
+
+
+@pytest.mark.asyncio
+async def test_mark_v2_terminal_retains_summary_for_budget_exhaustion():
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state()
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=RoomUserMessage(
+            room_id="room-1",
+            message_id="message-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Finish orchestration."),
+            extend_info={},
+        ),
+    )
+
+    updated = await executor._mark_v2_terminal(
+        state,
+        OrchestrationStatus.BUDGET_EXHAUSTED,
+        reason="step budget exhausted",
+    )
+
+    result = executor._state_run_result(status=RunStatus.FAILED, state=updated)
+    assert updated.terminal_summary is not None
+    assert result.terminal_summary == updated.terminal_summary
+    assert store._events_by_run[updated.run_id][-1].payload["terminal_summary"]
+
+
+@pytest.mark.asyncio
+async def test_mark_v2_terminal_clears_summary_for_canceled_status():
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(terminal_summary={"code": "stale"})
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=RoomUserMessage(
+            room_id="room-1",
+            message_id="message-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Cancel orchestration."),
+            extend_info={},
+        ),
+    )
+
+    updated = await executor._mark_v2_terminal(
+        state,
+        OrchestrationStatus.CANCELED,
+        reason="canceled",
+    )
+
+    result = executor._state_run_result(status=RunStatus.CANCELED, state=updated)
+    assert updated.terminal_summary is None
+    assert result.terminal_summary is None
+    assert "terminal_summary" not in store._events_by_run[updated.run_id][-1].payload
+
+
+def test_state_run_result_omits_stale_summary_while_waiting_for_input():
+    state = _run_state(
+        status=OrchestrationStatus.AWAITING_USER,
+        terminal_summary={"code": "stale"},
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=RoomUserMessage(
+            room_id="room-1",
+            message_id="message-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Waiting."),
+            extend_info={},
+        ),
+    )
+
+    result = executor._state_run_result(
+        status=RunStatus.AWAITING_INPUT,
+        state=state,
+    )
+
+    assert result.terminal_summary is None
