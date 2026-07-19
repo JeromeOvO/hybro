@@ -772,66 +772,54 @@ def test_planner_schema_does_not_expose_attachment_policy():
     assert "attachment_policy" not in target_schema["required"]
 
 
-def test_planner_schema_requires_v2_outcome_policy_fields():
-    target_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["targets"]["items"]
-    expected_output_schema = target_schema["properties"]["expected_outputs"]["items"]
-    question_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["questions"]["items"]
+def test_planner_schema_accepts_business_level_delegate_without_control_fields():
+    validate(
+        {
+            "action": "delegate",
+            "reasoning": "Ask the selected specialist to review the submission.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Agent One",
+                    "task": "Review the submission and return missing underwriting facts.",
+                    "parallel_group": None,
+                    "depends_on": [],
+                    "required_resource_refs": ["file:file-1"],
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [],
+                }
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        },
+        PLANNER_ACTION_RESPONSE_SCHEMA,
+    )
 
-    assert set(target_schema["required"]) == {
-        "agent_id",
-        "agent_name",
-        "task",
-        "parallel_group",
-        "depends_on",
-        "required_resource_refs",
-        "context_refs",
-        "artifact_refs",
-        "attachment_refs",
-        "expected_outputs",
-        "repair_of_intent_id",
-    }
-    assert set(expected_output_schema["required"]) == {
-        "output_key",
-        "kind",
-        "required",
-        "description",
-        "artifact_name",
-        "required_fields",
-        "allow_partial",
-    }
-    assert set(question_schema["required"]) == {
-        "prompt",
-        "prompt_type",
-        "choices",
-        "reason",
-        "blocker_keys",
-    }
-    with pytest.raises(ValidationError, match="repair_of_intent_id"):
-        validate(
-            {
-                "action": "delegate",
-                "reasoning": "Use the selected specialist.",
-                "targets": [
-                    {
-                        "agent_id": "agent-1",
-                        "agent_name": "Agent One",
-                        "task": "Provide a summary.",
-                        "parallel_group": None,
-                        "depends_on": [],
-                        "required_resource_refs": [],
-                        "context_refs": [],
-                        "artifact_refs": [],
-                        "attachment_refs": [],
-                        "expected_outputs": [],
-                    }
-                ],
-                "questions": [],
-                "synthesis_instruction": None,
-                "failure_reason": None,
-                "completion_evidence": None,
-            },
-            PLANNER_ACTION_RESPONSE_SCHEMA,
-        )
+
+def test_planner_schema_accepts_business_level_question_without_blocker_keys():
+    validate(
+        {
+            "action": "ask_user",
+            "reasoning": "The next step needs information only the user can provide.",
+            "targets": [],
+            "questions": [
+                {
+                    "prompt": "What is the applicant's annual revenue?",
+                    "prompt_type": "text",
+                    "choices": None,
+                    "reason": "initial_clarification",
+                }
+            ],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        },
+        PLANNER_ACTION_RESPONSE_SCHEMA,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1077,9 +1065,9 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     assert dependency_fields <= set(target_schema["required"])
     assert "shared non-null parallel_group" in supervisor_service.system_prompt
     assert (
-        "output_key, kind, required, description, artifact_name, required_fields, "
-        "and allow_partial"
-    ) in supervisor_service.system_prompt
+        "Execution will decide the compatible representation"
+        in supervisor_service.system_prompt
+    )
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():

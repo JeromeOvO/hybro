@@ -105,7 +105,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "artifact_refs",
                     "attachment_refs",
                     "expected_outputs",
-                    "repair_of_intent_id",
                 ],
             },
         },
@@ -138,7 +137,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "prompt_type",
                     "choices",
                     "reason",
-                    "blocker_keys",
                 ],
             },
         },
@@ -347,32 +345,20 @@ class RoomSupervisorPlannerAdapter:
             "must be the exact instruction the target agent should execute, with "
             "enough context to act without reading hidden planner state.\n\n"
             "For a delegate action, each target may include context_refs, "
-            "artifact_refs, attachment_refs, and expected_outputs. Select "
-            "context_refs for ready text projections and facts, artifact_refs "
-            "for upstream agent artifacts. Only include attachment_refs when "
-            "the target agent's candidate_scope input_modes support that "
-            "attachment MIME. Prefer artifact_refs over raw attachment_refs "
-            "when an upstream agent has produced a structured artifact. Do not include "
-            "attachment_policy; supervisor dispatch always uses "
-            "explicit_refs_only. expected_outputs must be an array of objects "
-            "with output_key, kind, required, description, artifact_name, "
-            "required_fields, and allow_partial; do not use plain strings.\n\n"
+            "artifact_refs, attachment_refs, expected_outputs, and "
+            "required_resource_refs. Select resources by business relevance; "
+            "Execution will decide the compatible representation for the target "
+            "Agent before dispatch. Use attachment_refs only when the task needs "
+            "the raw attachment, not merely its extracted text.\n\n"
             "Every delegate target must include parallel_group, depends_on, "
             "and required_resource_refs. For a single target, parallel_group may "
             "be null. For multiple targets, use one shared non-null parallel_group "
             "and leave depends_on empty because all targets must be independent. "
             "Use required_resource_refs to declare resource IDs that must resolve "
             "before the target is dispatched.\n\n"
-            "Unknown values are non-blocking by default. Continue with explicit assumptions\n"
-            "and conditional results when useful. Use repair_of_intent_id only for semantic\n"
-            "partial/no-progress repair. Failed operational retries use open failure recovery\n"
-            "lineage and leave repair_of_intent_id null. Post-dispatch ask_user questions must\n"
-            "reference validated blocker_keys. Do not delegate the same output contract to the\n"
-            "same agent twice in one action.\n\n"
-            "If state_context.recovery_directives is non-empty, obey those directives before\n"
-            "choosing a new delegate action. A directive to ask_user for validated blockers\n"
-            "must become an ask_user action using the provided blocker_keys. Do not repeat\n"
-            "the same Agent invocation for the same goal revision after a no-progress directive.\n\n"
+            "For ask_user, ask the smallest concrete question needed to continue. "
+            "Do not invent blocker keys, repair lineage, retry policy, artifact "
+            "lineage, or disposition records; Execution owns those decisions.\n\n"
             "Valid action values are delegate, synthesize, complete, ask_user, "
             "fail, plus legacy aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."
