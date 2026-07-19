@@ -33,6 +33,16 @@ TERMINAL_ORCHESTRATION_STATUSES = {
     OrchestrationStatus.BUDGET_EXHAUSTED,
 }
 
+TERMINAL_DISPATCH_STATUSES = {
+    "success",
+    "completed",
+    "failed",
+    "canceled",
+    "rejected",
+    "expired",
+    "abandoned",
+}
+
 
 class OrchestrationEventType(StrEnum):
     RUN_CREATED = "run_created"

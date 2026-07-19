@@ -1358,7 +1358,18 @@ def test_completion_accepts_referenced_abandoned_family_without_output_waivers()
     )
 
 
-@pytest.mark.parametrize("status", ["abandoned", "expired"])
+@pytest.mark.parametrize(
+    "status",
+    [
+        "success",
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "expired",
+        "abandoned",
+    ],
+)
 def test_completion_accepts_terminal_active_dispatch(status):
     state = _complete_run_state(
         active_dispatches=[
