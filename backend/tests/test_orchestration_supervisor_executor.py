@@ -100,6 +100,106 @@ class RecordingPlanner:
 
 
 @pytest.mark.asyncio
+async def test_dispatch_payload_failure_does_not_call_agent_processor():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use the PDF",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=256,
+                )
+            ],
+        ),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.RUNNING,
+            state_version=0,
+        )
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Use PDF.",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    task="Read the PDF",
+                    attachment_refs=[
+                        DispatchContentRef(
+                            kind=DispatchRefKind.ATTACHMENT,
+                            ref_id="file:file-1",
+                            mime_type="application/pdf",
+                            required=True,
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="Cannot bind the required PDF.",
+            failure_reason="Required PDF cannot be represented for the target Agent.",
+        ),
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.orchestration_resource_provider.list_resources = AsyncMock(
+        return_value=[]
+    )
+    executor.agent_dispatcher.resolve_agent = AsyncMock(
+        return_value=SimpleNamespace(
+            agent_id="agent-1",
+            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+            rate_limit_per_user_per_hour=100,
+            rate_limit_system_per_hour=1000,
+        )
+    )
+    executor.orchestration_resource_provider.ensure_projection = AsyncMock(
+        side_effect=KeyError("no projection")
+    )
+    executor.agent_message_processor.process_single_message = AsyncMock()
+
+    result = await executor._execute_orchestration_loop(
+        state=state,
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Use the PDF",
+        agent_registry=[
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="PDF-limited Agent",
+                description="Text-only agent",
+                capabilities=[],
+                is_healthy=True,
+            )
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    executor.agent_dispatcher.resolve_agent.assert_awaited_once_with(
+        "agent-1",
+        "room-1",
+    )
+    executor.orchestration_resource_provider.ensure_projection.assert_awaited_once()
+    executor.agent_message_processor.process_single_message.assert_not_awaited()
+    assert result.run_state.dispatch_intents[0].status == "failed"
+    assert (
+        result.run_state.open_failures[0].error_code
+        == "agent_does_not_accept_file_type"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("stored_room_id", "stored_user_message_id"),
     [
