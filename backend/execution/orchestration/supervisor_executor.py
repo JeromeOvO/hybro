@@ -320,6 +320,12 @@ class SupervisorExecutor:
         synthesis_text: str | None = None,
         clarification_question: str | None = None,
     ) -> SupervisorRunResult:
+        terminal_summary = (
+            state.terminal_summary
+            if state.status
+            in {OrchestrationStatus.FAILED, OrchestrationStatus.BUDGET_EXHAUSTED}
+            else None
+        )
         return SupervisorRunResult(
             status=status,
             trajectory=None,
@@ -328,7 +334,7 @@ class SupervisorExecutor:
             synthesis_text=synthesis_text,
             clarification_question=clarification_question,
             terminal_reason=state.terminal_reason,
-            terminal_summary=state.terminal_summary,
+            terminal_summary=terminal_summary,
         )
 
     @staticmethod
@@ -5372,6 +5378,8 @@ class SupervisorExecutor:
         }:
             terminal_summary = build_terminal_summary(updated, reason=reason)
             updated.terminal_summary = terminal_summary
+        else:
+            updated.terminal_summary = None
         saved = await self.orchestration_run_store.save_state(
             updated,
             expected_version=expected_version,
