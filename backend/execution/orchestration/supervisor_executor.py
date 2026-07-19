@@ -3160,12 +3160,6 @@ class SupervisorExecutor:
             fact_kind = str(fact.get("kind") or "").lower()
             ref_id_lower = ref_id.lower()
             key_tokens = self._input_required_prompt_tokens(key.replace("_", " "))
-            kind_tokens = self._input_required_prompt_tokens(
-                fact_kind.replace("_", " ")
-            )
-            ref_tokens = self._input_required_prompt_tokens(
-                ref_id_lower.replace(":", " ")
-            )
             is_projection = (
                 ref_id_lower.startswith("ctx:")
                 or "projection" in fact_kind
@@ -3174,8 +3168,6 @@ class SupervisorExecutor:
             text_tokens = self._input_required_prompt_tokens(text)
             if (
                 prompt_tokens & key_tokens
-                or prompt_tokens & kind_tokens
-                or prompt_tokens & ref_tokens
                 or (is_projection and prompt_tokens & text_tokens)
             ):
                 add_payload(

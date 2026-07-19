@@ -10242,7 +10242,7 @@ async def test_agent_input_required_uses_existing_projection_without_creating_hi
                     status=StepStatus.AWAITING_INPUT.value,
                     a2a_task_id="task-1",
                     a2a_context_id="ctx-1",
-                    status_message="Need projection",
+                    status_message="Need annual revenue",
                 )
             ],
             pending_agent_continuations=[
@@ -10278,8 +10278,8 @@ async def test_agent_input_required_uses_existing_projection_without_creating_hi
             step_number=1,
             agent_id="agent-1",
             agent_name="Agent One",
-            task="Need projection",
-            response_text="Need projection",
+            task="Need annual revenue",
+            response_text="Need annual revenue",
             success=False,
             status=StepStatus.AWAITING_INPUT,
             agent_message_id="agent-msg-1",
@@ -10324,7 +10324,7 @@ async def test_agent_input_required_ignores_unrelated_projection():
                     status=StepStatus.AWAITING_INPUT.value,
                     a2a_task_id="task-1",
                     a2a_context_id="ctx-1",
-                    status_message="Need annual revenue",
+                    status_message="Need projection",
                 )
             ],
             pending_agent_continuations=[
@@ -10353,8 +10353,8 @@ async def test_agent_input_required_ignores_unrelated_projection():
             step_number=1,
             agent_id="agent-1",
             agent_name="Agent One",
-            task="Need annual revenue",
-            response_text="Need annual revenue",
+            task="Need projection",
+            response_text="Need projection",
             success=False,
             status=StepStatus.AWAITING_INPUT,
             agent_message_id="agent-msg-1",
