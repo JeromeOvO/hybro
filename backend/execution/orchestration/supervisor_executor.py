@@ -2013,18 +2013,21 @@ class SupervisorExecutor:
             ]
 
         if awaiting:
-            for index, result in enumerate(results):
-                if result.status != StepStatus.AWAITING_INPUT:
-                    continue
-                prompt = self._extract_input_required_prompt(result)
-                if self._find_fact_answer_for_input_required(state, prompt) is None:
-                    continue
-                results[index] = await self._handle_agent_input_required(
-                    state=state,
-                    result=result,
-                    user_message=user_message,
-                )
+            (
+                state,
+                results,
+                follow_up_hitl_message_ids,
+            ) = await self._resolve_agent_input_required_results(
+                state=state,
+                results=results,
+                user_message=user_message,
+            )
             entry.results = results
+            paused = [
+                result
+                for result in results
+                if result.status == StepStatus.PAUSED
+            ]
             awaiting = [
                 result
                 for result in results
@@ -2034,6 +2037,7 @@ class SupervisorExecutor:
                 result
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
+                or result.agent_message_id in follow_up_hitl_message_ids
             ]
             if not self.guardrails_enabled:
                 # Preserve legacy live-dispatch behavior while keeping recovery
@@ -2068,23 +2072,26 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-            state = await self._ingest_v2_results(
-                state,
-                results,
-                status=OrchestrationStatus.RUNNING,
-                advance_step=True,
-                available_resource_refs=blocker_available_resource_refs,
-                attempted_agent_ids=blocker_attempted_agent_ids,
-                eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
-                conditional_result_viable=blocker_conditional_result_viable,
-            )
-            logger.info(
-                "orchestration_input_required_recoverable run_id=%s "
-                "awaiting_count=%d",
-                state.run_id,
-                len(awaiting),
-            )
-            return state, None
+            if awaiting:
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.RUNNING,
+                    advance_step=True,
+                    available_resource_refs=blocker_available_resource_refs,
+                    attempted_agent_ids=blocker_attempted_agent_ids,
+                    eligible_alternate_agent_ids=(
+                        blocker_eligible_alternate_agent_ids
+                    ),
+                    conditional_result_viable=blocker_conditional_result_viable,
+                )
+                logger.info(
+                    "orchestration_input_required_recoverable run_id=%s "
+                    "awaiting_count=%d",
+                    state.run_id,
+                    len(awaiting),
+                )
+                return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2254,17 +2261,20 @@ class SupervisorExecutor:
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
         if awaiting:
-            for index, result in enumerate(results):
-                if result.status != StepStatus.AWAITING_INPUT:
-                    continue
-                prompt = self._extract_input_required_prompt(result)
-                if self._find_fact_answer_for_input_required(state, prompt) is None:
-                    continue
-                results[index] = await self._handle_agent_input_required(
-                    state=state,
-                    result=result,
-                    user_message=user_message,
-                )
+            (
+                state,
+                results,
+                follow_up_hitl_message_ids,
+            ) = await self._resolve_agent_input_required_results(
+                state=state,
+                results=results,
+                user_message=user_message,
+            )
+            paused = [
+                result
+                for result in results
+                if result.status == StepStatus.PAUSED
+            ]
             awaiting = [
                 result
                 for result in results
@@ -2274,6 +2284,7 @@ class SupervisorExecutor:
                 result
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
+                or result.agent_message_id in follow_up_hitl_message_ids
             ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -2321,13 +2332,14 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-            state = await self._ingest_v2_results(
-                state,
-                results,
-                status=OrchestrationStatus.RUNNING,
-                advance_step=False,
-            )
-            return state, None
+            if awaiting:
+                state = await self._ingest_v2_results(
+                    state,
+                    results,
+                    status=OrchestrationStatus.RUNNING,
+                    advance_step=False,
+                )
+                return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -3032,15 +3044,26 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         prompt: str,
     ) -> str | None:
-        normalized_prompt = prompt.lower()
+        normalized_prompt = " ".join(
+            "".join(
+                char.lower() if char.isalnum() else " " for char in prompt
+            ).split()
+        )
         for fact in reversed(state.facts):
             if not isinstance(fact, dict):
                 continue
-            key = str(fact.get("key") or fact.get("name") or "").lower()
+            key = str(fact.get("key") or fact.get("name") or "")
             value = fact.get("value")
             if value is None:
                 continue
-            if key and key.replace("_", " ") in normalized_prompt:
+            normalized_key = " ".join(
+                "".join(
+                    char.lower() if char.isalnum() else " " for char in key
+                ).split()
+            )
+            if normalized_key and (
+                f" {normalized_key} " in f" {normalized_prompt} "
+            ):
                 return str(value)
         return None
 
@@ -3111,9 +3134,50 @@ class SupervisorExecutor:
             context_id=continuation.a2a_context_id,
             user_input=answer,
         )
-        task_state = str(reply_result.get("task_state") or "completed").lower()
+        if not reply_result.get("blocking", False):
+            return StepResult(
+                step_number=0,
+                agent_id=continuation.agent_id,
+                agent_name=continuation.agent_id,
+                task=answer,
+                response_text="",
+                success=False,
+                status=StepStatus.PAUSED,
+                agent_message_id=continuation.source_agent_message_id,
+                paused_message_id=continuation.source_agent_message_id,
+                a2a_task_id=continuation.a2a_task_id,
+                a2a_context_id=continuation.a2a_context_id,
+            )
+
+        task_state = str(reply_result.get("task_state") or "completed")
+        task_state = task_state.strip().lower().replace("_", "-")
         response_text = reply_result.get("response_text") or ""
         failed = task_state in {"failed", "canceled", "rejected"}
+        requires_policy = bool(
+            reply_result.get("requires_policy")
+            or reply_result.get("policy_required")
+            or task_state == "policy-required"
+        )
+        if task_state in {"input-required", "auth-required", "policy-required"}:
+            return StepResult(
+                step_number=0,
+                agent_id=continuation.agent_id,
+                agent_name=continuation.agent_id,
+                task=answer,
+                response_text="",
+                success=False,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id=continuation.source_agent_message_id,
+                paused_message_id=continuation.source_agent_message_id,
+                a2a_task_id=continuation.a2a_task_id,
+                a2a_context_id=continuation.a2a_context_id,
+                status_message=response_text,
+                interactive_state=(
+                    "policy-required" if requires_policy else task_state
+                ),
+                requires_auth=task_state == "auth-required",
+                requires_policy=requires_policy,
+            )
         return StepResult(
             step_number=0,
             agent_id=continuation.agent_id,
@@ -3144,62 +3208,6 @@ class SupervisorExecutor:
                 answer=answer,
                 user_message=user_message,
             )
-
-        if self.hitl_coordinator is None:
-            raise RuntimeError("HITL coordinator has not been bound")
-        request = await self.hitl_coordinator.request_input(
-            room_id=state.room_id,
-            user_message_id=state.user_message_id,
-            source="agent",
-            prompt=prompt,
-            agent_id=result.agent_id,
-            agent_name=result.agent_name,
-            a2a_task_id=result.a2a_task_id,
-            a2a_context_id=result.a2a_context_id,
-            continuation_message_id=(
-                result.paused_message_id or result.agent_message_id
-            ),
-            display_message_id=result.agent_message_id,
-            orchestration_run_id=state.run_id,
-            orchestration_schema_version=state.schema_version,
-        )
-        request_id = getattr(request, "request_id", request)
-        if not isinstance(request_id, str) or not request_id:
-            raise RuntimeError("failed to create agent HITL request")
-
-        def mutate(updated: OrchestrationRunState) -> None:
-            updated.status = OrchestrationStatus.AWAITING_USER
-            if continuation is not None and not any(
-                item.continuation_id == continuation.continuation_id
-                for item in updated.pending_agent_continuations
-            ):
-                updated.pending_agent_continuations.append(continuation)
-            if request_id not in updated.pending_hitl_request_ids:
-                updated.pending_hitl_request_ids.append(request_id)
-            if not any(
-                question.get("request_id") == request_id
-                for question in updated.open_questions
-            ):
-                updated.open_questions.append(
-                    {
-                        "request_id": request_id,
-                        "source": "agent",
-                        "agent_id": result.agent_id,
-                        "prompt": prompt,
-                        "status": "open",
-                        "created_at": utcnow().isoformat(),
-                    }
-                )
-
-        await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_REQUESTED,
-            payload={
-                "status": OrchestrationStatus.AWAITING_USER.value,
-                "request_ids": [request_id],
-            },
-            mutate=mutate,
-        )
         return result
 
     async def _resolve_agent_input_required_results(
@@ -3208,9 +3216,10 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         results: list[StepResult],
         user_message,
-    ) -> tuple[OrchestrationRunState, list[StepResult]]:
+    ) -> tuple[OrchestrationRunState, list[StepResult], set[str]]:
         current = state
         resolved_results: list[StepResult] = []
+        follow_up_hitl_message_ids: set[str] = set()
         for result in results:
             if result.status != StepStatus.AWAITING_INPUT:
                 resolved_results.append(result)
@@ -3221,10 +3230,16 @@ class SupervisorExecutor:
                 user_message=user_message,
             )
             resolved_results.append(resolved)
+            if (
+                resolved is not result
+                and resolved.status == StepStatus.AWAITING_INPUT
+                and resolved.agent_message_id
+            ):
+                follow_up_hitl_message_ids.add(resolved.agent_message_id)
             persisted = await self.orchestration_run_store.get_run(current.run_id)
             if persisted is not None:
                 current = persisted
-        return current, resolved_results
+        return current, resolved_results, follow_up_hitl_message_ids
 
     async def _run_agent_awaiting_input_action(
         self,
