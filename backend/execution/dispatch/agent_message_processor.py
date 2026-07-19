@@ -14,7 +14,7 @@ Contains zero orchestration logic — only the mechanics of:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
@@ -170,6 +170,10 @@ class AgentMessageProcessor:
         step_number: int | None = None,
         total_steps: int | None = None,
         quoted_text: str | None = None,
+        dispatch_task: str | None = None,
+        resolved_resource_payloads: list[dict[str, Any]] | None = None,
+        explicit_attachment_refs: list[str | dict[str, Any]] | None = None,
+        attachment_forwarding_policy: str | None = None,
     ) -> ProcessingResult:
         """Process a single agent message.
 
@@ -181,7 +185,13 @@ class AgentMessageProcessor:
         room_memory = await self._room_memory_reader.get_room_memory_by_room_id(room_id)
 
         process_response = await self.room_runtime.process_agent_message(
-            RoomCenterAgentMessageRequest(message=current_message),
+            RoomCenterAgentMessageRequest(
+                message=current_message,
+                dispatch_task=dispatch_task,
+                resolved_resource_payloads=resolved_resource_payloads,
+                explicit_attachment_refs=explicit_attachment_refs,
+                attachment_forwarding_policy=attachment_forwarding_policy,
+            ),
             room_memory=room_memory,
             quoted_text=quoted_text,
             orchestration_user_message_id=user_message_id,
