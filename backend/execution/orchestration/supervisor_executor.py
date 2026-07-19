@@ -2641,6 +2641,20 @@ class SupervisorExecutor:
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
         )
+        if not reply_result.get("blocking", False):
+            return StepResult(
+                step_number=0,
+                agent_id=awaiting_output.agent_id,
+                agent_name=target.agent_name,
+                task=target.task,
+                response_text="",
+                success=False,
+                status=StepStatus.PAUSED,
+                agent_message_id=awaiting_output.agent_message_id,
+                paused_message_id=awaiting_output.agent_message_id,
+                a2a_task_id=awaiting_output.a2a_task_id,
+                a2a_context_id=awaiting_output.a2a_context_id,
+            )
         task_state = str(reply_result.get("task_state") or "completed")
         task_state = task_state.strip().lower().replace("_", "-")
         response_text = reply_result.get("response_text") or ""
@@ -4140,8 +4154,13 @@ class SupervisorExecutor:
                 for result in entry.results
                 if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
+            follow_up_hitl_message_ids: set[str] = set()
             if any(result.status == StepStatus.AWAITING_INPUT for result in pending):
-                synced, resolved_results = await self._resolve_agent_input_required_results(
+                (
+                    synced,
+                    resolved_results,
+                    follow_up_hitl_message_ids,
+                ) = await self._resolve_agent_input_required_results(
                     state=synced,
                     results=entry.results,
                     user_message=SimpleNamespace(
@@ -4160,13 +4179,17 @@ class SupervisorExecutor:
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
-                and self._awaiting_result_requires_hitl(result)
+                and (
+                    self._awaiting_result_requires_hitl(result)
+                    or result.agent_message_id in follow_up_hitl_message_ids
+                )
             ]
             plain_awaiting_pending = [
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
                 and not self._awaiting_result_requires_hitl(result)
+                and result.agent_message_id not in follow_up_hitl_message_ids
             ]
             has_awaiting_input = bool(hitl_required_pending)
             has_paused_pending = bool(plain_awaiting_pending) or any(

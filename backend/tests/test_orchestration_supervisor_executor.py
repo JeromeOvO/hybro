@@ -5841,12 +5841,7 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         user_message=user_message,
         guardrails_enabled=True,
     )
-    async def run_agent_awaiting_input_action(**kwargs):
-        return kwargs["state"], RunStatus.AWAITING_INPUT
-
-    executor._run_agent_awaiting_input_action = AsyncMock(
-        side_effect=run_agent_awaiting_input_action
-    )
+    executor._run_agent_awaiting_input_action = AsyncMock()
 
     state = _run_state(
         run_id="message-1",
@@ -5895,9 +5890,9 @@ async def test_recover_v2_inflight_dispatch_ingests_plain_a2a_input_required_for
         user_message=user_message,
     )
 
-    executor._run_agent_awaiting_input_action.assert_awaited_once()
-    assert run_status == RunStatus.AWAITING_INPUT
-    assert recovered_state.status == OrchestrationStatus.WAITING_AGENT
+    executor._run_agent_awaiting_input_action.assert_not_awaited()
+    assert run_status is None
+    assert recovered_state.status == OrchestrationStatus.RUNNING
     assert recovered_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
     assert recovered_state.open_failures[0].error_code == "agent_input_required"
 
@@ -10874,6 +10869,59 @@ async def test_same_agent_retry_continues_existing_input_required_task():
 
 
 @pytest.mark.asyncio
+async def test_same_agent_retry_nonblocking_reply_remains_paused():
+    user_message = _state_unification_user_message(message_id="message-1")
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": False,
+                    "task_state": None,
+                    "response_text": None,
+                }
+            )
+        )
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        target=DelegateTarget(
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="retry",
+        ),
+        resolved_payload=ResolvedDispatchPayload(
+            selected_context_refs=["ctx:file-file-1:text"],
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ],
+        ),
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.PAUSED
+    assert result.success is False
+    assert result.paused_message_id == "agent-msg-1"
+
+
+@pytest.mark.asyncio
 async def test_unclaimed_continuation_does_not_call_remote_reply():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -11200,7 +11248,11 @@ async def test_plain_input_required_reopens_persisted_continuation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply_result", [
-    {"task_state": "failed", "response_text": "Unable to continue"},
+    {
+        "blocking": True,
+        "task_state": "failed",
+        "response_text": "Unable to continue",
+    },
 ])
 async def test_failed_continuation_reply_reopens_persisted_claim(reply_result):
     user_message = RoomUserMessage(
@@ -11539,6 +11591,7 @@ async def test_plain_continuation_preserves_auth_required_classification():
         agent_reply=SimpleNamespace(
             reply_to_task=AsyncMock(
                 return_value={
+                    "blocking": True,
                     "task_state": "auth-required",
                     "response_text": "Sign in to continue",
                 }
@@ -11604,6 +11657,7 @@ async def test_plain_continuation_preserves_policy_required_classification():
         agent_reply=SimpleNamespace(
             reply_to_task=AsyncMock(
                 return_value={
+                    "blocking": True,
                     "task_state": "input-required",
                     "response_text": "Approve policy to continue",
                     "requires_policy": True,
