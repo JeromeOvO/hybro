@@ -112,6 +112,12 @@ def record_step_result_metadata(
     matched_intent_id: str | None,
     advance_step: bool,
 ) -> OrchestrationRunState:
+    """Record result metadata without double-counting a planner-owned step.
+
+    Callers that already used ``record_planner_action`` for the logical step must
+    pass ``advance_step=False``. The flag is reserved for compatibility paths
+    that persist a standalone result without a corresponding planner transition.
+    """
     updated = state.model_copy(deep=True)
     updated.status = status
     if advance_step:
