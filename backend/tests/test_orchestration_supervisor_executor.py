@@ -9769,6 +9769,64 @@ async def test_state_validation_rejection_replans_with_failure_context():
 
 
 @pytest.mark.asyncio
+async def test_exhausted_operational_retry_is_terminal_without_replanning(
+    monkeypatch,
+):
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Need coordination"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Retry the failed dispatch.",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    task="Handle the request.",
+                )
+            ],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    monkeypatch.setattr(
+        PlannerActionValidator,
+        "validate",
+        MagicMock(
+            side_effect=PlannerActionValidationError(
+                "operational retry budget exhausted",
+                code="recovery_retry_exhausted",
+                recoverable=True,
+            )
+        ),
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id=user_message.message_id,
+        message_text="Need coordination",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.run_state.status == OrchestrationStatus.FAILED
+    assert result.run_state.open_failures == []
+    assert len(planner.contexts) == 1
+
+
+@pytest.mark.asyncio
 async def test_nonrecoverable_adapter_validation_error_is_terminal():
     user_message = RoomUserMessage(
         room_id="room-1",

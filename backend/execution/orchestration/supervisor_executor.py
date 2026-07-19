@@ -1082,6 +1082,17 @@ class SupervisorExecutor:
                         state,
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
+                if exc.code == "recovery_retry_exhausted":
+                    state = await self._mark_v2_terminal(
+                        state,
+                        OrchestrationStatus.FAILED,
+                        reason=str(exc),
+                    )
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                    )
                 state, exhausted = await self._record_v2_planner_rejection(
                     state,
                     error_code=exc.code,

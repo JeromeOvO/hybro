@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
+from execution.orchestration.result_ingestor import (
+    related_open_failure_for_dispatch_intent,
+)
 from models.orchestration import (
     BlockerRecord,
     DelegationOutcomeRecord,
+    DispatchIntent,
     OrchestrationRunState,
     PlannedDelegateTarget,
 )
@@ -263,20 +268,45 @@ def _evaluate_operational_retry(
         if failure_id in open_failures_by_id
     ]
     if not failures:
-        prior_intent = next(
-            (
-                intent
-                for intent in run_state.dispatch_intents
-                if intent.dispatch_intent_id == latest.dispatch_intent_id
-            ),
-            None,
+        intents_by_id = {
+            intent.dispatch_intent_id: intent
+            for intent in run_state.dispatch_intents
+        }
+        failed_intent = intents_by_id.get(latest.dispatch_intent_id)
+        if failed_intent is None:
+            return _rejected_operational("recovery_retry_unavailable")
+        retry_lineage_refs = [
+            {
+                "kind": "context",
+                "ref_id": intent.planned_agent_message_id,
+                "source_agent_message_id": intent.planned_agent_message_id,
+            }
+            for outcome in run_state.delegation_outcomes
+            if outcome.agent_id == target.agent_id
+            and outcome.goal_revision_fingerprint
+            == latest.goal_revision_fingerprint
+            if (intent := intents_by_id.get(outcome.dispatch_intent_id)) is not None
+        ]
+        retry_intent = DispatchIntent(
+            step_id="outcome-policy-retry",
+            step_target_id="outcome-policy-retry:target",
+            dispatch_intent_id="outcome-policy-retry",
+            planned_agent_message_id="outcome-policy-retry:message",
+            agent_id=target.agent_id,
+            task=target.task,
+            task_hash=hashlib.sha256(target.task.encode("utf-8")).hexdigest(),
+            context_refs=[*target.context_refs, *retry_lineage_refs],
+            artifact_refs=list(target.artifact_refs),
+            attachment_refs=list(target.attachment_refs),
         )
-        if prior_intent is not None and prior_intent.task == target.task:
-            failures = [
-                failure
-                for failure in open_failures_by_id.values()
-                if failure.dispatch_intent_id == latest.dispatch_intent_id
-            ]
+        failure = related_open_failure_for_dispatch_intent(
+            run_state.open_failures,
+            retry_intent=retry_intent,
+            dispatch_intents=[*run_state.dispatch_intents, retry_intent],
+            statuses={"open", "abandoned"},
+        )
+        if failure is not None:
+            failures = [failure]
     if not failures:
         return _rejected_operational("recovery_retry_unavailable")
     if all(failure.retry_count >= failure.max_retries for failure in failures):

@@ -9,8 +9,10 @@ from models.orchestration import (
     BlockerRecord,
     BlockerResolutionAttempt,
     DelegationOutcomeRecord,
+    DispatchContentRef,
     DispatchExpectedOutput,
     DispatchIntent,
+    DispatchRefKind,
     GoalFamilyDispositionRecord,
     OpenFailureRecord,
     OrchestrationRunState,
@@ -44,7 +46,15 @@ def _outcome(
     )
 
 
-def _intent(intent_id, status, repair_of=None, *, agent_id="agent-1"):
+def _intent(
+    intent_id,
+    status,
+    repair_of=None,
+    *,
+    agent_id="agent-1",
+    artifact_refs=None,
+    attachment_refs=None,
+):
     return DispatchIntent(
         step_id=intent_id,
         step_target_id=f"{intent_id}:target",
@@ -55,6 +65,8 @@ def _intent(intent_id, status, repair_of=None, *, agent_id="agent-1"):
         task_hash="shared-task-hash",
         status=status,
         repair_of_intent_id=repair_of,
+        artifact_refs=list(artifact_refs or []),
+        attachment_refs=list(attachment_refs or []),
     )
 
 
@@ -73,11 +85,12 @@ def _state(outcomes, intents, failures=None, blockers=None, dispositions=None):
     )
 
 
-def _target(*, repair_of=None, agent_id="agent-1"):
+def _target(*, repair_of=None, agent_id="agent-1", artifact_refs=None):
     return PlannedDelegateTarget(
         agent_id=agent_id,
         task="produce quote",
         repair_of_intent_id=repair_of,
+        artifact_refs=list(artifact_refs or []),
     )
 
 
@@ -180,7 +193,15 @@ def test_failed_retry_uses_open_failure_budget_without_repair_lineage():
     assert decision.kind == "operational_retry"
 
 
-def test_failed_retry_without_repair_lineage_requires_same_task():
+def test_failed_retry_allows_changed_task_for_same_goal():
+    broker_artifact = DispatchContentRef(
+        kind=DispatchRefKind.ARTIFACT,
+        ref_id="broker-msg:artifact_id:submission",
+    )
+    rejected_attachment = DispatchContentRef(
+        kind=DispatchRefKind.ATTACHMENT,
+        ref_id="file-1",
+    )
     failure = OpenFailureRecord(
         failure_id="failure-1",
         fingerprint="failure-fingerprint",
@@ -196,23 +217,38 @@ def test_failed_retry_without_repair_lineage_requires_same_task():
     )
     state = _state(
         [_outcome("o1", "i1", "failed", ["quote:$present"], [])],
-        [_intent("i1", "failed")],
+        [
+            _intent(
+                "i1",
+                "failed",
+                artifact_refs=[broker_artifact],
+                attachment_refs=[rejected_attachment],
+            )
+        ],
         [failure],
     )
 
     decision = evaluate_retry(
         state,
-        PlannedDelegateTarget(agent_id="agent-1", task="fresh unrelated task"),
+        PlannedDelegateTarget(
+            agent_id="agent-1",
+            task="Underwrite the same submission from a broker artifact.",
+            artifact_refs=[broker_artifact],
+        ),
         goal_family_fingerprint="family-1",
         goal_revision_fingerprint="revision-1",
     )
 
-    assert decision.allowed is False
-    assert decision.code == "recovery_retry_unavailable"
+    assert decision.allowed is True
+    assert decision.code is None
     assert decision.kind == "operational_retry"
 
 
 def test_failed_retry_is_blocked_when_budget_exhausted():
+    broker_artifact = DispatchContentRef(
+        kind=DispatchRefKind.ARTIFACT,
+        ref_id="broker-msg:artifact_id:submission",
+    )
     failure = OpenFailureRecord(
         failure_id="failure-1",
         fingerprint="failure-fingerprint",
@@ -225,6 +261,7 @@ def test_failed_retry_is_blocked_when_budget_exhausted():
         recoverable=True,
         retry_count=2,
         max_retries=2,
+        status="abandoned",
     )
     state = _state(
         [
@@ -237,13 +274,13 @@ def test_failed_retry_is_blocked_when_budget_exhausted():
                 open_failure_ids=["failure-1"],
             )
         ],
-        [_intent("i1", "failed")],
+        [_intent("i1", "failed", artifact_refs=[broker_artifact])],
         [failure],
     )
 
     decision = evaluate_retry(
         state,
-        _target(),
+        _target(artifact_refs=[broker_artifact]),
         goal_family_fingerprint="family-1",
         goal_revision_fingerprint="revision-1",
     )
