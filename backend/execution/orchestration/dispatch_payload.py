@@ -54,7 +54,7 @@ async def resolve_dispatch_payload_refs(
     original_attachments: Sequence[UserAttachment],
     required_resource_refs: Sequence[str] = (),
     resource_provider: Any | None = None,
-    max_resource_text_chars: int = 80_000,
+    max_resource_text_chars: int = 120_000,
 ) -> ResolvedDispatchPayload:
     artifact_keys = {
         str(artifact.get("artifact_key"))
@@ -331,7 +331,7 @@ def _text_payload_is_accepted_by_agent(
     )
 
 
-async def _attachment_projection_payload_or_none(
+async def _resolve_attachment_projection(
     *,
     run_id: str,
     attachment_canonical_ref_id: str,
@@ -340,9 +340,9 @@ async def _attachment_projection_payload_or_none(
     target_agent_card: Any,
     resource_provider: Any | None,
     max_resource_text_chars: int,
-) -> ResolvedResourcePayload | None:
+) -> tuple[ResolvedResourcePayload | None, str | None]:
     if resource_provider is None or not hasattr(resource_provider, "ensure_projection"):
-        return None
+        return None, "attachment_projection_unavailable"
     try:
         projection = resource_provider.ensure_projection(
             attachment_canonical_ref_id,
@@ -352,8 +352,8 @@ async def _attachment_projection_payload_or_none(
         )
         if hasattr(projection, "__await__"):
             projection = await projection
-    except Exception:
-        return None
+    except KeyError:
+        return None, "attachment_projection_unavailable"
     projection_ref_id = getattr(projection, "ref_id", None)
     projection_source_ref_id = getattr(projection, "source_ref_id", None)
     if (
@@ -367,7 +367,7 @@ async def _attachment_projection_payload_or_none(
         )
         != attachment_canonical_ref_id
     ):
-        return None
+        return None, "attachment_projection_unavailable"
     payload = await _resolve_resource_payload(
         ref=DispatchContentRef(
             kind=DispatchRefKind.CONTEXT,
@@ -380,27 +380,27 @@ async def _attachment_projection_payload_or_none(
         resource_provider=resource_provider,
     )
     if payload is None:
-        return None
+        return None, "attachment_projection_unavailable"
     resolved = ResolvedResourcePayload.model_validate(
         payload.model_dump(mode="json")
         if hasattr(payload, "model_dump")
         else payload
     )
     if _context_payload_invalid_code(resolved) is not None:
-        return None
+        return None, "attachment_projection_unavailable"
     if not _text_payload_is_accepted_by_agent(
         resolved.mime_type,
         target_agent_card,
     ):
-        return None
+        return None, "agent_does_not_accept_file_type"
     if isinstance(resolved.text, str) and len(resolved.text) > max_resource_text_chars:
         if required:
             raise DispatchPayloadValidationError(
                 f"Resource payload too large: {resolved.ref_id}.",
                 code="resource_payload_too_large",
             )
-        return None
-    return resolved
+        return None, "attachment_projection_unavailable"
+    return resolved, None
 
 
 async def _resolve_attachment_refs(
@@ -447,7 +447,10 @@ async def _resolve_attachment_refs(
                 selected_attachment_refs.append(attachment.file_id)
                 selected_attachment_file_ids.add(attachment.file_id)
             continue
-        projection_payload = await _attachment_projection_payload_or_none(
+        (
+            projection_payload,
+            projection_failure_code,
+        ) = await _resolve_attachment_projection(
             run_id=run_id,
             attachment_canonical_ref_id=f"file:{attachment.file_id}",
             required=ref.required,
@@ -465,13 +468,23 @@ async def _resolve_attachment_refs(
                 selected_projection_ref_ids.add(projection_payload.ref_id)
             continue
         if ref.required and attachment.file_id not in failed_attachment_file_ids:
+            failure_code = (
+                projection_failure_code or "attachment_projection_unavailable"
+            )
             attachment_failures.append(
                 {
                     "ref_id": ref.ref_id,
-                    "code": "agent_does_not_accept_file_type",
+                    "code": failure_code,
                     "message": (
-                        f"Agent does not accept {attachment.file_name} "
-                        f"({attachment.mime_type})."
+                        (
+                            f"Agent does not accept {attachment.file_name} "
+                            f"({attachment.mime_type})."
+                        )
+                        if failure_code == "agent_does_not_accept_file_type"
+                        else (
+                            "Attachment projection unavailable for "
+                            f"{attachment.file_name} ({attachment.mime_type})."
+                        )
                     ),
                 }
             )

@@ -195,8 +195,11 @@ async def test_dispatch_payload_failure_does_not_call_agent_processor():
     assert result.run_state.dispatch_intents[0].status == "failed"
     assert (
         result.run_state.open_failures[0].error_code
-        == "agent_does_not_accept_file_type"
+        == "attachment_projection_unavailable"
     )
+    assert result.run_state.open_failures[0].recovery_hints == [
+        "retry_with_available_refs"
+    ]
 
 
 @pytest.mark.asyncio

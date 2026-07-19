@@ -158,7 +158,7 @@ async def test_resolver_rejects_unreferenced_original_attachment():
 
 
 @pytest.mark.asyncio
-async def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref():
+async def test_resolver_returns_projection_failure_for_incompatible_attachment():
     attachment = UserAttachment(
         file_id="file-1",
         s3_key="uploads/room-1/file-1/report.pdf",
@@ -181,8 +181,11 @@ async def test_resolver_returns_failure_for_incompatible_explicit_attachment_ref
     assert payload.attachment_failures == [
         {
             "ref_id": "file-1",
-            "code": "agent_does_not_accept_file_type",
-            "message": "Agent does not accept report.pdf (application/pdf).",
+            "code": "attachment_projection_unavailable",
+            "message": (
+                "Attachment projection unavailable for "
+                "report.pdf (application/pdf)."
+            ),
         }
     ]
 
@@ -536,6 +539,28 @@ async def test_attachment_projection_accepts_generic_and_mime_text_input_modes(
 
 
 @pytest.mark.asyncio
+async def test_attachment_projection_default_limit_matches_projection_service():
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[],
+        artifact_refs=[],
+        attachment_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ATTACHMENT,
+                ref_id="file:file-1",
+                required=True,
+            )
+        ],
+        original_attachments=[_pdf_attachment()],
+        resource_provider=ProjectionProvider(projection_text="x" * 100_000),
+    )
+
+    assert payload.selected_context_refs == ["ctx:file-file-1:text"]
+    assert len(payload.resource_payloads[0].text or "") == 100_000
+
+
+@pytest.mark.asyncio
 async def test_required_attachment_projection_raises_when_text_is_too_large():
     with pytest.raises(DispatchPayloadValidationError) as exc_info:
         await resolve_dispatch_payload_refs(
@@ -584,6 +609,58 @@ async def test_attachment_projection_rejects_card_incompatible_text_payload():
 
 
 @pytest.mark.asyncio
+async def test_required_attachment_without_projection_provider_reports_bind_failure():
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[],
+        artifact_refs=[],
+        attachment_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ATTACHMENT,
+                ref_id="file:file-1",
+                required=True,
+            )
+        ],
+        original_attachments=[_pdf_attachment()],
+    )
+
+    assert payload.attachment_failures == [
+        {
+            "ref_id": "file:file-1",
+            "code": "attachment_projection_unavailable",
+            "message": (
+                "Attachment projection unavailable for "
+                "submission.pdf (application/pdf)."
+            ),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_attachment_projection_reraises_unexpected_provider_errors():
+    provider = ProjectionProvider()
+    provider.ensure_projection = AsyncMock(side_effect=RuntimeError("provider bug"))
+
+    with pytest.raises(RuntimeError, match="provider bug"):
+        await resolve_dispatch_payload_refs(
+            run_state=_state(),
+            target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+            context_refs=[],
+            artifact_refs=[],
+            attachment_refs=[
+                DispatchContentRef(
+                    kind=DispatchRefKind.ATTACHMENT,
+                    ref_id="file:file-1",
+                    required=True,
+                )
+            ],
+            original_attachments=[_pdf_attachment()],
+            resource_provider=provider,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("projection_status", "source_ref_id"),
     [("processing", "file:file-1"), ("ready", "file:other-file")],
@@ -614,7 +691,7 @@ async def test_attachment_projection_requires_ready_matching_context_record(
     assert payload.selected_context_refs == []
     assert payload.resource_payloads == []
     assert [failure["code"] for failure in payload.attachment_failures] == [
-        "agent_does_not_accept_file_type"
+        "attachment_projection_unavailable"
     ]
 
 
