@@ -1237,6 +1237,89 @@ async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
 
 
 @pytest.mark.asyncio
+async def test_supervisor_records_dispatch_status_through_run_reducer():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review the submission"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(status=OrchestrationStatus.RUNNING, state_version=0)
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Use the selected agent.",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    task="Review the submission",
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="Agent answered.",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["agent answered"],
+                referenced_fact_ids=[],
+                referenced_artifact_keys=[],
+                unresolved_questions=[],
+                final_answer_intent="Return the agent response",
+                confidence=1.0,
+                satisfied_output_keys=[],
+            ),
+        ),
+    )
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    async def process_single_message(*_args, **_kwargs):
+        dispatching = await store.get_run("run-1")
+        assert dispatching is not None
+        assert dispatching.last_planner_action is not None
+        assert dispatching.last_planner_action.action == "delegate"
+        assert len(dispatching.active_dispatches) == 1
+        assert dispatching.active_dispatches[0].agent_id == "agent-1"
+        assert dispatching.active_dispatches[0].status == "planned"
+        return ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Reviewed",
+            message_id="agent-msg-1",
+        )
+
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=process_single_message
+    )
+
+    result = await executor._execute_orchestration_loop(
+        state=state,
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Review the submission",
+        agent_registry=[
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                description="Reviews submissions",
+                capabilities=[],
+                is_healthy=True,
+            )
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    saved = await store.get_run("run-1")
+    assert result.status == RunStatus.COMPLETED
+    assert saved is not None
+    assert saved.dispatch_intents[0].status == "success"
+    assert saved.active_dispatches == []
+
+
+@pytest.mark.asyncio
 async def test_run_delegate_path_preserves_planner_dispatch_metadata():
     refs = _dispatch_refs_payload()
     user_message = RoomUserMessage(

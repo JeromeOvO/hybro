@@ -69,6 +69,10 @@ def record_planner_action(
         {
             "action": str(action.action),
             "reasoning": action.reasoning,
+            "targets": [
+                target.model_dump(mode="json") for target in action.targets
+            ],
+            "planner_action": action.model_dump(mode="json"),
             "created_at": utcnow().isoformat(),
         }
     )
@@ -116,11 +120,15 @@ def record_step_result_metadata(
     result_status = str(
         result.status.value if hasattr(result.status, "value") else result.status
     )
+    matched_message_ids = (
+        {result.agent_message_id} if result.agent_message_id else set()
+    )
     for intent in updated.dispatch_intents:
         if matched_intent_id and intent.dispatch_intent_id == matched_intent_id:
             intent.status = result_status
+            matched_message_ids.add(intent.planned_agent_message_id)
     for active in updated.active_dispatches:
-        if result.agent_message_id and active.agent_message_id == result.agent_message_id:
+        if active.agent_message_id in matched_message_ids:
             active.status = result_status
     updated.active_dispatches = [
         active

@@ -58,6 +58,10 @@ def test_record_planner_action_increments_step_and_logs_decision():
     assert updated.last_planner_action is not None
     assert updated.last_planner_action.action == "ask_user"
     assert updated.decision_log[-1]["reasoning"] == "Need the applicant revenue."
+    assert updated.decision_log[-1]["targets"] == []
+    assert updated.decision_log[-1]["planner_action"] == action.model_dump(
+        mode="json"
+    )
 
 
 def test_record_dispatch_intents_sets_dispatching_and_active_dispatches():
@@ -128,3 +132,32 @@ def test_record_step_result_updates_intent_and_active_dispatch_status():
     assert updated.dispatch_intents[0].status == "success"
     assert updated.active_dispatches == []
     assert updated.state_version == state.state_version + 1
+
+
+def test_record_step_result_clears_matched_dispatch_without_result_message_id():
+    from execution.orchestration.run_reducer import (
+        record_dispatch_intents,
+        record_step_result_metadata,
+    )
+
+    state = record_dispatch_intents(_state(), [_intent()])
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Review the submission",
+        response_text="Done",
+        success=True,
+        status=StepStatus.SUCCESS,
+    )
+
+    updated = record_step_result_metadata(
+        state,
+        result,
+        status=OrchestrationStatus.RUNNING,
+        matched_intent_id="intent-1",
+        advance_step=False,
+    )
+
+    assert updated.dispatch_intents[0].status == "success"
+    assert updated.active_dispatches == []
