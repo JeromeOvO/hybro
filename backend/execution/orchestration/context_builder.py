@@ -157,6 +157,27 @@ class OrchestrationStateContext(BaseModel):
     summary_message_id: str | None = None
 
 
+PLANNER_PROMPT_STATE_EXCLUDE_KEYS = {
+    "open_failures",
+    "outcomes",
+    "goal_progress",
+    "continuations",
+    "dispositions",
+    "blockers",
+    "attempt_chain_views",
+    "recovery_directives",
+}
+
+
+def _planner_public_state_payload(
+    state_context: OrchestrationStateContext,
+) -> dict[str, Any]:
+    payload = state_context.model_dump(mode="json")
+    for key in PLANNER_PROMPT_STATE_EXCLUDE_KEYS:
+        payload.pop(key, None)
+    return payload
+
+
 class OrchestrationPlannerContext(BaseModel):
     """Structured input boundary for planner adapters."""
 
@@ -176,7 +197,7 @@ class OrchestrationPlannerContext(BaseModel):
         return list(self.candidate_scope.agent_ids)
 
     def prompt_payload(self) -> dict[str, Any]:
-        """Return planner prompt content without embedding validation schemas."""
+        """Return planner prompt content without backend-only control state."""
 
         return {
             "message": {"text": self.message_text},
@@ -185,7 +206,7 @@ class OrchestrationPlannerContext(BaseModel):
             ),
             "room_background": self.room_background,
             "candidate_scope": self.candidate_scope.model_dump(mode="json"),
-            "state_context": self.state_context.model_dump(mode="json"),
+            "state_context": _planner_public_state_payload(self.state_context),
             "available_resources": [
                 resource.model_dump(mode="json")
                 for resource in self.available_resources

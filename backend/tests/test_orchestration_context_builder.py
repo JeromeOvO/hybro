@@ -518,7 +518,7 @@ def test_context_builder_exposes_immutable_outcome_policy_views_without_artifact
         message_text="Continue the workflow",
     )
     state.delegation_outcomes[0].status = "fulfilled"
-    payload = context.prompt_payload()["state_context"]
+    payload = context.state_context.model_dump(mode="json")
 
     assert payload["outcomes"][0]["status"] == "partial"
     assert payload["continuations"][0]["continuation_id"] == "continuation-1"
@@ -535,6 +535,81 @@ def test_context_builder_exposes_immutable_outcome_policy_views_without_artifact
         }
     ]
     assert "payload" not in payload["attempt_chain_views"][0]
+
+
+def test_prompt_payload_excludes_shadow_control_state_from_planner():
+    state = _run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="agent-1:input",
+                source="executor",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                dispatch_intent_id="intent-1",
+                error_code="agent_input_required",
+                error_message="Agent asked for missing data",
+                recoverable=True,
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="blocked",
+            )
+        ],
+        blockers=[
+            BlockerRecord(
+                key="blocker-1",
+                description="Need revenue",
+                source="agent",
+            )
+        ],
+        pending_agent_continuations=[
+            PendingAgentContinuation(
+                continuation_id="cont-1",
+                source_intent_id="intent-1",
+                source_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+            )
+        ],
+        goal_family_dispositions=[
+            GoalFamilyDispositionRecord(
+                event_id="dispose-1",
+                goal_family_fingerprint="family-1",
+                through_goal_revision_fingerprint="revision-1",
+                status="abandoned",
+                reason="superseded by user reply",
+            )
+        ],
+    )
+
+    payload = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Coordinate the selected agents",
+    ).prompt_payload()
+
+    state_payload = payload["state_context"]
+    assert "open_failures" not in state_payload
+    assert "outcomes" not in state_payload
+    assert "goal_progress" not in state_payload
+    assert "continuations" not in state_payload
+    assert "dispositions" not in state_payload
+    assert "blockers" not in state_payload
+    assert "attempt_chain_views" not in state_payload
+    assert "recovery_directives" not in state_payload
+    assert state_payload["agent_outputs"] == []
+    assert state_payload["artifacts"] == []
+    assert payload["available_resources"] == []
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
@@ -927,8 +1002,9 @@ async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection
     system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
         "system_prompt"
     ]
-    assert "Only include attachment_refs when the target agent's candidate_scope input_modes support that attachment MIME." in system_prompt
-    assert "Prefer artifact_refs over raw attachment_refs when an upstream agent has produced a structured artifact." in system_prompt
+    assert "Select resources by business relevance" in system_prompt
+    assert "Execution will decide the compatible representation" in system_prompt
+    assert "Do not invent blocker keys, repair lineage, retry policy" in system_prompt
 
 
 @pytest.mark.asyncio
