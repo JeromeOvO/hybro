@@ -144,6 +144,84 @@ class TestRoomFacadeBinding:
 
 
 @pytest.mark.asyncio
+async def test_failed_supervisor_result_projects_terminal_summary_to_client_boundaries():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    summary = {
+        "code": "orchestration_failed",
+        "reason": "delegate_no_progress_repeat",
+        "recommended_next_action": "ask_user",
+    }
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Produce a quote."),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "run-1",
+        },
+    )
+    run_state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Produce a quote.",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.FAILED,
+        terminal_reason="delegate_no_progress_repeat",
+        terminal_summary=summary,
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+    )
+    rmc.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock(),
+        cancel_agent_messages_by_ids=AsyncMock(),
+        cancel_descendants=AsyncMock(),
+    )
+    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    rmc._turn_event_appender = SimpleNamespace(append=AsyncMock())
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
+
+    await rmc._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.FAILED,
+            run_state=run_state,
+            terminal_reason=run_state.terminal_reason,
+            terminal_summary=summary,
+        ),
+        "room-1",
+        "user-msg-1",
+        user_message=user_message,
+    )
+
+    assert user_message.extend_info["terminal_summary"] == summary
+    rmc._turn_event_appender.append.assert_awaited_once_with(
+        "room-1",
+        "user-msg-1",
+        "turn_failed",
+        {
+            "reason": "delegate_no_progress_repeat",
+            "code": "orchestration_failed",
+            "terminal_summary": summary,
+        },
+    )
+    rmc._emit_processing_status.assert_awaited_once_with(
+        room_id="room-1",
+        status=SSEProcessingStatus.FAILED,
+        message_id="user-msg-1",
+        lifecycle_message_id="user-msg-1",
+        details={
+            "message": "supervisor execution failed",
+            "terminal_summary": summary,
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_process_room_user_message_cancelled_error_emits_canceled_and_reraises():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     request = SimpleNamespace(
@@ -1340,13 +1418,13 @@ def test_supervisor_failed_appends_and_notifies_before_terminal_status():
         "_handle_supervisor_run_result",
         "append",
         ("turn_failed",),
-        ("supervisor execution failed",),
+        ("SSEProcessingStatus.FAILED",),
     )
     _assert_before(
         "_handle_supervisor_run_result",
         "_notify_all_non_terminal_tasks_failed",
         (),
-        ("supervisor execution failed",),
+        ("SSEProcessingStatus.FAILED",),
     )
 
 
@@ -1373,7 +1451,7 @@ def test_supervisor_terminal_post_loop_side_effects_complete_before_terminal_sta
     first_terminal_emit = min(
         _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.COMPLETED"),
         _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.CANCELED"),
-        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "supervisor execution failed"),
+        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.FAILED"),
     )
     assert integration_line < first_terminal_emit
 

@@ -415,6 +415,10 @@ class RoomMessageCenter:
                 details
                 if isinstance(details, str)
                 and status_value in {"failed", "canceled", "rejected", "error"}
+                else details.get("message")
+                if isinstance(details, dict)
+                and isinstance(details.get("message"), str)
+                and status_value in {"failed", "canceled", "rejected", "error"}
                 else None
             ),
             agents=agents,
@@ -2405,6 +2409,8 @@ class RoomMessageCenter:
                     user_message.extend_info["terminal_summary"] = (
                         terminal_summary
                     )
+                else:
+                    user_message.extend_info.pop("terminal_summary", None)
             elif result_trajectory is None:
                 legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
                 if isinstance(legacy_trajectory, dict):
@@ -2611,6 +2617,21 @@ class RoomMessageCenter:
                 self.delivery.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
+                terminal_summary = result.terminal_summary
+                failure_reason = (
+                    result.terminal_reason
+                    or (
+                        terminal_summary.get("reason")
+                        if terminal_summary is not None
+                        else None
+                    )
+                    or "supervisor execution failed"
+                )
+                failure_code = (
+                    terminal_summary.get("code")
+                    if terminal_summary is not None
+                    else "error"
+                )
                 failed_parent_ids: list[str] = []
                 cleanup_trajectory = self._compat_trajectory_for_supervisor_result(
                     result
@@ -2633,7 +2654,15 @@ class RoomMessageCenter:
                     try:
                         await self._turn_event_appender.append(
                             room_id, user_message_id, "turn_failed",
-                            {"reason": "supervisor execution failed", "code": "error"},
+                            {
+                                "reason": failure_reason,
+                                "code": failure_code,
+                                **(
+                                    {"terminal_summary": terminal_summary}
+                                    if terminal_summary is not None
+                                    else {}
+                                ),
+                            },
                         )
                     except Exception:
                         pass
@@ -2645,7 +2674,14 @@ class RoomMessageCenter:
                     status=SSEProcessingStatus.FAILED,
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
-                    details="supervisor execution failed",
+                    details={
+                        "message": "supervisor execution failed",
+                        **(
+                            {"terminal_summary": terminal_summary}
+                            if terminal_summary is not None
+                            else {}
+                        ),
+                    },
                 )
 
         # Terminal run state is persisted via run_command_handler / runs; no room mirror write.
