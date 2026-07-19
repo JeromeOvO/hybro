@@ -91,14 +91,16 @@ def record_dispatch_intents(
     updated = state.model_copy(deep=True)
     updated.status = OrchestrationStatus.DISPATCHING
     updated.dispatch_intents.extend(intents)
-    updated.active_dispatches = [
-        ActiveDispatchRef(
+    active_by_message_id = {
+        active.agent_message_id: active for active in updated.active_dispatches
+    }
+    for intent in intents:
+        active_by_message_id[intent.planned_agent_message_id] = ActiveDispatchRef(
             agent_message_id=intent.planned_agent_message_id,
             agent_id=intent.agent_id,
             status=intent.status,
         )
-        for intent in intents
-    ]
+    updated.active_dispatches = list(active_by_message_id.values())
     return _bump(updated)
 
 

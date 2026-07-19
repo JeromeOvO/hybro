@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from models.orchestration import (
+    ActiveDispatchRef,
     DispatchIntent,
     OrchestrationRunState,
     OrchestrationStatus,
@@ -71,6 +72,30 @@ def test_record_dispatch_intents_sets_dispatching_and_active_dispatches():
     assert updated.active_dispatches[0].agent_message_id == "agent-msg-1"
     assert updated.active_dispatches[0].status == "planned"
     assert updated.state_version == 4
+
+
+def test_record_dispatch_intents_preserves_prior_active_dispatches():
+    from execution.orchestration.run_reducer import record_dispatch_intents
+
+    state = _state(
+        active_dispatches=[
+            ActiveDispatchRef(
+                agent_message_id="agent-msg-existing",
+                agent_id="agent-2",
+                status="awaiting_input",
+            )
+        ]
+    )
+
+    updated = record_dispatch_intents(state, [_intent()])
+
+    assert [
+        (dispatch.agent_message_id, dispatch.status)
+        for dispatch in updated.active_dispatches
+    ] == [
+        ("agent-msg-existing", "awaiting_input"),
+        ("agent-msg-1", "planned"),
+    ]
 
 
 def test_record_step_result_updates_intent_and_active_dispatch_status():
