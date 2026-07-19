@@ -3427,6 +3427,7 @@ class SupervisorExecutor:
                 resolved_request_ids=set(resolved_request_ids),
                 answer_fact=answer_fact,
             )
+            updated.goal_progress = rebuild_goal_progress(updated).goal_progress
             updated.pending_hitl_request_ids = [
                 request_id
                 for request_id in updated.pending_hitl_request_ids

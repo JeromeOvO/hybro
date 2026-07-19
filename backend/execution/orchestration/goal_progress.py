@@ -3,6 +3,7 @@ from __future__ import annotations
 from execution.orchestration.outcome_evaluator import canonical_content_fingerprint
 from execution.orchestration.outcome_policy import active_completion_scope
 from models.orchestration import (
+    BlockerRecord,
     DelegationOutcomeRecord,
     GoalProgressRecord,
     OrchestrationRunState,
@@ -23,6 +24,10 @@ def rebuild_goal_progress(state: OrchestrationRunState) -> OrchestrationRunState
         outcomes_by_scope.setdefault(scope, []).append(outcome)
     for (family, revision), outcomes in sorted(outcomes_by_scope.items()):
         latest = outcomes[-1]
+        current_blockers = _current_blockers_for_outcome(state, latest)
+        projected_status = latest.status
+        if latest.status == "blocked" and latest.blockers and not current_blockers:
+            projected_status = "partial"
         invalidated = _invalidated_obligations(state, family)
         satisfied = {
             obligation
@@ -46,14 +51,27 @@ def rebuild_goal_progress(state: OrchestrationRunState) -> OrchestrationRunState
                 latest_outcome_id=latest.outcome_id,
                 source_outcome_ids=[outcome.outcome_id for outcome in outcomes],
                 agent_ids=list(dict.fromkeys(outcome.agent_id for outcome in outcomes)),
-                status=latest.status,
+                status=projected_status,
                 satisfied_required_obligations=sorted(satisfied),
                 remaining_required_obligations=sorted(remaining - satisfied),
-                blocker_keys=[blocker.key for blocker in latest.blockers],
+                blocker_keys=[blocker.key for blocker in current_blockers],
                 unknown_keys=[unknown.key for unknown in latest.unknowns],
             )
         )
     return state.model_copy(update={"goal_progress": records})
+
+
+def _current_blockers_for_outcome(
+    state: OrchestrationRunState,
+    outcome: DelegationOutcomeRecord,
+) -> list[BlockerRecord]:
+    current_by_key = {blocker.key: blocker for blocker in state.blockers}
+    projected = []
+    for historical in outcome.blockers:
+        current = current_by_key.get(historical.key, historical)
+        if current.status == "open":
+            projected.append(current)
+    return sorted(projected, key=lambda blocker: blocker.key)
 
 
 def _invalidated_obligations(

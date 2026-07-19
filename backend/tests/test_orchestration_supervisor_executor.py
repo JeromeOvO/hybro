@@ -20,6 +20,7 @@ from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     ResolvedResourcePayload,
 )
+from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
@@ -2909,6 +2910,86 @@ async def test_resolve_v2_hitl_if_answered_clears_only_addressed_agent_request_i
         "hitl-agent-1": "resolved",
         "hitl-agent-2": "open",
     }
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_hitl_rebuilds_blocked_goal_progress():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="$5M"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "hitl_user_reply": "$5M",
+            "hitl_request_id": "hitl-1",
+        },
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    blocker = BlockerRecord(
+        key="blocker-1",
+        description="Need requested limit.",
+        blocked_output_keys=["quote"],
+        source="agent",
+        claimed_user_only=True,
+        validated_user_only=True,
+        validation_status="validated",
+        status="open",
+    )
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        status=OrchestrationStatus.AWAITING_USER,
+        candidate_agent_ids=["agent-1"],
+        blockers=[blocker],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint="family-1",
+                goal_revision_fingerprint="revision-1",
+                attempt_fingerprint="attempt-1",
+                status="blocked",
+                remaining_required_obligations=["quote:requested_limit"],
+                blockers=[blocker.model_copy(deep=True)],
+            )
+        ],
+        pending_hitl_request_ids=["hitl-1"],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "status": "open",
+                "prompt": "What requested limit should be used?",
+                "source": "supervisor",
+                "blocker_keys": ["blocker-1"],
+                "blocker_obligations": {
+                    "blocker-1": ["quote:requested_limit"],
+                },
+            }
+        ],
+    )
+    state = rebuild_goal_progress(state)
+    await store.create_run(state)
+
+    resolved = await executor._resolve_v2_hitl_if_answered(
+        state,
+        user_message=user_message,
+    )
+
+    assert resolved.blockers[0].status == "resolved"
+    assert resolved.delegation_outcomes[0].status == "blocked"
+    assert resolved.goal_progress[0].status == "partial"
+    assert resolved.goal_progress[0].blocker_keys == []
 
 
 @pytest.mark.asyncio
