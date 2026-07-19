@@ -521,6 +521,24 @@ class AgentResultIngestor:
         )
         if _is_sparse_terminal_replay(existing_output, result):
             return False
+        preserve_artifact_text_evidence = bool(result.artifacts) and any(
+            isinstance(fact, dict)
+            and fact.get("kind") == "agent_text_evidence"
+            and fact.get("source_agent_message_id") == result.agent_message_id
+            for fact in state.facts
+        )
+        if preserve_artifact_text_evidence:
+            if existing_fact_index is None:
+                return False
+            state.facts = [
+                fact
+                for fact in state.facts
+                if not (
+                    isinstance(fact, dict)
+                    and fact.get("fact_id") == fact_id
+                )
+            ]
+            return True
         if text and _is_fact_projectable(result):
             fact_record = {
                 "fact_id": fact_id,
@@ -641,6 +659,30 @@ def _upsert_blockers(
             merged_evidence_refs = sorted(
                 set(existing.evidence_refs) | set(blocker.evidence_refs)
             )
+            has_new_evidence = bool(
+                set(blocker.evidence_refs) - set(existing.evidence_refs)
+            )
+            if (
+                existing.source == "agent"
+                and existing.status == "resolved"
+                and has_new_evidence
+            ):
+                state.blockers[existing_index] = blocker.model_copy(
+                    update={
+                        "evidence_refs": merged_evidence_refs,
+                        "blocked_output_keys": sorted(
+                            set(existing.blocked_output_keys)
+                            | set(blocker.blocked_output_keys)
+                        ),
+                        "claimed_user_only": False,
+                        "validated_user_only": False,
+                        "validation_status": "candidate",
+                        "status": "open",
+                        "resolution_attempts": [],
+                    }
+                )
+                changed = True
+                continue
             if existing.validation_status == "validated" or existing.validated_user_only:
                 replacement = existing.model_copy(
                     update={

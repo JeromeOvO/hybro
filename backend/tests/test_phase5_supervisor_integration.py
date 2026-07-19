@@ -1931,7 +1931,6 @@ async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_e
                     ],
                     "referenced_fact_ids": [
                         f"{broker_message_id}:text",
-                        f"{insurer_message_id}:text",
                     ],
                     "referenced_artifact_keys": [quote_artifact_key],
                     "unresolved_questions": [],
@@ -1968,7 +1967,10 @@ async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_e
     ] == ["broker", "insurer"]
     assert {
         fact["fact_id"] for fact in complete_context["facts"]
-    } >= {f"{broker_message_id}:text", f"{insurer_message_id}:text"}
+    } >= {
+        f"{broker_message_id}:text",
+        f"{insurer_message_id}:text_evidence",
+    }
     assert {
         artifact["artifact_key"] for artifact in complete_context["artifacts"]
     } >= {quote_artifact_key}

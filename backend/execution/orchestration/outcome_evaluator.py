@@ -55,7 +55,7 @@ def semantic_fact_map(facts: list[dict[str, Any]]) -> dict[str, object]:
         str(fact["semantic_key"]): _stable_value(fact.get("value"))
         for fact in facts
         if isinstance(fact, dict)
-        and fact.get("kind") != "agent_text"
+        and fact.get("kind") not in {"agent_text", "agent_text_evidence"}
         and fact.get("semantic_key")
     }
 

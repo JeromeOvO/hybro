@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime
 
 from execution.orchestration.failure_classifier import classify_agent_failure
+from execution.orchestration.outcome_evaluator import semantic_fact_map
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
     AgentResultRead,
@@ -258,11 +259,14 @@ def test_sparse_terminal_replay_preserves_richer_result_without_version_bump():
     ]
     assert replayed.facts == [
         {
-            "fact_id": "agent-msg-1:text",
+            "fact_id": "agent-msg-1:text_evidence",
+            "kind": "agent_text_evidence",
+            "semantic_key": "agent_text_evidence:agent-msg-1",
+            "value": "The agent finished.",
             "source_agent_message_id": "agent-msg-1",
             "source_agent_id": "agent-1",
-            "kind": "agent_text",
-            "text": "The agent finished.",
+            "evidence_refs": ["agent-msg-1", "agent-msg-1:text_or_status"],
+            "trusted_for_blocker_keys": False,
         }
     ]
 
@@ -384,6 +388,50 @@ def test_ingest_artifact_records_source_and_summary():
     assert updated.artifacts[0]["source_agent_message_id"] == "agent-msg-1"
     assert updated.artifacts[0]["source_agent_id"] == "agent-1"
     assert updated.artifacts[0]["summary"] == "Premium quote from Carrier A"
+
+
+def test_ingest_narrative_only_artifact_preserves_untrusted_text_evidence():
+    result = AgentResultRead(
+        agent_message_id="agent-msg-narrative",
+        agent_id="agent-1",
+        status="completed",
+        text="The attached narrative explains the partial result.",
+        artifacts=[
+            {
+                "artifact_id": "narrative",
+                "name": "Narrative",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "No structured data is present.",
+                    }
+                ],
+            }
+        ],
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+
+    evidence = next(
+        fact
+        for fact in updated.facts
+        if fact.get("kind") == "agent_text_evidence"
+    )
+    assert evidence == {
+        "fact_id": "agent-msg-narrative:text_evidence",
+        "kind": "agent_text_evidence",
+        "semantic_key": "agent_text_evidence:agent-msg-narrative",
+        "value": "The attached narrative explains the partial result.",
+        "source_agent_message_id": "agent-msg-narrative",
+        "source_agent_id": "agent-1",
+        "evidence_refs": [
+            "agent-msg-narrative",
+            "agent-msg-narrative:text_or_status",
+        ],
+        "trusted_for_blocker_keys": False,
+    }
+    assert not any(fact.get("kind") == "agent_text" for fact in updated.facts)
+    assert semantic_fact_map(updated.facts) == {}
 
 
 def test_ingest_artifact_overwrites_stale_source_metadata():
@@ -1752,3 +1800,97 @@ def test_ingest_does_not_downgrade_existing_validated_blocker_on_replay():
     assert blocker.validation_status == "validated"
     assert blocker.validated_user_only is True
     assert blocker.claimed_user_only is True
+
+
+def test_ingest_exact_replay_preserves_resolved_validated_blocker():
+    state = _run_state(
+        blockers=[
+            BlockerRecord(
+                key="agent_blocker:agent-1:client.industry",
+                description="Agent reported missing input: client.industry",
+                blocked_output_keys=["broker_submission"],
+                source="agent",
+                evidence_refs=["agent-msg-1:artifact_id:submission", "hitl-fact-1"],
+                claimed_user_only=True,
+                validated_user_only=True,
+                validation_status="validated",
+                status="resolved",
+            )
+        ]
+    )
+
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {"missing_fields": ["client.industry"]},
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    blocker = updated.blockers[0]
+    assert blocker.status == "resolved"
+    assert blocker.validation_status == "validated"
+    assert blocker.validated_user_only is True
+
+
+def test_ingest_new_evidence_reopens_resolved_agent_blocker_as_candidate():
+    state = _run_state(
+        blockers=[
+            BlockerRecord(
+                key="agent_blocker:agent-1:client.industry",
+                description="Agent reported missing input: client.industry",
+                blocked_output_keys=["broker_submission"],
+                source="agent",
+                evidence_refs=["agent-msg-1:artifact_id:submission", "hitl-fact-1"],
+                claimed_user_only=True,
+                validated_user_only=True,
+                validation_status="validated",
+                status="resolved",
+            )
+        ]
+    )
+
+    updated = AgentResultIngestor().ingest(
+        state,
+        AgentResultRead(
+            agent_message_id="agent-msg-2",
+            agent_id="agent-1",
+            status="completed",
+            artifacts=[
+                {
+                    "artifact_id": "submission",
+                    "name": "submission",
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {"missing_fields": ["client.industry"]},
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    blocker = updated.blockers[0]
+    assert blocker.status == "open"
+    assert blocker.validation_status == "candidate"
+    assert blocker.claimed_user_only is False
+    assert blocker.validated_user_only is False
+    assert blocker.evidence_refs == [
+        "agent-msg-1:artifact_id:submission",
+        "agent-msg-2:artifact_id:submission",
+        "hitl-fact-1",
+    ]
