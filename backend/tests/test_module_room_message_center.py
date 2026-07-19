@@ -215,7 +215,7 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
         message_id="user-msg-1",
         lifecycle_message_id="user-msg-1",
         details={
-            "message": "delegate_no_progress_repeat",
+            "message": "supervisor execution failed",
             "terminal_summary": summary,
         },
     )

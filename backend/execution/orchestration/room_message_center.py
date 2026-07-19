@@ -2675,7 +2675,7 @@ class RoomMessageCenter:
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
                     details={
-                        "message": failure_reason,
+                        "message": "supervisor execution failed",
                         **(
                             {"terminal_summary": terminal_summary}
                             if terminal_summary is not None
