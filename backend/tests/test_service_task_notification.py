@@ -28,7 +28,6 @@ PATCH_NOTIFIER = "execution.dispatch.task_notifications._task_notifier"
 PATCH_DELIVERY = "execution.dispatch.task_notifications._delivery"
 PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message"
 PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
-PATCH_HAS_VISIBLE = "execution.dispatch.task_notifications.task_has_visible_content"
 PATCH_SLEEP = "execution.dispatch.task_notifications.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
 PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
@@ -276,10 +275,10 @@ class TestNotifyTaskUpdate:
             assert call_kw["content"] == "Hello world"
 
     # --------------------------------------------------------------------- #
-    # 6. Completed backfills artifacts from agent task history
+    # 6. Completed tasks do not backfill artifacts from private history
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_completed_backfills_artifacts_from_agent_history(self):
+    async def test_completed_does_not_backfill_artifacts_from_agent_history(self):
         private_sentinel = "PRIVATE_SENTINEL_backfill_message_text"
         task = _make_task(TaskState.completed, artifacts=[])
         task.history = [
@@ -304,19 +303,11 @@ class TestNotifyTaskUpdate:
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
-            db.update_room_agent_message_by_message_id.assert_awaited_once()
-            updated_msg = db.update_room_agent_message_by_message_id.call_args[0][1]
-            backfilled_task = updated_msg.message_content.message_task
-            assert backfilled_task.artifacts is not None
-            assert len(backfilled_task.artifacts) == 1
-            assert backfilled_task.artifacts[0].name == "response"
-            assert (
-                backfilled_task.artifacts[0].parts[0].root.text
-                == "Backfilled public answer"
-            )
-            payload = notifier.send_task_update.await_args.kwargs
-            assert payload["content"] == "Backfilled public answer"
-            assert private_sentinel not in repr(payload)
+            db.update_room_agent_message_by_message_id.assert_not_awaited()
+            call_kw = notifier.send_task_update.call_args.kwargs
+            assert call_kw["content"] is None
+            assert "Backfilled public answer" not in repr(call_kw)
+            assert private_sentinel not in repr(call_kw)
 
     # --------------------------------------------------------------------- #
     # 7. Failed state extracts error
@@ -407,12 +398,11 @@ class TestNotifyTaskUpdate:
             assert private_sentinel not in repr(emitter_payload)
 
     # --------------------------------------------------------------------- #
-    # 7b. Failed state with artifacts extracts content
+    # 7b. Failed state with artifacts suppresses partial content
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_failed_with_artifacts_extracts_content(self):
-        """A failed task that has artifacts (e.g. partial results) should
-        still extract text content from those artifacts for the SSE."""
+    async def test_failed_with_artifacts_suppresses_partial_content(self):
+        """Failed tasks expose the safe error, not partial artifact content."""
         task = _make_task(
             TaskState.failed,
             artifacts=[
@@ -447,10 +437,9 @@ class TestNotifyTaskUpdate:
             )
 
             assert result is True
-            # Artifacts should be extracted regardless of state
-            mock_ep.assert_called_once()
+            mock_ep.assert_not_called()
             call_kw = notifier.send_task_update.call_args.kwargs
-            assert call_kw["content"] == "Partial result before failure"
+            assert call_kw["content"] is None
             assert call_kw["error"] == "Task failed"
 
     # --------------------------------------------------------------------- #
@@ -539,10 +528,11 @@ class TestNotifyTaskUpdate:
             assert call_kw["status_message"] == "Authentication required"
 
     # --------------------------------------------------------------------- #
-    # 10. completed-without-visible-content forwards status_message hint
+    # 10. completed-without-visible-content does not forward status_message
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_completed_without_visible_content_forwards_status_message(self):
+    async def test_completed_without_visible_content_drops_status_message(self):
+        private_sentinel = "PRIVATE_SENTINEL_completed_status_message"
         task = _make_task(TaskState.completed)
         msg = _make_message(task=task)
 
@@ -551,8 +541,7 @@ class TestNotifyTaskUpdate:
             patch(PATCH_NOTIFIER) as notifier,
             patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
-            patch(PATCH_HAS_VISIBLE, return_value=False),
-            patch(PATCH_EXTRACT_STATUS, return_value="No visible output from upstream agent"),
+            patch(PATCH_EXTRACT_STATUS, return_value=private_sentinel),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
@@ -568,7 +557,7 @@ class TestNotifyTaskUpdate:
 
             assert result is True
             call_kw = notifier.send_task_update.call_args.kwargs
-            assert call_kw["status_message"] == "No visible output from upstream agent"
+            assert call_kw["status_message"] is None
 
     # --------------------------------------------------------------------- #
     # 10. lifecycle processing_status mapping for task states
@@ -614,7 +603,7 @@ class TestNotifyTaskUpdate:
                 lifecycle_message_id="msg-1",
                 record_lifecycle=True,
                 client_request_id=None,
-                details={"message": "Need input"},
+                details=None,
                 error_message=None,
             )
 

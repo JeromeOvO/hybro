@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mapAgentDisplayProps } from '@/lib/selectors/map-agent-display'
 import { createAgentMessage, createTaskMessage, resetCounters } from '../../../fixtures'
 import { TASK_STATE } from '@/lib/types/sse'
+import type { TaskState } from '@/lib/types/sse'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 function asEntity(msg: ReturnType<typeof createAgentMessage>): MessageEntity {
@@ -88,6 +89,24 @@ describe('mapAgentDisplayProps', () => {
     expect(result.label).toBe('Auth Required')
     expect(result.tone).toBe('warning')
     expect(result.isAnimated).toBe(false)
+  })
+
+  it('returns Policy Required for policy-required status', () => {
+    const entity = asEntity(createTaskMessage('policy-required' as TaskState))
+    const result = mapAgentDisplayProps(entity)
+    expect(result.label).toBe('Policy Required')
+    expect(result.tone).toBe('warning')
+    expect(result.isAnimated).toBe(false)
+    expect(result.ariaLabel).toBe('Test Agent — Policy Required')
+  })
+
+  it('returns Expired for expired status', () => {
+    const entity = asEntity(createTaskMessage('expired' as TaskState))
+    const result = mapAgentDisplayProps(entity)
+    expect(result.label).toBe('Expired')
+    expect(result.tone).toBe('muted')
+    expect(result.isAnimated).toBe(false)
+    expect(result.ariaLabel).toBe('Test Agent — Expired')
   })
 
   it('returns Working for unknown status', () => {

@@ -78,7 +78,9 @@ export async function convertApiMessageToIncoming(
   if (messageTask) {
     const messageTaskTyped = messageTask as A2ATaskStatus['task']
     const safeError = publicTaskError(taskStatus)
-    const extractedError = taskStatus === TASK_STATE.COMPLETED
+    const extractedError = taskStatus
+      && taskStatus !== TASK_STATE.COMPLETED
+      && isTerminalState(taskStatus)
       ? extractTaskError(messageTaskTyped)
       : undefined
     taskError = safeError ?? extractedError
@@ -144,13 +146,6 @@ export async function convertApiMessageToIncoming(
   const hasTrustedHitlMetadata = typeof trustedHitlRequestId === 'string'
     && trustedHitlRequestId.length > 0
     && meta?.hitl_request_id === trustedHitlRequestId
-  if (meta) {
-    const maybeUserAnswer = meta.user_answer
-    if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
-    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
-    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
-    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
-  }
 
   if (meta && hasTrustedHitlMetadata) {
     const rid = meta.hitl_request_id ?? meta.request_id
@@ -161,6 +156,11 @@ export async function convertApiMessageToIncoming(
     if (typeof hpt === 'string') hitlPromptType = hpt as 'text' | 'choice' | 'confirmation'
     if (Array.isArray(meta.hitl_choices)) hitlChoices = meta.hitl_choices as string[]
     else if (Array.isArray(meta.choices)) hitlChoices = meta.choices as string[]
+    const maybeUserAnswer = meta.user_answer
+    if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
+    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
+    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
+    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
   }
 
   // ── Extract user attachments ────────────────────────────
@@ -181,7 +181,9 @@ export async function convertApiMessageToIncoming(
 
   // ── Extract multimodal artifacts from task ───────────────
   let artifacts: ArtifactData[] | undefined
-  const rawArtifacts = messageTask?.artifacts as Record<string, unknown>[] | undefined
+  const rawArtifacts = taskStatus === TASK_STATE.COMPLETED
+    ? messageTask?.artifacts as Record<string, unknown>[] | undefined
+    : undefined
   if (Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
     const mapped = rawArtifacts
       .map((a) => {
@@ -194,15 +196,15 @@ export async function convertApiMessageToIncoming(
             const kind = (root.kind as string) || 'text'
             if (kind === 'text') return null
             const fileData = root.file as Record<string, unknown> | undefined
+            const safeFile = fileData ? {
+              uri: fileData.uri as string | undefined,
+              mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
+              name: fileData.name as string | undefined,
+            } : undefined
             return {
               kind: kind as ArtifactPart['kind'],
               text: root.text as string | undefined,
-              file: fileData ? {
-                uri: fileData.uri as string | undefined,
-                bytes: fileData.bytes as string | undefined,
-                mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
-                name: fileData.name as string | undefined,
-              } : undefined,
+              file: safeFile,
               data: root.data as Record<string, unknown> | undefined,
             }
           })

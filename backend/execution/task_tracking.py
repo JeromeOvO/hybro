@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -48,7 +49,6 @@ _PUBLIC_SAFE_STATUS_TEXT = {
     "expired": "Task expired",
 }
 _COMPLETED_STATE = "completed"
-_PUBLIC_HISTORY_STATES = {_COMPLETED_STATE}
 _PUBLIC_METADATA_KEYS = frozenset({"s3_key"})
 
 if TYPE_CHECKING:
@@ -292,15 +292,22 @@ class A2ATaskTrackingService:
             existing_task = (
                 msg.message_content.message_task if msg.message_content else None
             )
-            trusted_local_hitl_metadata = (
-                existing_task.metadata if existing_task is not None else None
+            trusted_local_hitl_metadata = await self._trusted_local_hitl_metadata(
+                msg,
+                existing_task,
+                task_id=task_id,
+                context_id=context_id,
+            )
+            projected_task_data = public_persisted_task_data(
+                task_obj,
+                trusted_local_hitl_metadata=trusted_local_hitl_metadata,
+            )
+            response_text = _extract_reply_response_text(
+                _task_model_for_internal_projection(projected_task_data)
             )
             await self._tracking_store.update_task_on_message(
                 message_id,
-                public_persisted_task_data(
-                    task_obj,
-                    trusted_local_hitl_metadata=trusted_local_hitl_metadata,
-                ),
+                projected_task_data,
                 message_text=response_text,
             )
 
@@ -324,6 +331,49 @@ class A2ATaskTrackingService:
             "response_text": response_text,
         }
 
+    async def _trusted_local_hitl_metadata(
+        self,
+        msg,
+        existing_task: Task | None,
+        *,
+        task_id: str,
+        context_id: str,
+    ) -> dict[str, Any] | None:
+        metadata = existing_task.metadata if existing_task is not None else None
+        request_id = (
+            metadata.get("hitl_request_id") if isinstance(metadata, dict) else None
+        )
+        if not isinstance(request_id, str) or not request_id:
+            return None
+
+        getter = getattr(self._tracking_store, "get_hitl_request", None)
+        if not callable(getter):
+            return None
+
+        try:
+            request = getter(request_id)
+            if inspect.isawaitable(request):
+                request = await request
+        except Exception:
+            logger.warning(
+                "Failed to verify local HITL metadata for agent message %s",
+                msg.message_id,
+                exc_info=True,
+            )
+            return None
+
+        if not _is_trusted_local_hitl_request(
+            request,
+            request_id=request_id,
+            room_id=msg.room_id,
+            message_id=msg.message_id,
+            agent_id=msg.agent_id,
+            task_id=task_id,
+            context_id=context_id,
+        ):
+            return None
+        return _trusted_metadata_from_hitl_request(request)
+
     async def _handle_message_result(
         self,
         message: Message,
@@ -346,10 +396,12 @@ class A2ATaskTrackingService:
                 context="message",
             )
 
-        message_text = _extract_text_from_message(message)
+        projected_task_data = public_persisted_task_data(completed_task)
+        projected_task = _task_model_for_internal_projection(projected_task_data)
+        message_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            completed_task.model_dump(mode="json"),
+            projected_task_data,
             message_text=message_text or None,
         )
         resp = {
@@ -358,7 +410,7 @@ class A2ATaskTrackingService:
             "content": message_text,
             "persisted": persisted,
         }
-        non_text_parts = _non_text_parts(completed_task.artifacts)
+        non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
         return resp
@@ -405,7 +457,6 @@ class A2ATaskTrackingService:
         message_id: str,
         room_id: str | None,
     ) -> dict[str, Any]:
-        state = task.status.state
         if task.artifacts:
             await _best_effort_convert_pydantic_artifacts_to_s3(
                 task.artifacts,
@@ -414,10 +465,13 @@ class A2ATaskTrackingService:
                 context="terminal_task",
             )
 
-        task_text = _extract_text_from_task(task)
+        projected_data = public_persisted_task_data(task)
+        projected_task = _task_model_for_internal_projection(projected_data)
+        state = projected_task.status.state
+        task_text = _extract_text_from_task(projected_task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            public_persisted_task_data(task),
+            projected_data,
             message_text=task_text or None,
         )
 
@@ -428,19 +482,15 @@ class A2ATaskTrackingService:
             "status": _state_value(state),
             "persisted": persisted,
         }
-        non_text_parts = _non_text_parts(task.artifacts)
+        non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
         if state != TaskState.completed:
-            error_text = _extract_status_message(task)
+            error_text = _extract_status_message(projected_task)
             if error_text:
                 resp["error"] = error_text
             elif not task_text:
                 resp["error"] = f"Task {_state_value(state)}"
-        elif not task_text:
-            status_text = _extract_status_message(task)
-            if status_text:
-                resp["message"] = status_text
         return resp
 
     async def _persist_failed_task(
@@ -483,6 +533,65 @@ def _agent_card_url(agent_card: Any) -> str | None:
         return None
     url = str(raw_url).strip()
     return url or None
+
+
+def _is_trusted_local_hitl_request(
+    request: Any,
+    *,
+    request_id: str,
+    room_id: str,
+    message_id: str,
+    agent_id: str | None,
+    task_id: str,
+    context_id: str,
+) -> bool:
+    if not isinstance(request, dict):
+        return False
+    if (
+        request.get("request_id") != request_id
+        or request.get("room_id") != room_id
+        or request.get("source") != "agent"
+    ):
+        return False
+    projected_message_id = request.get("display_message_id") or request.get(
+        "continuation_message_id"
+    )
+    if projected_message_id != message_id:
+        return False
+    request_agent_id = request.get("agent_id")
+    if request_agent_id is not None and request_agent_id != agent_id:
+        return False
+    request_task_id = request.get("a2a_task_id")
+    if request_task_id is not None and request_task_id != task_id:
+        return False
+    request_context_id = request.get("a2a_context_id")
+    if request_context_id is not None and request_context_id != context_id:
+        return False
+    return True
+
+
+def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, Any]:
+    request_id = request["request_id"]
+    trusted: dict[str, Any] = {
+        "hitl_request_id": request_id,
+        "hitl_prompt": request.get("prompt"),
+        "hitl_prompt_type": getattr(
+            request.get("prompt_type"), "value", request.get("prompt_type")
+        ),
+    }
+    optional_fields = {
+        "hitl_choices": request.get("choices"),
+        "hitl_a2a_task_id": request.get("a2a_task_id"),
+        "hitl_a2a_context_id": request.get("a2a_context_id"),
+        "hitl_group_id": request.get("group_id"),
+        "hitl_group_total": request.get("group_total"),
+        "hitl_group_index": request.get("group_index"),
+        "user_answer": request.get("user_input"),
+    }
+    trusted.update(
+        {key: value for key, value in optional_fields.items() if value is not None}
+    )
+    return {key: value for key, value in trusted.items() if value is not None}
 
 
 async def _best_effort_convert_pydantic_artifacts_to_s3(
@@ -576,6 +685,48 @@ def _extract_text_from_task(task: Task) -> str | None:
     return "".join(texts) if texts else None
 
 
+def _task_model_for_internal_projection(task_data: dict[str, Any]) -> Task:
+    try:
+        return Task.model_validate(task_data)
+    except ValueError:
+        return Task.model_validate(_drop_unaddressable_public_file_parts(task_data))
+
+
+def _drop_unaddressable_public_file_parts(
+    task_data: dict[str, Any]
+) -> dict[str, Any]:
+    artifacts = task_data.get("artifacts")
+    if not isinstance(artifacts, list):
+        return task_data
+
+    public_artifacts: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        parts = artifact.get("parts")
+        if not isinstance(parts, list):
+            continue
+
+        public_parts = []
+        for part in parts:
+            if not isinstance(part, dict):
+                public_parts.append(part)
+                continue
+            payload = part.get("root") if isinstance(part.get("root"), dict) else part
+            file_payload = payload.get("file") if isinstance(payload, dict) else None
+            if isinstance(file_payload, dict) and not file_payload.get("uri"):
+                continue
+            public_parts.append(part)
+
+        public_artifact = dict(artifact)
+        public_artifact["parts"] = public_parts
+        public_artifacts.append(public_artifact)
+
+    sanitized = dict(task_data)
+    sanitized["artifacts"] = public_artifacts or None
+    return sanitized
+
+
 def _extract_status_message(task: Task) -> str | None:
     if task.status.message and task.status.message.parts:
         for part in task.status.message.parts:
@@ -626,23 +777,29 @@ def _public_metadata_subset(metadata: Any) -> dict[str, Any] | None:
     return public or None
 
 
-def public_part_data(part: Any) -> dict[str, Any]:
+def public_part_data(part: Any) -> dict[str, Any] | None:
     part_data = _plain_model_data(part)
     root = part_data.get("root")
     if isinstance(root, dict):
-        part_data["root"] = _public_part_payload(root)
+        public_root = _public_part_payload(root)
+        if public_root is None:
+            return None
+        part_data["root"] = public_root
         return part_data
     return _public_part_payload(part_data)
 
 
-def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     public_payload = dict(payload)
     public_metadata = _public_metadata_subset(public_payload.get("metadata"))
     public_payload["metadata"] = public_metadata
 
     file_payload = public_payload.get("file")
     if isinstance(file_payload, dict):
-        allowed_file_keys = {"uri", "mimeType", "mime_type", "name", "bytes"}
+        uri = file_payload.get("uri")
+        if not isinstance(uri, str) or not uri.strip():
+            return None
+        allowed_file_keys = {"uri", "mimeType", "mime_type", "name"}
         public_payload["file"] = {
             key: value
             for key, value in file_payload.items()
@@ -658,19 +815,26 @@ def public_message_data(message: Any) -> dict[str, Any] | None:
     if message_data.get("role") != Role.AGENT.value:
         return None
     message_data["metadata"] = None
-    message_data["parts"] = [
-        public_part_data(part) for part in message_data.get("parts") or []
-    ]
+    message_data["parts"] = _public_parts_data(message_data.get("parts"))
+    if not message_data["parts"]:
+        return None
     return message_data
 
 
 def public_artifact_data(artifact: Any) -> dict[str, Any]:
     artifact_data = _plain_model_data(artifact)
     artifact_data["metadata"] = None
-    artifact_data["parts"] = [
-        public_part_data(part) for part in artifact_data.get("parts") or []
-    ]
+    artifact_data["parts"] = _public_parts_data(artifact_data.get("parts"))
     return artifact_data
+
+
+def _public_parts_data(parts: Any) -> list[dict[str, Any]]:
+    public_parts = []
+    for part in parts or []:
+        public_part = public_part_data(part)
+        if public_part is not None:
+            public_parts.append(public_part)
+    return public_parts
 
 
 def _public_status_message(text: str) -> dict[str, Any]:
@@ -690,24 +854,17 @@ def public_persisted_task_data(
     state_value = _state_value_from_task_data(task_data)
 
     artifacts = task_data.get("artifacts")
-    if isinstance(artifacts, list):
+    if state_value == _COMPLETED_STATE and isinstance(artifacts, list):
         task_data["artifacts"] = [public_artifact_data(artifact) for artifact in artifacts]
-
-    history = task_data.get("history")
-    if state_value in _PUBLIC_HISTORY_STATES and isinstance(history, list):
-        public_history = []
-        for message in history:
-            public_message = public_message_data(message)
-            if public_message is not None:
-                public_history.append(public_message)
-        task_data["history"] = public_history
     else:
-        task_data["history"] = None
+        task_data["artifacts"] = None
+
+    task_data["history"] = None
 
     status = task_data.get("status")
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
         if state_value == _COMPLETED_STATE:
-            status["message"] = public_message_data(status["message"])
+            status["message"] = None
         elif state_value in _PUBLIC_SAFE_STATUS_TEXT:
             status["message"] = _public_status_message(
                 _PUBLIC_SAFE_STATUS_TEXT[state_value]

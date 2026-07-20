@@ -26,6 +26,11 @@ from common.a2a_constants import (
     is_terminal_state,
 )
 from common.config import settings
+from common.types import Task
+from common.utils.a2a_helpers import (
+    convert_pydantic_artifacts_to_s3,
+    extract_text_from_artifacts,
+)
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.orchestration.run_store import OrchestrationStoreConflict
@@ -102,6 +107,27 @@ class StaleTaskCheckerDeps:
     notify_task_update: Callable[..., Awaitable[Any]]
     increment_counter: Callable[[str], Any]
     a2a_service: Any
+
+
+async def _best_effort_convert_pydantic_artifacts_to_s3(
+    artifacts: list,
+    *,
+    room_id: str,
+    message_id: str,
+) -> None:
+    try:
+        await convert_pydantic_artifacts_to_s3(
+            artifacts,
+            room_id=room_id,
+            message_id=message_id,
+        )
+    except Exception:
+        logger.warning(
+            "Stale task checker artifact conversion failed for message %s; "
+            "continuing with public projection",
+            message_id,
+            exc_info=True,
+        )
 
 
 class StaleTaskChecker:
@@ -500,21 +526,33 @@ class StaleTaskChecker:
                 await self._store.touch_task_message(message_id)
                 return
 
-            # Update our record
+            if current_task.artifacts:
+                await _best_effort_convert_pydantic_artifacts_to_s3(
+                    current_task.artifacts,
+                    room_id=msg.room_id,
+                    message_id=message_id,
+                )
+
+            # Update our record using the same public projection as the normal
+            # task completion path; stale recovery must not persist raw remote
+            # task metadata or inline file bytes.
+            projected_task_data = public_persisted_task_data(current_task)
+            projected_task = Task.model_validate(projected_task_data)
             task_text = None
+            state_value = getattr(
+                current_task.status.state,
+                "value",
+                current_task.status.state,
+            )
             if (
                 is_terminal_state(current_task.status.state)
-                and current_task.status.state == CommonTaskState.COMPLETED
+                and state_value == CommonTaskState.COMPLETED.value
+                and projected_task.artifacts
             ):
-                from common.utils.a2a_helpers import extract_text_from_artifacts
-
-                if current_task.artifacts:
-                    task_text = (
-                        extract_text_from_artifacts(current_task.artifacts) or None
-                    )
+                task_text = extract_text_from_artifacts(projected_task.artifacts) or None
             await self._store.update_task_on_message(
                 message_id,
-                public_persisted_task_data(current_task),
+                projected_task_data,
                 message_text=task_text,
             )
 
@@ -659,7 +697,8 @@ class StaleTaskChecker:
         )
 
         await self._store.update_task_on_message(
-            message_id, failed_task.model_dump(mode="json")
+            message_id,
+            public_persisted_task_data(failed_task),
         )
 
         # Clear any orphaned continuation (on both agent and user messages)

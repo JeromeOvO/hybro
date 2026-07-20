@@ -100,6 +100,94 @@ class TestParseSyncFallbackResponse:
         assert result["task_id"] == "task-001"
         assert result["status"] == "completed"
 
+    def test_terminal_failed_task_with_artifacts_uses_projected_public_error(self):
+        private_sentinel = "PRIVATE_SENTINEL_sync_terminal_failed_artifact"
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {
+                    "state": "failed",
+                    "message": {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-status",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    },
+                },
+                "history": [
+                    {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": "private-history",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "artifactId": "partial-artifact",
+                        "name": "partial",
+                        "parts": [{"kind": "text", "text": private_sentinel}],
+                    }
+                ],
+                "metadata": {"remote_error": private_sentinel},
+            },
+            "error": None,
+        }
+
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
+
+        assert result == {
+            "type": "message",
+            "message_id": "msg-1",
+            "content": None,
+            "status": "failed",
+            "error": "Task failed",
+        }
+        assert private_sentinel not in json.dumps(result)
+
+    def test_terminal_completed_task_with_inline_file_bytes_drops_unaddressable_part(self):
+        private_sentinel = "PRIVATE_SENTINEL_sync_terminal_file_bytes"
+        response = {
+            "kind": "task",
+            "result": {
+                "kind": "task",
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {"state": "completed"},
+                "artifacts": [
+                    {
+                        "artifactId": "file-artifact",
+                        "name": "result-file",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "bytes": private_sentinel,
+                                    "mimeType": "text/plain",
+                                    "name": "result.txt",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            "error": None,
+        }
+
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
+
+        assert result == {
+            "type": "message",
+            "message_id": "msg-1",
+            "task_id": "task-001",
+            "status": "completed",
+            "content": None,
+        }
+        assert private_sentinel not in json.dumps(result)
+
     def test_parses_interactive_task_with_requires_flags(self):
         response = {
             "kind": "task",
@@ -808,7 +896,15 @@ class TestFinalizeStreamingWritesArtifacts:
         event_arg = proc.response_handler.handle.call_args[0][0]
         assert event_arg.message_id == "msg-1"
         assert event_arg.room_id == "room-1"
-        assert current_message.message_content.message_text == "Final answer from agent."
+        assert event_arg.text == "Final answer from agent."
+        persisted_task = current_message.message_content.message_task
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is not None
+        assert persisted_task.artifacts[0].name == "response"
+        assert (
+            persisted_task.artifacts[0].parts[0].root.text
+            == "Final answer from agent."
+        )
 
     @pytest.mark.asyncio
     async def test_already_failed_task_persists_only_public_failure_text(self):
@@ -2012,6 +2108,85 @@ class TestDispatchInteractive:
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
 
+    @pytest.mark.asyncio
+    async def test_dispatch_non_push_polled_interactive_keeps_raw_prompt_internal_only(self):
+        private_prompt = "PRIVATE_SENTINEL_polled_interactive_prompt"
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {
+            "webhook_token": "tok-123",
+            "context_id": "ctx-1",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        processing_ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=message,
+            agent_card=agent_card,
+            user_message_id="user-msg-1",
+            task_info=task_info,
+            send_sse=False,
+        )
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(task_info, processing_ctx)
+        )
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_push_notification_capability = MagicMock(
+            return_value=False
+        )
+        proc.a2a_transport.send_message_to_tracked_agent = AsyncMock(
+            return_value={
+                "type": "task",
+                "task_id": "remote-task-42",
+                "status": TaskState.working,
+            }
+        )
+        proc._poll_task_until_complete = AsyncMock(
+            return_value=Task(
+                id="remote-task-42",
+                contextId="ctx-1",
+                status=TaskStatus(
+                    state=TaskState.input_required,
+                    message=Message(
+                        message_id="private-status-msg",
+                        role=MessageRole.AGENT,
+                        parts=[TextPart(kind="text", text=private_prompt)],
+                    ),
+                ),
+                artifacts=[
+                    {
+                        "artifactId": "private-artifact",
+                        "parts": [{"kind": "text", "text": private_prompt}],
+                    }
+                ],
+                kind="task",
+            )
+        )
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        proc.tsm.notify_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+        agent = MagicMock()
+        agent.agent_card = agent_card
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.status_message == private_prompt
+        persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
+        persisted_json = json.dumps(persisted_task, sort_keys=True)
+        in_memory_json = message.message_content.message_task.model_dump_json()
+        assert private_prompt not in persisted_json
+        assert private_prompt not in in_memory_json
+        assert proc.response_handler.handle.await_args is None
+
 
 class TestFinalizePolledTaskPrivacy:
     def _make_completed_task_with_private_history(self, private_text: str) -> Task:
@@ -2061,6 +2236,36 @@ class TestFinalizePolledTaskPrivacy:
             kind="task",
         )
 
+    def _make_failed_task_with_private_terminal_data(self, private_text: str) -> Task:
+        return Task(
+            id="remote-task-1",
+            contextId="ctx-1",
+            status=TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-status",
+                    parts=[TextPart(kind="text", text=private_text)],
+                ),
+            ),
+            history=[
+                Message(
+                    role=MessageRole.AGENT,
+                    message_id="private-history",
+                    parts=[TextPart(kind="text", text=private_text)],
+                )
+            ],
+            artifacts=[
+                Artifact(
+                    artifactId="partial-artifact",
+                    name="partial",
+                    parts=[TextPart(kind="text", text=private_text)],
+                )
+            ],
+            metadata={"remote_error": private_text},
+            kind="task",
+        )
+
     def _make_ctx(self, current_message, agent_card):
         return ProcessingContext(
             room_id="room-1",
@@ -2072,7 +2277,7 @@ class TestFinalizePolledTaskPrivacy:
         )
 
     @pytest.mark.asyncio
-    async def test_terminal_polled_task_persists_public_history_only(self):
+    async def test_terminal_polled_task_does_not_use_history_as_public_output(self):
         private_text = "PRIVATE_SENTINEL_polled_terminal_history"
         proc = _make_processor()
         proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
@@ -2096,9 +2301,10 @@ class TestFinalizePolledTaskPrivacy:
         )
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         assert private_text not in persisted_json
-        assert "Visible agent answer" in persisted_json
+        assert persisted_task["history"] is None
+        assert "Visible agent answer" not in persisted_json
         emitted_event = proc.response_handler.handle.await_args.args[0]
-        assert emitted_event.text == "Visible agent answer"
+        assert emitted_event.text == "Requesting Agent One"
         assert private_text not in json.dumps(emitted_event.__dict__)
 
     @pytest.mark.asyncio
@@ -2131,12 +2337,46 @@ class TestFinalizePolledTaskPrivacy:
         assert "Visible prompt" not in in_memory_json
 
     @pytest.mark.asyncio
-    async def test_room_task_persistence_sanitizes_returned_task_history(self):
+    async def test_failed_polled_task_degraded_output_and_memory_use_public_projection(self):
+        private_text = "PRIVATE_SENTINEL_polled_failed_terminal"
+        proc = _make_processor()
+        proc.delivery.send_task_update = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+
+        result = await proc._finalize_polled_task(
+            self._make_failed_task_with_private_terminal_data(private_text),
+            current_message,
+            agent_card,
+            room_id="room-1",
+            message_id="agent-msg-1",
+            task_info=None,
+            ctx=self._make_ctx(current_message, agent_card),
+        )
+
+        assert result == (False, "Task failed", None, None)
+        delivery_payload = proc.delivery.send_task_update.await_args.kwargs
+        in_memory_json = current_message.message_content.message_task.model_dump_json()
+        assert delivery_payload["content"] is None
+        assert delivery_payload["error"] == "Task failed"
+        assert private_text not in json.dumps(delivery_payload)
+        assert private_text not in in_memory_json
+
+    @pytest.mark.asyncio
+    async def test_room_task_persistence_drops_history_and_keeps_artifacts(self):
         private_text = "PRIVATE_SENTINEL_room_task_persistence_history"
         proc = _make_processor()
         proc.tsm.persist_message = AsyncMock(return_value=True)
         message = _make_room_agent_message()
         returned_task = self._make_completed_task_with_private_history(private_text)
+        returned_task.artifacts = [
+            Artifact(
+                artifact_id="artifact-answer",
+                name="response",
+                parts=[TextPart(kind="text", text="Visible artifact answer")],
+            )
+        ]
 
         result = await proc._handle_a2a_response_for_room(message, returned_task)
 
@@ -2144,16 +2384,50 @@ class TestFinalizePolledTaskPrivacy:
         persisted_message = proc.tsm.persist_message.await_args.args[0]
         persisted_json = persisted_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
-        assert "Visible agent answer" in persisted_json
+        assert "Visible agent answer" not in persisted_json
+        assert "Visible artifact answer" in persisted_json
+        assert persisted_message.message_content.message_task.history is None
 
     @pytest.mark.asyncio
-    async def test_room_message_append_sanitizes_agent_metadata(self):
+    async def test_room_message_response_for_noncompleted_task_is_discarded(self):
+        private_text = "PRIVATE_SENTINEL_noncompleted_message_response"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        message = _make_room_agent_message()
+        returned_message = Message(
+            role=MessageRole.AGENT,
+            message_id="agent-message",
+            parts=[Part(root=TextPart(text=private_text))],
+        )
+
+        result = await proc._handle_a2a_response_for_room(message, returned_message)
+
+        assert result is True
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        persisted_task = persisted_message.message_content.message_task
+        assert persisted_task.status.state == TaskState.working
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is None
+        assert private_text not in persisted_task.model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_completed_room_message_response_materializes_sanitized_artifact(self):
         message_metadata_sentinel = "PRIVATE_SENTINEL_agent_message_metadata"
         part_metadata_sentinel = "PRIVATE_SENTINEL_agent_part_metadata"
         public_text = "Visible agent answer"
         proc = _make_processor()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        message = _make_room_agent_message()
+        message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=Task(
+                    id="task-001",
+                    contextId="ctx-001",
+                    status=TaskStatus(state=TaskState.completed),
+                    kind="task",
+                ),
+            )
+        )
         returned_message = Message(
             role=MessageRole.AGENT,
             message_id="agent-message-with-private-metadata",
@@ -2177,8 +2451,7 @@ class TestFinalizePolledTaskPrivacy:
         assert message_metadata_sentinel not in persisted_json
         assert part_metadata_sentinel not in persisted_json
         assert public_text in persisted_json
-        agent_history = [
-            item for item in persisted_task.history if item.role == MessageRole.AGENT
-        ]
-        assert agent_history[-1].metadata is None
-        assert agent_history[-1].parts[0].root.text == public_text
+        assert persisted_task.history is None
+        assert persisted_task.artifacts is not None
+        assert persisted_task.artifacts[0].name == "response"
+        assert persisted_task.artifacts[0].parts[0].root.text == public_text

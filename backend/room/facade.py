@@ -25,11 +25,12 @@ from common.protocols import (
     RoomMembershipSeedSource,
     RoomRepository,
 )
-from common.types import Message, Part, TaskState, TaskStatus, TextPart
+from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
 from common.types import MessageRole as Role
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from execution.task_tracking import public_persisted_task_data
 from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
@@ -271,22 +272,6 @@ class RoomFacade:
         self, message_id: str, message: RoomAgentMessage
     ) -> bool:
         try:
-            if (
-                message.message_content
-                and message.message_content.message_task
-                and message.message_content.message_task.metadata is None
-            ):
-                existing_message = await self.get_agent_message_model(message_id)
-                if (
-                    existing_message
-                    and existing_message.message_content
-                    and existing_message.message_content.message_task
-                    and existing_message.message_content.message_task.metadata
-                    is not None
-                ):
-                    message.message_content.message_task.metadata = (
-                        existing_message.message_content.message_task.metadata
-                    )
             update_data = _strip_unset_task_tracking_fields(
                 message.model_dump(exclude_unset=True, mode="json")
             )
@@ -504,7 +489,8 @@ class RoomFacade:
         def mark_failed(msg: RoomAgentMessage, error_text: str) -> None:
             task = msg.message_content.message_task if msg.message_content else None
             if task:
-                task.status = TaskStatus(
+                public_task = Task.model_validate(public_persisted_task_data(task))
+                public_task.status = TaskStatus(
                     state=TaskState.failed,
                     message=Message(
                         message_id=self._id_factory(),
@@ -512,6 +498,7 @@ class RoomFacade:
                         parts=[Part(root=TextPart(text=error_text))],
                     ),
                 )
+                msg.message_content.message_task = public_task
             msg.task_updated_at = utcnow()
 
         for msg in messages:

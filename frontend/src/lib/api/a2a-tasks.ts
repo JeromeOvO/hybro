@@ -177,22 +177,6 @@ export function extractTaskContent(task: A2ATaskStatus['task']): string | undefi
     }
   }
 
-  // Fallback to history for streaming agents that accumulate content
-  if (texts.length === 0 && task.history) {
-    const agentMessages = task.history.filter(m => m.role === 'agent')
-    if (agentMessages.length > 0) {
-      const latestAgentMessage = agentMessages[agentMessages.length - 1]
-      for (const part of latestAgentMessage.parts || []) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyPart = part as any
-        const text = anyPart.text || anyPart.root?.text
-        if (text) {
-          texts.push(text)
-        }
-      }
-    }
-  }
-
   return texts.length > 0 ? texts.join('') : undefined
 }
 

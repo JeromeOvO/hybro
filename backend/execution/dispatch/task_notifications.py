@@ -17,29 +17,22 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from common.a2a_constants import SSEProcessingStatus
 from common.types import (
-    Artifact,
-    Part,
     Task,
     TaskState,
-    TextPart,
 )
 from common.utils.a2a_helpers import (
     extract_error_message,
     extract_status_message,
-    extract_text_from_artifacts,
-    get_message_from_task,
-    get_text_from_message,
-    task_has_visible_content,
 )
 from common.utils.logger import get_logger
 from execution.task_tracking import (
+    public_part_data,
     public_persisted_task_data,
     resolve_public_task_label,
 )
@@ -339,20 +332,7 @@ async def _notify_task_update_impl(
                 extract_status_message(task) or "Authentication required"
             )
 
-        elif state == TaskState.completed:
-            # Surface diagnostic status messages for silent completions.
-            # This keeps terminal hints visible when an adapter finishes with
-            # no text/non-text payload but provides a status.message reason.
-            if not task_has_visible_content(task):
-                status_message = extract_status_message(task)
-
     public_agent_text = content
-    if (
-        task is not None
-        and not public_agent_text
-        and state not in {TaskState.failed, TaskState.rejected}
-    ):
-        public_agent_text = get_text_from_message(get_message_from_task(task)) or None
 
     # --- Write-side: artifact backfill + message_text backfill ------------
     # Only write back to DB when a backfill actually modifies the message.
@@ -362,33 +342,6 @@ async def _notify_task_update_impl(
     # loses fields from the a2a Task schema.
     needs_write = False
     if room_agent_message.message_content and task:
-        if (
-            state == TaskState.completed
-            and public_agent_text
-            and (not task.artifacts or len(task.artifacts) == 0)
-        ):
-            task = Task(
-                id=task.id,
-                context_id=task.context_id,
-                status=task.status,
-                history=task.history,
-                metadata=task.metadata,
-                artifacts=[
-                    Artifact(
-                        artifact_id=str(uuid.uuid4()),
-                        name="response",
-                        parts=[Part(root=TextPart(text=public_agent_text))],
-                    )
-                ],
-            )
-            room_agent_message.message_content.message_task = task
-            content = extract_text_from_artifacts(task.artifacts)
-            needs_write = True
-            logger.info(
-                "Task %s: Populated artifacts from public agent output",
-                message_id,
-            )
-
         if not room_agent_message.message_content.message_text:
             if content:
                 room_agent_message.message_content.message_text = content
@@ -447,6 +400,13 @@ async def _notify_task_update_impl(
         is_terminal_task_state_value,
         resolve_terminal_sse_content,
     )
+
+    if parts:
+        parts = [
+            public_part
+            for part in parts
+            if (public_part := public_part_data(part)) is not None
+        ]
 
     if is_terminal_task_state_value(state):
         content = resolve_terminal_sse_content(

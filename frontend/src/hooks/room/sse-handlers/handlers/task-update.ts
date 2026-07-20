@@ -16,6 +16,20 @@ import {
 } from '@/lib/room-timeline/turn-terminal-stamp'
 import type { SSEHandlerDeps } from '../types'
 
+function safeTaskStatusMessage(
+  status: TaskState,
+  rawStatusMessage: string | null | undefined,
+): string | null | undefined {
+  if (rawStatusMessage === undefined) return undefined
+  const text = rawStatusMessage?.trim()
+  if (!text) return null
+  if (isTerminalState(status)) return undefined
+  if (status === TASK_STATE.AUTH_REQUIRED && text === 'Authentication required') {
+    return text
+  }
+  return undefined
+}
+
 function maybeScheduleTurnTerminalRecovery(
   ctx: SSEHandlerDeps,
   hint: {
@@ -56,8 +70,7 @@ export async function handleTaskUpdate(
   const taskFields = {
     taskStatus: status,
     taskError: sseMessage.data.error !== undefined ? (sseMessage.data.error || null) : undefined,
-    taskStatusMessage: sseMessage.data.status_message !== undefined
-      ? (sseMessage.data.status_message || null) : undefined,
+    taskStatusMessage: safeTaskStatusMessage(status, sseMessage.data.status_message),
     taskRequiresInput: sseMessage.data.requires_input,
     taskRequiresAuth: sseMessage.data.requires_auth,
     taskContent: sseMessage.data.task_content ?? undefined,

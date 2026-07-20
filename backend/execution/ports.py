@@ -358,6 +358,8 @@ class A2ATaskTrackingStorePort(Protocol):
 
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None: ...
 
+    async def get_hitl_request(self, request_id: str) -> dict[str, Any] | None: ...
+
     async def update_task_on_message(
         self,
         message_id: str,

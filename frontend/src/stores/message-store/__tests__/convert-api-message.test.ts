@@ -249,7 +249,8 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.hitlUserAnswer).toBe('Approve')
     })
 
-    it('preserves locally projected supervisor answer and group context', async () => {
+    it('ignores all persisted HITL metadata when backend provenance is absent', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_untrusted_hitl_metadata'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'system:clarifier',
@@ -257,6 +258,52 @@ describe('convertApiMessageToIncoming', () => {
           message_text: '',
           message_task: {
             metadata: {
+              hitl_request_id: 'spoofed-request',
+              request_id: 'spoofed-request',
+              hitl_prompt: privateSentinel,
+              prompt: privateSentinel,
+              hitl_prompt_type: 'choice',
+              prompt_type: 'choice',
+              hitl_choices: [privateSentinel],
+              choices: [privateSentinel],
+              user_answer: privateSentinel,
+              hitl_group_id: privateSentinel,
+              hitl_group_total: 2,
+              hitl_group_index: 0,
+            },
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.hitlRequestId).toBeUndefined()
+      expect(result.hitlPrompt).toBeUndefined()
+      expect(result.hitlPromptType).toBeUndefined()
+      expect(result.hitlChoices).toBeUndefined()
+      expect(result.hitlUserAnswer).toBeUndefined()
+      expect(result.hitlGroupId).toBeUndefined()
+      expect(result.hitlGroupTotal).toBeUndefined()
+      expect(result.hitlGroupIndex).toBeUndefined()
+      expect(result.hitlResolved).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('preserves trusted locally projected supervisor answer and group context', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'system:clarifier',
+        extend_info: {
+          hitl_request_id: 'supervisor-hitl-request',
+        },
+        message_content: {
+          message_text: '',
+          message_task: {
+            metadata: {
+              hitl_request_id: 'supervisor-hitl-request',
+              hitl_prompt: 'Which account should be used?',
+              hitl_prompt_type: 'text',
               user_answer: 'Use the enterprise account',
               hitl_group_id: 'supervisor-group',
               hitl_group_total: 2,
@@ -269,6 +316,8 @@ describe('convertApiMessageToIncoming', () => {
 
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
+      expect(result.hitlRequestId).toBe('supervisor-hitl-request')
+      expect(result.hitlPrompt).toBe('Which account should be used?')
       expect(result.hitlUserAnswer).toBe('Use the enterprise account')
       expect(result.hitlGroupId).toBe('supervisor-group')
       expect(result.hitlGroupTotal).toBe(2)
@@ -338,6 +387,54 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
+    it('does not promote completed task status message to content or error', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_completed_status_message'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: {
+              state: 'completed',
+              message: { parts: [{ text: privateSentinel }] },
+            },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.content).toBe('')
+      expect(result.taskError).toBeNull()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('does not use completed task history as output', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_completed_history'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'completed' },
+            history: [{
+              role: 'agent',
+              parts: [{ text: privateSentinel }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.content).toBe('')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
     it('uses a stable public error for terminal failed tasks', async () => {
       const privateSentinel = 'PRIVATE_SENTINEL_failed_status_message'
       const apiMsg = makeApiMessage({
@@ -358,6 +455,73 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.taskStatus).toBe(TASK_STATE.FAILED)
       expect(result.content).toBe('Task failed')
       expect(result.taskError).toBe('Task failed')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('ignores non-completed artifacts and inline file bytes', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_noncompleted_file_bytes'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'failed' },
+            artifacts: [{
+              artifactId: 'partial-artifact',
+              name: 'partial',
+              parts: [{
+                kind: 'file',
+                file: {
+                  bytes: privateSentinel,
+                  mimeType: 'text/plain',
+                  name: 'partial.txt',
+                },
+              }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.FAILED)
+      expect(result.artifacts).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('drops inline file bytes from completed artifacts while keeping safe file fields', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_completed_file_bytes'
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'completed' },
+            artifacts: [{
+              artifactId: 'file-artifact',
+              name: 'result-file',
+              parts: [{
+                kind: 'file',
+                file: {
+                  uri: 'https://storage.example/result.csv',
+                  bytes: privateSentinel,
+                  mimeType: 'text/csv',
+                  name: 'result.csv',
+                },
+              }],
+            }],
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.artifacts?.[0]?.parts[0]?.file).toEqual({
+        uri: 'https://storage.example/result.csv',
+        mime_type: 'text/csv',
+        name: 'result.csv',
+      })
       expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
