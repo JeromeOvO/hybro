@@ -11,7 +11,7 @@ function makeLifecycle(): ProcessingLifecycle {
     dismissPlaceholder: () => {},
     disarmCancelTimeout: () => {},
     hasCancelTimedOut: () => false,
-  } as ProcessingLifecycle
+  } as unknown as ProcessingLifecycle
 }
 
 describe('handleAgentResponsePartial', () => {
@@ -97,7 +97,7 @@ describe('handleAgentResponsePartial', () => {
     expect(useStreamingStore.getState().buffers['codex-1']?.text).toBe('Codex text')
   })
 
-  it('matches artifact_update concat semantics for multi-chunk text', () => {
+  it('matches terminal artifact_update concat semantics for multi-chunk text', () => {
     const lifecycle = makeLifecycle()
     const artifactCtx = { roomId: 'room-1', lifecycle }
     const partialCtx = { roomId: 'room-1', lifecycle } as Parameters<typeof handleAgentResponsePartial>[0]
@@ -118,7 +118,7 @@ describe('handleAgentResponsePartial', () => {
             parts: [{ kind: 'text', text: 'Line one. ' }],
           },
           append: false,
-          last_chunk: false,
+          last_chunk: true,
         },
       },
       { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
@@ -140,7 +140,7 @@ describe('handleAgentResponsePartial', () => {
             parts: [{ kind: 'text', text: 'Line two.' }],
           },
           append: false,
-          last_chunk: false,
+          last_chunk: true,
         },
       },
       { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },

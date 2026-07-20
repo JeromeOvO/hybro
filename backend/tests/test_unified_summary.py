@@ -116,8 +116,10 @@ class TestEmitUnifiedSummary:
         rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_openai_fallback_with_trajectory(self, rmc):
-        """When no synthesis_text, streams OpenAI summary via artifact_update."""
+    async def test_openai_fallback_collects_then_emits_completed_summary(self, rmc):
+        """When no synthesis_text, publish only the completed summary response."""
+        from a2a.types import TaskState
+
         rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
@@ -125,7 +127,8 @@ class TestEmitUnifiedSummary:
 
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
             seen_agent_responses.extend(agent_responses)
-            yield "OpenAI summary."
+            yield "OpenAI "
+            yield "summary."
 
         rmc.summary_service.summarize_agent_responses_stream = mock_stream
 
@@ -139,13 +142,15 @@ class TestEmitUnifiedSummary:
             is_debate=True,
         )
 
-        rmc.delivery.send_artifact_update.assert_awaited()
+        rmc.delivery.send_artifact_update.assert_not_awaited()
         assert all(isinstance(item, RoomMessageSummary) for item in seen_agent_responses)
         assert seen_agent_responses[0].agent_name == "A"
-        assert rmc.delivery.send_artifact_update.await_count >= 2
         saved_msg = rmc.message_writer.upsert_room_agent_message.call_args[0][0]
+        assert saved_msg.message_content.message_task.status.state == TaskState.completed
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
         assert saved_msg.extend_info["summary_type"] == "debate"
+        rmc.delivery.send_agent_response.assert_awaited_once()
+        assert rmc.delivery.send_agent_response.await_args.args[3] == "OpenAI summary."
 
     @pytest.mark.asyncio
     async def test_missing_summary_service_fails_fast(self, rmc):
@@ -230,7 +235,7 @@ class TestEmitUnifiedSummary:
 
     @pytest.mark.asyncio
     async def test_two_agents_from_db_emits_summary(self, rmc):
-        """When DB returns 2+ agent messages, summary is generated and emitted."""
+        """When DB returns 2+ agent messages, only completed summary is emitted."""
         msgs = [
             _make_agent_message("agent-1", "Response from A"),
             _make_agent_message("agent-2", "Response from B"),
@@ -240,7 +245,8 @@ class TestEmitUnifiedSummary:
             side_effect=["Agent A", "Agent B"]
         )
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
-            yield "Combined summary."
+            yield "Combined "
+            yield "summary."
 
         rmc.summary_service.summarize_agent_responses_stream = mock_stream
         rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
@@ -253,13 +259,14 @@ class TestEmitUnifiedSummary:
             user_message_id="msg-1",
         )
 
-        rmc.delivery.send_artifact_update.assert_awaited()
+        rmc.delivery.send_artifact_update.assert_not_awaited()
         # Placeholder SSE emitted
         rmc.delivery.send_task_submitted.assert_awaited_once()
         # Summary persisted
         rmc.message_writer.upsert_room_agent_message.assert_awaited_once()
         # Final SSE emitted
         rmc.delivery.send_agent_response.assert_awaited_once()
+        assert rmc.delivery.send_agent_response.await_args.args[3] == "Combined summary."
 
     @pytest.mark.asyncio
     async def test_openai_returns_empty_emits_failed(self, rmc):

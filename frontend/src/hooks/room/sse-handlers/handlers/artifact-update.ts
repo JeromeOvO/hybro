@@ -18,6 +18,8 @@ export function handleArtifactUpdate(
   sseMessage: RoomSSEFrameMap['artifact_update'],
   correlation: CorrelationResult,
 ): void {
+  if (sseMessage.data.last_chunk !== true) return
+
   const store = useMessageStore.getState()
   const streaming = useStreamingStore.getState()
 

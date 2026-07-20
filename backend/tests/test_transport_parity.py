@@ -2,7 +2,7 @@
 Transport parity integration tests.
 
 Feeds the same AgentEvent sequences through AgentResponseHandler and
-asserts identical DB + SSE outcomes regardless of skip_persist flag
+asserts identical public delivery outcomes regardless of skip_persist flag
 (direct transport uses skip_persist=True, relay/webhook use False).
 """
 
@@ -58,36 +58,48 @@ def _base(**overrides):
 
 
 def _multi_event_sequence(*, skip_persist: bool) -> list[AgentEvent]:
-    """artifact_update (text) -> artifact_update (text) -> artifact_update (file) -> response (terminal)."""
+    """Nonterminal artifact updates followed by a terminal response."""
     return [
         AgentEvent(
-            kind="artifact_update", **_base(),
+            kind="artifact_update",
+            **_base(),
             text="Hello ",
-            artifacts=[{
-                "artifact_id": "msg-001-stream",
-                "parts": [{"kind": "text", "text": "Hello "}],
-            }],
-            append=True, last_chunk=False,
+            artifacts=[
+                {
+                    "artifact_id": "msg-001-stream",
+                    "parts": [{"kind": "text", "text": "Hello "}],
+                }
+            ],
+            append=True,
+            last_chunk=False,
             skip_persist=skip_persist,
         ),
         AgentEvent(
-            kind="artifact_update", **_base(),
+            kind="artifact_update",
+            **_base(),
             text="world",
-            artifacts=[{
-                "artifact_id": "msg-001-stream",
-                "parts": [{"kind": "text", "text": "world"}],
-            }],
-            append=True, last_chunk=False,
+            artifacts=[
+                {
+                    "artifact_id": "msg-001-stream",
+                    "parts": [{"kind": "text", "text": "world"}],
+                }
+            ],
+            append=True,
+            last_chunk=False,
             skip_persist=skip_persist,
         ),
         AgentEvent(
-            kind="artifact_update", **_base(),
-            text="file ready", artifacts=[{"id": "a1"}],
+            kind="artifact_update",
+            **_base(),
+            text="file ready",
+            artifacts=[{"id": "a1"}],
             skip_persist=skip_persist,
         ),
         AgentEvent(
-            kind="response", **_base(),
-            text="Hello world", parts=[{"kind": "text", "text": "Hello world"}],
+            kind="response",
+            **_base(),
+            text="Hello world",
+            parts=[{"kind": "text", "text": "Hello world"}],
             skip_persist=skip_persist,
         ),
     ]
@@ -112,15 +124,16 @@ class TestMultiEventSequenceWithPersist:
             for event in _multi_event_sequence(skip_persist=False):
                 await h.handle(event)
 
-        # Three artifact_update events -> three send_artifact_update calls
-        assert h._delivery.send_artifact_update.await_count == 3
+        # Nonterminal artifact_update events are private and produce no frames.
+        h._delivery.send_artifact_update.assert_not_awaited()
 
-        # Streaming artifacts are projected for delivery but not persisted.
+        # Nonterminal artifacts are not persisted as public result shadows.
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
 
         # response persists "completed" state via update_task_state_on_message
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "completed",
+            "msg-001",
+            "completed",
             message_text="Hello world",
             artifacts=[
                 {
@@ -165,9 +178,9 @@ class TestMultiEventSequenceSkipPersist:
             for event in _multi_event_sequence(skip_persist=True):
                 await h.handle(event)
 
-        # SSE emissions are identical regardless of skip_persist
-        # Three artifact_update events (send_agent_response removed)
-        assert h._delivery.send_artifact_update.await_count == 3
+        # Public emissions are identical regardless of skip_persist:
+        # nonterminal artifacts produce no public frames.
+        h._delivery.send_artifact_update.assert_not_awaited()
         h._delivery.send_agent_response.assert_not_awaited()
 
         # DB writes are skipped
@@ -179,14 +192,14 @@ class TestMultiEventSequenceSkipPersist:
 
 
 # =========================================================================
-# SSE parity: both paths produce identical SSE call patterns
+# Delivery parity: both paths produce identical public call patterns
 # =========================================================================
 
 
-class TestSSEParity:
+class TestDeliveryParity:
     @pytest.mark.asyncio
-    async def test_sse_calls_identical_across_persist_modes(self):
-        """Both skip_persist=True and False produce the same SSE emissions."""
+    async def test_public_delivery_calls_identical_across_persist_modes(self):
+        """Both skip_persist=True and False produce the same public emissions."""
         results = {}
         for skip in (True, False):
             h = _make_handler()
@@ -206,6 +219,7 @@ class TestSSEParity:
             }
 
         assert results[True]["artifact_count"] == results[False]["artifact_count"]
+        assert results[True]["artifact_count"] == 0
         assert results[True]["artifact_calls"] == results[False]["artifact_calls"]
         assert results[True]["response_count"] == results[False]["response_count"]
         assert results[True]["response_calls"] == results[False]["response_calls"]
@@ -233,7 +247,9 @@ class TestErrorEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "failed", message_text="Task failed",
+            "msg-001",
+            "failed",
+            message_text="Task failed",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001", task_result_text=None, failed=True,
@@ -278,7 +294,9 @@ class TestCanceledEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "canceled", message_text="Task was canceled",
+            "msg-001",
+            "canceled",
+            message_text="Task was canceled",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001", task_result_text=None, failed=True,

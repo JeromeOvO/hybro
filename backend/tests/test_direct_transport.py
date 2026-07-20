@@ -1034,11 +1034,12 @@ class TestDispatchTerminalNotificationFailure:
 
 
 class TestMessageChunkEmitsArtifactUpdate:
-    """_handle_stream_message_chunk emits send_artifact_update."""
+    """_handle_stream_message_chunk keeps nonterminal content in memory only."""
 
     @pytest.mark.asyncio
-    async def test_message_chunk_emits_artifact_update(self, monkeypatch):
+    async def test_message_chunk_keeps_text_in_memory_without_public_sse(self, monkeypatch):
         proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
         proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
 
@@ -1074,14 +1075,10 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         monkeypatch.undo()
 
-        proc.delivery.send_artifact_update.assert_awaited_once()
-        call_kwargs = proc.delivery.send_artifact_update.call_args.kwargs
-        assert call_kwargs["room_id"] == "room-1"
-        assert call_kwargs["message_id"] == "msg-1"
-        assert call_kwargs["agent_id"] == "agent-1"
-        assert call_kwargs["artifact"]["artifact_id"] == "msg-1-stream"
-        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "Hello"}]
-        assert call_kwargs["append"] is True
+        assert streaming_state.full_response_text == "Hello"
+        assert streaming_state.accumulated_parts
+        proc.delivery.send_artifact_update.assert_not_awaited()
+        proc.response_handler.handle.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_message_chunk_skips_empty_content(self, monkeypatch):
@@ -1200,11 +1197,10 @@ async def test_working_stream_message_chunk_does_not_persist_remote_metadata_or_
 
 
 class TestArtifactUpdateRoutedThroughHandler:
-    """_handle_stream_artifact_update routes through response_handler.handle
-    instead of using tsm.persist_message + delivery.send_artifact_update."""
+    """_handle_stream_artifact_update keeps nonterminal artifacts in memory only."""
 
     @pytest.mark.asyncio
-    async def test_artifact_chunk_routes_through_handler(self):
+    async def test_artifact_chunk_waits_for_finalization_even_when_sse_enabled(self):
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
@@ -1240,23 +1236,51 @@ class TestArtifactUpdateRoutedThroughHandler:
 
         await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
-        # Handler receives the event, NOT direct delivery or persist_message
-        proc.response_handler.handle.assert_awaited_once()
-        event = proc.response_handler.handle.call_args[0][0]
-        assert event.kind == "artifact_update"
-        assert event.s3_converted is True
-        assert event.append is True
-        assert event.last_chunk is False
-        assert event.artifacts == [
-            {"artifact_id": "art-1", "parts": [], "metadata": None}
-        ]
-
-        # Old paths should NOT be called
+        proc.response_handler.handle.assert_not_awaited()
         proc.tsm.persist_message.assert_not_awaited()
         proc.delivery.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_artifact_chunk_strips_remote_metadata_but_keeps_storage_key(self):
+    async def test_artifact_text_uses_append_semantics_for_finalization(self):
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        streaming_state = MessageStreamingState(full_response_text="stale")
+        initial = MagicMock(
+            artifact=Artifact(
+                artifact_id="artifact-1",
+                parts=[Part(root=TextPart(text="Hello"))],
+            ),
+            append=False,
+            last_chunk=False,
+        )
+        appended = MagicMock(
+            artifact=Artifact(
+                artifact_id="artifact-1",
+                parts=[Part(root=TextPart(text=" world"))],
+            ),
+            append=True,
+            last_chunk=True,
+        )
+
+        await proc._handle_stream_artifact_update(initial, ctx, streaming_state)
+        await proc._handle_stream_artifact_update(appended, ctx, streaming_state)
+
+        assert streaming_state.full_response_text == "Hello world"
+        proc.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_with_last_chunk_waits_for_terminal_finalization(self):
         private_sentinel = "PRIVATE_SENTINEL_stream_artifact_metadata"
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
@@ -1293,16 +1317,17 @@ class TestArtifactUpdateRoutedThroughHandler:
             metadata={"request": private_sentinel},
         )
         result = MagicMock(artifact=artifact, append=False, last_chunk=True)
+        streaming_state = MessageStreamingState()
 
-        await proc._handle_stream_artifact_update(result, ctx, MessageStreamingState())
+        await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
-        event = proc.response_handler.handle.await_args.args[0]
-        payload = json.dumps(event.artifacts, sort_keys=True)
-        assert "artifacts/room/msg/result.csv" in payload
-        assert private_sentinel not in payload
+        proc.response_handler.handle.assert_not_awaited()
+        assert streaming_state.non_text_parts
+        retained_payload = json.dumps(streaming_state.non_text_parts, sort_keys=True)
+        assert "https://storage.example/result.csv" in retained_payload
 
     @pytest.mark.asyncio
-    async def test_artifact_chunk_sse_is_sanitized_only_and_not_persisted_midstream(self):
+    async def test_artifact_chunk_with_private_bytes_never_reaches_public_handler(self):
         private_bytes = "PRIVATE_SENTINEL_direct_stream_bytes"
         private_metadata = "PRIVATE_SENTINEL_direct_stream_metadata"
         proc = _make_processor()
@@ -1347,16 +1372,11 @@ class TestArtifactUpdateRoutedThroughHandler:
 
         proc.tsm.persist_message.assert_not_awaited()
         proc._artifact_store.accumulate_artifact_on_message.assert_not_awaited()
+        proc.response_handler.handle.assert_not_awaited()
         task = current_message.message_content.message_task
         assert task.artifacts in (None, [])
         assert streaming_state.non_text_parts
         assert private_bytes in json.dumps(streaming_state.non_text_parts)
-        event = proc.response_handler.handle.await_args.args[0]
-        event_json = json.dumps(event.artifacts, sort_keys=True)
-        assert private_bytes not in event_json
-        assert private_metadata not in event_json
-        assert event.artifacts[0]["parts"] == []
-        assert event.artifacts[0]["name"] == "partial-file"
 
     @pytest.mark.asyncio
     async def test_later_empty_artifact_chunk_does_not_erase_accumulated_final_parts(self):
@@ -1496,11 +1516,11 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert streaming_state.non_text_parts
 
 
-class TestFinalizeStreamingEmitsLastChunk:
-    """_finalize_streaming sends a last_chunk=True artifact_update event."""
+class TestFinalizeStreamingArtifactDelivery:
+    """_finalize_streaming relies on the terminal task update for delivery."""
 
     @pytest.mark.asyncio
-    async def test_finalize_emits_last_chunk(self):
+    async def test_finalize_does_not_emit_empty_artifact_sentinel(self):
         proc = _make_processor()
         proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.transition_task = AsyncMock()
@@ -1529,13 +1549,8 @@ class TestFinalizeStreamingEmitsLastChunk:
         status, text = await proc._finalize_streaming(ctx, streaming_state)
 
         assert status == ProcessingStatus.SUCCESS
-        # First call should be the last_chunk artifact_update
-        first_call_kwargs = proc.delivery.send_artifact_update.call_args_list[0].kwargs
-        assert first_call_kwargs["room_id"] == "room-1"
-        assert first_call_kwargs["message_id"] == "msg-1"
-        assert first_call_kwargs["artifact"]["artifact_id"] == "msg-1-stream"
-        assert first_call_kwargs["artifact"]["parts"] == []
-        assert first_call_kwargs["last_chunk"] is True
+        assert text == "Agent done."
+        proc.delivery.send_artifact_update.assert_not_awaited()
 
 
 # =============================================================================
@@ -1991,6 +2006,7 @@ class TestHandleSyncResponseInteractive:
             )
         )
         proc.delivery.send_task_submitted = AsyncMock()
+        proc.delivery.send_task_update = AsyncMock()
         proc.a2a_transport.send_message_sync = AsyncMock(
             return_value={
                 "kind": "task",
@@ -2020,6 +2036,76 @@ class TestHandleSyncResponseInteractive:
         assert agent_task_id == "real-agent-task-abc123"
         assert current_message.agent_url == "http://localhost:9060"
         proc.tsm.persist_message.assert_awaited_once_with(current_message)
+
+    @pytest.mark.asyncio
+    async def test_degraded_submitted_delivery_uses_public_task_label(self):
+        private_task = "PRIVATE_SENTINEL_degraded_sync_task_content"
+        private_message = "PRIVATE_SENTINEL_degraded_sync_message_text"
+        public_label = "Requesting public insurer quote"
+        proc = _make_processor()
+        current_message = _make_room_agent_message(
+            agent_url=None,
+            task_content=private_task,
+            message_content=MessageContent(
+                message_text=private_message,
+                message_task=Task(
+                    id="task-001",
+                    contextId="ctx-001",
+                    status=TaskStatus(state=TaskState.working),
+                    kind="task",
+                ),
+            ),
+            extend_info={"public_task_label": public_label},
+        )
+        agent_card = MagicMock(spec_set=["name", "url"])
+        agent_card.name = "test-agent"
+        agent_card.url = "http://localhost:9060"
+
+        proc._setup_tracking_context = AsyncMock(
+            return_value=(
+                None,
+                MagicMock(
+                    room_id="room-1",
+                    current_message=current_message,
+                    agent_card=agent_card,
+                    user_message_id="msg-1",
+                    task_info=None,
+                    send_sse=False,
+                ),
+            )
+        )
+        proc.delivery.send_task_submitted = AsyncMock()
+        proc.delivery.send_task_update = AsyncMock()
+        proc.a2a_transport.send_message_sync = AsyncMock(
+            return_value={
+                "kind": "message",
+                "result": {
+                    "kind": "message",
+                    "role": "agent",
+                    "messageId": "agent-msg-1",
+                    "parts": [{"kind": "text", "text": "Done"}],
+                },
+                "error": None,
+            }
+        )
+        proc.tsm.transition_task = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+
+        await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=MagicMock(),
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
+
+        submitted_kwargs = proc.delivery.send_task_submitted.await_args.kwargs
+        assert submitted_kwargs["task_content"] == public_label
+        submitted_payload = json.dumps(submitted_kwargs, default=str)
+        assert private_task not in submitted_payload
+        assert private_message not in submitted_payload
 
     @pytest.mark.asyncio
     async def test_degraded_input_required_keeps_status_message_internal(self):

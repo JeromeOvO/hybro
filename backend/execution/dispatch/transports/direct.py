@@ -4,7 +4,7 @@ Absorbs all response-processing logic (formerly in ``ResponseProcessor``)
 and replaces terminal ``notify_task_update`` calls with ``AgentEvent``
 emissions through ``AgentResponseHandler``.
 
-Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
+Mid-stream content stays in memory until terminal finalization.
 """
 
 import asyncio
@@ -1066,21 +1066,6 @@ class DirectTransport(AgentTransport):
             ctx.current_message.message_content.message_task = self._public_task_model(task)
             await self.tsm.persist_message(ctx.current_message)
 
-        if ctx.send_sse and content:
-            artifact_dict = {
-                "artifact_id": f"{ctx.current_message.message_id}-stream",
-                "parts": [{"kind": "text", "text": content}],
-            }
-            await self.delivery.send_artifact_update(
-                room_id=ctx.room_id,
-                message_id=ctx.current_message.message_id,
-                agent_id=ctx.current_message.agent_id,
-                artifact=artifact_dict,
-                append=True,
-                last_chunk=False,
-                client_request_id=ctx.current_message.client_request_id,
-            )
-
     @staticmethod
     def _coerce_parts(parts: list[Any]) -> list[Part]:
         coerced: list[Part] = []
@@ -1220,55 +1205,27 @@ class DirectTransport(AgentTransport):
         if not artifact_result:
             return
 
-        # Convert inline base64 to S3 URIs before SSE. Durable persistence waits
-        # until completed finalization; raw stream data stays only in memory.
-        # Share the counter across chunks via streaming_state so the
-        # per-message cap is enforced across the whole streaming session.
-        shared_counter = [streaming_state.inline_conversion_count]
-        try:
-            await self._convert_inline_bytes_to_s3(
-                artifact_result, ctx.room_id, ctx.current_message.message_id,
-                conversion_counter=shared_counter,
-            )
-            streaming_state.inline_conversion_count = shared_counter[0]
-        except Exception:
-            logger.warning(
-                "DirectTransport: S3 conversion failed for streamed artifact on %s; "
-                "dropping unaddressable bytes from SSE",
-                ctx.current_message.message_id,
-                exc_info=True,
-            )
-
         from common.utils.a2a_helpers import extract_parts
 
         extracted = extract_parts(getattr(artifact_result, "parts", None) or [])
+        if extracted.text:
+            if append:
+                streaming_state.full_response_text += extracted.text
+            else:
+                streaming_state.full_response_text = extracted.text
+
         if extracted.has_non_text:
             streaming_state.non_text_parts.extend(extracted.file_parts)
             streaming_state.non_text_parts.extend(extracted.data_parts)
 
-        # Route SSE through handler for one final public projection. The handler
-        # intentionally does not persist nonterminal artifact updates.
-        artifact_dict = (
-            artifact_result.model_dump()
-            if hasattr(artifact_result, "model_dump")
-            else artifact_result
-        )
-        artifact_dict = public_artifact_data(artifact_dict)
-        artifact_dict["parts"] = self._public_stream_artifact_parts(
-            artifact_dict.get("parts") or []
-        )
-        if ctx.send_sse:
-            await self.response_handler.handle(AgentEvent(
-                kind="artifact_update",
-                message_id=ctx.current_message.message_id,
-                room_id=ctx.room_id,
-                agent_id=ctx.current_message.agent_id or "",
-                client_request_id=ctx.current_message.client_request_id,
-                artifacts=[artifact_dict],
-                append=append,
-                last_chunk=last_chunk,
-                s3_converted=True,
-            ))
+        if ctx.send_sse and (append or last_chunk):
+            logger.debug(
+                "DirectTransport: Deferring streamed artifact update for %s "
+                "(append=%s, last_chunk=%s) until terminal finalization",
+                ctx.current_message.message_id,
+                append,
+                last_chunk,
+            )
 
     @staticmethod
     def _public_stream_artifact_parts(parts: list[dict]) -> list[dict]:
@@ -1292,20 +1249,6 @@ class DirectTransport(AgentTransport):
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
-        if ctx.send_sse:
-            await self.delivery.send_artifact_update(
-                room_id=ctx.room_id,
-                message_id=ctx.current_message.message_id,
-                agent_id=ctx.current_message.agent_id,
-                artifact={
-                    "artifact_id": f"{ctx.current_message.message_id}-stream",
-                    "parts": [],
-                },
-                append=True,
-                last_chunk=True,
-                client_request_id=ctx.current_message.client_request_id,
-            )
-
         logger.info(
             "DirectTransport: Streaming complete for message %s, text length: %d",
             ctx.current_message.message_id,
@@ -1704,6 +1647,7 @@ class DirectTransport(AgentTransport):
                 ),
                 step_number=step_number,
                 total_steps=total_steps,
+                task_content=self._public_task_label(current_message, agent_card.name),
                 client_request_id=current_message.client_request_id,
             )
 
