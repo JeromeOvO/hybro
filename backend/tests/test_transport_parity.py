@@ -115,13 +115,26 @@ class TestMultiEventSequenceWithPersist:
         # Three artifact_update events -> three send_artifact_update calls
         assert h._delivery.send_artifact_update.await_count == 3
 
-        # All three artifact_update events with artifacts trigger DB accumulation
-        assert h._message_writer.accumulate_artifact_on_message.await_count == 3
+        # Streaming artifacts are projected for delivery but not persisted.
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
 
         # response persists "completed" state via update_task_state_on_message
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "completed",
-            message_text="Hello world", artifacts=None,
+            message_text="Hello world",
+            artifacts=[
+                {
+                    "artifactId": "msg-001-response",
+                    "name": "response",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Hello world",
+                            "metadata": None,
+                        }
+                    ],
+                }
+            ],
         )
 
         # send_agent_response removed — _notify() delivers parts via task_update
@@ -220,7 +233,7 @@ class TestErrorEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "failed", message_text="agent crashed",
+            "msg-001", "failed", message_text="Task failed",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001", task_result_text=None, failed=True,
@@ -265,7 +278,7 @@ class TestCanceledEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "canceled", message_text="user stopped",
+            "msg-001", "canceled", message_text="Task was canceled",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001", task_result_text=None, failed=True,

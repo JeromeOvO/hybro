@@ -1031,11 +1031,12 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(detail?.isStreaming).toBe(false)
   })
 
-  it('normalizes root-wrapped file parts from task_update before storing artifacts', async () => {
+  it('drops root-wrapped inline file bytes from task_update artifacts', async () => {
     const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
     await mountHook()
 
     resolveClientRequestMessageId('req-root-file', 'task-root-file')
+    const privateBytes = 'JVBERi0xLjQK'
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -1052,7 +1053,7 @@ describe('useRoomWebhook SSE message handling', () => {
               root: {
                 kind: 'file',
                 file: {
-                  bytes: 'JVBERi0xLjQK',
+                  bytes: privateBytes,
                   mime_type: 'application/pdf',
                   name: 'mock_report.pdf',
                 },
@@ -1065,19 +1066,8 @@ describe('useRoomWebhook SSE message handling', () => {
 
     const entity = useMessageStore.getState().entities['task-root-file']
     expect(entity.content).toBe('Here is the PDF report.')
-    expect(entity.artifacts?.[0].parts).toEqual([
-      {
-        kind: 'file',
-        file: {
-          bytes: 'JVBERi0xLjQK',
-          mime_type: 'application/pdf',
-          name: 'mock_report.pdf',
-          uri: undefined,
-        },
-        data: undefined,
-        text: undefined,
-      },
-    ])
+    expect(entity.artifacts).toBeUndefined()
+    expect(JSON.stringify(entity)).not.toContain(privateBytes)
   })
 
   it('drops uncorrelated task_update even when lifecycle already has active message id', async () => {
