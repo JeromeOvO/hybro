@@ -2,7 +2,9 @@
 import { describe, it, expect } from 'vitest'
 import { buildTurns, selectSummary, buildTurnsIncremental, deriveTurnPhase } from '@/lib/room-timeline/build-turns'
 import { derivePrimaryStreamFromFinalAnswer } from '@/lib/room-timeline/derive-final-answer'
+import { convertApiMessageToIncoming } from '@/stores/message-store/convert-api-message'
 import type { MessageEntity } from '@/stores/message-store/types'
+import type { RoomMessage } from '@/lib/types/response'
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -1367,24 +1369,39 @@ describe('primaryStreamMessageId', () => {
     expect(turns[0].processingStatusLogs).toHaveLength(1)
   })
 
-  it('serializes the public task label in timeline turns without internal dispatch text', () => {
+  it('serializes a converted public task label without private legacy API fields', async () => {
+    const privateSentinel = 'PRIVATE_SENTINEL_frontend_timeline'
     const user = makeUserEntity({ id: 'u1' })
+    const incoming = await convertApiMessageToIncoming({
+      room_id: 'room-1',
+      message_id: 'a1',
+      message_created_at: '2026-07-12T12:00:00Z',
+      message_type: 'agent',
+      agent_id: 'system:hybro',
+      task_content: privateSentinel,
+      extend_info: { public_task_label: 'Requesting Insurer' },
+      message_content: {
+        message_text: privateSentinel,
+        message_task: {
+          status: { state: 'working' },
+          metadata: { task_content: privateSentinel },
+        } as RoomMessage['message_content']['message_task'],
+      },
+    } as RoomMessage, {
+      getAgentName: async () => 'HYBRO AI',
+    })
     const agent = makeEntity({
-      id: 'a1',
-      messageType: 'agent',
-      senderName: 'HYBRO AI',
-      agentId: 'system:hybro',
-      taskStatus: 'working',
-      content: '',
-      taskContent: 'Requesting Insurer',
+      ...incoming,
     })
 
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    const serializedEntity = JSON.stringify(agent)
     const serialized = JSON.stringify(turns[0])
 
     expect(turns).toHaveLength(1)
     expect(turns[0].supervisorStage?.details).toBe('Requesting Insurer')
+    expect(serializedEntity).not.toContain(privateSentinel)
     expect(serialized).toContain('Requesting Insurer')
-    expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+    expect(serialized).not.toContain(privateSentinel)
   })
 })

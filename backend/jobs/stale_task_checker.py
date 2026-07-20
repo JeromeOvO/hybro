@@ -29,6 +29,7 @@ from common.config import settings
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.orchestration.run_store import OrchestrationStoreConflict
+from execution.task_tracking import public_persisted_task_data
 from jobs.constants import STALE_TASK_CHECKER
 from models.orchestration import OrchestrationEventType, OrchestrationRunEvent
 from models.request import OrchestrationRequest
@@ -513,7 +514,7 @@ class StaleTaskChecker:
                     )
             await self._store.update_task_on_message(
                 message_id,
-                current_task.model_dump(mode="json"),
+                public_persisted_task_data(current_task),
                 message_text=task_text,
             )
 

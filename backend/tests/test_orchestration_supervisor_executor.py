@@ -1595,6 +1595,110 @@ async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
     )
 
 
+@pytest.mark.asyncio
+async def test_attachment_preflight_failure_update_uses_public_task_label(
+    monkeypatch,
+):
+    private_task_sentinel = "PRIVATE_SENTINEL_attachment_preflight_task"
+    public_task_label = "Requesting Agent One"
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use the uploaded file",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/submission.pdf",
+                    mime_type="application/pdf",
+                    file_name="submission.pdf",
+                    size_bytes=16,
+                )
+            ],
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.tsm.fail_pre_dispatch_task = AsyncMock()
+    monkeypatch.setattr(
+        supervisor_executor_module,
+        "resolve_dispatch_payload_refs",
+        MagicMock(
+            return_value=ResolvedDispatchPayload(
+                selected_attachment_refs=["file-1"],
+            )
+        ),
+    )
+
+    def create_agent_message(**kwargs):
+        return RoomAgentMessage(
+            room_id=kwargs["room_id"],
+            message_id="agent-msg-1",
+            related_message_id=kwargs["related_message_id"],
+            agent_id=kwargs["agent_id"],
+            user_id=kwargs["user_id"],
+            client_request_id=kwargs["client_request_id"],
+            step_number=kwargs.get("step_number"),
+            total_steps=kwargs.get("total_steps"),
+            message_content=MessageContent(message_text=kwargs["content"]),
+            task_content=kwargs["task_content"],
+            extend_info={},
+        )
+
+    async def fail_attachment_preflight(message, *_args, **_kwargs):
+        message.extend_info["attachment_preflight_failure"] = {
+            "code": "agent_does_not_accept_file_type",
+            "message": "Agent does not accept the uploaded file type.",
+        }
+        return ProcessingResult(
+            ProcessingStatus.FAILED,
+            response_text="Agent does not accept the uploaded file type.",
+        )
+
+    executor.room_runtime.create_agent_message = MagicMock(
+        side_effect=create_agent_message
+    )
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=fail_attachment_preflight
+    )
+
+    result = await executor._dispatch_targets(
+        targets=[
+            DelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task=private_task_sentinel,
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+            )
+        ],
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_id="room-1",
+        user_message_id="message-1",
+        step_number=1,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        planned_message_ids=["agent-msg-1"],
+        run_state=_run_state(run_id="message-1", user_message_id="message-1"),
+        original_attachments=list(user_message.message_content.attachments),
+    )
+
+    assert result[0].status == StepStatus.FAILED
+    update_kwargs = executor.delivery.send_task_update.await_args.kwargs
+    assert update_kwargs["task_content"] == public_task_label
+    assert private_task_sentinel not in str(update_kwargs)
+
+
 def test_v2_dispatch_intent_preserves_dispatch_metadata():
     refs = _dispatch_refs_payload()
 

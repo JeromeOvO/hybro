@@ -36,6 +36,7 @@ export async function convertApiMessageToIncoming(
   options: ConvertApiMessageOptions,
 ): Promise<IncomingMessage> {
   const { userId, userName, getAgentName, getAgentSource } = options
+  const extendInfo = apiMessage.extend_info as Record<string, unknown> | null | undefined
 
   // ── Extract task status (before content, so we can gate error fallback) ──
   const messageTask = apiMessage.message_content?.message_task
@@ -52,15 +53,11 @@ export async function convertApiMessageToIncoming(
   let taskError: string | undefined
   let taskContent: string | undefined
 
-  if (apiMessage.message_content?.message_text) {
-    // For non-terminal agent tasks, message_text may contain the user's original
-    // prompt (seeded at task creation). Only use it as display content for
-    // terminal states, non-task messages, or user messages.
-    const isNonTerminalAgentTask = apiMessage.message_type === 'agent'
-      && taskStatus && !isTerminalState(taskStatus)
-    if (!isNonTerminalAgentTask) {
-      content = apiMessage.message_content.message_text
-    }
+  if (
+    apiMessage.message_content?.message_text
+    && (apiMessage.message_type !== 'agent' || !messageTask)
+  ) {
+    content = apiMessage.message_content.message_text
   }
 
   if (messageTask) {
@@ -79,14 +76,10 @@ export async function convertApiMessageToIncoming(
     }
   }
 
-  // ── Extract task_content ─────────────────────────────────────
-  if (apiMessage.task_content) {
-    taskContent = apiMessage.task_content
-  } else {
-    const maybeTaskContent = messageTask?.metadata?.task_content
-    if (typeof maybeTaskContent === 'string') {
-      taskContent = maybeTaskContent
-    }
+  // Only backend-labeled public text may become a visible task description.
+  const publicTaskLabel = extendInfo?.public_task_label
+  if (typeof publicTaskLabel === 'string' && publicTaskLabel.trim()) {
+    taskContent = publicTaskLabel.trim()
   }
 
   // ── Resolve sender name ──────────────────────────────────────
@@ -220,7 +213,6 @@ export async function convertApiMessageToIncoming(
   }
 
   // ── Build IncomingMessage ────────────────────────────────────
-  const extendInfo = apiMessage.extend_info as Record<string, unknown> | null | undefined
   const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
   const turnCompletionKind = parseTurnCompletionKind(extendInfo?.turn_completion_kind)
   const quotedText = typeof extendInfo?.quoted_text === 'string' ? extendInfo.quoted_text : undefined

@@ -1,4 +1,5 @@
 """Integration tests for multimodal flows (upload -> sendMessage -> verify)."""
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -443,8 +444,57 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert "file" in result.error.lower()
         failure = message.extend_info["attachment_preflight_failure"]
         assert failure["code"] == "agent_does_not_accept_file_type"
-        assert "report.pdf" in failure["message"]
+        assert failure["message"] == "The agent does not accept an attached file type."
+        assert "file_names" not in failure
         reader.get_bytes.assert_not_called()
+
+    async def test_sensitive_filename_is_absent_after_preflight_failure_persistence(
+        self,
+    ):
+        from execution.state.task_state_manager import TaskStateManager
+
+        private_filename = "PRIVATE_FILENAME_SENTINEL-payroll.pdf"
+        attachment = UserAttachment(
+            file_id="f-private",
+            s3_key=f"uploads/r/f-private/{private_filename}",
+            mime_type="application/pdf",
+            file_name=private_filename,
+            size_bytes=4,
+        )
+        svc = RoomServices()
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text"]),
+        )
+        message = self._message()
+
+        result = await svc.process_agent_message(self._request(message))
+
+        persisted_payloads = []
+
+        async def persist(request):
+            persisted_payloads.append(request.message.model_dump(mode="json"))
+            return SimpleNamespace(success=True, error=None)
+
+        room_runtime = SimpleNamespace(
+            update_agent_message_by_message_id=AsyncMock(side_effect=persist)
+        )
+        tsm = TaskStateManager(room_runtime, MagicMock())
+        failure = message.extend_info["attachment_preflight_failure"]
+        await tsm.fail_pre_dispatch_task(
+            message,
+            error=result.error,
+            error_code=failure["code"],
+        )
+
+        assert result.success is False
+        assert failure == {
+            "code": "agent_does_not_accept_file_type",
+            "message": "The agent does not accept an attached file type.",
+        }
+        assert len(persisted_payloads) == 1
+        assert private_filename not in json.dumps(persisted_payloads[0])
 
     async def test_compatible_only_policy_skips_unsupported_user_attachment(self):
         svc = RoomServices()
@@ -469,13 +519,8 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert result.a2a_message is not None
         assert len(result.a2a_message.parts) == 1
         assert "attachment_preflight_failure" not in message.extend_info
-        assert message.extend_info["skipped_user_attachments"] == [
-            {
-                "file_name": "report.pdf",
-                "mime_type": "application/pdf",
-                "reason": "unsupported_by_agent",
-            }
-        ]
+        assert "skipped_user_attachments" not in message.extend_info
+        assert "report.pdf" not in json.dumps(message.extend_info)
         reader.get_bytes.assert_not_called()
 
     async def test_explicit_refs_only_does_not_inherit_original_user_attachment(self):

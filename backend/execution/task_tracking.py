@@ -26,6 +26,30 @@ RecordCall = Callable[[str | None], Awaitable[None]]
 SendMessageCall = Callable[..., Awaitable[dict[str, Any]]]
 SendHitlReplyCall = Callable[..., Awaitable[dict[str, Any]]]
 
+_PUBLIC_TASK_METADATA_KEYS = frozenset(
+    {
+        "agent_id",
+        "preflight_failure_code",
+        "requires_policy",
+        "policy_required",
+        "hitl_request_id",
+        "hitl_prompt",
+        "hitl_prompt_type",
+        "hitl_choices",
+        "hitl_a2a_task_id",
+        "hitl_a2a_context_id",
+        "hitl_group_id",
+        "hitl_group_total",
+        "hitl_group_index",
+        "user_answer",
+        # Legacy aliases still consumed by the frontend HITL projection.
+        "request_id",
+        "prompt",
+        "prompt_type",
+        "choices",
+    }
+)
+
 if TYPE_CHECKING:
     from execution.ports import A2ATaskTrackingStorePort
 
@@ -266,7 +290,7 @@ class A2ATaskTrackingService:
         if task_obj:
             await self._tracking_store.update_task_on_message(
                 message_id,
-                task_obj.model_dump(mode="json"),
+                public_persisted_task_data(task_obj),
                 message_text=response_text,
             )
 
@@ -383,7 +407,7 @@ class A2ATaskTrackingService:
         task_text = _extract_text_from_task(task)
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
-            task.model_dump(mode="json"),
+            public_persisted_task_data(task),
             message_text=task_text or None,
         )
 
@@ -558,6 +582,41 @@ def _extract_reply_response_text(task_result) -> str | None:
     return None
 
 
+def public_persisted_task_data(task: Task) -> dict[str, Any]:
+    task_data = task.model_dump(mode="json")
+    history = task_data.get("history")
+    if isinstance(history, list):
+        public_history = []
+        for message in history:
+            if message.get("role") != Role.AGENT.value:
+                continue
+            public_message = dict(message)
+            public_message["metadata"] = None
+            public_history.append(public_message)
+        task_data["history"] = public_history
+
+    status = task_data.get("status")
+    if isinstance(status, dict) and isinstance(status.get("message"), dict):
+        status["message"] = {**status["message"], "metadata": None}
+
+    metadata = task_data.get("metadata")
+    if isinstance(metadata, dict):
+        task_data["metadata"] = {
+            key: value
+            for key, value in metadata.items()
+            if key in _PUBLIC_TASK_METADATA_KEYS
+        }
+    return task_data
+
+
+def resolve_public_task_label(extend_info: Any, agent_name: str) -> str:
+    if isinstance(extend_info, dict):
+        public_task_label = extend_info.get("public_task_label")
+        if isinstance(public_task_label, str) and public_task_label.strip():
+            return public_task_label.strip()
+    return f"Requesting {agent_name}"
+
+
 def _state_value(state: TaskState) -> str:
     return state.value if hasattr(state, "value") else str(state)
 
@@ -569,4 +628,8 @@ def _non_text_parts(artifacts) -> list[dict] | None:
     return None
 
 
-__all__ = ["A2ATaskTrackingService"]
+__all__ = [
+    "A2ATaskTrackingService",
+    "public_persisted_task_data",
+    "resolve_public_task_label",
+]

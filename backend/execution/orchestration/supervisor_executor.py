@@ -7512,7 +7512,7 @@ class SupervisorExecutor:
                         agent_id=target.agent_id,
                         step_number=step_number,
                         total_steps=None,
-                        task_content=target.task,
+                        task_content=public_task_label,
                         client_request_id=message.client_request_id,
                     )
                 step_result = StepResult(

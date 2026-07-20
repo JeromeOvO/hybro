@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -167,6 +168,107 @@ class TestRoomMessageRetrieval:
             result.message_list[0].message_content.message_text
             == "final artifact answer"
         )
+
+    @pytest.mark.parametrize(
+        ("extend_info", "expected_label"),
+        [
+            (
+                {"public_task_label": "Requesting Claims Agent"},
+                "Requesting Claims Agent",
+            ),
+            ({}, "Requesting agent1"),
+        ],
+    )
+    async def test_legacy_agent_task_projection_redacts_private_dispatch_fields(
+        self,
+        room_runtime,
+        extend_info,
+        expected_label,
+    ):
+        private_sentinel = "PRIVATE_SENTINEL_legacy_room_projection"
+        task = Task(
+            id="task-private",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[
+                Artifact(
+                    artifact_id="artifact-public",
+                    parts=[Part(root=TextPart(text="Final public agent answer"))],
+                )
+            ],
+            history=[
+                Message(
+                    role=MessageRole.USER,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+                Message(
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text="Final public agent answer"))],
+                ),
+            ],
+            metadata={
+                "agent_id": "agent1",
+                "preflight_failure_code": "safe-code",
+                "requires_policy": True,
+                "hitl_request_id": "hitl-request-1",
+                "hitl_prompt": "Choose a public option",
+                "hitl_prompt_type": "choice",
+                "hitl_choices": ["A", "B"],
+                "hitl_a2a_task_id": "a2a-task-1",
+                "hitl_a2a_context_id": "a2a-context-1",
+                "hitl_group_id": "hitl-group-1",
+                "hitl_group_total": 2,
+                "hitl_group_index": 1,
+                "user_answer": "A",
+                "task_content": private_sentinel,
+                "internal_task_payload": {"instructions": private_sentinel},
+            },
+        )
+        agent_msg = RoomAgentMessage(
+            room_id="room1",
+            message_id="agent-private",
+            agent_id="agent1",
+            message_content=MessageContent(
+                message_text=private_sentinel,
+                message_task=task,
+            ),
+            task_content=private_sentinel,
+            extend_info=extend_info,
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[])
+        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        room_runtime.bind_facade(facade)
+        room_runtime.bind_s3_service(SimpleNamespace(get_presigned_url=AsyncMock()))
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1")
+        )
+
+        projected = result.message_list[0]
+        projected_task = projected.message_content.message_task
+        assert projected.message_content.message_text == "Final public agent answer"
+        assert projected.task_content == expected_label
+        assert projected.extend_info == {"public_task_label": expected_label}
+        assert projected_task is not None
+        assert [message.role for message in projected_task.history] == [
+            MessageRole.AGENT
+        ]
+        assert projected_task.metadata == {
+            "agent_id": "agent1",
+            "preflight_failure_code": "safe-code",
+            "requires_policy": True,
+            "hitl_request_id": "hitl-request-1",
+            "hitl_prompt": "Choose a public option",
+            "hitl_prompt_type": "choice",
+            "hitl_choices": ["A", "B"],
+            "hitl_a2a_task_id": "a2a-task-1",
+            "hitl_a2a_context_id": "a2a-context-1",
+            "hitl_group_id": "hitl-group-1",
+            "hitl_group_total": 2,
+            "hitl_group_index": 1,
+            "user_answer": "A",
+        }
+        assert private_sentinel not in json.dumps(result.model_dump(mode="json"))
 
 
 class TestRefreshArtifactPresignedUrls:
