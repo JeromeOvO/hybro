@@ -6383,7 +6383,7 @@ async def test_recover_v2_inflight_dispatch_rehydrates_a2a_task_fields_for_auth_
     recovered_output = recovered_state.agent_outputs[0]
     assert recovered_output.a2a_task_id == "task-from-task"
     assert recovered_output.a2a_context_id == "ctx-from-task"
-    assert recovered_output.status_message == "Please provide missing details."
+    assert recovered_output.status_message is None
 
 
 @pytest.mark.asyncio
@@ -11331,6 +11331,79 @@ def test_awaiting_result_requires_hitl_only_for_auth_or_policy():
     assert SupervisorExecutor._awaiting_result_requires_hitl(plain_input_required) is False
     assert SupervisorExecutor._awaiting_result_requires_hitl(auth_required) is True
     assert SupervisorExecutor._awaiting_result_requires_hitl(policy_required) is True
+
+
+@pytest.mark.asyncio
+async def test_agent_input_required_hitl_keeps_remote_prompt_out_of_run_state():
+    private_prompt = "PRIVATE_SENTINEL_supervisor_agent_prompt"
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-1"))
+    )
+    state = await store.create_run(
+        _run_state(status=OrchestrationStatus.RUNNING, state_version=0)
+    )
+    result = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Continue remote task",
+        response_text="",
+        success=True,
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id="agent-msg-1",
+        paused_message_id="agent-msg-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+        status_message=private_prompt,
+        interactive_state="input-required",
+    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor._emit_processing_status = AsyncMock()
+
+    persisted, status = await executor._run_agent_awaiting_input_action(
+        state=state,
+        results=[result],
+        awaiting=[result],
+        trajectory=SupervisorTrajectory(),
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        conversation_context=None,
+        request_user_id="user-1",
+        quoted_text=None,
+    )
+
+    assert status == RunStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    assert executor.hitl_coordinator.request_input.await_args.kwargs["prompt"] == private_prompt
+    persisted = await store.get_run(persisted.run_id)
+    assert persisted is not None
+    serialized = json.dumps(persisted.model_dump(mode="json"), sort_keys=True)
+    assert private_prompt not in serialized
+    assert persisted.open_questions == [
+        {
+            "request_id": "hitl-1",
+            "source": "agent",
+            "agent_id": "agent-1",
+            "prompt": "The agent needs additional information.",
+            "status": "open",
+            "created_at": persisted.open_questions[0]["created_at"],
+        }
+    ]
 
 
 @pytest.mark.asyncio

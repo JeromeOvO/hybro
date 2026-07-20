@@ -67,6 +67,22 @@ describe('PartRenderer', () => {
     expect(screen.getByText('doc.pdf')).toBeTruthy()
   })
 
+  it('does not render inline file bytes without a URI', () => {
+    const privateBytes = 'PRIVATE_SENTINEL_renderer_file_bytes'
+    const part: ArtifactPart = {
+      kind: 'file',
+      file: { bytes: privateBytes, mime_type: 'image/png', name: 'private.png' },
+    }
+    const { container } = render(<PartRenderer part={part} />)
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('audio')).toBeNull()
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.innerHTML).not.toContain(privateBytes)
+    expect(container.innerHTML).not.toContain('data:image/png;base64')
+  })
+
   it('renders data part as collapsible JSON block', () => {
     const data = { key: 'value', nested: { a: 1 } }
     const part: ArtifactPart = { kind: 'data', data }

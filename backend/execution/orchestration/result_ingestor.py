@@ -53,9 +53,40 @@ _PROJECTION_OWNED_ARTIFACT_FIELDS = {
     "summary",
 }
 
+_SAFE_STATUS_MESSAGE_CODES = {
+    "agent_does_not_accept_file_type",
+    "attachment_ref_not_found",
+    "context_ref_not_found",
+    "artifact_ref_not_found",
+    "dispatch_payload_ref_unresolved",
+    "attachment_projection_unavailable",
+    "rate_limited",
+    "agent_unavailable",
+    "timeout",
+    "agent_execution_failed",
+    "file_too_large",
+    "file_prepare_failed",
+    "agent_card_unavailable",
+}
+
+_GENERIC_AGENT_INPUT_REQUIRED = "Agent requested additional input."
+
+
+def _safe_status_message_for_state(result: AgentResultRead) -> str | None:
+    value = result.status_message
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if result.status in {"awaiting_input", "completed"}:
+        return None
+    if normalized in _SAFE_STATUS_MESSAGE_CODES:
+        return normalized
+    return None
+
 
 def _input_required_failure(result: AgentResultRead) -> OpenFailureRecord:
-    message = result.status_message or "Agent requested additional input."
     return OpenFailureRecord(
         failure_id=uuid4().hex,
         fingerprint=f"{result.agent_id}:{result.agent_message_id}:agent_input_required",
@@ -63,7 +94,7 @@ def _input_required_failure(result: AgentResultRead) -> OpenFailureRecord:
         agent_id=result.agent_id,
         agent_message_id=result.agent_message_id,
         error_code="agent_input_required",
-        error_message=message,
+        error_message=_GENERIC_AGENT_INPUT_REQUIRED,
         recoverable=True,
         retry_count=0,
         max_retries=2,
@@ -110,6 +141,7 @@ class AgentResultIngestor:
         if not isinstance(result, AgentResultRead):
             result = AgentResultRead.model_validate(result)
 
+        safe_status_message = _safe_status_message_for_state(result)
         updated = state.model_copy(deep=True)
         result_artifact_keys, artifacts_changed = self._merge_artifacts(
             updated,
@@ -119,14 +151,20 @@ class AgentResultIngestor:
             updated,
             result,
             result_artifact_keys,
+            safe_status_message,
         )
         output_changed = self._merge_output(
             updated,
             result,
             result_artifact_keys,
+            safe_status_message,
         )
         fact_changed = self._merge_fact(updated, result)
-        failure_changed = self._merge_failures(updated, result)
+        failure_changed = self._merge_failures(
+            updated,
+            result,
+            safe_status_message,
+        )
 
         if not any(
             (
@@ -248,6 +286,7 @@ class AgentResultIngestor:
         state: OrchestrationRunState,
         result: AgentResultRead,
         result_artifact_keys: list[str],
+        safe_status_message: str | None,
     ) -> bool:
         existing_output = next(
             (
@@ -272,7 +311,7 @@ class AgentResultIngestor:
             agent_id=result.agent_id,
             status=result.status,
             text=result.text,
-            status_message=result.status_message,
+            status_message=safe_status_message,
             artifact_records=observation_artifacts,
         )
         observation_fact_ids = {fact["fact_id"] for fact in observation.facts}
@@ -305,6 +344,7 @@ class AgentResultIngestor:
         state: OrchestrationRunState,
         result: AgentResultRead,
         result_artifact_keys: list[str],
+        safe_status_message: str | None,
     ) -> bool:
         changed = False
         existing_output = next(
@@ -326,7 +366,7 @@ class AgentResultIngestor:
                     error=result.error,
                     a2a_task_id=result.a2a_task_id,
                     a2a_context_id=result.a2a_context_id,
-                    status_message=result.status_message,
+                    status_message=safe_status_message,
                     interactive_state=result.interactive_state,
                     requires_auth=result.requires_auth,
                     requires_policy=result.requires_policy,
@@ -343,7 +383,7 @@ class AgentResultIngestor:
                 ("status", result.status),
                 ("a2a_task_id", result.a2a_task_id),
                 ("a2a_context_id", result.a2a_context_id),
-                ("status_message", result.status_message),
+                ("status_message", safe_status_message),
                 ("interactive_state", result.interactive_state),
                 ("requires_auth", result.requires_auth),
                 ("requires_policy", result.requires_policy),
@@ -370,6 +410,7 @@ class AgentResultIngestor:
     def _merge_failures(
         state: OrchestrationRunState,
         result: AgentResultRead,
+        safe_status_message: str | None,
     ) -> bool:
         matched_intent = next(
             (
@@ -384,7 +425,7 @@ class AgentResultIngestor:
                 agent_id=result.agent_id,
                 agent_message_id=result.agent_message_id,
                 error=result.error,
-                status_message=result.status_message,
+                status_message=safe_status_message,
                 dispatch_intent_id=(
                     matched_intent.dispatch_intent_id if matched_intent else None
                 ),

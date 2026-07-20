@@ -54,6 +54,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_PUBLIC_TERMINAL_ERRORS = {
+    "failed": "Task failed",
+    "error": "Task failed",
+    "rate_limited": "Task failed",
+    "rejected": "Task was rejected by the agent",
+    "canceled": "Task was canceled",
+    "expired": "Task expired",
+}
+
+
+def _safe_terminal_error(state: Any) -> str:
+    return _PUBLIC_TERMINAL_ERRORS.get(str(state), "Task failed")
+
 
 class WebhookTransport(AgentTransport):
     """Push-notification transport for async A2A agents (inbound-only)."""
@@ -197,8 +210,6 @@ class WebhookTransport(AgentTransport):
                 if extracted.has_non_text
                 else None
             )
-        if not text and task.status and task.status.message:
-            text = extract_error_message(task) or None
 
         state_value = normalize_task_state_value(state) or str(state)
 
@@ -206,7 +217,7 @@ class WebhookTransport(AgentTransport):
             return AgentEvent(
                 kind="canceled",
                 **base,
-                text=text or "",
+                text=_safe_terminal_error("canceled"),
                 state=state_value,
             )
 
@@ -214,7 +225,7 @@ class WebhookTransport(AgentTransport):
             return AgentEvent(
                 kind="error",
                 **base,
-                error_text=text or "Unknown agent error",
+                error_text=_safe_terminal_error(state_value),
                 state=state_value,
             )
 
@@ -222,7 +233,7 @@ class WebhookTransport(AgentTransport):
             return AgentEvent(
                 kind="interactive",
                 **base,
-                text=text or "",
+                text=text or extract_error_message(task) or "",
                 state=state_value,
             )
 
@@ -246,7 +257,7 @@ class WebhookTransport(AgentTransport):
         return AgentEvent(
             kind="status_update",
             **base,
-            text=text or "",
+            text="",
             state=state_value,
         )
 

@@ -1217,45 +1217,46 @@ class DirectTransport(AgentTransport):
         append = getattr(result, "append", False) or False
         last_chunk = getattr(result, "last_chunk", False) or False
 
-        task = get_task(ctx.current_message)
-        if not artifact_result or not task:
+        if not artifact_result:
             return
 
-        if task.artifacts is None:
-            task.artifacts = []
-
-        artifact_id = getattr(artifact_result, "artifact_id", None)
-        if append and artifact_id:
-            existing = next(
-                (a for a in task.artifacts if a.artifact_id == artifact_id), None
-            )
-            if existing:
-                artifact_parts = getattr(artifact_result, "parts", None)
-                if artifact_parts:
-                    existing.parts.extend(artifact_parts)
-            else:
-                task.artifacts.append(artifact_result)
-        else:
-            task.artifacts.append(artifact_result)
-
-        # Convert inline base64 to S3 URIs before persistence and SSE.
+        # Convert inline base64 to S3 URIs before SSE. Durable persistence waits
+        # until completed finalization; raw stream data stays only in memory.
         # Share the counter across chunks via streaming_state so the
         # per-message cap is enforced across the whole streaming session.
         shared_counter = [streaming_state.inline_conversion_count]
-        await self._convert_inline_bytes_to_s3(
-            artifact_result, ctx.room_id, ctx.current_message.message_id,
-            conversion_counter=shared_counter,
-        )
-        streaming_state.inline_conversion_count = shared_counter[0]
+        try:
+            await self._convert_inline_bytes_to_s3(
+                artifact_result, ctx.room_id, ctx.current_message.message_id,
+                conversion_counter=shared_counter,
+            )
+            streaming_state.inline_conversion_count = shared_counter[0]
+        except Exception:
+            logger.warning(
+                "DirectTransport: S3 conversion failed for streamed artifact on %s; "
+                "dropping unaddressable bytes from SSE",
+                ctx.current_message.message_id,
+                exc_info=True,
+            )
 
-        # Route persistence + SSE through handler (atomic DB ops + broadcast).
-        # S3 conversion was already done above, so set s3_converted=True.
+        from common.utils.a2a_helpers import extract_parts
+
+        extracted = extract_parts(getattr(artifact_result, "parts", None) or [])
+        if extracted.has_non_text:
+            streaming_state.non_text_parts.extend(extracted.file_parts)
+            streaming_state.non_text_parts.extend(extracted.data_parts)
+
+        # Route SSE through handler for one final public projection. The handler
+        # intentionally does not persist nonterminal artifact updates.
         artifact_dict = (
             artifact_result.model_dump()
             if hasattr(artifact_result, "model_dump")
             else artifact_result
         )
         artifact_dict = public_artifact_data(artifact_dict)
+        artifact_dict["parts"] = self._public_stream_artifact_parts(
+            artifact_dict.get("parts") or []
+        )
         if ctx.send_sse:
             await self.response_handler.handle(AgentEvent(
                 kind="artifact_update",
@@ -1268,11 +1269,22 @@ class DirectTransport(AgentTransport):
                 last_chunk=last_chunk,
                 s3_converted=True,
             ))
-        else:
-            # No SSE but still persist via atomic op (replaces full-doc persist_message)
-            await self._artifact_store.accumulate_artifact_on_message(
-                ctx.current_message.message_id, artifact_dict, append=append,
+
+    @staticmethod
+    def _public_stream_artifact_parts(parts: list[dict]) -> list[dict]:
+        public_parts: list[dict] = []
+        for part in parts:
+            public_part = public_part_data(part)
+            payload = (
+                public_part.get("root")
+                if isinstance(public_part.get("root"), dict)
+                else public_part
             )
+            file_payload = payload.get("file") if isinstance(payload, dict) else None
+            if isinstance(file_payload, dict) and not file_payload.get("uri"):
+                continue
+            public_parts.append(public_part)
+        return public_parts
 
     async def _finalize_streaming(
         self,
@@ -1912,6 +1924,20 @@ class DirectTransport(AgentTransport):
                     )
             else:
                 should_persist = True
+            if actual_state == CommonTaskState.COMPLETED and full_response_text:
+                task = get_task(current_message)
+                if task:
+                    self._materialize_text_as_response_artifact(
+                        task,
+                        full_response_text,
+                        artifact_id=f"{message_id}-final",
+                    )
+                    self._force_terminal_state_for_projection(
+                        task, CommonTaskState.COMPLETED
+                    )
+                    current_message.message_content.message_task = (
+                        self._public_terminal_output_task_model(task)
+                    )
             await self.tsm.transition_task(
                 current_message,
                 actual_state,

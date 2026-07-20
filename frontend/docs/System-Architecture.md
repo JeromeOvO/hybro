@@ -417,6 +417,12 @@ Backend queue/resume completion paths set `turn_completion_kind` from `_emit_uni
 
 **Live streaming (target):** `artifact_update` is the primary path into `streaming-store.append(message_id, …)`. `agent_response_partial` (rare in production; delivery-layer alias) should shim into the same message-keyed append — not a separate turn-level buffer. **Checkpoints:** terminal `task_update` and final `agent_response` write to `message-store`, read the message-scoped buffer for fallback text, then clear that message's stream buffer (turn-level clear only on turn complete).
 
+SSE artifact conversion is defensive at the client boundary. `task_update`
+`parts` and `artifact_update` payloads drop legacy inline `file.bytes`; file
+parts are renderable only when they carry a URI. `PartRenderer` does not create
+`data:` URLs from inline bytes, so stale or malicious legacy SSE cannot surface
+private file content in message state or rendered media.
+
 Room DB synchronization lives under `src/lib/room-sync/`:
 
 - `hydrate-room.ts`: initial hydration, reconcile, and HITL overlay orchestration.

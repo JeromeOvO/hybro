@@ -7,6 +7,7 @@ and that flow-control flags (skip_persist) work.
 """
 
 import ast
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -146,7 +147,7 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
 
 class TestArtifactUpdateEvent:
     @pytest.mark.asyncio
-    async def test_persists_and_sends_sse(self):
+    async def test_broadcasts_sse_without_midstream_persist(self):
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update",
@@ -155,19 +156,12 @@ class TestArtifactUpdateEvent:
             artifacts=[{"id": "a1"}],
         )
         await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-001",
-            {"id": "a1"},
-            append=False,
-        )
-        h._delivery.send_artifact_update.assert_awaited_once_with(
-            room_id="room-001",
-            message_id="msg-001",
-            agent_id="agent-001",
-            artifact={"id": "a1"},
-            append=False,
-            last_chunk=False,
-        )
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._delivery.send_artifact_update.await_args.kwargs
+        assert call_kwargs["artifact"]["id"] == "a1"
+        assert call_kwargs["append"] is False
+        assert call_kwargs["last_chunk"] is False
 
     @pytest.mark.asyncio
     async def test_skip_persist_still_broadcasts(self):
@@ -194,11 +188,7 @@ class TestArtifactUpdateEvent:
             append=True,
         )
         await h.handle(event)
-        h._message_writer.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-001",
-            {"id": "a1"},
-            append=True,
-        )
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
         h._delivery.send_artifact_update.assert_awaited_once()
         call_kwargs = h._delivery.send_artifact_update.call_args.kwargs
         assert call_kwargs["append"] is True
@@ -277,7 +267,7 @@ class TestArtifactUpdateEvent:
             await h.handle(event)
 
         h._delivery.send_artifact_update.assert_awaited_once()
-        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_s3_converted_flag_skips_conversion(self):
@@ -309,13 +299,12 @@ class TestArtifactUpdateEvent:
 
         # S3 conversion should NOT be called (already done by transport)
         mock_convert.assert_not_awaited()
-        # But SSE and DB should still fire
         h._delivery.send_artifact_update.assert_awaited_once()
-        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_s3_conversion_failure_does_not_block_sse(self):
-        """S3 conversion failure should not prevent SSE broadcast or DB persist."""
+        """S3 conversion failure should not prevent sanitized SSE broadcast."""
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
@@ -342,8 +331,46 @@ class TestArtifactUpdateEvent:
 
         # SSE should still be sent despite S3 failure
         h._delivery.send_artifact_update.assert_awaited_once()
-        # DB persist should still happen
-        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_streaming_artifact_update_never_persists_and_drops_unconverted_bytes(self):
+        """Remote mid-stream artifacts are SSE-only and never persist raw inline bytes."""
+        private_bytes = "PRIVATE_SENTINEL_stream_file_bytes"
+        private_metadata = "PRIVATE_SENTINEL_stream_metadata"
+        h = _make_handler()
+        artifact = {
+            "artifactId": "a-private",
+            "name": "partial",
+            "metadata": {"private": private_metadata},
+            "parts": [
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": private_bytes,
+                        "mime_type": "text/plain",
+                        "name": "private.txt",
+                    },
+                    "metadata": {"private": private_metadata},
+                }
+            ],
+        }
+        event = AgentEvent(kind="artifact_update", **_base_event(), artifacts=[artifact])
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            await h.handle(event)
+
+        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._delivery.send_artifact_update.assert_awaited_once()
+        delivered = h._delivery.send_artifact_update.await_args.kwargs["artifact"]
+        delivered_json = json.dumps(delivered, sort_keys=True)
+        assert private_bytes not in delivered_json
+        assert private_metadata not in delivered_json
+        assert delivered.get("parts") in ([], None)
 
 
 # =============================================================================
@@ -369,9 +396,181 @@ class TestResponseEvent:
             "msg-001",
             "completed",
             message_text="Done!",
-            artifacts=None,
+            artifacts=[
+                {
+                    "artifactId": "msg-001-response",
+                    "name": "response",
+                    "parts": [{"kind": "text", "text": "Done!"}],
+                }
+            ],
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_text_only_completed_response_materializes_public_artifact_for_refresh(self):
+        h = _make_handler()
+        event = AgentEvent(kind="response", **_base_event(), text="Visible final answer")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        kwargs = h._message_writer.update_task_state_on_message.await_args.kwargs
+        assert kwargs["message_text"] == "Visible final answer"
+        assert kwargs["artifacts"] == [
+            {
+                "artifactId": "msg-001-response",
+                "name": "response",
+                "parts": [{"kind": "text", "text": "Visible final answer"}],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_completed_response_sanitizes_artifacts_for_all_terminal_consumers(self):
+        private_bytes = "PRIVATE_SENTINEL_completed_file_bytes"
+        private_metadata = "PRIVATE_SENTINEL_completed_metadata"
+        h = _make_handler(
+            slot_lifecycle=MagicMock(terminate_slot=AsyncMock()),
+        )
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(turn_id="turn-001"),
+            text="raw status text should not be used",
+            artifacts=[
+                {
+                    "artifactId": "artifact-private",
+                    "name": "response",
+                    "metadata": {"private": private_metadata},
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Visible completed output",
+                            "metadata": {"private": private_metadata},
+                        },
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": private_bytes,
+                                "mime_type": "text/plain",
+                                "name": "private.txt",
+                            },
+                            "metadata": {"private": private_metadata},
+                        },
+                    ],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        persisted_kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert persisted_kwargs["message_text"] == "Visible completed output"
+        payloads = [
+            persisted_kwargs["artifacts"],
+            h._slot_lifecycle.terminate_slot.await_args.kwargs["artifacts"],
+            service.ingest_agent_result.await_args.args[0].artifacts,
+        ]
+        for payload in payloads:
+            payload_json = json.dumps(payload, sort_keys=True)
+            assert private_bytes not in payload_json
+            assert private_metadata not in payload_json
+            assert "Visible completed output" in payload_json
+
+    @pytest.mark.asyncio
+    async def test_completed_response_does_not_fallback_to_raw_text_when_artifacts_drop(self):
+        private_text = "PRIVATE_SENTINEL_completed_status_text"
+        private_bytes = "PRIVATE_SENTINEL_completed_only_file_bytes"
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text=private_text,
+            artifacts=[
+                {
+                    "artifactId": "unsafe-file-only",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": private_bytes,
+                                "mime_type": "text/plain",
+                                "name": "private.txt",
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert kwargs["message_text"] is None
+        assert kwargs["artifacts"] is None
+        assert private_text not in repr(kwargs)
+        assert private_bytes not in repr(kwargs)
+
+    @pytest.mark.asyncio
+    async def test_parts_only_completed_response_drops_unaddressable_file(self):
+        private_text = "PRIVATE_SENTINEL_parts_only_status_text"
+        private_bytes = "PRIVATE_SENTINEL_parts_only_file_bytes"
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text=private_text,
+            parts=[
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": private_bytes,
+                        "mime_type": "text/plain",
+                        "name": "private.txt",
+                    },
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert kwargs["message_text"] is None
+        assert kwargs["artifacts"] is None
+        assert private_text not in repr(kwargs)
+        assert private_bytes not in repr(kwargs)
 
     @pytest.mark.asyncio
     async def test_terminal_notification_failure_does_not_block_response_cleanup(self):
@@ -396,15 +595,28 @@ class TestResponseEvent:
             "msg-001",
             "completed",
             message_text="Done!",
-            artifacts=None,
+            artifacts=[
+                {
+                    "artifactId": "msg-001-response",
+                    "name": "response",
+                    "parts": [{"kind": "text", "text": "Done!"}],
+                }
+            ],
         )
+        expected_artifacts = [
+            {
+                "artifactId": "msg-001-response",
+                "name": "response",
+                "parts": [{"kind": "text", "text": "Done!"}],
+            }
+        ]
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
             turn_id="turn-001",
             slot_id="msg-001",
             status="completed",
             content="Done!",
-            artifacts=None,
+            artifacts=expected_artifacts,
             error=None,
             has_partial_content=None,
         )
@@ -551,14 +763,11 @@ class TestOrchestrationResultIngestorHook:
         assert events == ["persist", "notify", "hook", "resume"]
         service.ingest_agent_result.assert_awaited_once()
         result = service.ingest_agent_result.await_args.args[0]
-        assert result == AgentResultRead(
-            agent_message_id="msg-001",
-            agent_id="agent-001",
-            status="completed",
-            text="resolved text",
-            artifacts=artifacts,
-            error=None,
-        )
+        assert result.agent_message_id == "msg-001"
+        assert result.status == "completed"
+        assert result.text == "resolved text"
+        assert result.artifacts[0]["artifactId"] == "artifact-1"
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_hook_exception_does_not_prevent_legacy_resume_path(self):
@@ -657,18 +866,71 @@ class TestOrchestrationResultIngestorHook:
             agent_message_id="msg-error",
             agent_id="agent-001",
             status="failed",
-            text="partial",
+            text=None,
             artifacts=[],
-            error="boom",
+            error="Task failed",
         )
         assert canceled_result == AgentResultRead(
             agent_message_id="msg-canceled",
             agent_id="agent-001",
             status="canceled",
-            text="stopped",
+            text=None,
             artifacts=[],
-            error="stopped",
+            error="Task was canceled",
         )
+
+    @pytest.mark.asyncio
+    async def test_failure_events_project_generic_error_before_persist_delivery_and_ingest(self):
+        private_text = "PRIVATE_SENTINEL_remote_failure_text"
+        private_metadata = "PRIVATE_SENTINEL_remote_failure_metadata"
+        h = _make_handler(slot_lifecycle=MagicMock(terminate_slot=AsyncMock()))
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="error",
+            **_base_event(turn_id="turn-001"),
+            text=private_text,
+            error_text=private_text,
+            state="failed",
+            artifacts=[
+                {
+                    "artifactId": "raw-failure",
+                    "metadata": {"private": private_metadata},
+                    "parts": [{"kind": "text", "text": private_text}],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            notify = AsyncMock(return_value=True)
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                notify,
+            )
+            await h.handle(event)
+
+        persisted_kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert persisted_kwargs["message_text"] == "Task failed"
+        assert notify.await_args.kwargs["error"] == "Task failed"
+        slot_kwargs = h._slot_lifecycle.terminate_slot.await_args.kwargs
+        assert slot_kwargs["content"] is None
+        assert slot_kwargs["error"] == "Task failed"
+        result = service.ingest_agent_result.await_args.args[0]
+        assert result.text is None
+        assert result.artifacts == []
+        assert result.error == "Task failed"
+        combined = json.dumps(
+            [
+                h._task_writer.update_task_state_on_message.await_args.kwargs,
+                notify.await_args.kwargs,
+                slot_kwargs,
+                result.model_dump(),
+            ],
+            sort_keys=True,
+        )
+        assert private_text not in combined
+        assert private_metadata not in combined
 
     @pytest.mark.asyncio
     async def test_error_hook_preserves_terminal_state(self):
@@ -693,7 +955,7 @@ class TestOrchestrationResultIngestorHook:
 
         result = service.ingest_agent_result.await_args.args[0]
         assert result.status == "rejected"
-        assert result.error == "nope"
+        assert result.error == "Task was rejected by the agent"
 
 
 # =============================================================================
@@ -722,7 +984,7 @@ class TestErrorEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "failed",
-            message_text="boom",
+            message_text="Task failed",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001",
@@ -754,17 +1016,17 @@ class TestErrorEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "failed",
-            message_text="boom",
+            message_text="Task failed",
         )
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
             turn_id="turn-001",
             slot_id="msg-001",
             status="failed",
-            content="partial",
+            content=None,
             artifacts=None,
-            error="boom",
-            has_partial_content=True,
+            error="Task failed",
+            has_partial_content=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001",
@@ -792,7 +1054,7 @@ class TestErrorEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "rejected",
-            message_text="nope",
+            message_text="Task was rejected by the agent",
         )
 
 
@@ -817,7 +1079,7 @@ class TestCanceledEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "canceled",
-            message_text="stopped",
+            message_text="Task was canceled",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001",
@@ -847,7 +1109,7 @@ class TestCanceledEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "canceled",
-            message_text="stopped",
+            message_text="Task was canceled",
         )
         slot_lifecycle.terminate_slot.assert_awaited_once_with(
             room_id="room-001",
@@ -894,11 +1156,57 @@ class TestInteractiveEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "input-required",
-            message_text="need input",
+            message_text=None,
             task_id="t-1",
             context_id="c-1",
         )
         h._rmc.resume_queue_from_continuation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(self):
+        private_prompt = "PRIVATE_SENTINEL_async_interactive_prompt"
+        mock_impl = AsyncMock(return_value=True)
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(
+            return_value={"user_message_id": "user-msg-001"}
+        )
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        db.get_room_by_room_id = AsyncMock(return_value=None)
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            task_notification_impl=mock_impl,
+            task_notification_store=db,
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        event = AgentEvent(
+            kind="interactive",
+            **_base_event(),
+            text=private_prompt,
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
+            details=private_prompt,
+        )
+
+        await h.handle(event)
+
+        hitl.request_input.assert_awaited_once()
+        assert hitl.request_input.await_args.kwargs["prompt"] == private_prompt
+        persisted_kwargs = db.update_task_state_on_message.await_args.kwargs
+        assert persisted_kwargs["message_text"] is None
+        notify_payload = mock_impl.await_args.kwargs
+        assert private_prompt not in repr(notify_payload)
+        emitter_payload = emitter.await_args.kwargs
+        assert private_prompt not in json.dumps(emitter_payload, sort_keys=True)
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
@@ -1182,7 +1490,7 @@ class TestSubmittedEvent:
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
-    async def test_sends_task_update_for_text(self):
+    async def test_drops_status_update_text(self):
         h = _make_handler()
         event = AgentEvent(
             kind="status_update",
@@ -1190,10 +1498,19 @@ class TestStatusUpdateEvent:
             text="still working",
         )
         await h.handle(event)
-        h._delivery.send_task_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_task_update.call_args.kwargs
-        assert call_kwargs["status"] == "working"
-        assert call_kwargs["status_message"] == "still working"
+        h._delivery.send_task_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_drops_raw_remote_status_text(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="status_update",
+            **_base_event(),
+            text="PRIVATE_SENTINEL_remote_working_status",
+            state="working",
+        )
+        await h.handle(event)
+        h._delivery.send_task_update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_sse_for_empty_text(self):
@@ -1207,7 +1524,7 @@ class TestStatusUpdateEvent:
         h._delivery.send_task_update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_sends_task_update_with_resolved_client_request_id(self):
+    async def test_status_update_does_not_resolve_client_request_id_when_dropped(self):
         db = MagicMock()
         db.resolve_client_request_id_for_message_id = AsyncMock(return_value="cr-002")
         h = _make_handler(db=db)
@@ -1218,9 +1535,8 @@ class TestStatusUpdateEvent:
         )
         await h.handle(event)
 
-        call_kwargs = h._delivery.send_task_update.call_args.kwargs
-        assert call_kwargs["client_request_id"] == "cr-002"
-        db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
+        h._delivery.send_task_update.assert_not_awaited()
+        db.resolve_client_request_id_for_message_id.assert_not_awaited()
 
 
 class TestProcessingStatusEvent:
@@ -1244,7 +1560,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id=None,
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         h._delivery.send_processing_status.assert_not_awaited()
@@ -1272,7 +1588,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id="cr-1",
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         h._delivery.send_processing_status.assert_not_awaited()
@@ -1320,7 +1636,7 @@ class TestProcessingStatusEvent:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id="cr-processor",
-            details={"message": "all done"},
+            details=None,
             error_message=None,
         )
         db.resolve_client_request_id_for_message_id.assert_awaited_once_with("msg-001")
@@ -1381,10 +1697,10 @@ class TestArtifactTextFallback:
 
 
 class TestStatusUpdateSendsTaskUpdate:
-    """_on_status sends task_update for status text."""
+    """_on_status drops raw remote status text."""
 
     @pytest.mark.asyncio
-    async def test_status_uses_task_update(self):
+    async def test_status_text_is_dropped(self):
         h = _make_handler()
         event = AgentEvent(
             kind="status_update",
@@ -1392,11 +1708,7 @@ class TestStatusUpdateSendsTaskUpdate:
             text="Searching the web...",
         )
         await h.handle(event)
-        h._delivery.send_task_update.assert_awaited_once()
-        call_kwargs = h._delivery.send_task_update.call_args.kwargs
-        assert call_kwargs["status"] == "working"
-        assert call_kwargs["status_message"] == "Searching the web..."
-        assert call_kwargs["message_id"] == "msg-001"
+        h._delivery.send_task_update.assert_not_awaited()
 
 
 # =============================================================================
@@ -1482,6 +1794,91 @@ class TestHandlerNotifyTaskUpdate:
         )
 
     @pytest.mark.asyncio
+    async def test_processing_status_terminal_completed_projects_public_output(self):
+        private_text = "PRIVATE_SENTINEL_hub_terminal_text"
+        private_bytes = "PRIVATE_SENTINEL_hub_terminal_bytes"
+        private_metadata = "PRIVATE_SENTINEL_hub_terminal_metadata"
+        mock_impl = AsyncMock(return_value=True)
+        slot_lifecycle = MagicMock(terminate_slot=AsyncMock())
+        h = _make_handler(
+            slot_lifecycle=slot_lifecycle,
+            task_notification_impl=mock_impl,
+            task_notification_store=MagicMock(),
+        )
+        emitter = AsyncMock()
+        h.bind_execution_event_deps(emitter)
+        service = MagicMock()
+        service.ingest_agent_result = AsyncMock(return_value=None)
+        bind_orchestration_result_ingestor(service)
+        event = AgentEvent(
+            kind="processing_status",
+            **_base_event(turn_id="turn-001"),
+            lifecycle_message_id="umsg-001",
+            state="completed",
+            text=private_text,
+            details=private_text,
+            artifacts=[
+                {
+                    "artifactId": "hub-artifact",
+                    "name": "response",
+                    "metadata": {"private": private_metadata},
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Visible hub output",
+                            "metadata": {"private": private_metadata},
+                        },
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": private_bytes,
+                                "mime_type": "text/plain",
+                                "name": "private.txt",
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            await h.handle(event)
+
+        persisted_kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert persisted_kwargs["message_text"] == "Visible hub output"
+        result = service.ingest_agent_result.await_args.args[0]
+        payloads = [
+            persisted_kwargs["artifacts"],
+            slot_lifecycle.terminate_slot.await_args.kwargs["artifacts"],
+            result.artifacts,
+            emitter.await_args.kwargs["details"],
+            mock_impl.await_args.kwargs,
+            event.model_dump() if hasattr(event, "model_dump") else event.__dict__,
+        ]
+        combined = json.dumps(payloads, sort_keys=True, default=str)
+        assert "Visible hub output" in combined
+        assert private_text not in combined
+        assert private_bytes not in combined
+        assert private_metadata not in combined
+        assert result.text == "Visible hub output"
+        assert result.error is None
+        slot_lifecycle.terminate_slot.assert_awaited_once()
+        emitter.assert_awaited_once_with(
+            room_id="room-001",
+            status="completed",
+            message_id="msg-001",
+            lifecycle_message_id="umsg-001",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_processing_status_terminal_close_out_ingests_agent_result(self):
         mock_impl = AsyncMock(return_value=True)
         h = _make_handler(
@@ -1511,8 +1908,8 @@ class TestHandlerNotifyTaskUpdate:
                 agent_id="agent-001",
                 status="failed",
                 text=None,
-                artifacts=artifacts,
-                error="relay failed",
+                artifacts=[],
+                error="Task failed",
             )
         )
         emitter.assert_awaited_once_with(
@@ -1522,8 +1919,8 @@ class TestHandlerNotifyTaskUpdate:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id=None,
-            details={"message": "relay failed"},
-            error_message="relay failed",
+            details={"message": "Task failed"},
+            error_message="Task failed",
         )
 
     @pytest.mark.asyncio
@@ -1556,7 +1953,7 @@ class TestHandlerNotifyTaskUpdate:
                 status="rate_limited",
                 text=None,
                 artifacts=[],
-                error="too many requests",
+                error="Task failed",
             )
         )
         emitter.assert_awaited_once_with(
@@ -1566,7 +1963,7 @@ class TestHandlerNotifyTaskUpdate:
             lifecycle_message_id="umsg-001",
             record_lifecycle=True,
             client_request_id=None,
-            details={"message": "too many requests"},
+            details={"message": "Task failed"},
             error_message=None,
         )
 

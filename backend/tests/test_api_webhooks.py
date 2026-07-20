@@ -15,6 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.types import (
     Artifact,
+    Message,
+    Part,
+    Role,
     Task,
     TaskState,
     TaskStatus,
@@ -511,6 +514,32 @@ class TestWebhookTransportNormalize:
         assert event.kind == "response"
         assert event.text == "done"
 
+    def test_completed_task_without_artifacts_does_not_promote_status_message(self):
+        private_text = "PRIVATE_SENTINEL_webhook_completed_status"
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(
+                state=TaskState.completed,
+                message=Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=private_text))],
+                    message_id="remote-completed-status",
+                ),
+            ),
+            artifacts=None,
+        )
+
+        event = wt._task_to_event(task, msg)
+
+        assert event.kind == "response"
+        assert event.text == ""
+        assert event.parts is None
+        assert event.artifacts is None
+        assert private_text not in repr(event)
+
     def test_failed_task(self):
         wt = _make_webhook_transport()
         msg = _make_tracked_message()
@@ -540,3 +569,84 @@ class TestWebhookTransportNormalize:
         task = self._make_task("working")
         event = wt._task_to_event(task, msg)
         assert event.kind == "status_update"
+
+    def test_working_task_does_not_surface_remote_status_artifacts_or_metadata(self):
+        private_text = "PRIVATE_SENTINEL_webhook_working_status"
+        private_bytes = "PRIVATE_SENTINEL_webhook_working_bytes"
+        private_metadata = "PRIVATE_SENTINEL_webhook_working_metadata"
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(
+                state=TaskState.working,
+                message=Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=private_text))],
+                    message_id="remote-status-message",
+                    metadata={"private": private_metadata},
+                ),
+            ),
+            artifacts=[
+                Artifact(
+                    artifact_id="raw-streaming-artifact",
+                    metadata={"private": private_metadata},
+                    parts=[
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": private_bytes,
+                                "mimeType": "text/plain",
+                                "name": "private.txt",
+                            },
+                        }
+                    ],
+                )
+            ],
+            history=[
+                Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=private_text))],
+                    message_id="remote-history",
+                )
+            ],
+            metadata={"private": private_metadata},
+        )
+
+        event = wt._task_to_event(task, msg)
+
+        assert event.kind == "status_update"
+        assert event.text == ""
+        assert event.parts is None
+        assert event.artifacts is None
+        assert private_text not in repr(event)
+        assert private_bytes not in repr(event)
+        assert private_metadata not in repr(event)
+
+    def test_failed_task_uses_generic_error_not_remote_failure_payload(self):
+        private_text = "PRIVATE_SENTINEL_webhook_failed_status"
+        private_metadata = "PRIVATE_SENTINEL_webhook_failed_metadata"
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=private_text))],
+                    message_id="remote-failure",
+                    metadata={"private": private_metadata},
+                ),
+            ),
+            metadata={"private": private_metadata},
+        )
+
+        event = wt._task_to_event(task, msg)
+
+        assert event.kind == "error"
+        assert event.error_text == "Task failed"
+        assert private_text not in repr(event)
+        assert private_metadata not in repr(event)

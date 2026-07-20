@@ -153,6 +153,7 @@ if TYPE_CHECKING:
     from execution.state.task_state_manager import TaskStateManager
 
 logger = get_logger(__name__)
+_GENERIC_AGENT_INPUT_REQUIRED_PROMPT = "The agent needs additional information."
 
 
 DEFAULT_DEBATE_ROUNDS = 2
@@ -508,7 +509,11 @@ class SupervisorExecutor:
             completed_at=utcnow(),
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
-            status_message=output.status_message,
+            status_message=(
+                _GENERIC_AGENT_INPUT_REQUIRED_PROMPT
+                if status == StepStatus.AWAITING_INPUT
+                else output.status_message
+            ),
             interactive_state=output.interactive_state,
             requires_auth=output.requires_auth,
             requires_policy=output.requires_policy,
@@ -3582,7 +3587,8 @@ class SupervisorExecutor:
         ):
             created_request_ids = [request.request_id] if request is not None else []
             prompt_by_request_id = {
-                request_id: hitl_prompt for request_id in created_request_ids
+                request_id: _GENERIC_AGENT_INPUT_REQUIRED_PROMPT
+                for request_id in created_request_ids
             }
             extra_by_request_id = {
                 request_id: {
@@ -3649,6 +3655,8 @@ class SupervisorExecutor:
             )
             return state, RunStatus.FAILED
 
+        awaiting_result.status_message = _GENERIC_AGENT_INPUT_REQUIRED_PROMPT
+
         try:
             saved = await self._save_interrupted_state(
                 kind=InterruptKind.HITL_AGENT,
@@ -3713,10 +3721,7 @@ class SupervisorExecutor:
                         "request_id": request.request_id,
                         "source": "agent",
                         "agent_id": awaiting_result.agent_id,
-                        "prompt": (
-                            awaiting_result.status_message
-                            or "The agent needs additional information."
-                        ),
+                        "prompt": _GENERIC_AGENT_INPUT_REQUIRED_PROMPT,
                         "status": "open",
                         "created_at": utcnow().isoformat(),
                     }
