@@ -402,7 +402,11 @@ async def _notify_task_update_impl(
     )
 
     if parts:
-        parts = [public_part_data(part) for part in parts]
+        parts = [
+            public_part
+            for part in parts
+            if (public_part := public_part_data(part)) is not None
+        ]
 
     if is_terminal_task_state_value(state):
         content = resolve_terminal_sse_content(

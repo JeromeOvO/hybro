@@ -251,7 +251,7 @@ def test_completed_projection_sanitizes_artifact_metadata_but_preserves_delivery
     assert private_sentinel not in json.dumps(persisted)
 
 
-def test_completed_projection_drops_inline_file_bytes_but_preserves_public_file_identity():
+def test_completed_projection_drops_unaddressable_inline_file_part():
     private_bytes = "PRIVATE_SENTINEL_inline_file_bytes"
     task = Task(
         id="remote-task",
@@ -281,15 +281,10 @@ def test_completed_projection_drops_inline_file_bytes_but_preserves_public_file_
     )
 
     persisted = public_persisted_task_data(task)
-    part = persisted["artifacts"][0]["parts"][0]
-    part_root = part.get("root", part)
 
-    assert part_root["file"] == {
-        "mimeType": "text/plain",
-        "name": "result.txt",
-    }
-    assert part_root["metadata"] == {"s3_key": "artifacts/room/msg/result.txt"}
+    assert persisted["artifacts"][0]["parts"] == []
     assert private_bytes not in json.dumps(persisted)
+    Task.model_validate(persisted)
 
 
 @pytest.mark.asyncio

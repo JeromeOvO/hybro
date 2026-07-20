@@ -4111,6 +4111,33 @@ class RoomServices:
                         if public_task is not None
                         else ""
                     )
+                    legacy_message_text = (
+                        agent_msg.message_content.message_text
+                        if agent_msg.message_content is not None
+                        else None
+                    )
+                    public_state = (
+                        getattr(public_task.status.state, "value", public_task.status.state)
+                        if public_task is not None and public_task.status is not None
+                        else None
+                    )
+                    if (
+                        not agent_content
+                        and public_task is not None
+                        and public_state == TaskState.completed.value
+                        and isinstance(legacy_message_text, str)
+                        and legacy_message_text
+                    ):
+                        legacy_artifact = Artifact(
+                            artifact_id=f"{agent_msg.message_id}-legacy-response",
+                            name="response",
+                            parts=[Part(root=TextPart(text=legacy_message_text))],
+                        )
+                        public_task.artifacts = [
+                            *(public_task.artifacts or []),
+                            legacy_artifact,
+                        ]
+                        agent_content = legacy_message_text
                     public_task_label = resolve_public_task_label(
                         agent_msg.extend_info,
                         agent_msg.agent_id or "agent",

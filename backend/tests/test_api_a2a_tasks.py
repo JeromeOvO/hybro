@@ -163,12 +163,7 @@ class TestGetTaskStatus:
             message.message_id, mock_user, db=mock_db_service
         )
 
-        part = result["task"]["artifacts"][0]["parts"][0]
-        part_root = part.get("root", part)
-        assert part_root["file"] == {
-            "mimeType": "text/plain",
-            "name": "result.txt",
-        }
+        assert result["task"]["artifacts"][0]["parts"] == []
         assert private_bytes not in str(result)
 
     @pytest.mark.asyncio

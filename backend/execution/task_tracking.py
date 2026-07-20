@@ -777,22 +777,28 @@ def _public_metadata_subset(metadata: Any) -> dict[str, Any] | None:
     return public or None
 
 
-def public_part_data(part: Any) -> dict[str, Any]:
+def public_part_data(part: Any) -> dict[str, Any] | None:
     part_data = _plain_model_data(part)
     root = part_data.get("root")
     if isinstance(root, dict):
-        part_data["root"] = _public_part_payload(root)
+        public_root = _public_part_payload(root)
+        if public_root is None:
+            return None
+        part_data["root"] = public_root
         return part_data
     return _public_part_payload(part_data)
 
 
-def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     public_payload = dict(payload)
     public_metadata = _public_metadata_subset(public_payload.get("metadata"))
     public_payload["metadata"] = public_metadata
 
     file_payload = public_payload.get("file")
     if isinstance(file_payload, dict):
+        uri = file_payload.get("uri")
+        if not isinstance(uri, str) or not uri.strip():
+            return None
         allowed_file_keys = {"uri", "mimeType", "mime_type", "name"}
         public_payload["file"] = {
             key: value
@@ -809,19 +815,26 @@ def public_message_data(message: Any) -> dict[str, Any] | None:
     if message_data.get("role") != Role.AGENT.value:
         return None
     message_data["metadata"] = None
-    message_data["parts"] = [
-        public_part_data(part) for part in message_data.get("parts") or []
-    ]
+    message_data["parts"] = _public_parts_data(message_data.get("parts"))
+    if not message_data["parts"]:
+        return None
     return message_data
 
 
 def public_artifact_data(artifact: Any) -> dict[str, Any]:
     artifact_data = _plain_model_data(artifact)
     artifact_data["metadata"] = None
-    artifact_data["parts"] = [
-        public_part_data(part) for part in artifact_data.get("parts") or []
-    ]
+    artifact_data["parts"] = _public_parts_data(artifact_data.get("parts"))
     return artifact_data
+
+
+def _public_parts_data(parts: Any) -> list[dict[str, Any]]:
+    public_parts = []
+    for part in parts or []:
+        public_part = public_part_data(part)
+        if public_part is not None:
+            public_parts.append(public_part)
+    return public_parts
 
 
 def _public_status_message(text: str) -> dict[str, Any]:

@@ -7,6 +7,8 @@ import pytest
 
 from common.types import (
     Artifact,
+    FileContent,
+    FilePart,
     Message,
     MessageRole,
     Part,
@@ -35,7 +37,7 @@ def _text_message(text: str, *, message_id: str) -> Message:
 
 
 @pytest.mark.asyncio
-async def test_room_message_projection_prefers_terminal_artifact_over_legacy_text() -> None:
+async def test_room_message_projection_backfills_legacy_terminal_text_as_artifact() -> None:
     final_text = "Hello! I'm your cyber insurance broker agent. How can I assist you today?"
     progress_text = "Preparing cyber broker submission..."
     task = Task(
@@ -45,12 +47,7 @@ async def test_room_message_projection_prefers_terminal_artifact_over_legacy_tex
             state=TaskState.completed,
             message=_text_message(final_text, message_id="status-message"),
         ),
-        artifacts=[
-            Artifact(
-                artifact_id="final-response",
-                parts=[Part(root=TextPart(text=final_text))],
-            )
-        ],
+        artifacts=None,
         history=[_text_message(progress_text, message_id="history-message")],
     )
     agent_message = RoomAgentMessage(
@@ -60,7 +57,7 @@ async def test_room_message_projection_prefers_terminal_artifact_over_legacy_tex
         related_message_id="user-1",
         message_created_at=NOW,
         message_content=MessageContent(
-            message_text="Legacy display text",
+            message_text=final_text,
             message_task=task,
         ),
     )
@@ -88,4 +85,70 @@ async def test_room_message_projection_prefers_terminal_artifact_over_legacy_tex
 
     assert response.success is True
     assert response.message_list is not None
-    assert response.message_list[0].message_content.message_text == final_text
+    projected = response.message_list[0]
+    assert projected.message_content.message_text == final_text
+    assert projected.message_content.message_task.history is None
+    assert projected.message_content.message_task.artifacts[0].parts[0].root.text == final_text
+
+
+@pytest.mark.asyncio
+async def test_room_message_projection_drops_inline_file_without_uri() -> None:
+    private_bytes = "PRIVATE_SENTINEL_room_inline_file"
+    task = Task(
+        id="task-1",
+        context_id="ctx-1",
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id="final-response",
+                parts=[
+                    Part(root=TextPart(text="Public final response")),
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                bytes=private_bytes,
+                                mimeType="text/plain",
+                                name="private.txt",
+                            )
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
+    agent_message = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-1",
+        agent_id="agent-1",
+        related_message_id="user-1",
+        message_created_at=NOW,
+        message_content=MessageContent(message_task=task),
+    )
+    runtime = RoomServices()
+    runtime.inquiry_user_messages_by_room_id = AsyncMock(
+        return_value=RoomCenterUserMessageResponse(
+            room_id="room-1",
+            message_list=[],
+            success=True,
+            error=None,
+        )
+    )
+    runtime.inquiry_agent_messages_by_room_id = AsyncMock(
+        return_value=RoomCenterAgentMessageResponse(
+            room_id="room-1",
+            message_list=[agent_message],
+            success=True,
+            error=None,
+        )
+    )
+
+    response = await runtime.inquiry_room_messages_by_room_id(
+        RoomCenterRoomMessageRequest(room_id="room-1")
+    )
+
+    assert response.success is True
+    assert response.message_list is not None
+    projected = response.message_list[0]
+    assert projected.message_content.message_text == "Public final response"
+    assert len(projected.message_content.message_task.artifacts[0].parts) == 1
+    assert private_bytes not in projected.model_dump_json()

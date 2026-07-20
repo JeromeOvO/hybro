@@ -189,11 +189,13 @@ class DirectTransport(AgentTransport):
         else:
             kind = "response"
 
-        public_parts = (
-            [public_part_data(part) for part in parts]
-            if parts is not None
-            else None
-        )
+        public_parts = None
+        if parts is not None:
+            public_parts = [
+                public_part
+                for part in parts
+                if (public_part := public_part_data(part)) is not None
+            ]
         public_text = error or ""
         if not public_text:
             task = get_task(msg)
@@ -1875,7 +1877,11 @@ class DirectTransport(AgentTransport):
                 await self._convert_streaming_parts_to_s3(
                     non_text_parts, room_id, message_id,
                 )
-                non_text_parts = [public_part_data(part) for part in non_text_parts]
+                non_text_parts = [
+                    public_part
+                    for part in non_text_parts
+                    if (public_part := public_part_data(part)) is not None
+                ]
                 task = get_task(current_message)
                 if task:
                     self._materialize_non_text_parts_as_artifact(

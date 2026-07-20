@@ -241,3 +241,80 @@ async def test_stale_recovery_persists_public_projection_without_inline_file_byt
         "name": "secret.txt",
     }
     assert private_sentinel not in json.dumps(persisted)
+
+
+@pytest.mark.asyncio
+async def test_stale_recovery_drops_inline_file_when_s3_conversion_fails():
+    private_sentinel = "PRIVATE_SENTINEL_failed_stale_s3_conversion"
+    current_task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id="artifact-1",
+                name="response",
+                parts=[
+                    Part(root=TextPart(text="Recovered public result")),
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                bytes=private_sentinel,
+                                mimeType="text/plain",
+                                name="secret.txt",
+                            )
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-message-1",
+        user_id="user-1",
+        agent_id="agent-1",
+        agent_url="https://agent.example",
+        has_task_tracking=True,
+        message_content=MessageContent(
+            message_task=Task(
+                id="remote-task",
+                context_id="remote-context",
+                status=TaskStatus(state=TaskState.working),
+            )
+        ),
+    )
+    store = SimpleNamespace(
+        is_message_cancelled=AsyncMock(return_value=False),
+        update_task_on_message=AsyncMock(return_value=True),
+        touch_task_message=AsyncMock(),
+    )
+    checker = StaleTaskChecker()
+    checker.set_runtime_deps(
+        SimpleNamespace(
+            store=store,
+            rooms_collection=None,
+            notify_task_update=AsyncMock(),
+            increment_counter=MagicMock(),
+            a2a_service=SimpleNamespace(
+                get_agent_card_from_url=AsyncMock(return_value=SimpleNamespace())
+            ),
+        )
+    )
+    checker._get_task_from_agent = AsyncMock(return_value=current_task)
+
+    with patch(
+        "jobs.stale_task_checker.convert_pydantic_artifacts_to_s3",
+        new=AsyncMock(side_effect=RuntimeError("storage unavailable")),
+    ):
+        await checker._process_stale_task(msg)
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    assert persisted["artifacts"][0]["parts"] == [
+        Part(root=TextPart(text="Recovered public result")).model_dump(mode="json")
+    ]
+    assert store.update_task_on_message.await_args.kwargs["message_text"] == (
+        "Recovered public result"
+    )
+    assert private_sentinel not in json.dumps(persisted)
+    store.touch_task_message.assert_not_awaited()
