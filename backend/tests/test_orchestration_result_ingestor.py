@@ -368,24 +368,23 @@ def test_reingesting_same_text_does_not_duplicate_fact():
     }
 
 
-def test_ingest_preserves_untrusted_text_evidence_for_awaiting_input():
+def test_ingest_does_not_preserve_remote_prompt_as_text_evidence():
+    private_prompt = "Need the requested limit before continuing."
     updated = AgentResultIngestor().ingest(
         _run_state(),
         AgentResultRead(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
             status="awaiting_input",
-            status_message="Need the requested limit before continuing.",
+            status_message=private_prompt,
         ),
     )
 
-    assert [fact["fact_id"] for fact in updated.facts] == [
-        "agent-msg-1:text_evidence"
-    ]
-    assert updated.facts[0]["value"] == (
-        "Need the requested limit before continuing."
+    assert updated.facts == []
+    assert private_prompt not in json.dumps(
+        updated.model_dump(mode="json"),
+        sort_keys=True,
     )
-    assert updated.facts[0]["trusted_for_blocker_keys"] is False
 
 
 def test_ingest_artifact_records_source_and_summary():

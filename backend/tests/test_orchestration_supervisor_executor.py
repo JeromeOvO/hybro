@@ -11369,27 +11369,29 @@ async def test_agent_input_required_hitl_keeps_remote_prompt_out_of_run_state():
         status_message=private_prompt,
         interactive_state="input-required",
     )
-    continuation = PendingAgentContinuation(
-        continuation_id="cont-1",
-        source_intent_id="intent-1",
-        source_agent_message_id="agent-msg-1",
-        agent_id="agent-1",
-        goal_family_fingerprint="family-1",
-        goal_revision_fingerprint="revision-1",
-        a2a_task_id="task-1",
-        a2a_context_id="ctx-1",
-    )
+    executor._save_interrupted_state = AsyncMock(return_value=True)
+    executor._emit_processing_status = AsyncMock()
 
-    await executor._create_agent_input_required_hitl(
+    persisted, status = await executor._run_agent_awaiting_input_action(
         state=state,
-        result=result,
-        prompt=private_prompt,
-        continuation=continuation,
+        results=[result],
+        awaiting=[result],
+        trajectory=SupervisorTrajectory(),
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        conversation_context=None,
+        request_user_id="user-1",
+        quoted_text=None,
     )
 
+    assert status == RunStatus.AWAITING_INPUT
     executor.hitl_coordinator.request_input.assert_awaited_once()
     assert executor.hitl_coordinator.request_input.await_args.kwargs["prompt"] == private_prompt
-    persisted = await store.get_run(state.run_id)
+    persisted = await store.get_run(persisted.run_id)
+    assert persisted is not None
     serialized = json.dumps(persisted.model_dump(mode="json"), sort_keys=True)
     assert private_prompt not in serialized
     assert persisted.open_questions == [
@@ -11402,9 +11404,6 @@ async def test_agent_input_required_hitl_keeps_remote_prompt_out_of_run_state():
             "created_at": persisted.open_questions[0]["created_at"],
         }
     ]
-    assert persisted.pending_agent_continuations[0].source_agent_message_id == "agent-msg-1"
-    assert persisted.pending_agent_continuations[0].a2a_task_id == "task-1"
-    assert persisted.pending_agent_continuations[0].a2a_context_id == "ctx-1"
 
 
 @pytest.mark.asyncio

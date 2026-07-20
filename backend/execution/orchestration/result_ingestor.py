@@ -59,6 +59,7 @@ _SAFE_STATUS_MESSAGE_CODES = {
     "context_ref_not_found",
     "artifact_ref_not_found",
     "dispatch_payload_ref_unresolved",
+    "attachment_projection_unavailable",
     "rate_limited",
     "agent_unavailable",
     "timeout",
