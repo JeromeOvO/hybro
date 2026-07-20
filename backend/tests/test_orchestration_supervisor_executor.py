@@ -1596,7 +1596,9 @@ async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
 
 
 @pytest.mark.asyncio
-async def test_attachment_preflight_failure_update_uses_public_task_label():
+async def test_attachment_preflight_failure_update_uses_public_task_label(
+    monkeypatch,
+):
     private_task_sentinel = "PRIVATE_SENTINEL_attachment_preflight_task"
     public_task_label = "Requesting Agent One"
     user_message = RoomUserMessage(
@@ -1623,6 +1625,15 @@ async def test_attachment_preflight_failure_update_uses_public_task_label():
         user_message=user_message,
     )
     executor.tsm.fail_pre_dispatch_task = AsyncMock()
+    monkeypatch.setattr(
+        supervisor_executor_module,
+        "resolve_dispatch_payload_refs",
+        MagicMock(
+            return_value=ResolvedDispatchPayload(
+                selected_attachment_refs=["file-1"],
+            )
+        ),
+    )
 
     def create_agent_message(**kwargs):
         return RoomAgentMessage(
@@ -1679,7 +1690,7 @@ async def test_attachment_preflight_failure_update_uses_public_task_label():
         quoted_text=None,
         planned_message_ids=["agent-msg-1"],
         run_state=_run_state(run_id="message-1", user_message_id="message-1"),
-        user_message=user_message,
+        original_attachments=list(user_message.message_content.attachments),
     )
 
     assert result[0].status == StepStatus.FAILED

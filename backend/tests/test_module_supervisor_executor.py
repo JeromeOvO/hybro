@@ -187,7 +187,7 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
         "agent_id": "agent-1",
         "step_number": 1,
         "total_steps": None,
-        "task_content": "Read the attachment.",
+        "task_content": "Requesting Test Agent",
         "client_request_id": "client-req-1",
     }
 
