@@ -13,6 +13,9 @@ import pytest
 
 from common.a2a_constants import CommonTaskState
 from common.types import (
+    Artifact,
+    FileContent,
+    FilePart,
     Message,
     MessageRole,
     Part,
@@ -23,7 +26,6 @@ from common.types import (
     TaskStatusUpdateEvent,
     TextPart,
 )
-from common.utils.a2a_helpers import get_text_from_message
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.response_handler import AgentResponseHandler
@@ -326,6 +328,134 @@ async def test_emit_terminal_uses_public_task_output_not_legacy_message_text():
 
 
 @pytest.mark.asyncio
+async def test_streaming_exception_uses_generic_public_failure_everywhere():
+    private_sentinel = "PRIVATE_SENTINEL_streaming_exception_dispatch_task"
+    message = _make_room_agent_message()
+    response_handler = MagicMock(handle=AsyncMock())
+    tsm = MagicMock(transition_task=AsyncMock())
+    delivery = MagicMock(send_error=AsyncMock())
+    capability_issues = MagicMock(record_issue=AsyncMock())
+    transport = _make_processor(
+        response_handler=response_handler,
+        tsm=tsm,
+        delivery=delivery,
+    )
+    transport.capability_issue_service = capability_issues
+    transport.a2a_transport.has_streaming_capability.return_value = True
+    transport.handle_streaming_response = AsyncMock(
+        side_effect=RuntimeError(private_sentinel)
+    )
+    agent = MagicMock()
+    agent.agent_card.name = "Claims Agent"
+    ctx = DispatchContext(
+        agent=agent,
+        room_agent_message=message,
+        room_id=message.room_id,
+        user_message_id=message.related_message_id,
+        prepared_message=MagicMock(),
+    )
+
+    result = await transport.dispatch(ctx, message)
+
+    transition = tsm.transition_task.await_args
+    assert transition.args[1] == CommonTaskState.FAILED
+    assert transition.kwargs["error"] == "Agent processing failed"
+    emitted_event = response_handler.handle.await_args.args[0]
+    assert emitted_event.error_text == "Agent processing failed"
+    delivery.send_error.assert_awaited_once_with(
+        message.room_id,
+        "Agent processing failed",
+        message_id=message.message_id,
+    )
+    assert result.status == ProcessingStatus.FAILED
+    assert result.response_text == "Agent processing failed"
+    assert result.status_message == "agent_execution_failed"
+    capability_issues.record_issue.assert_awaited_once()
+    assert private_sentinel in capability_issues.record_issue.await_args.kwargs[
+        "error_message"
+    ]
+    public_payload = json.dumps(
+        {
+            "transition": transition.kwargs,
+            "event": emitted_event.__dict__,
+            "delivery": delivery.send_error.await_args.kwargs,
+            "result": result.__dict__,
+        },
+        default=str,
+    )
+    assert private_sentinel not in public_payload
+
+
+@pytest.mark.asyncio
+async def test_sync_exception_uses_generic_public_failure_everywhere():
+    private_sentinel = "PRIVATE_SENTINEL_sync_exception_dispatch_task"
+    message = _make_room_agent_message()
+    response_handler = MagicMock(handle=AsyncMock())
+    tsm = MagicMock(transition_task=AsyncMock())
+    delivery = MagicMock(send_error=AsyncMock())
+    capability_issues = MagicMock(record_issue=AsyncMock())
+    transport = _make_processor(
+        response_handler=response_handler,
+        tsm=tsm,
+        delivery=delivery,
+    )
+    transport.capability_issue_service = capability_issues
+    transport.a2a_transport.has_streaming_capability.return_value = False
+    transport.a2a_transport.send_message_to_tracked_agent = AsyncMock(
+        side_effect=RuntimeError(private_sentinel)
+    )
+    agent = MagicMock()
+    agent.agent_card.name = "Claims Agent"
+    processing_ctx = ProcessingContext(
+        room_id=message.room_id,
+        current_message=message,
+        agent_card=agent.agent_card,
+        user_message_id=message.related_message_id,
+        task_info={"webhook_token": "token", "context_id": "context"},
+    )
+    transport._setup_tracking_context = AsyncMock(
+        return_value=(processing_ctx.task_info, processing_ctx)
+    )
+    ctx = DispatchContext(
+        agent=agent,
+        room_agent_message=message,
+        room_id=message.room_id,
+        user_message_id=message.related_message_id,
+        prepared_message=MagicMock(),
+    )
+
+    result = await transport.dispatch(ctx, message)
+
+    transition = tsm.transition_task.await_args
+    assert transition.args[1] == CommonTaskState.FAILED
+    assert transition.kwargs["error"] == "Agent processing failed"
+    emitted_event = response_handler.handle.await_args.args[0]
+    assert emitted_event.error_text == "Agent processing failed"
+    delivery.send_error.assert_awaited_once_with(
+        message.room_id,
+        "Agent processing failed",
+        message_id=message.message_id,
+    )
+    assert result.status == ProcessingStatus.FAILED
+    assert result.response_text == "Agent processing failed"
+    assert result.status_message == "agent_execution_failed"
+    capability_issues.record_issue.assert_awaited_once()
+    assert capability_issues.record_issue.await_args.kwargs["error_message"] == (
+        private_sentinel
+    )
+    public_payload = json.dumps(
+        {
+            "transition": transition.kwargs,
+            "event": emitted_event.__dict__,
+            "delivery": delivery.send_error.await_args.kwargs,
+            "result": result.__dict__,
+        },
+        default=str,
+    )
+    assert private_sentinel not in public_payload
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("extend_info", "message_text", "expected_public_label"),
     [
@@ -592,6 +722,52 @@ class TestHandleStreamingCancellation:
         proc.response_handler.handle.assert_awaited_once()
 
 
+class TestHandleStreamStatusUpdatePrivacy:
+    @pytest.mark.asyncio
+    async def test_interactive_status_update_emits_public_label_not_remote_prompt(self):
+        private_prompt = "PRIVATE_SENTINEL_streaming_interactive_prompt"
+        public_label = "Requesting Claims Agent"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.tsm.notify_task = AsyncMock()
+        current_message = _make_room_agent_message(
+            extend_info={"public_task_label": public_label}
+        )
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Claims Agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            send_sse=True,
+        )
+        result = MagicMock(
+            status=TaskStatus(
+                state=TaskState.input_required,
+                message=Message(
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text=private_prompt))],
+                    message_id="remote-status-message",
+                ),
+            ),
+            final=False,
+        )
+
+        await proc._handle_stream_status_update(
+            result,
+            ctx,
+            MessageStreamingState(),
+        )
+
+        proc.tsm.notify_task.assert_awaited_once()
+        notify_kwargs = proc.tsm.notify_task.await_args.kwargs
+        assert notify_kwargs["status_message"] == public_label
+        assert private_prompt not in repr(notify_kwargs)
+        persisted_task = current_message.message_content.message_task
+        assert persisted_task.status.message is None
+
+
 class TestFinalizeStreamingWritesArtifacts:
     """_finalize_streaming transitions to completed and calls _emit_terminal
     with the accumulated content."""
@@ -633,6 +809,44 @@ class TestFinalizeStreamingWritesArtifacts:
         assert event_arg.message_id == "msg-1"
         assert event_arg.room_id == "room-1"
         assert current_message.message_content.message_text == "Final answer from agent."
+
+    @pytest.mark.asyncio
+    async def test_already_failed_task_persists_only_public_failure_text(self):
+        private_failure = "PRIVATE_SENTINEL_remote_failure_detail"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc._emit_terminal = AsyncMock()
+
+        task = Task(
+            id="task-001",
+            status=TaskStatus(state=TaskState.failed),
+        )
+        current_message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=task,
+            )
+        )
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            send_sse=False,
+        )
+        streaming_state = MessageStreamingState(
+            full_response_text=private_failure,
+        )
+
+        status, text = await proc._finalize_streaming(ctx, streaming_state)
+
+        assert status == ProcessingStatus.FAILED
+        assert text == "Task failed"
+        assert current_message.message_content.message_text == "Task failed"
+        assert private_failure not in current_message.model_dump_json()
+        proc.tsm.persist_message.assert_awaited_once_with(current_message)
 
 
 class TestDispatchTerminalNotificationFailure:
@@ -850,6 +1064,45 @@ async def test_user_role_message_chunk_is_ignored_before_persistence_or_sse():
     proc.delivery.send_artifact_update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_working_stream_message_chunk_does_not_persist_remote_metadata_or_history():
+    private_sentinel = "PRIVATE_SENTINEL_stream_message_part_metadata"
+    proc = _make_processor()
+    proc.delivery.send_artifact_update = AsyncMock()
+    proc.tsm.persist_message = AsyncMock(return_value=True)
+    current_message = _make_room_agent_message()
+    agent_card = MagicMock(spec_set=["name"])
+    agent_card.name = "test-agent"
+    ctx = ProcessingContext(
+        room_id="room-1",
+        current_message=current_message,
+        agent_card=agent_card,
+        user_message_id="msg-1",
+        task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+        send_sse=False,
+    )
+    result = Message(
+        role=MessageRole.AGENT,
+        message_id="remote-agent-message",
+        parts=[
+            Part(
+                root=TextPart(
+                    text="Visible streaming text",
+                    metadata={"private": private_sentinel},
+                )
+            )
+        ],
+        metadata={"private": private_sentinel},
+    )
+
+    await proc._handle_stream_message_chunk(result, ctx, MessageStreamingState())
+
+    persisted_message = proc.tsm.persist_message.await_args.args[0]
+    persisted_task = persisted_message.message_content.message_task
+    assert persisted_task.history in (None, [])
+    assert private_sentinel not in persisted_task.model_dump_json()
+
+
 class TestArtifactUpdateRoutedThroughHandler:
     """_handle_stream_artifact_update routes through response_handler.handle
     instead of using tsm.persist_message + delivery.send_artifact_update."""
@@ -898,11 +1151,59 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert event.s3_converted is True
         assert event.append is True
         assert event.last_chunk is False
-        assert event.artifacts == [{"artifact_id": "art-1", "parts": []}]
+        assert event.artifacts == [
+            {"artifact_id": "art-1", "parts": [], "metadata": None}
+        ]
 
         # Old paths should NOT be called
         proc.tsm.persist_message.assert_not_awaited()
         proc.delivery.send_artifact_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_strips_remote_metadata_but_keeps_storage_key(self):
+        private_sentinel = "PRIVATE_SENTINEL_stream_artifact_metadata"
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            name="file-result",
+            parts=[
+                Part(
+                    root=FilePart(
+                        file=FileContent(
+                            uri="https://storage.example/result.csv",
+                            mimeType="text/csv",
+                            name="result.csv",
+                        ),
+                        metadata={
+                            "s3_key": "artifacts/room/msg/result.csv",
+                            "request": private_sentinel,
+                        },
+                    )
+                )
+            ],
+            metadata={"request": private_sentinel},
+        )
+        result = MagicMock(artifact=artifact, append=False, last_chunk=True)
+
+        await proc._handle_stream_artifact_update(result, ctx, MessageStreamingState())
+
+        event = proc.response_handler.handle.await_args.args[0]
+        payload = json.dumps(event.artifacts, sort_keys=True)
+        assert "artifacts/room/msg/result.csv" in payload
+        assert private_sentinel not in payload
 
     @pytest.mark.asyncio
     async def test_artifact_chunk_no_sse_uses_atomic_persist(self):
@@ -948,7 +1249,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc.tsm.persist_message.assert_not_awaited()
         # Instead uses atomic accumulate
         proc._artifact_store.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-1", {"artifact_id": "art-1", "parts": []}, append=False,
+            "msg-1",
+            {"artifact_id": "art-1", "parts": [], "metadata": None},
+            append=False,
         )
 
 
@@ -1135,6 +1438,7 @@ class TestProcessSyncResponseRespectsStatus:
     async def test_failed_status_uses_failed_state(self):
         """Response with status=failed should transition to TaskState.failed,
         not TaskState.completed."""
+        private_sentinel = "PRIVATE_SENTINEL_normalized_sync_error"
         proc = _make_processor()
         proc.tsm.transition_task = AsyncMock()
         proc.response_handler.handle = AsyncMock()
@@ -1149,7 +1453,7 @@ class TestProcessSyncResponseRespectsStatus:
             "type": "message",
             "content": None,
             "status": "failed",
-            "error": "Apify actor timed out",
+            "error": private_sentinel,
             "persisted": True,
         }
 
@@ -1171,10 +1475,11 @@ class TestProcessSyncResponseRespectsStatus:
         # _emit_terminal should receive state=failed and error text
         handle_call = proc.response_handler.handle.call_args[0][0]
         assert handle_call.kind == "error"
-        assert handle_call.error_text == "Apify actor timed out"
+        assert handle_call.error_text == "Agent processing failed"
 
-        # Return text should be the error message
-        assert text == "Apify actor timed out"
+        # Public results must not echo the remote error payload.
+        assert text == "Agent processing failed"
+        assert private_sentinel not in json.dumps(handle_call.__dict__)
 
         # Failed dispatch must return success=False
         assert success is False
@@ -1266,11 +1571,59 @@ class TestHandleSyncResponseInteractive:
         assert text is None
         assert paused == current_message.message_id
         assert agent_task_id == "real-agent-task-abc123"
+        notify_kwargs = proc.tsm.notify_task.await_args.kwargs
+        assert notify_kwargs["status_message"] == "Requesting test-agent"
+        assert "Please approve." not in repr(notify_kwargs)
 
     @pytest.mark.asyncio
-    async def test_input_required_stores_prompt_in_task_status_message(self):
-        """When the agent returns requires_input with a message text, it must be
-        stored in task.status.message so dispatch() can read it as the HITL prompt."""
+    async def test_no_task_tracking_interactive_does_not_persist_remote_prompt(self):
+        private_prompt = "PRIVATE_SENTINEL_sync_interactive_prompt"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.tsm.notify_task = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name", "url"])
+        agent_card.name = "test-agent"
+        agent_card.url = "https://agent.example"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info=None,
+            send_sse=False,
+        )
+
+        success, text, paused, agent_task_id = await proc._process_sync_response(
+            response={
+                "type": "task",
+                "status": "input-required",
+                "requires_input": True,
+                "task_id": "remote-task-1",
+                "message": private_prompt,
+            },
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=None,
+            ctx=ctx,
+            token=None,
+        )
+
+        assert success is True
+        assert text is None
+        assert paused == current_message.message_id
+        assert agent_task_id == "remote-task-1"
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        task = persisted_message.message_content.message_task
+        assert task.status.state == CommonTaskState.INPUT_REQUIRED
+        assert task.status.message is None
+        assert private_prompt not in task.model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_input_required_keeps_prompt_internal_not_task_status_message(self):
+        """Remote prompts stay internal so dispatch() can build the HITL prompt."""
         proc = _make_processor()
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
@@ -1316,8 +1669,8 @@ class TestHandleSyncResponseInteractive:
 
         task = current_message.message_content.message_task
         assert task is not None
-        assert task.status.message is not None
-        assert get_text_from_message(task.status.message) == "Please provide your API key."
+        assert task.status.message is None
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
     @pytest.mark.asyncio
     async def test_input_required_without_message_leaves_task_status_message_none(self):
@@ -1422,8 +1775,8 @@ class TestHandleSyncResponseInteractive:
         proc.tsm.persist_message.assert_awaited_once_with(current_message)
 
     @pytest.mark.asyncio
-    async def test_degraded_input_required_stores_status_message_for_hitl_prompt(self):
-        """Degraded sync fallback must keep the A2A status.message prompt."""
+    async def test_degraded_input_required_keeps_status_message_internal(self):
+        """Degraded sync fallback must not persist the A2A status.message prompt."""
         proc = _make_processor()
         current_message = _make_room_agent_message(agent_url=None)
         agent_card = MagicMock(spec_set=["name", "url"])
@@ -1482,10 +1835,8 @@ class TestHandleSyncResponseInteractive:
 
         task = current_message.message_content.message_task
         assert task is not None
-        assert task.status.message is not None
-        assert get_text_from_message(task.status.message) == (
-            "Which revenue period should I use?"
-        )
+        assert task.status.message is None
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
     @pytest.mark.asyncio
     async def test_requires_auth_without_status_sets_auth_required_state(self):
@@ -1535,9 +1886,8 @@ class TestHandleSyncResponseInteractive:
         task = current_message.message_content.message_task
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
-        assert get_text_from_message(task.status.message) == (
-            "Please provide your OAuth token."
-        )
+        assert task.status.message is None
+        assert not hasattr(proc, "_internal_interactive_status_messages")
 
 
 class TestDispatchInteractive:
@@ -1576,7 +1926,7 @@ class TestDispatchInteractive:
         assert result.status == ProcessingStatus.AWAITING_INPUT
         assert result.message_id == message.message_id
         assert result.a2a_task_id == "agent-task-auth"
-        assert result.status_message == "Please provide your OAuth token."
+        assert result.status_message == "Authentication required"
 
     @pytest.mark.asyncio
     async def test_dispatch_auth_required_without_message_uses_default_prompt(self):
@@ -1657,6 +2007,7 @@ class TestDispatchInteractive:
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
         assert result.status_message == "Please provide your OAuth token."
+        assert not hasattr(proc, "_internal_interactive_status_messages")
         task = message.message_content.message_task
         assert task is not None
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
@@ -1776,8 +2127,8 @@ class TestFinalizePolledTaskPrivacy:
         in_memory_json = current_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
         assert private_text not in in_memory_json
-        assert "Visible prompt" in persisted_json
-        assert "Visible prompt" in in_memory_json
+        assert "Visible prompt" not in persisted_json
+        assert "Visible prompt" not in in_memory_json
 
     @pytest.mark.asyncio
     async def test_room_task_persistence_sanitizes_returned_task_history(self):
@@ -1794,3 +2145,40 @@ class TestFinalizePolledTaskPrivacy:
         persisted_json = persisted_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
         assert "Visible agent answer" in persisted_json
+
+    @pytest.mark.asyncio
+    async def test_room_message_append_sanitizes_agent_metadata(self):
+        message_metadata_sentinel = "PRIVATE_SENTINEL_agent_message_metadata"
+        part_metadata_sentinel = "PRIVATE_SENTINEL_agent_part_metadata"
+        public_text = "Visible agent answer"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        message = _make_room_agent_message()
+        returned_message = Message(
+            role=MessageRole.AGENT,
+            message_id="agent-message-with-private-metadata",
+            parts=[
+                Part(
+                    root=TextPart(
+                        text=public_text,
+                        metadata={"private": part_metadata_sentinel},
+                    )
+                )
+            ],
+            metadata={"private": message_metadata_sentinel},
+        )
+
+        result = await proc._handle_a2a_response_for_room(message, returned_message)
+
+        assert result is True
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        persisted_task = persisted_message.message_content.message_task
+        persisted_json = persisted_task.model_dump_json()
+        assert message_metadata_sentinel not in persisted_json
+        assert part_metadata_sentinel not in persisted_json
+        assert public_text in persisted_json
+        agent_history = [
+            item for item in persisted_task.history if item.role == MessageRole.AGENT
+        ]
+        assert agent_history[-1].metadata is None
+        assert agent_history[-1].parts[0].root.text == public_text

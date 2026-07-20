@@ -9,6 +9,7 @@ Tests cover:
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,6 +21,19 @@ from api.sse import (
     get_room_sse_status,
     stream_room_messages,
 )
+from common.types import (
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
+from delivery.task_notifier import TaskUpdateNotifier
+from execution.dispatch.task_notifications import _notify_task_update_impl
+from models.room import MessageContent, RoomAgentMessage
+from tests.delivery_adapter_fakes import make_delivery_facade
 
 # =============================================================================
 # SSE Stream Tests
@@ -125,54 +139,159 @@ class TestStreamRoomMessages:
 
     @pytest.mark.asyncio
     async def test_stream_forwards_public_task_frame_with_client_request_id(
-        self, mock_user, mock_sse_transport, mock_db_service, sample_room
+        self, mock_user, mock_db_service, sample_room
     ):
+        private_sentinel = "PRIVATE_SENTINEL_actual_notification_delivery_boundary"
         public_label = "Requesting Insurer"
         client_request_id = "cr-insurer-001"
-        forwarded_frame = json.dumps(
-            {
-                "type": "task_submitted",
-                "room_id": sample_room.room_id,
-                "timestamp": "2026-01-15T12:00:00",
-                "data": {
-                    "message_id": "agent-msg-insurer-001",
-                    "task_id": "task-insurer-001",
-                    "agent_name": "Insurer",
-                    "status": "submitted",
-                    "task_content": public_label,
-                    "client_request_id": client_request_id,
-                },
-            }
+        task = Task(
+            id="task-insurer-001",
+            status=TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    message_id="private-error",
+                    role=MessageRole.USER,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+            ),
+            history=[
+                Message(
+                    message_id="private-history",
+                    role=MessageRole.USER,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                )
+            ],
+            metadata={
+                "prompt": private_sentinel,
+                "hitl_prompt": private_sentinel,
+                "choices": [private_sentinel],
+                "hitl_choices": [private_sentinel],
+            },
         )
-
-        mock_connection = MagicMock()
-        mock_connection.connection_id = "conn-123"
-        mock_connection.is_active = True
-
-        async def _get_message(timeout=30.0):
-            mock_connection.is_active = False
-            return forwarded_frame
-
-        mock_connection.get_message = AsyncMock(side_effect=_get_message)
-        mock_sse_transport.add_connection.return_value = mock_connection
+        message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="agent-msg-insurer-001",
+            agent_id="insurer-agent",
+            user_id=mock_user.user_id,
+            client_request_id=client_request_id,
+            has_task_tracking=True,
+            message_content=MessageContent(
+                message_text=private_sentinel,
+                message_task=task,
+            ),
+            task_content=private_sentinel,
+            extend_info={"public_task_label": public_label},
+        )
+        notification_store = SimpleNamespace(
+            update_last_notified_state=AsyncMock(return_value=True),
+            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
+            get_room_by_room_id=AsyncMock(return_value=sample_room),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
+        )
+        delivery = make_delivery_facade()
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         response = await stream_room_messages(
             sample_room.room_id,
             mock_user,
-            transport=mock_sse_transport,
+            transport=delivery,
             db=mock_db_service,
         )
 
         await anext(response.body_iterator)
+        await _notify_task_update_impl(
+            notification_store,
+            TaskUpdateNotifier(delivery),
+            delivery,
+            message_id=message.message_id,
+            state=TaskState.failed,
+            room_id=sample_room.room_id,
+            user_id=mock_user.user_id,
+        )
         second_event = await anext(response.body_iterator)
         frame = json.loads(second_event.removeprefix("data: ").strip())
+        await response.body_iterator.aclose()
 
-        assert frame["type"] == "task_submitted"
+        assert frame["type"] == "task_update"
         assert frame["room_id"] == sample_room.room_id
         assert frame["data"]["task_content"] == public_label
         assert frame["data"]["client_request_id"] == client_request_id
-        assert "INTERNAL DISPATCH TASK" not in second_event
+        assert frame["data"]["error"] == "Task failed"
+        assert private_sentinel not in second_event
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("state", "safe_error"),
+        [
+            (TaskState.failed, "Task failed"),
+            (TaskState.rejected, "Task was rejected by the agent"),
+        ],
+    )
+    async def test_stream_hides_agent_role_failure_status_message(
+        self,
+        mock_user,
+        mock_db_service,
+        sample_room,
+        state,
+        safe_error,
+    ):
+        private_sentinel = f"PRIVATE_SENTINEL_sse_{state.value}_agent_status"
+        public_label = "Requesting Insurer"
+        task = Task(
+            id="task-insurer-002",
+            status=TaskStatus(
+                state=state,
+                message=Message(
+                    message_id="private-agent-status",
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text=private_sentinel))],
+                ),
+            ),
+        )
+        message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id=f"agent-msg-insurer-{state.value}",
+            agent_id="insurer-agent",
+            user_id=mock_user.user_id,
+            has_task_tracking=True,
+            message_content=MessageContent(message_task=task),
+            extend_info={"public_task_label": public_label},
+        )
+        notification_store = SimpleNamespace(
+            update_last_notified_state=AsyncMock(return_value=True),
+            get_room_agent_message_by_message_id=AsyncMock(return_value=message),
+            get_room_by_room_id=AsyncMock(return_value=sample_room),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
+        )
+        delivery = make_delivery_facade()
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+
+        response = await stream_room_messages(
+            sample_room.room_id,
+            mock_user,
+            transport=delivery,
+            db=mock_db_service,
+        )
+
+        await anext(response.body_iterator)
+        await _notify_task_update_impl(
+            notification_store,
+            TaskUpdateNotifier(delivery),
+            delivery,
+            message_id=message.message_id,
+            state=state,
+            room_id=sample_room.room_id,
+            user_id=mock_user.user_id,
+        )
+        second_event = await anext(response.body_iterator)
+        frame = json.loads(second_event.removeprefix("data: ").strip())
+        await response.body_iterator.aclose()
+
+        assert frame["type"] == "task_update"
+        assert frame["data"]["task_content"] == public_label
+        assert frame["data"]["error"] == safe_error
+        assert frame["data"].get("status_message") is None
+        assert private_sentinel not in second_event
 
 
 # =============================================================================

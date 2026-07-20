@@ -253,21 +253,7 @@ class TestRoomMessageRetrieval:
         assert [message.role for message in projected_task.history] == [
             MessageRole.AGENT
         ]
-        assert projected_task.metadata == {
-            "agent_id": "agent1",
-            "preflight_failure_code": "safe-code",
-            "requires_policy": True,
-            "hitl_request_id": "hitl-request-1",
-            "hitl_prompt": "Choose a public option",
-            "hitl_prompt_type": "choice",
-            "hitl_choices": ["A", "B"],
-            "hitl_a2a_task_id": "a2a-task-1",
-            "hitl_a2a_context_id": "a2a-context-1",
-            "hitl_group_id": "hitl-group-1",
-            "hitl_group_total": 2,
-            "hitl_group_index": 1,
-            "user_answer": "A",
-        }
+        assert projected_task.metadata is None
         assert private_sentinel not in json.dumps(result.model_dump(mode="json"))
 
 

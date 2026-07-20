@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from common.a2a_constants import TERMINAL_STATES
 from dal.runtime_store import RuntimeRepositoryStore
 
 
@@ -122,7 +123,7 @@ def _set_stage(update_doc: dict | list) -> dict:
 
 def _assert_terminal_state_filter(query: dict) -> None:
     state_filter = query["message_content.message_task.status.state"]
-    assert set(state_filter["$nin"]) == {"completed", "canceled", "failed", "rejected"}
+    assert set(state_filter["$nin"]) == {state.value for state in TERMINAL_STATES}
 
 
 @pytest.mark.asyncio
@@ -311,6 +312,46 @@ class TestRepositoryStoreHITL:
         assert hitl_requests.find_calls == [
             ({"user_message_id": "u1", "status": "pending"}, {"limit": 50})
         ]
+
+    @pytest.mark.asyncio
+    async def test_persists_and_clears_hitl_request_id_on_display_message(self):
+        with_request = {
+            "message_content": {
+                "message_task": {
+                    "metadata": {"hitl_request_id": "hitl-supervisor-1"}
+                }
+            }
+        }
+        without_request = {
+            "message_content": {"message_task": {"metadata": {}}}
+        }
+        messages = RecordingCollection(
+            [_result(1), with_request, _result(1), without_request]
+        )
+        store = _store(messages)
+
+        assert await store.persist_hitl_request_id_on_message(
+            "display-msg-1", "hitl-supervisor-1"
+        )
+        assert await store.persist_hitl_request_id_on_message(
+            "display-msg-1", None
+        )
+
+        assert messages.find_one_and_update_calls[0][0] == {
+            "message_id": "display-msg-1"
+        }
+        assert messages.find_one_and_update_calls[0][1] == {
+            "$set": {
+                "message_content.message_task.metadata.hitl_request_id": (
+                    "hitl-supervisor-1"
+                )
+            }
+        }
+        assert messages.find_one_and_update_calls[1][1] == {
+            "$unset": {
+                "message_content.message_task.metadata.hitl_request_id": ""
+            }
+        }
 
     @pytest.mark.asyncio
     async def test_cas_and_fenced_updates_preserve_concurrency_guards(self):

@@ -80,10 +80,12 @@ class TaskState(str, Enum):
     working = "working"
     input_required = "input-required"
     auth_required = "auth-required"
+    policy_required = "policy-required"
     completed = "completed"
     failed = "failed"
     canceled = "canceled"
     rejected = "rejected"
+    expired = "expired"
 
 
 PartUnion = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]

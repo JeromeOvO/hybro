@@ -43,7 +43,10 @@ def _make_task(
     if status_message_text:
         status = TaskStatus(
             state=state,
-            message=MagicMock(parts=[MagicMock(text=status_message_text)]),
+            message=Message(
+                role=MessageRole.AGENT,
+                parts=[Part(root=TextPart(text=status_message_text))],
+            ),
         )
     return Task(
         id="task-1",
@@ -347,6 +350,62 @@ class TestNotifyTaskUpdate:
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["error"] == "Task failed"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("state", "safe_error"),
+        [
+            (TaskState.failed, "Task failed"),
+            (TaskState.rejected, "Task was rejected by the agent"),
+        ],
+    )
+    async def test_failed_or_rejected_agent_status_message_is_not_public_error(
+        self,
+        state,
+        safe_error,
+    ):
+        private_sentinel = f"PRIVATE_SENTINEL_{state.value}_agent_status_message"
+        task = _make_task(
+            state,
+            status_message_text=private_sentinel,
+        )
+        msg = _make_message(task=task)
+
+        with (
+            patch(PATCH_DB) as db,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
+            patch(PATCH_SLEEP, new_callable=AsyncMock),
+            patch(PATCH_EXTRACT_ERR, return_value=private_sentinel),
+            patch(PATCH_EXTRACT_STATUS, return_value=private_sentinel),
+            patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
+        ):
+            _setup_db_mock(db, msg=msg)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
+            emitter = AsyncMock()
+            from execution.dispatch import task_notifications as task_notifications_mod
+
+            with patch.object(
+                task_notifications_mod,
+                "_processing_status_emitter",
+                emitter,
+            ):
+                result = await notify_task_update(
+                    message_id="msg-1",
+                    state=state,
+                    room_id="room-1",
+                    user_id="user-1",
+                )
+
+            assert result is True
+            payload = notifier.send_task_update.await_args.kwargs
+            assert payload["error"] == safe_error
+            assert payload["status_message"] is None
+            assert private_sentinel not in repr(payload)
+            emitter_payload = emitter.await_args.kwargs
+            assert emitter_payload["details"] == {"message": safe_error}
+            assert private_sentinel not in repr(emitter_payload)
+
     # --------------------------------------------------------------------- #
     # 7b. Failed state with artifacts extracts content
     # --------------------------------------------------------------------- #
@@ -392,14 +451,18 @@ class TestNotifyTaskUpdate:
             mock_ep.assert_called_once()
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Partial result before failure"
-            assert call_kw["error"] == "Agent error"
+            assert call_kw["error"] == "Task failed"
 
     # --------------------------------------------------------------------- #
     # 8. input_required sets requires_input flag
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_input_required_sets_requires_input_flag(self):
-        task = _make_task(TaskState.input_required)
+        private_sentinel = "PRIVATE_SENTINEL_notification_input_prompt"
+        task = _make_task(
+            TaskState.input_required,
+            status_message_text=private_sentinel,
+        )
         msg = _make_message(task=task)
 
         with (
@@ -407,7 +470,6 @@ class TestNotifyTaskUpdate:
             patch(PATCH_NOTIFIER) as notifier,
             patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
-            patch(PATCH_EXTRACT_STATUS, return_value="Please provide input") as mock_st,
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
         ):
             _setup_db_mock(db, msg=msg)
@@ -429,10 +491,10 @@ class TestNotifyTaskUpdate:
                 )
 
             assert result is True
-            mock_st.assert_called_once()
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
-            assert call_kw["status_message"] == "Please provide input"
+            assert call_kw["status_message"] is None
+            assert private_sentinel not in repr(call_kw)
             emitter.assert_awaited_once_with(
                 room_id="room-1",
                 status=SSEProcessingStatus.AWAITING_INPUT,
@@ -440,7 +502,7 @@ class TestNotifyTaskUpdate:
                 lifecycle_message_id="msg-1",
                 record_lifecycle=True,
                 client_request_id=None,
-                details={"message": "Please provide input"},
+                details=None,
                 error_message=None,
             )
 
@@ -572,16 +634,16 @@ class TestNotifyTaskUpdate:
                     room_id="room-1",
                     user_id="user-1",
                 )
-            emitter.assert_awaited_once_with(
-                room_id="room-1",
-                status=SSEProcessingStatus.AWAITING_INPUT,
-                message_id="msg-1",
-                lifecycle_message_id="msg-1",
-                record_lifecycle=True,
-                client_request_id=None,
-                details={"message": "Need input"},
-                error_message=None,
-            )
+        emitter.assert_awaited_once_with(
+            room_id="room-1",
+            status=SSEProcessingStatus.AWAITING_INPUT,
+            message_id="msg-1",
+            lifecycle_message_id="msg-1",
+            record_lifecycle=True,
+            client_request_id=None,
+            details=None,
+            error_message=None,
+        )
 
     # --------------------------------------------------------------------- #
     # 11. Agent name resolved from room

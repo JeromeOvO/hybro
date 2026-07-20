@@ -86,6 +86,11 @@ class HITLPersistencePort(Protocol):
     async def update_agent_message_task_state(
         self, message_id: str, state: str
     ) -> None: ...
+    async def persist_hitl_request_id_on_message(
+        self,
+        message_id: str,
+        request_id: str | None,
+    ) -> bool: ...
     async def find_pending_hitl_request_for_agent_message(
         self,
         *,

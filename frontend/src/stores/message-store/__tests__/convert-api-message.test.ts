@@ -189,13 +189,21 @@ describe('convertApiMessageToIncoming', () => {
     })
 
     it('ignores legacy task metadata task_content without a public label', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_task_metadata'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
         message_content: {
           message_text: '',
           message_task: {
-            metadata: { task_content: 'PRIVATE_SENTINEL_task_metadata' },
+            metadata: {
+              task_content: privateSentinel,
+              prompt: privateSentinel,
+              hitl_prompt: privateSentinel,
+              choices: [privateSentinel],
+              hitl_choices: [privateSentinel],
+              hitl_request_id: privateSentinel,
+            },
             status: { state: 'working' },
             kind: 'task',
             contextId: 'ctx-1',
@@ -206,10 +214,69 @@ describe('convertApiMessageToIncoming', () => {
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.taskContent).toBeUndefined()
-      expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
+    })
+
+    it('hydrates HITL fields only when backend provenance matches the request', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        extend_info: {
+          public_task_label: 'Requesting Claims Agent',
+          hitl_request_id: 'local-hitl-request',
+        },
+        message_content: {
+          message_text: '',
+          message_task: {
+            metadata: {
+              hitl_request_id: 'local-hitl-request',
+              hitl_prompt: 'Choose the approved option',
+              hitl_prompt_type: 'choice',
+              hitl_choices: ['Approve', 'Reject'],
+              user_answer: 'Approve',
+            },
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.hitlRequestId).toBe('local-hitl-request')
+      expect(result.hitlPrompt).toBe('Choose the approved option')
+      expect(result.hitlPromptType).toBe('choice')
+      expect(result.hitlChoices).toEqual(['Approve', 'Reject'])
+      expect(result.hitlUserAnswer).toBe('Approve')
+    })
+
+    it('preserves locally projected supervisor answer and group context', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'system:clarifier',
+        message_content: {
+          message_text: '',
+          message_task: {
+            metadata: {
+              user_answer: 'Use the enterprise account',
+              hitl_group_id: 'supervisor-group',
+              hitl_group_total: 2,
+              hitl_group_index: 0,
+            },
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.hitlUserAnswer).toBe('Use the enterprise account')
+      expect(result.hitlGroupId).toBe('supervisor-group')
+      expect(result.hitlGroupTotal).toBe(2)
+      expect(result.hitlGroupIndex).toBe(0)
     })
 
     it('does not promote status message to content for non-terminal tasks', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_working_status_message'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
@@ -218,7 +285,7 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             status: {
               state: 'working',
-              message: { parts: [{ text: 'Processing your request' }] },
+              message: { parts: [{ text: privateSentinel }] },
             },
           } as RoomMessage['message_content']['message_task'],
         },
@@ -227,7 +294,8 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result.taskStatus).toBe(TASK_STATE.WORKING)
       expect(result.content).toBe('')
-      expect(result.taskError).toBe('Processing your request')
+      expect(result.taskError).toBeNull()
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
     it('ignores message_text for non-terminal agent tasks (user prompt seed)', async () => {
@@ -270,7 +338,8 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
     })
 
-    it('promotes status message to content for terminal failed tasks', async () => {
+    it('uses a stable public error for terminal failed tasks', async () => {
+      const privateSentinel = 'PRIVATE_SENTINEL_failed_status_message'
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
@@ -279,7 +348,7 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             status: {
               state: 'failed',
-              message: { parts: [{ text: 'Something went wrong' }] },
+              message: { parts: [{ text: privateSentinel }] },
             },
           } as RoomMessage['message_content']['message_task'],
         },
@@ -287,8 +356,9 @@ describe('convertApiMessageToIncoming', () => {
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.taskStatus).toBe(TASK_STATE.FAILED)
-      expect(result.content).toBe('Something went wrong')
-      expect(result.taskError).toBe('Something went wrong')
+      expect(result.content).toBe('Task failed')
+      expect(result.taskError).toBe('Task failed')
+      expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
     it('has no taskStatus when message_task is absent', async () => {

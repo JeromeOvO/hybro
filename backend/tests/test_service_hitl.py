@@ -67,6 +67,7 @@ def mock_hitl_db_service():
     mock.create_or_reuse_pending_hitl_request = AsyncMock(return_value=None)
     mock.persist_pending_hitl_on_agent_message = AsyncMock(return_value=True)
     mock.update_agent_message_task_state = AsyncMock(return_value=True)
+    mock.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
     mock.persist_hitl_user_answer = AsyncMock(return_value=True)
     mock.persist_hitl_group_metadata = AsyncMock(return_value=True)
     mock.claim_hitl_request = AsyncMock(return_value=None)
@@ -188,6 +189,27 @@ class TestRequestInput:
         assert result.status == HITLStatus.PENDING
 
         mock_hitl_db_service.create_hitl_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_projection_persists_request_id_on_display_message(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Please clarify your request",
+            display_message_id="supervisor-display-msg",
+        )
+
+        assert result is not None
+        mock_hitl_db_service.persist_hitl_request_id_on_message.assert_awaited_once_with(
+            "supervisor-display-msg",
+            result.request_id,
+        )
 
     @pytest.mark.asyncio
     async def test_supervisor_request_reuses_deterministic_request_id(

@@ -664,6 +664,15 @@ class RuntimeRepositoryStore:
             message_id, state
         )
 
+    async def persist_hitl_request_id_on_message(
+        self,
+        message_id: str,
+        request_id: str | None,
+    ) -> bool:
+        return await self._hitl_delegate().persist_hitl_request_id_on_message(
+            message_id, request_id
+        )
+
     async def find_pending_hitl_request_for_agent_message(
         self,
         *,
