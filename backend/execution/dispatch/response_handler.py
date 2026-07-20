@@ -115,6 +115,8 @@ def _sanitize_public_parts(parts: list[dict] | None) -> list[dict]:
         if not isinstance(part, dict):
             continue
         public_part = public_part_data(part)
+        if public_part is None:
+            continue
         if _part_has_unaddressable_file(public_part):
             continue
         sanitized.append(public_part)

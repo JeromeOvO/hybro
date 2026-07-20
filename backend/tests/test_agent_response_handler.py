@@ -535,6 +535,44 @@ class TestResponseEvent:
         assert private_bytes not in repr(kwargs)
 
     @pytest.mark.asyncio
+    async def test_parts_only_completed_response_drops_unaddressable_file(self):
+        private_text = "PRIVATE_SENTINEL_parts_only_status_text"
+        private_bytes = "PRIVATE_SENTINEL_parts_only_file_bytes"
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text=private_text,
+            parts=[
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": private_bytes,
+                        "mime_type": "text/plain",
+                        "name": "private.txt",
+                    },
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(side_effect=RuntimeError("S3 unavailable")),
+            )
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
+        assert kwargs["message_text"] is None
+        assert kwargs["artifacts"] is None
+        assert private_text not in repr(kwargs)
+        assert private_bytes not in repr(kwargs)
+
+    @pytest.mark.asyncio
     async def test_terminal_notification_failure_does_not_block_response_cleanup(self):
         slot_lifecycle = MagicMock()
         slot_lifecycle.terminate_slot = AsyncMock()
