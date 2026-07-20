@@ -401,5 +401,30 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.taskUpdatedAt).toBeTruthy()
       expect(result.taskCreatedAt).toBeTruthy()
     })
+
+    it('serializes the public task label without leaking internal dispatch instructions', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        task_content: 'Requesting Insurer',
+        message_content: {
+          message_text: 'Requesting Insurer',
+          message_task: {
+            status: { state: 'working' },
+            metadata: {
+              public_task_label: 'Requesting Insurer',
+              internal_task_payload: { redacted: true },
+            },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+      const serialized = JSON.stringify(result)
+
+      expect(result.content).toBe('')
+      expect(result.taskContent).toBe('Requesting Insurer')
+      expect(serialized).toContain('Requesting Insurer')
+      expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+    })
   })
 })

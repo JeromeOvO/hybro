@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -71,7 +72,13 @@ from models.orchestration import (
 )
 from models.processing import ProcessingResult, ProcessingStatus
 from models.response import OrchestrationResponse
-from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
+from models.room import (
+    MessageContent,
+    Room,
+    RoomAgentMessage,
+    RoomUserMessage,
+    UserAttachment,
+)
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -509,12 +516,15 @@ async def test_run_materializes_only_selected_resource_refs_for_dispatch():
     )
 
     assert result.status == RunStatus.COMPLETED
-    dispatched_message = (
-        executor.agent_message_processor.process_single_message.await_args.args[0]
+    processor_call = executor.agent_message_processor.process_single_message.await_args
+    dispatched_message = processor_call.args[0]
+    assert dispatched_message.extend_info == {
+        "public_task_label": "Requesting Agent One"
+    }
+    assert processor_call.kwargs["resolved_resource_payloads"][0]["ref_id"] == (
+        "ctx:file-file-1:text"
     )
-    resolved = dispatched_message.extend_info["resolved_dispatch_payload_refs"]
-    assert resolved["context_refs"] == ["ctx:file-file-1:text"]
-    assert resolved["resource_payloads"][0]["text"] == (
+    assert processor_call.kwargs["resolved_resource_payloads"][0]["text"] == (
         "Projected submission text"
     )
     projection_service.ensure_projection.assert_awaited_once()
@@ -1423,13 +1433,27 @@ async def test_supervisor_records_dispatch_status_through_run_reducer():
 
 
 @pytest.mark.asyncio
-async def test_run_delegate_path_preserves_planner_dispatch_metadata():
-    refs = _dispatch_refs_payload()
+async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
+    monkeypatch,
+):
+    dispatch_task_sentinel = "INTERNAL DISPATCH TASK: private"
+    public_task_label = "Requesting Agent One"
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
         user_id="user-1",
-        message_content=MessageContent(message_text="Coordinate this"),
+        message_content=MessageContent(
+            message_text="Coordinate this",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    s3_key="uploads/room-1/file-1/report.pdf",
+                    mime_type="application/pdf",
+                    file_name="report.pdf",
+                    size_bytes=16,
+                )
+            ],
+        ),
         extend_info={
             "orchestration": True,
             "orchestration_schema_version": 2,
@@ -1438,72 +1462,137 @@ async def test_run_delegate_path_preserves_planner_dispatch_metadata():
             "client_request_id": "client-1",
         },
     )
-    planner = RecordingPlanner(
-        PlannerAction(
-            action=PlannerActionType.DELEGATE,
-            reasoning="Delegate with explicit refs",
-            targets=[
-                PlannedDelegateTarget(
-                    agent_id="agent-1",
-                    agent_name="Agent One",
-                    task="Use the referenced materials",
-                    context_refs=refs["context_refs"],
-                    attachment_refs=refs["attachment_refs"],
-                    expected_outputs=refs["expected_outputs"],
-                    attachment_policy="compatible_only",
-                )
-            ],
-        ),
-        PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
-            reasoning="Summarize the completed agent output",
-            synthesis_instruction="Summarize the answer",
-        ),
+    planner_action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Delegate with explicit refs",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task=dispatch_task_sentinel,
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="ctx-1",
+                    )
+                ],
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file-1",
+                    )
+                ],
+                attachment_policy="compatible_only",
+            )
+        ],
     )
     store = InMemoryOrchestrationRunStore()
-    executor = _executor(store=store, planner=planner, user_message=user_message)
-
-    result = await executor.run(
-        room_id="room-1",
-        user_message_id="message-1",
-        message_text="Coordinate this",
-        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
-        room_config=RoomConfig(),
-        request_user_id="user-1",
+    state = await store.create_run(
+        _run_state(
+            run_id="message-1",
+            room_id="room-1",
+            user_message_id="message-1",
+            status=OrchestrationStatus.RUNNING,
+            state_version=0,
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.COMPLETED
-    state = await store.get_run("message-1")
-    assert state is not None
-    assert len(state.dispatch_intents) == 1
-    intent = state.dispatch_intents[0]
-    assert intent.context_refs == refs["context_refs"]
-    assert intent.artifact_refs == []
-    assert intent.attachment_refs == refs["attachment_refs"]
-    assert intent.expected_outputs == refs["expected_outputs"]
-    assert intent.attachment_policy == "compatible_only"
+    resolved_resource_payload = ResolvedResourcePayload(
+        ref_id="ctx-1",
+        kind="context",
+        mime_type="text/plain",
+        text="Room context selected for delegation.",
+    )
+    monkeypatch.setattr(
+        supervisor_executor_module,
+        "resolve_dispatch_payload_refs",
+        MagicMock(
+            return_value=ResolvedDispatchPayload(
+                selected_context_refs=["ctx-1"],
+                selected_attachment_refs=["file-1"],
+                resource_payloads=[resolved_resource_payload],
+            )
+        ),
+    )
+
+    def create_agent_message(**kwargs):
+        return RoomAgentMessage(
+            room_id=kwargs["room_id"],
+            message_id=kwargs.get("message_id", "message-1:step-1:target-1:message"),
+            related_message_id=kwargs["related_message_id"],
+            agent_id=kwargs["agent_id"],
+            user_id=kwargs["user_id"],
+            client_request_id=kwargs["client_request_id"],
+            step_number=kwargs.get("step_number"),
+            total_steps=kwargs.get("total_steps"),
+            message_content=MessageContent(message_text=kwargs["content"]),
+            task_content=kwargs["task_content"],
+            extend_info={},
+        )
+
+    executor.room_runtime.create_agent_message = MagicMock(
+        side_effect=create_agent_message
+    )
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Agent One response",
+            message_id="agent-message-1",
+        )
+    )
+
+    saved, status = await executor._run_delegate_action(
+        state=state,
+        planner_action=planner_action,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+        resource_fingerprints={},
+    )
+
+    assert status is None
+    assert len(saved.dispatch_intents) == 1
+    intent = saved.dispatch_intents[0]
 
     delegated_message = executor.message_writer.add_room_agent_message.await_args_list[
-        1
+        -1
     ].args[0]
     assert delegated_message.message_id == intent.planned_agent_message_id
-    assert (
-        delegated_message.extend_info["attachment_forwarding_policy"]
-        == "compatible_only"
+    assert delegated_message.message_content.message_text == public_task_label
+    assert delegated_message.task_content == public_task_label
+    assert delegated_message.extend_info == {"public_task_label": public_task_label}
+    persisted_json = json.dumps(
+        delegated_message.model_dump(mode="json"),
+        sort_keys=True,
     )
-    assert delegated_message.extend_info["dispatch_payload_refs"] == {
-        "context_refs": [
-            ref.model_dump(mode="json") for ref in refs["context_refs"]
-        ],
-        "artifact_refs": [],
-        "attachment_refs": [
-            ref.model_dump(mode="json") for ref in refs["attachment_refs"]
-        ],
-        "expected_outputs": [
-            output.model_dump(mode="json") for output in refs["expected_outputs"]
-        ],
-    }
+    assert public_task_label in persisted_json
+    assert dispatch_task_sentinel not in persisted_json
+    assert "dispatch_payload_refs" not in persisted_json
+    assert "resolved_dispatch_resource_payloads" not in persisted_json
+    assert "attachment_forwarding_policy" not in persisted_json
+
+    processor_call = executor.agent_message_processor.process_single_message.await_args
+    assert processor_call.args[0] == delegated_message
+    assert dispatch_task_sentinel in processor_call.kwargs["dispatch_task"]
+    assert processor_call.kwargs["resolved_resource_payloads"] == [
+        resolved_resource_payload.model_dump(mode="json")
+    ]
+    assert processor_call.kwargs["explicit_attachment_refs"] == ["file-1"]
+    assert processor_call.kwargs["attachment_forwarding_policy"] == (
+        "compatible_only"
+    )
 
 
 def test_v2_dispatch_intent_preserves_dispatch_metadata():
@@ -9103,23 +9192,15 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
     replayed_message = executor.message_writer.add_room_agent_message.await_args_list[
         1
     ].args[0]
-    assert replayed_message.extend_info["attachment_forwarding_policy"] == (
+    assert replayed_message.extend_info == {"public_task_label": "Requesting Agent One"}
+    replayed_call = executor.agent_message_processor.process_single_message.await_args
+    assert replayed_call.kwargs["attachment_forwarding_policy"] == (
         "explicit_refs_only"
     )
-    assert replayed_message.extend_info["dispatch_payload_refs"] == {
-        "context_refs": [
-            ref.model_dump(mode="json") for ref in refs["context_refs"]
-        ],
-        "artifact_refs": [
-            ref.model_dump(mode="json") for ref in refs["artifact_refs"]
-        ],
-        "attachment_refs": [
-            ref.model_dump(mode="json") for ref in refs["attachment_refs"]
-        ],
-        "expected_outputs": [
-            output.model_dump(mode="json") for output in refs["expected_outputs"]
-        ],
-    }
+    # The replay intent retains the private attachment selector, but a file
+    # absent from the recovered user message must not be forwarded.
+    assert replayed_call.kwargs["explicit_attachment_refs"] == []
+    assert replayed_call.kwargs["resolved_resource_payloads"] == []
     assert planner.contexts[0].state_context.current_step.steps_used == 1
 
 
@@ -11200,6 +11281,24 @@ async def test_persisted_continuation_claim_allows_one_remote_reply_under_race()
     assert persisted.pending_agent_continuations[0].status == "resuming"
 
 
+def test_resolved_resource_fingerprints_prefer_private_catalog_fingerprint():
+    resolved_payload = ResolvedDispatchPayload(
+        resource_payloads=[
+            ResolvedResourcePayload(
+                ref_id="ctx:file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected input",
+                content_fingerprint="projected-input-fingerprint",
+            )
+        ]
+    )
+
+    assert SupervisorExecutor._resolved_resource_fingerprints(
+        resolved_payload
+    ) == {"projected-input-fingerprint"}
+
+
 @pytest.mark.asyncio
 async def test_concurrent_delegate_recovery_claims_before_one_remote_reply():
     user_message = RoomUserMessage(
@@ -11521,40 +11620,65 @@ async def test_ingest_v2_results_reopens_repeated_plain_input_and_resolves_conti
 
 
 @pytest.mark.asyncio
-async def test_persisted_resource_fingerprints_seed_continuation_attempts():
-    user_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="message-1",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Use uploaded PDF"),
-    )
+async def test_private_intent_fingerprints_seed_continuation_attempts():
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
-        user_message=user_message,
+        user_message=_state_unification_user_message(message_id="message-1"),
     )
-    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
-        return_value=SimpleNamespace(
-            extend_info={
-                "resolved_dispatch_payload_refs": {
-                    "resource_payloads": [
-                        {
-                            "ref_id": "ctx:file-1:text",
-                            "kind": "context",
-                            "mime_type": "text/plain",
-                            "text": "Projected input",
-                        }
-                    ]
-                }
-            }
-        )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Initial",
+                task_hash="hash-1",
+                status="dispatching",
+                selected_resource_fingerprints=["projected-input-fingerprint"],
+            )
+        ]
+    )
+    await store.create_run(state)
+
+    current = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Initial",
+                response_text="Need more input",
+                success=True,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id="agent-msg-1",
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=False,
     )
 
-    fingerprints = await executor._v2_persisted_resource_fingerprints(
-        "agent-msg-1"
+    continuation = current.pending_agent_continuations[0]
+    assert continuation.attempted_resource_fingerprints == [
+        "projected-input-fingerprint"
+    ]
+    claimed = await executor._claim_matching_continuation(
+        state=current,
+        target=PlannedDelegateTarget(
+            agent_id="agent-1",
+            task="Retry",
+            repair_of_intent_id="intent-1",
+        ),
+        goal_family_fingerprint=continuation.goal_family_fingerprint,
+        selected_resource_fingerprints={"projected-input-fingerprint"},
     )
-
-    assert len(fingerprints) == 1
+    assert claimed is None
 
 
 @pytest.mark.asyncio
@@ -12472,38 +12596,17 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
         user_message=user_message,
     )
 
-    dispatched_messages = [
-        call.args[0]
-        for call in executor.agent_message_processor.process_single_message.await_args_list
-    ]
-    broker_dispatch, insurer_dispatch = dispatched_messages
-    assert broker_dispatch.message_id == "broker-msg"
-    assert broker_dispatch.extend_info["attachment_forwarding_policy"] == (
-        "explicit_refs_only"
+    processor_calls = (
+        executor.agent_message_processor.process_single_message.await_args_list
     )
-    assert broker_dispatch.extend_info["resolved_dispatch_payload_refs"] == {
-        "context_refs": ["ctx:file-file-1:text"],
-        "artifact_refs": [],
-        "attachment_refs": [],
-        "resource_payloads": [
-            {
-                "ref_id": "ctx:file-file-1:text",
-                "kind": "context",
-                "mime_type": "text/plain",
-                "text": "Insured has 250 employees and 50M revenue.",
-                "summary": "Extracted 42 characters from 1 PDF page(s).",
-                "metadata": {
-                    "source_ref_id": "file:file-1",
-                    "file_id": "file-1",
-                    "file_name": "submission.pdf",
-                    "char_count": 42,
-                    "page_count": 1,
-                    "is_truncated": False,
-                },
-            }
-        ],
-    }
-    assert broker_dispatch.extend_info["resolved_dispatch_resource_payloads"] == [
+    broker_dispatch = processor_calls[0].args[0]
+    broker_kwargs = processor_calls[0].kwargs
+    insurer_dispatch = processor_calls[1].args[0]
+    insurer_kwargs = processor_calls[1].kwargs
+    assert broker_dispatch.message_id == "broker-msg"
+    assert broker_dispatch.extend_info == {"public_task_label": "Requesting Broker"}
+    assert broker_kwargs["attachment_forwarding_policy"] == "explicit_refs_only"
+    assert broker_kwargs["resolved_resource_payloads"] == [
         {
             "ref_id": "ctx:file-file-1:text",
             "kind": "context",
@@ -12520,22 +12623,12 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
             },
         }
     ]
+    assert broker_kwargs["explicit_attachment_refs"] == []
     assert insurer_dispatch.message_id == "insurer-msg"
-    assert insurer_dispatch.extend_info["attachment_forwarding_policy"] == (
-        "explicit_refs_only"
-    )
-    assert insurer_dispatch.extend_info["dispatch_payload_refs"]["artifact_refs"] == [
-        {
-            "kind": "artifact",
-            "ref_id": "broker-msg:artifact_id:submission",
-            "source_agent_message_id": None,
-            "mime_type": None,
-            "required": True,
-        }
-    ]
-    assert insurer_dispatch.extend_info["resolved_dispatch_payload_refs"][
-        "artifact_refs"
-    ] == ["broker-msg:artifact_id:submission"]
+    assert insurer_dispatch.extend_info == {"public_task_label": "Requesting Insurer"}
+    assert insurer_kwargs["attachment_forwarding_policy"] == "explicit_refs_only"
+    assert insurer_kwargs["explicit_attachment_refs"] == []
+    assert insurer_kwargs["resolved_resource_payloads"] == []
 
     dispatched_agents = [intent.agent_id for intent in result.run_state.dispatch_intents]
     assert dispatched_agents == ["broker-agent", "insurer-agent"]

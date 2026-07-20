@@ -123,6 +123,57 @@ class TestStreamRoomMessages:
         }
         assert isinstance(frame["timestamp"], str)
 
+    @pytest.mark.asyncio
+    async def test_stream_forwards_public_task_frame_with_client_request_id(
+        self, mock_user, mock_sse_transport, mock_db_service, sample_room
+    ):
+        public_label = "Requesting Insurer"
+        client_request_id = "cr-insurer-001"
+        forwarded_frame = json.dumps(
+            {
+                "type": "task_submitted",
+                "room_id": sample_room.room_id,
+                "timestamp": "2026-01-15T12:00:00",
+                "data": {
+                    "message_id": "agent-msg-insurer-001",
+                    "task_id": "task-insurer-001",
+                    "agent_name": "Insurer",
+                    "status": "submitted",
+                    "task_content": public_label,
+                    "client_request_id": client_request_id,
+                },
+            }
+        )
+
+        mock_connection = MagicMock()
+        mock_connection.connection_id = "conn-123"
+        mock_connection.is_active = True
+
+        async def _get_message(timeout=30.0):
+            mock_connection.is_active = False
+            return forwarded_frame
+
+        mock_connection.get_message = AsyncMock(side_effect=_get_message)
+        mock_sse_transport.add_connection.return_value = mock_connection
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+
+        response = await stream_room_messages(
+            sample_room.room_id,
+            mock_user,
+            transport=mock_sse_transport,
+            db=mock_db_service,
+        )
+
+        await anext(response.body_iterator)
+        second_event = await anext(response.body_iterator)
+        frame = json.loads(second_event.removeprefix("data: ").strip())
+
+        assert frame["type"] == "task_submitted"
+        assert frame["room_id"] == sample_room.room_id
+        assert frame["data"]["task_content"] == public_label
+        assert frame["data"]["client_request_id"] == client_request_id
+        assert "INTERNAL DISPATCH TASK" not in second_event
+
 
 # =============================================================================
 # Room SSE Status Tests

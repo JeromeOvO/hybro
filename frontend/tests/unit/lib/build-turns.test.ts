@@ -1366,4 +1366,25 @@ describe('primaryStreamMessageId', () => {
     expect(turns[0].phase).toBe('collecting')
     expect(turns[0].processingStatusLogs).toHaveLength(1)
   })
+
+  it('serializes the public task label in timeline turns without internal dispatch text', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agent = makeEntity({
+      id: 'a1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      agentId: 'system:hybro',
+      taskStatus: 'working',
+      content: '',
+      taskContent: 'Requesting Insurer',
+    })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    const serialized = JSON.stringify(turns[0])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0].supervisorStage?.details).toBe('Requesting Insurer')
+    expect(serialized).toContain('Requesting Insurer')
+    expect(serialized).not.toContain('INTERNAL DISPATCH TASK')
+  })
 })
