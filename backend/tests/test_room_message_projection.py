@@ -5,7 +5,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from common.types import Message, MessageRole, Part, Task, TaskState, TaskStatus, TextPart
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Part,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from models.request import RoomCenterRoomMessageRequest
 from models.response import (
     RoomCenterAgentMessageResponse,
@@ -13,7 +22,6 @@ from models.response import (
 )
 from models.room import MessageContent, RoomAgentMessage
 from room.compat.runtime import RoomServices
-
 
 NOW = datetime(2026, 7, 3, tzinfo=UTC)
 
@@ -27,7 +35,7 @@ def _text_message(text: str, *, message_id: str) -> Message:
 
 
 @pytest.mark.asyncio
-async def test_room_message_projection_prefers_terminal_message_text_over_history_status() -> None:
+async def test_room_message_projection_prefers_terminal_artifact_over_legacy_text() -> None:
     final_text = "Hello! I'm your cyber insurance broker agent. How can I assist you today?"
     progress_text = "Preparing cyber broker submission..."
     task = Task(
@@ -37,7 +45,12 @@ async def test_room_message_projection_prefers_terminal_message_text_over_histor
             state=TaskState.completed,
             message=_text_message(final_text, message_id="status-message"),
         ),
-        artifacts=None,
+        artifacts=[
+            Artifact(
+                artifact_id="final-response",
+                parts=[Part(root=TextPart(text=final_text))],
+            )
+        ],
         history=[_text_message(progress_text, message_id="history-message")],
     )
     agent_message = RoomAgentMessage(
@@ -47,7 +60,7 @@ async def test_room_message_projection_prefers_terminal_message_text_over_histor
         related_message_id="user-1",
         message_created_at=NOW,
         message_content=MessageContent(
-            message_text=final_text,
+            message_text="Legacy display text",
             message_task=task,
         ),
     )

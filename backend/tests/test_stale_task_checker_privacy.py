@@ -10,7 +10,7 @@ from models.room import MessageContent, RoomAgentMessage
 
 
 @pytest.mark.asyncio
-async def test_polled_stale_task_persists_only_public_task_history():
+async def test_polled_stale_task_persists_only_public_terminal_artifacts():
     private_text = "PRIVATE_SENTINEL_stale_poll_history"
     remote_task = Task(
         id="task-1",
@@ -81,9 +81,9 @@ async def test_polled_stale_task_persists_only_public_task_history():
     persisted_task = store.update_task_on_message.await_args.args[1]
     persisted_json = json.dumps(persisted_task, sort_keys=True)
     assert private_text not in persisted_json
-    assert "Visible agent answer" in persisted_json
-    assert persisted_task["history"][0]["role"] == "agent"
-    assert persisted_task["history"][0]["metadata"] is None
+    assert "Visible terminal output" in persisted_json
+    assert "Visible agent answer" not in persisted_json
+    assert persisted_task["history"] is None
     assert persisted_task["metadata"] is None
     assert store.update_task_on_message.await_args.kwargs["message_text"] == (
         "Visible terminal output"
