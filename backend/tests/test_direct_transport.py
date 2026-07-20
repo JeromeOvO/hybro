@@ -1241,6 +1241,45 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc.delivery.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_artifact_text_uses_append_semantics_for_finalization(self):
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=True,
+        )
+        streaming_state = MessageStreamingState(full_response_text="stale")
+        initial = MagicMock(
+            artifact=Artifact(
+                artifact_id="artifact-1",
+                parts=[Part(root=TextPart(text="Hello"))],
+            ),
+            append=False,
+            last_chunk=False,
+        )
+        appended = MagicMock(
+            artifact=Artifact(
+                artifact_id="artifact-1",
+                parts=[Part(root=TextPart(text=" world"))],
+            ),
+            append=True,
+            last_chunk=True,
+        )
+
+        await proc._handle_stream_artifact_update(initial, ctx, streaming_state)
+        await proc._handle_stream_artifact_update(appended, ctx, streaming_state)
+
+        assert streaming_state.full_response_text == "Hello world"
+        proc.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_artifact_chunk_with_last_chunk_waits_for_terminal_finalization(self):
         private_sentinel = "PRIVATE_SENTINEL_stream_artifact_metadata"
         proc = _make_processor()
@@ -1477,11 +1516,11 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert streaming_state.non_text_parts
 
 
-class TestFinalizeStreamingEmitsLastChunk:
-    """_finalize_streaming sends a last_chunk=True artifact_update event."""
+class TestFinalizeStreamingArtifactDelivery:
+    """_finalize_streaming relies on the terminal task update for delivery."""
 
     @pytest.mark.asyncio
-    async def test_finalize_emits_last_chunk(self):
+    async def test_finalize_does_not_emit_empty_artifact_sentinel(self):
         proc = _make_processor()
         proc.delivery.send_artifact_update = AsyncMock()
         proc.tsm.transition_task = AsyncMock()
@@ -1510,13 +1549,8 @@ class TestFinalizeStreamingEmitsLastChunk:
         status, text = await proc._finalize_streaming(ctx, streaming_state)
 
         assert status == ProcessingStatus.SUCCESS
-        # First call should be the last_chunk artifact_update
-        first_call_kwargs = proc.delivery.send_artifact_update.call_args_list[0].kwargs
-        assert first_call_kwargs["room_id"] == "room-1"
-        assert first_call_kwargs["message_id"] == "msg-1"
-        assert first_call_kwargs["artifact"]["artifact_id"] == "msg-1-stream"
-        assert first_call_kwargs["artifact"]["parts"] == []
-        assert first_call_kwargs["last_chunk"] is True
+        assert text == "Agent done."
+        proc.delivery.send_artifact_update.assert_not_awaited()
 
 
 # =============================================================================

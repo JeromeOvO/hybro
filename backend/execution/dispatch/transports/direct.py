@@ -1208,6 +1208,12 @@ class DirectTransport(AgentTransport):
         from common.utils.a2a_helpers import extract_parts
 
         extracted = extract_parts(getattr(artifact_result, "parts", None) or [])
+        if extracted.text:
+            if append:
+                streaming_state.full_response_text += extracted.text
+            else:
+                streaming_state.full_response_text = extracted.text
+
         if extracted.has_non_text:
             streaming_state.non_text_parts.extend(extracted.file_parts)
             streaming_state.non_text_parts.extend(extracted.data_parts)
@@ -1243,20 +1249,6 @@ class DirectTransport(AgentTransport):
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
-        if ctx.send_sse:
-            await self.delivery.send_artifact_update(
-                room_id=ctx.room_id,
-                message_id=ctx.current_message.message_id,
-                agent_id=ctx.current_message.agent_id,
-                artifact={
-                    "artifact_id": f"{ctx.current_message.message_id}-stream",
-                    "parts": [],
-                },
-                append=True,
-                last_chunk=True,
-                client_request_id=ctx.current_message.client_request_id,
-            )
-
         logger.info(
             "DirectTransport: Streaming complete for message %s, text length: %d",
             ctx.current_message.message_id,
