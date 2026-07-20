@@ -2725,7 +2725,8 @@ class SupervisorExecutor:
         resolved_payload: ResolvedDispatchPayload,
     ) -> set[str]:
         return {
-            canonical_content_fingerprint(payload.model_dump(mode="json"))
+            payload.content_fingerprint
+            or canonical_content_fingerprint(payload.model_dump(mode="json"))
             for payload in resolved_payload.resource_payloads
         }
 
@@ -5365,30 +5366,17 @@ class SupervisorExecutor:
             return []
         return self._v2_artifacts_from_agent_message(message)
 
-    async def _v2_persisted_resource_fingerprints(
-        self,
-        output_message_id: str,
+    @classmethod
+    def _v2_intent_resource_fingerprints(
+        cls,
+        state: OrchestrationRunState,
+        intent: DispatchIntent,
     ) -> list[str]:
-        message = await self.message_reader.get_room_agent_message_by_message_id(
-            output_message_id
-        )
-        extend_info = getattr(message, "extend_info", None) if message else None
-        resolved_payload_refs = (
-            extend_info.get("resolved_dispatch_payload_refs")
-            if isinstance(extend_info, Mapping)
-            else {}
-        )
-        payloads = (
-            resolved_payload_refs.get("resource_payloads")
-            if isinstance(resolved_payload_refs, Mapping)
-            else None
-        )
-        if not isinstance(payloads, list):
-            return []
         return sorted(
-            canonical_content_fingerprint(payload)
-            for payload in payloads
-            if isinstance(payload, Mapping)
+            set(
+                intent.selected_resource_fingerprints
+                or cls._v2_selected_resource_fingerprints(state, intent)
+            )
         )
 
     @staticmethod
@@ -5624,8 +5612,9 @@ class SupervisorExecutor:
                         )
                         if existing_continuation is None:
                             attempted_resource_fingerprints = (
-                                await self._v2_persisted_resource_fingerprints(
-                                    output.agent_message_id
+                                self._v2_intent_resource_fingerprints(
+                                    current,
+                                    matched_intent,
                                 )
                             )
                             next_state.pending_agent_continuations.append(
@@ -7432,7 +7421,11 @@ class SupervisorExecutor:
                     dispatch_task=dispatch_task,
                     resolved_resource_payloads=resolved_resource_payloads,
                     explicit_attachment_refs=explicit_attachment_refs,
-                    attachment_forwarding_policy="explicit_refs_only",
+                    attachment_forwarding_policy=(
+                        target.attachment_policy
+                        if getattr(target, "attachment_policy", None)
+                        else "explicit_refs_only"
+                    ),
                 )
                 logger.info(
                     "supervisor_agent_invocation_completed",

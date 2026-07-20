@@ -1482,6 +1482,7 @@ async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
                         ref_id="file-1",
                     )
                 ],
+                attachment_policy="compatible_only",
             )
         ],
     )
@@ -1590,7 +1591,7 @@ async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
     ]
     assert processor_call.kwargs["explicit_attachment_refs"] == ["file-1"]
     assert processor_call.kwargs["attachment_forwarding_policy"] == (
-        "explicit_refs_only"
+        "compatible_only"
     )
 
 
@@ -11280,6 +11281,24 @@ async def test_persisted_continuation_claim_allows_one_remote_reply_under_race()
     assert persisted.pending_agent_continuations[0].status == "resuming"
 
 
+def test_resolved_resource_fingerprints_prefer_private_catalog_fingerprint():
+    resolved_payload = ResolvedDispatchPayload(
+        resource_payloads=[
+            ResolvedResourcePayload(
+                ref_id="ctx:file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Projected input",
+                content_fingerprint="projected-input-fingerprint",
+            )
+        ]
+    )
+
+    assert SupervisorExecutor._resolved_resource_fingerprints(
+        resolved_payload
+    ) == {"projected-input-fingerprint"}
+
+
 @pytest.mark.asyncio
 async def test_concurrent_delegate_recovery_claims_before_one_remote_reply():
     user_message = RoomUserMessage(
@@ -11601,40 +11620,65 @@ async def test_ingest_v2_results_reopens_repeated_plain_input_and_resolves_conti
 
 
 @pytest.mark.asyncio
-async def test_persisted_resource_fingerprints_seed_continuation_attempts():
-    user_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="message-1",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Use uploaded PDF"),
-    )
+async def test_private_intent_fingerprints_seed_continuation_attempts():
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
-        user_message=user_message,
+        user_message=_state_unification_user_message(message_id="message-1"),
     )
-    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
-        return_value=SimpleNamespace(
-            extend_info={
-                "resolved_dispatch_payload_refs": {
-                    "resource_payloads": [
-                        {
-                            "ref_id": "ctx:file-1:text",
-                            "kind": "context",
-                            "mime_type": "text/plain",
-                            "text": "Projected input",
-                        }
-                    ]
-                }
-            }
-        )
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Initial",
+                task_hash="hash-1",
+                status="dispatching",
+                selected_resource_fingerprints=["projected-input-fingerprint"],
+            )
+        ]
+    )
+    await store.create_run(state)
+
+    current = await executor._ingest_v2_results(
+        state,
+        [
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Agent One",
+                task="Initial",
+                response_text="Need more input",
+                success=True,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id="agent-msg-1",
+                a2a_task_id="task-1",
+                a2a_context_id="ctx-1",
+            )
+        ],
+        status=OrchestrationStatus.RUNNING,
+        advance_step=False,
     )
 
-    fingerprints = await executor._v2_persisted_resource_fingerprints(
-        "agent-msg-1"
+    continuation = current.pending_agent_continuations[0]
+    assert continuation.attempted_resource_fingerprints == [
+        "projected-input-fingerprint"
+    ]
+    claimed = await executor._claim_matching_continuation(
+        state=current,
+        target=PlannedDelegateTarget(
+            agent_id="agent-1",
+            task="Retry",
+            repair_of_intent_id="intent-1",
+        ),
+        goal_family_fingerprint=continuation.goal_family_fingerprint,
+        selected_resource_fingerprints={"projected-input-fingerprint"},
     )
-
-    assert len(fingerprints) == 1
+    assert claimed is None
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,7 @@ class ResolvedResourcePayload(BaseModel):
     mime_type: str | None = None
     text: str | None = None
     summary: str | None = None
+    content_fingerprint: str | None = Field(default=None, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
