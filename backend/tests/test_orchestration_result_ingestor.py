@@ -231,6 +231,57 @@ def test_ingest_does_not_persist_remote_status_message_as_output_or_observation(
     assert private_prompt not in serialized
 
 
+def test_ingest_failed_runtime_error_sanitizes_output_and_failure_shadow():
+    private_exception = (
+        "PRIVATE_EXCEPTION_SENTINEL_result_ingestor includes "
+        "PRIVATE_TASK_SENTINEL_dispatch_body"
+    )
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        text=private_exception,
+        error=private_exception,
+        status_message=private_exception,
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+    serialized = json.dumps(updated.model_dump(mode="json"), sort_keys=True)
+
+    output = updated.agent_outputs[0]
+    assert output.status == "failed"
+    assert output.text is None
+    assert output.error == "Agent processing failed"
+    assert output.status_message is None
+    assert len(updated.open_failures) == 1
+    failure = updated.open_failures[0]
+    assert failure.error_code == "agent_execution_failed"
+    assert failure.error_message == "Agent processing failed"
+    assert failure.recoverable is True
+    assert "Agent processing failed" in serialized
+    assert "PRIVATE_EXCEPTION_SENTINEL_result_ingestor" not in serialized
+    assert "PRIVATE_TASK_SENTINEL_dispatch_body" not in serialized
+
+
+def test_ingest_failed_result_rejects_remote_error_code_from_public_state():
+    private_error_code = "private_customer_denied"
+    result = AgentResultRead(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="failed",
+        error="Remote agent denied the request.",
+        error_code=private_error_code,
+    )
+
+    updated = AgentResultIngestor().ingest(_run_state(), result)
+    serialized = json.dumps(updated.model_dump(mode="json"), sort_keys=True)
+
+    output = updated.agent_outputs[0]
+    assert output.error == "Agent processing failed"
+    assert updated.open_failures[0].error_code == "agent_execution_failed"
+    assert private_error_code not in serialized
+
+
 def test_reingesting_same_result_is_idempotent_for_outputs_and_artifacts():
     result = AgentResultRead(
         agent_message_id="agent-msg-1",
@@ -820,8 +871,10 @@ def test_reingesting_artifacts_replaces_current_keys_and_removes_stale_records()
         for artifact in with_one.artifacts
     )
 
-def test_reingesting_failed_or_canceled_text_keeps_only_untrusted_evidence():
+def test_reingesting_failed_or_canceled_text_removes_remote_evidence():
     ingestor = AgentResultIngestor()
+    failed_text = "PRIVATE_SENTINEL_failed_partial_response"
+    canceled_text = "PRIVATE_SENTINEL_canceled_partial_response"
     first = AgentResultRead(
         agent_message_id="agent-msg-1",
         agent_id="agent-1",
@@ -832,29 +885,23 @@ def test_reingesting_failed_or_canceled_text_keeps_only_untrusted_evidence():
         agent_message_id="agent-msg-1",
         agent_id="agent-1",
         status="failed",
-        text="Partial carrier response.",
+        text=failed_text,
     )
     canceled = AgentResultRead(
         agent_message_id="agent-msg-1",
         agent_id="agent-1",
         status="canceled",
-        text="Stopped before completion.",
+        text=canceled_text,
     )
 
     once = ingestor.ingest(_run_state(), first)
     failed_update = ingestor.ingest(once, failed)
     canceled_update = ingestor.ingest(once, canceled)
 
-    assert [fact["fact_id"] for fact in failed_update.facts] == [
-        "agent-msg-1:text_evidence"
-    ]
-    assert failed_update.facts[0]["value"] == "Partial carrier response."
-    assert failed_update.facts[0]["trusted_for_blocker_keys"] is False
-    assert [fact["fact_id"] for fact in canceled_update.facts] == [
-        "agent-msg-1:text_evidence"
-    ]
-    assert canceled_update.facts[0]["value"] == "Stopped before completion."
-    assert canceled_update.facts[0]["trusted_for_blocker_keys"] is False
+    assert failed_update.facts == []
+    assert canceled_update.facts == []
+    assert failed_text not in failed_update.model_dump_json()
+    assert canceled_text not in canceled_update.model_dump_json()
 
 
 def test_ingest_artifact_summary_falls_back_to_description():

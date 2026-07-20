@@ -154,6 +154,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _GENERIC_AGENT_INPUT_REQUIRED_PROMPT = "The agent needs additional information."
+_GENERIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
+_GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
 
 
 DEFAULT_DEBATE_ROUNDS = 2
@@ -176,6 +178,19 @@ def _short_text_hash(value: str | None) -> str:
     if not value:
         return "-"
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _normalize_attachment_preflight_failure(
+    raw_preflight_failure: Any,
+) -> dict[str, str | None] | None:
+    if not isinstance(raw_preflight_failure, Mapping):
+        return None
+    preflight_code = raw_preflight_failure.get("code")
+    preflight_message = raw_preflight_failure.get("message")
+    return {
+        "code": str(preflight_code) if preflight_code else None,
+        "message": str(preflight_message) if preflight_message else None,
+    }
 
 
 def _fingerprint_prefix(value: str | None) -> str:
@@ -5516,6 +5531,7 @@ class SupervisorExecutor:
                         status=self._v2_result_status_to_agent_result_status(result),
                         text=result.response_text,
                         error=result.error_message,
+                        error_code=result.error_code,
                         artifacts=artifacts,
                         a2a_task_id=result.a2a_task_id,
                         a2a_context_id=result.a2a_context_id,
@@ -7333,16 +7349,12 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
-                preflight_failure = (
-                    message.extend_info.get("attachment_preflight_failure")
-                    if isinstance(message.extend_info, dict)
-                    else None
-                )
-                message.extend_info = {"public_task_label": public_task_label}
-                if preflight_failure is not None:
-                    message.extend_info["attachment_preflight_failure"] = (
-                        preflight_failure
+                preflight_failure: dict[str, str | None] | None = None
+                if isinstance(message.extend_info, Mapping):
+                    preflight_failure = _normalize_attachment_preflight_failure(
+                        message.extend_info.get("attachment_preflight_failure")
                     )
+                message.extend_info = {"public_task_label": public_task_label}
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)
@@ -7445,6 +7457,14 @@ class SupervisorExecutor:
                         "a2a_context_id": getattr(result, "a2a_context_id", None),
                     },
                 )
+                if isinstance(message.extend_info, Mapping):
+                    preflight_failure = (
+                        _normalize_attachment_preflight_failure(
+                            message.extend_info.get("attachment_preflight_failure")
+                        )
+                        or preflight_failure
+                    )
+                message.extend_info = {"public_task_label": public_task_label}
 
                 if result.status in (
                     ProcessingStatus.PAUSED,
@@ -7488,19 +7508,27 @@ class SupervisorExecutor:
                     )
 
                 is_success = result.status == ProcessingStatus.SUCCESS
-                error_text = None if is_success else (
-                    result.response_text or "Agent processing failed"
-                )
-                preflight_failure = (
-                    message.extend_info.get("attachment_preflight_failure")
-                    if isinstance(message.extend_info, dict)
+                preflight_code = (
+                    str(preflight_failure.get("code"))
+                    if preflight_failure is not None and preflight_failure.get("code")
                     else None
                 )
-                error_code = None if preflight_failure is None else (
-                    str(preflight_failure.get("code"))
-                    if isinstance(preflight_failure, dict)
-                    and preflight_failure.get("code")
-                    else result.status_message
+                preflight_message = (
+                    str(preflight_failure.get("message"))
+                    if preflight_failure is not None
+                    and preflight_failure.get("message")
+                    else None
+                )
+                error_text = None if is_success else (
+                    preflight_message
+                    or result.response_text
+                    or "Agent processing failed"
+                )
+                error_code = None if is_success or preflight_failure is None else (
+                    preflight_code or result.status_message
+                )
+                status_message = None if is_success or preflight_failure is None else (
+                    preflight_message or result.status_message or error_text
                 )
                 if not is_success and preflight_failure is not None:
                     await self.tsm.fail_pre_dispatch_task(
@@ -7529,7 +7557,9 @@ class SupervisorExecutor:
                     success=is_success,
                     status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
                     error_message=error_text,
+                    error_code=error_code,
                     agent_message_id=message.message_id,
+                    status_message=status_message,
                 )
 
                 logger.info(
@@ -7564,7 +7594,8 @@ class SupervisorExecutor:
                     response_text="",
                     success=False,
                     status=StepStatus.FAILED,
-                    error_message=f"Unexpected error: {e}",
+                    error_message=_GENERIC_AGENT_FAILURE_MESSAGE,
+                    error_code=_GENERIC_AGENT_FAILURE_CODE,
                 )
 
         if len(targets) == 1:
@@ -7655,7 +7686,8 @@ class SupervisorExecutor:
                     response_text="",
                     success=False,
                     status=StepStatus.FAILED,
-                    error_message=f"Unexpected error: {r}",
+                    error_message=_GENERIC_AGENT_FAILURE_MESSAGE,
+                    error_code=_GENERIC_AGENT_FAILURE_CODE,
                 )
                 for i, r in enumerate(raw_results)
             ]

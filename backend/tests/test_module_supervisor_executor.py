@@ -178,6 +178,7 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
         error_code="file_too_large",
     )
     se.delivery.send_task_update.assert_awaited_once()
+    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
     assert se.delivery.send_task_update.await_args.kwargs == {
         "room_id": "room-1",
         "message_id": "amsg-1",
@@ -193,7 +194,7 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
 
 
 @pytest.mark.asyncio
-async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_records_refs():
+async def test_supervisor_dispatch_keeps_public_message_metadata_label_only():
     se = _make_supervisor_executor()
     message = _make_supervisor_agent_message(preflight=False)
     target = _make_dispatch_target()
@@ -228,8 +229,12 @@ async def test_supervisor_dispatch_marks_agent_message_explicit_refs_only_and_re
     )
 
     assert result[0].success is True
+    create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    assert create_kwargs["content"] == "Requesting Test Agent"
+    assert create_kwargs["task_content"] == "Requesting Test Agent"
     assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
     processor_call = se.agent_message_processor.process_single_message.await_args
+    assert processor_call.kwargs["dispatch_task"] == "Read the attachment."
     assert processor_call.kwargs["attachment_forwarding_policy"] == (
         "explicit_refs_only"
     )
@@ -318,6 +323,7 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
+    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
     processor_call = se.agent_message_processor.process_single_message.await_args
     assert "artifact-1" in processor_call.kwargs["dispatch_task"]
     assert "Broker submission" in processor_call.kwargs["dispatch_task"]
@@ -449,6 +455,7 @@ async def test_supervisor_dispatch_projects_valid_context_ref_into_agent_task():
 
     assert result[0].success is True
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
     assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
     processor_call = se.agent_message_processor.process_single_message.await_args
@@ -1103,6 +1110,47 @@ async def test_supervisor_generic_failed_result_does_not_create_preflight_task()
     assert results[0].error_message == "Agent processing failed downstream."
     se.tsm.fail_pre_dispatch_task.assert_not_awaited()
     se.delivery.send_task_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(caplog):
+    se = _make_supervisor_executor()
+    message = _make_supervisor_agent_message(preflight=False)
+    private_task = "PRIVATE_TASK_SENTINEL_dispatch_body"
+    private_exception = (
+        "PRIVATE_EXCEPTION_SENTINEL_dispatch_failure includes "
+        f"{private_task}"
+    )
+    target = _make_dispatch_target().model_copy(update={"task": private_task})
+    se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
+    se.room_runtime.create_agent_message.return_value = message
+    se.message_writer.add_room_agent_message = AsyncMock()
+    se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
+        return_value="client-req-1"
+    )
+    se.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=RuntimeError(private_exception)
+    )
+
+    with caplog.at_level("ERROR"):
+        results = await se._dispatch_targets(
+            [target],
+            [_make_agent_profile()],
+            "room-1",
+            "umsg-1",
+            1,
+            None,
+            None,
+            None,
+        )
+
+    assert private_exception in caplog.text
+    assert len(results) == 1
+    assert results[0].status == StepStatus.FAILED
+    assert results[0].error_message == "Agent processing failed"
+    assert results[0].error_code == "agent_execution_failed"
+    serialized = results[0].model_dump_json()
+    assert "PRIVATE_EXCEPTION_SENTINEL_dispatch_failure" not in serialized
 
 
 def test_dispatch_targets_cancelled_error_handler_reraises():
