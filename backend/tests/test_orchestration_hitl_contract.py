@@ -39,6 +39,7 @@ def _persistence_mock():
     persistence.get_room_user_message_by_message_id = AsyncMock(return_value=None)
     persistence.resolve_client_request_id_for_message_id = AsyncMock(return_value=None)
     persistence.update_agent_message_task_state = AsyncMock(return_value=True)
+    persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
     persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
     persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
     persistence.get_hitl_request = AsyncMock(return_value=None)

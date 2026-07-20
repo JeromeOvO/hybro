@@ -936,6 +936,12 @@ class TestInquiryRoomMessages:
                 "user_answer": "Approve",
             },
         )
+        supervisor_task = Task(
+            id="local-supervisor-hitl-task",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[final_artifact],
+            metadata={"hitl_request_id": "local-supervisor-hitl-request"},
+        )
         remote_message = RoomAgentMessage(
             room_id=sample_room.room_id,
             message_id="agent-msg-remote-spoof",
@@ -956,10 +962,18 @@ class TestInquiryRoomMessages:
             message_content=MessageContent(message_task=local_task),
             extend_info={"public_task_label": public_label},
         )
+        supervisor_message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="supervisor-msg-clarify-001",
+            agent_id="supervisor",
+            related_message_id=sample_user_message.message_id,
+            message_content=MessageContent(message_task=supervisor_task),
+            extend_info={"public_task_label": "Clarifying request"},
+        )
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[])
         facade.get_agent_messages_for_room = AsyncMock(
-            return_value=[remote_message, local_message]
+            return_value=[remote_message, local_message, supervisor_message]
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)
@@ -985,7 +999,23 @@ class TestInquiryRoomMessages:
                             "user_input": "Approve",
                         }
                         if request_id == "local-hitl-request"
-                        else None
+                        else (
+                            {
+                                "request_id": "local-supervisor-hitl-request",
+                                "room_id": sample_room.room_id,
+                                "source": "supervisor",
+                                "display_message_id": supervisor_message.message_id,
+                                "prompt": "Which market should be prioritized?",
+                                "prompt_type": "text",
+                                "group_id": "supervisor-group-1",
+                                "group_total": 2,
+                                "group_index": 0,
+                                "status": "responded",
+                                "user_input": "California",
+                            }
+                            if request_id == "local-supervisor-hitl-request"
+                            else None
+                        )
                     )
                 )
             )
@@ -1004,6 +1034,7 @@ class TestInquiryRoomMessages:
         by_id = {message.message_id: message for message in response.message_list}
         remote_public = by_id[remote_message.message_id]
         local_public = by_id[local_message.message_id]
+        supervisor_public = by_id[supervisor_message.message_id]
         assert remote_public.message_content.message_text == "Public final result"
         assert remote_public.message_content.message_task.metadata is None
         assert local_public.client_request_id == client_request_id
@@ -1019,6 +1050,20 @@ class TestInquiryRoomMessages:
         assert local_public.extend_info == {
             "public_task_label": public_label,
             "hitl_request_id": "local-hitl-request",
+        }
+        assert supervisor_public.message_content.message_task.metadata == {
+            "hitl_request_id": "local-supervisor-hitl-request",
+            "hitl_prompt": "Which market should be prioritized?",
+            "hitl_prompt_type": "text",
+            "hitl_choices": None,
+            "hitl_group_id": "supervisor-group-1",
+            "hitl_group_total": 2,
+            "hitl_group_index": 0,
+            "user_answer": "California",
+        }
+        assert supervisor_public.extend_info == {
+            "public_task_label": "Clarifying request",
+            "hitl_request_id": "local-supervisor-hitl-request",
         }
         assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
 

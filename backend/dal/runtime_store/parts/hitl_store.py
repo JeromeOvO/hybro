@@ -215,6 +215,42 @@ class HITLRuntimeStorePart:
             logger.error("Failed to update agent message task state", exc_info=True)
             return False
 
+    async def persist_hitl_request_id_on_message(
+        self,
+        message_id: str,
+        request_id: str | None,
+    ) -> bool:
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            metadata_path = (
+                "message_content.message_task.metadata.hitl_request_id"
+            )
+            update = (
+                {"$set": {metadata_path: request_id}}
+                if request_id is not None
+                else {"$unset": {metadata_path: ""}}
+            )
+            projected = await self._room_agent_messages.find_one_and_update(
+                {"message_id": message_id},
+                update,
+                return_document=ReturnDocument.AFTER,
+            )
+            if not isinstance(projected, dict):
+                return False
+            metadata = (
+                projected.get("message_content", {})
+                .get("message_task", {})
+                .get("metadata")
+                or {}
+            )
+            return metadata.get("hitl_request_id") == request_id
+        except Exception:
+            logger.error(
+                "Failed to persist HITL request id on agent message",
+                exc_info=True,
+            )
+            return False
+
     async def find_pending_hitl_request_for_agent_message(
         self,
         *,

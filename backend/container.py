@@ -591,6 +591,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 update_agent_message_task_state=(
                     hitl_store.update_agent_message_task_state
                 ),
+                persist_hitl_request_id_on_message=(
+                    hitl_store.persist_hitl_request_id_on_message
+                ),
                 find_pending_hitl_request_for_agent_message=(
                     hitl_store.find_pending_hitl_request_for_agent_message
                 ),

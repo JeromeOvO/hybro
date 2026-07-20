@@ -3993,7 +3993,8 @@ class RoomServices:
         if (
             request.get("request_id") != request_id
             or request.get("room_id") != agent_message.room_id
-            or request.get("source") != "agent"
+            or request.get("source") not in {"agent", "supervisor"}
+            or request.get("status") in {"canceled", "expired"}
         ):
             return None, None
         projected_message_id = request.get("display_message_id") or request.get(

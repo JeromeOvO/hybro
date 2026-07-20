@@ -1051,6 +1051,7 @@ def test_protocol_methods_match_design_doc():
             "get_pending_hitl_requests",
             "get_pending_hitl_requests_for_message",
             "iter_stale_processing_hitl_requests",
+            "persist_hitl_request_id_on_message",
             "persist_pending_hitl_on_agent_message",
             "persist_hitl_group_metadata",
             "persist_hitl_user_answer",

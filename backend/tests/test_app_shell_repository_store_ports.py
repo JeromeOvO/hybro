@@ -361,6 +361,7 @@ def test_container_binds_hitl_runtime_store_lifecycle_and_client_request_hooks()
         "find_pending_hitl_request_for_agent_message",
         "create_or_reuse_pending_hitl_request",
         "persist_pending_hitl_on_agent_message",
+        "persist_hitl_request_id_on_message",
         "get_room_user_message_by_message_id",
         "resolve_client_request_id_for_message_id",
     } <= bound

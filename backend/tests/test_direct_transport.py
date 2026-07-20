@@ -810,6 +810,44 @@ class TestFinalizeStreamingWritesArtifacts:
         assert event_arg.room_id == "room-1"
         assert current_message.message_content.message_text == "Final answer from agent."
 
+    @pytest.mark.asyncio
+    async def test_already_failed_task_persists_only_public_failure_text(self):
+        private_failure = "PRIVATE_SENTINEL_remote_failure_detail"
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc._emit_terminal = AsyncMock()
+
+        task = Task(
+            id="task-001",
+            status=TaskStatus(state=TaskState.failed),
+        )
+        current_message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=task,
+            )
+        )
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            send_sse=False,
+        )
+        streaming_state = MessageStreamingState(
+            full_response_text=private_failure,
+        )
+
+        status, text = await proc._finalize_streaming(ctx, streaming_state)
+
+        assert status == ProcessingStatus.FAILED
+        assert text == "Task failed"
+        assert current_message.message_content.message_text == "Task failed"
+        assert private_failure not in current_message.model_dump_json()
+        proc.tsm.persist_message.assert_awaited_once_with(current_message)
+
 
 class TestDispatchTerminalNotificationFailure:
     @pytest.mark.asyncio

@@ -1326,7 +1326,11 @@ class DirectTransport(AgentTransport):
             if is_failure_state(final_state):
                 final_error = _safe_terminal_error(final_state)
 
-            if streaming_state.full_response_text:
+            if is_failure_state(final_state):
+                ctx.current_message.message_content.message_text = (
+                    final_error or _PUBLIC_AGENT_FAILURE_MESSAGE
+                )
+            elif streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
                 )
