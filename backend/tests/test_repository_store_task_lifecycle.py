@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from common.a2a_constants import TERMINAL_STATES
 from dal.runtime_store import RuntimeRepositoryStore
 
 
@@ -122,7 +123,7 @@ def _set_stage(update_doc: dict | list) -> dict:
 
 def _assert_terminal_state_filter(query: dict) -> None:
     state_filter = query["message_content.message_task.status.state"]
-    assert set(state_filter["$nin"]) == {"completed", "canceled", "failed", "rejected"}
+    assert set(state_filter["$nin"]) == {state.value for state in TERMINAL_STATES}
 
 
 @pytest.mark.asyncio

@@ -84,7 +84,7 @@ async def test_polled_stale_task_persists_only_public_task_history():
     assert "Visible agent answer" in persisted_json
     assert persisted_task["history"][0]["role"] == "agent"
     assert persisted_task["history"][0]["metadata"] is None
-    assert persisted_task["metadata"] == {"agent_id": "agent-1"}
+    assert persisted_task["metadata"] is None
     assert store.update_task_on_message.await_args.kwargs["message_text"] == (
         "Visible terminal output"
     )
