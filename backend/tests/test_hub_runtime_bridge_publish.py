@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from common.dto import HubPublishLineageSnapshot
 from common.utils.time import utcnow
+from execution.dispatch.response_handler import AgentResponseHandler
 from execution.facade import hub_agent_response_internal_to_agent_event
 from hub_runtime_bridge.hub_response_journal import InMemoryHubResponseJournal
 from hub_runtime_bridge.internal_response_router import HubInternalResponseRouter
@@ -138,6 +141,184 @@ def test_normalized_agent_response_deduplicates_file_parts() -> None:
     )
 
     assert len(payload["parts"]) == 1
+
+
+def test_normalized_agent_response_deduplicates_canonical_and_legacy_files() -> None:
+    file_info = {
+        "uri": "s3://public-artifacts/report.pdf",
+        "mimeType": "application/pdf",
+        "name": "report.pdf",
+    }
+    payload = normalize_hub_publish_payload(
+        "agent_response",
+        "msg-1",
+        {
+            "task_id": "task-1",
+            "content": "file",
+            "parts": [
+                {"kind": "file", "file": file_info},
+                {"kind": "file", "file": file_info},
+                {
+                    "url": file_info["uri"],
+                    "mediaType": file_info["mimeType"],
+                    "filename": file_info["name"],
+                },
+            ],
+        },
+        task_id="task-1",
+    )
+
+    assert payload["parts"] == [{"kind": "file", "file": file_info}]
+
+
+@pytest.mark.asyncio
+async def test_publish_response_alias_normalizes_legacy_parts_for_public_delivery() -> None:
+    private_bytes = "PRIVATE_SENTINEL_response_inline_bytes"
+    private_metadata = "PRIVATE_SENTINEL_response_metadata"
+    converted_uri = "s3://public-artifacts/converted-inline.txt"
+    existing_uri = "s3://public-artifacts/existing-report.pdf"
+    legacy_file_uri = "s3://public-artifacts/legacy-file.json"
+    dispatcher = Dispatcher()
+    service = HubPublishService(dispatcher=dispatcher)
+
+    await service.publish_from_hub(
+        "hub-1",
+        {
+            "room_id": "room-1",
+            "events": [
+                {
+                    "type": "response",
+                    "agent_message_id": "msg-1",
+                    "data": {
+                        "task_id": "task-1",
+                        "text": "Visible final answer",
+                        "parts": [
+                            {
+                                "text": "Visible final answer",
+                                "metadata": {"private": private_metadata},
+                            },
+                            {
+                                "raw": private_bytes,
+                                "mediaType": "text/plain",
+                                "filename": "inline.txt",
+                                "metadata": {"private": private_metadata},
+                            },
+                            {
+                                "url": existing_uri,
+                                "mediaType": "application/pdf",
+                                "filename": "report.pdf",
+                                "metadata": {"private": private_metadata},
+                            },
+                            {
+                                "file": {
+                                    "url": legacy_file_uri,
+                                    "mediaType": "application/json",
+                                    "filename": "legacy.json",
+                                },
+                                "metadata": {"private": private_metadata},
+                            },
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+
+    assert len(dispatcher.events) == 1
+    event = hub_agent_response_internal_to_agent_event(dispatcher.events[0])
+    assert event.kind == "response"
+    assert event.parts == [
+        {
+            "kind": "text",
+            "text": "Visible final answer",
+            "metadata": {"private": private_metadata},
+        },
+        {
+            "kind": "file",
+            "file": {
+                "bytes": private_bytes,
+                "mimeType": "text/plain",
+                "name": "inline.txt",
+            },
+            "metadata": {"private": private_metadata},
+        },
+        {
+            "kind": "file",
+            "file": {
+                "uri": existing_uri,
+                "mimeType": "application/pdf",
+                "name": "report.pdf",
+            },
+            "metadata": {"private": private_metadata},
+        },
+        {
+            "kind": "file",
+            "file": {
+                "uri": legacy_file_uri,
+                "mimeType": "application/json",
+                "name": "legacy.json",
+            },
+            "metadata": {"private": private_metadata},
+        },
+    ]
+
+    db = MagicMock()
+    db.update_task_state_on_message = AsyncMock(return_value=(True, None))
+    db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    delivery = MagicMock()
+    notification_impl = AsyncMock(return_value=True)
+    handler = AgentResponseHandler(
+        message_writer=db,
+        task_writer=db,
+        continuation_store=db,
+        client_request_resolver=db,
+        room_reader=db,
+        hitl_reader=db,
+        delivery=delivery,
+        room_message_center=MagicMock(resume_queue_from_continuation=AsyncMock()),
+        task_notifier=MagicMock(),
+        task_notification_impl=notification_impl,
+        task_notification_store=MagicMock(),
+    )
+
+    async def fake_convert_inline_bytes_to_s3(
+        parts: list[dict],
+        room_id: str,
+        message_id: str,
+        *,
+        converted_so_far: int = 0,
+    ) -> int:
+        assert room_id == "room-1"
+        assert message_id == "msg-1"
+        for part in parts:
+            assert "raw" not in part
+            assert "url" not in part
+            if part.get("kind") != "file":
+                continue
+            file_info = part.get("file")
+            assert isinstance(file_info, dict)
+            if file_info.get("bytes") == private_bytes:
+                file_info.pop("bytes")
+                file_info["uri"] = converted_uri
+        return converted_so_far + 1
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+            fake_convert_inline_bytes_to_s3,
+        )
+        await handler.handle(event)
+
+    delivered_parts = notification_impl.await_args.kwargs["parts"]
+    delivered_json = json.dumps(delivered_parts, sort_keys=True)
+    assert converted_uri in delivered_json
+    assert existing_uri in delivered_json
+    assert legacy_file_uri in delivered_json
+    assert private_bytes not in delivered_json
+    assert private_metadata not in delivered_json
+    assert '"raw"' not in delivered_json
+    assert '"bytes"' not in delivered_json
 
 
 def test_normalized_agent_response_converts_data_parts() -> None:

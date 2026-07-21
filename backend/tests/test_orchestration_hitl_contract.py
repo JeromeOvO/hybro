@@ -108,7 +108,7 @@ async def test_v2_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
     assert event.orchestration_schema_version == 2
 
 
-def test_hitl_sse_frame_includes_v2_run_links_when_present():
+def test_hitl_sse_frame_strips_v2_run_links_when_present():
     event = HITLRequestEvent(
         room_id="room-1",
         request_id="hitl-1",
@@ -125,8 +125,8 @@ def test_hitl_sse_frame_includes_v2_run_links_when_present():
 
     assert frame["data"]["message_id"] == "display-msg-1"
     assert frame["data"]["related_message_id"] == "user-msg-1"
-    assert frame["data"]["orchestration_run_id"] == "run-msg-1"
-    assert frame["data"]["orchestration_schema_version"] == 2
+    assert "orchestration_run_id" not in frame["data"]
+    assert "orchestration_schema_version" not in frame["data"]
     assert "lifecycle_message_id" not in frame["data"]
 
 

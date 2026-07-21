@@ -32,11 +32,9 @@ logger = get_logger(__name__)
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
     return ActiveRunRef(
-        run_id=run.run_id,
         state=str(getattr(run.state, "value", run.state)),
         trigger_message_id=run.trigger_message_id,
         agent_id=run.agent_id,
-        seq=run.seq,
         updated_at=run.updated_at,
     )
 

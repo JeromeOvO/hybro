@@ -364,11 +364,9 @@ export interface RoomCenterRoomSettingResponse {
   status_code?: number;
 }
 export interface ActiveRunRefWire {
-  run_id: string;
   state: string;
   trigger_message_id?: string | null;
   agent_id?: string | null;
-  seq?: number;
   updated_at?: string | null;
 }
 export interface RoomCenterActiveRunsResponse {
