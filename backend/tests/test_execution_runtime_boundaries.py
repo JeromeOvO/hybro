@@ -740,7 +740,10 @@ def _annotation_mentions_run_state(
     return False
 
 
-def _collect_run_state_names(tree: ast.Module, aliases: dict[str, str]) -> set[str]:
+def _collect_run_state_names(  # noqa: C901
+    tree: ast.Module,
+    aliases: dict[str, str],
+) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -845,7 +848,7 @@ def _run_state_control_field_access(
     return parts[0]
 
 
-def _run_state_control_mutation_violations_for_source(
+def _run_state_control_mutation_violations_for_source(  # noqa: C901
     source: str,
     *,
     rel_path: Path,
