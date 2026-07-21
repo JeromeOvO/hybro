@@ -103,6 +103,9 @@ class HITLRequest(BaseModel):
 
     # The question
     prompt: str
+    # Server-side fingerprint of the unsanitized agent prompt. It is persisted
+    # for no-progress detection but is never included in public HITL DTOs.
+    agent_prompt_hash: str | None = None
     prompt_type: HITLPromptType = HITLPromptType.TEXT
     choices: list[str] | None = None
 

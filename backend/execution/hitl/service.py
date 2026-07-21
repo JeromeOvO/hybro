@@ -56,13 +56,21 @@ logger = get_logger(__name__)
 
 
 def _short_prompt_hash(prompt: str | None) -> str:
-    if not prompt:
+    prompt_hash = _prompt_hash(prompt)
+    if prompt_hash is None:
         return "-"
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+    return prompt_hash[:12]
 
 
 def _normalized_prompt(prompt: str | None) -> str:
     return " ".join(str(prompt or "").split()).strip().casefold()
+
+
+def _prompt_hash(prompt: str | None) -> str | None:
+    normalized = _normalized_prompt(prompt)
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 MAX_HITL_ROUNDS = 15
@@ -185,6 +193,7 @@ class HITLService:
 
         Returns the created request, or None if max rounds exceeded.
         """
+        agent_prompt_hash = _prompt_hash(prompt) if source == "agent" else None
         if source == "agent":
             prompt = public_agent_input_prompt(prompt)
             prompt_type = HITLPromptType.TEXT
@@ -245,6 +254,7 @@ class HITLService:
             user_message_id=user_message_id,
             source=source,
             prompt=prompt,
+            agent_prompt_hash=agent_prompt_hash,
             prompt_type=prompt_type,
             choices=choices,
             agent_id=agent_id,
@@ -1277,11 +1287,23 @@ class HITLService:
             public_response_text = public_agent_input_prompt(
                 response_text or request.prompt
             )
+            response_prompt_hash = _prompt_hash(response_text)
+            same_raw_agent_prompt = bool(
+                request.agent_prompt_hash
+                and response_prompt_hash
+                and request.agent_prompt_hash == response_prompt_hash
+            )
+            same_concrete_public_prompt = bool(
+                request.agent_prompt_hash is None
+                and request.prompt != _GENERIC_AGENT_INPUT_PROMPT
+                and public_response_text != _GENERIC_AGENT_INPUT_PROMPT
+                and _normalized_prompt(public_response_text)
+                == _normalized_prompt(request.prompt)
+            )
             if (
                 request.orchestration_run_id
                 and task_state == "input-required"
-                and _normalized_prompt(public_response_text)
-                == _normalized_prompt(request.prompt)
+                and (same_raw_agent_prompt or same_concrete_public_prompt)
             ):
                 logger.warning(
                     "hitl_agent_no_progress message_id=%s task_id=%s "

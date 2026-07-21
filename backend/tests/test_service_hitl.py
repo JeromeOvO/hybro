@@ -22,7 +22,7 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
-from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
+from execution.hitl.service import MAX_HITL_ROUNDS, HITLService, _prompt_hash
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.hitl import (
@@ -421,9 +421,11 @@ class TestRequestInput:
 
         assert result is not None
         assert result.prompt == generic_prompt
+        assert result.agent_prompt_hash
         assert result.prompt_type == HITLPromptType.TEXT
         assert result.choices is None
         assert persisted_docs[0]["prompt"] == generic_prompt
+        assert persisted_docs[0]["agent_prompt_hash"] == result.agent_prompt_hash
         assert persisted_docs[0]["prompt_type"] == HITLPromptType.TEXT.value
         assert "choices" not in persisted_docs[0]
         projection_kwargs = (
@@ -1781,6 +1783,50 @@ class TestRequestInput:
             "Please provide the complete broker submission."
         )
         hitl_service.request_input.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_distinct_private_followup_prompt_does_not_signal_no_progress(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        first_private_prompt = "PRIVATE_SENTINEL_first_agent_question"
+        second_private_prompt = "PRIVATE_SENTINEL_second_agent_question"
+        request = HITLRequest(
+            request_id="hitl-old",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="The agent needs additional information.",
+            agent_prompt_hash=_prompt_hash(first_private_prompt),
+            agent_id="agent-insurer",
+            agent_name="Insurer Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+            orchestration_run_id="run-msg-1",
+            orchestration_schema_version=2,
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._agent_reply = SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": second_private_prompt,
+                }
+            )
+        )
+        followup = request.model_copy(update={"request_id": "hitl-next"})
+        hitl_service.request_input = AsyncMock(return_value=followup)
+
+        result = await hitl_service._handle_agent_response(request, "user answer")
+
+        assert result["resume_execution"] is False
+        assert "agent_no_progress" not in result
+        assert result["followup_hitl_request_id"] == "hitl-next"
+        hitl_service.request_input.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(
