@@ -122,10 +122,33 @@ export function useRoomActions(
     try {
       setCancelling(true)
       lifecycle.setCancelTimedOut(false)
-      await cancelMessage(messageId, getToken)
+      const cancellation = await cancelMessage(messageId, getToken)
 
       // Batch cancel all non-terminal tasks in the normalized store
       useMessageStore.getState().cancelAllNonTerminal(roomId)
+
+      if (cancellation.status) {
+        const store = useMessageStore.getState()
+        const userMessage = store.entities[messageId]
+        if (userMessage?.messageType === 'user') {
+          store.upsertMessage({
+            id: userMessage.id,
+            roomId,
+            messageType: 'user',
+            content: userMessage.content,
+            senderName: userMessage.senderName,
+            timestamp: userMessage.timestamp,
+            turnTerminalStatus: cancellation.status,
+          }, 'sse')
+        }
+        lifecycle.markProcessingResolved()
+        lifecycle.stopProcessing()
+        lifecycle.disarmCancelTimeout()
+        setCancelling(false)
+        store.removeMessage(lifecycle.placeholderId(roomId))
+        await reconcileWithDb(roomId)
+        return true
+      }
 
       // Start cancellation timeout safety net (Gap 11)
       lifecycle.armCancelTimeout(() => {
@@ -145,7 +168,7 @@ export function useRoomActions(
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken, setCancelling, lifecycle, roomId])
+  }, [getToken, setCancelling, lifecycle, roomId, reconcileWithDb])
 
   // Respond to a HITL request — inline Q&A display pattern:
   // 1. Mark agent message resolved + embed answer  2. Optionally show processing placeholder (last in group)

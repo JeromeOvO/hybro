@@ -61,6 +61,7 @@ export interface ConversationTurnView {
 
 export interface PendingHitl {
   hitlId: string
+  source: 'agent' | 'supervisor'
   agentName: string
   question: string
   promptType: HITLPromptType

@@ -69,7 +69,10 @@ function ResultHeader({
   const theme = getAgentTheme(result.agentId, result.agentName)
   const display = mapResultDisplayProps(result, isStreaming, displayContent)
   
-  let taskDescription = result.taskStatusMessage ?? ''
+  // A synthesis result is the final answer, not another delegated task. Live
+  // SSE events may have left a task/status label on the same entity; never show
+  // that control-plane text above the user-facing answer.
+  let taskDescription = result.isSummaryAgent ? '' : (result.taskStatusMessage ?? '')
   if (taskDescription.trim() === result.content.trim()) {
     taskDescription = ''
   }

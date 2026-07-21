@@ -299,7 +299,13 @@ export async function getSSEStatus(
 export async function cancelMessage(
   messageId: string,
   getToken?: () => Promise<string | null>
-): Promise<{ success: boolean; message_id: string; message: string }> {
+): Promise<{
+  success: boolean
+  message_id: string
+  message: string
+  status?: 'completed' | 'failed' | 'canceled'
+  outcome?: 'canceled' | 'already_terminal'
+}> {
   const url = `${API_BASE_URL}/message/${messageId}/cancel`
   
   const headers = await getClientAuthHeaders(getToken)

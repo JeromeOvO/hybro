@@ -68,7 +68,7 @@ function AgentResponseDetailHeader({
   const catalogAgent = useAgentFromCatalog(detail.agentId)
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
   const isHubOnline = catalogAgent?.is_hub_online
-  const [taskExpanded, setTaskExpanded] = useState(true)
+  const [taskExpanded, setTaskExpanded] = useState(false)
 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'hsl(var(--color-primary))',

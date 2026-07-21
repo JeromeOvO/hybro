@@ -29,6 +29,12 @@ function publicTaskError(status: TaskState | undefined): string | undefined {
   }
 }
 
+function parseTurnTerminalStatus(raw: unknown): 'completed' | 'failed' | 'canceled' | undefined {
+  if (raw === 'completed' || raw === 'failed' || raw === 'canceled') return raw
+  if (raw === 'budget_exhausted') return 'failed'
+  return undefined
+}
+
 /**
  * Parameters for converting API messages to IncomingMessage shape.
  */
@@ -67,10 +73,15 @@ export async function convertApiMessageToIncoming(
   let content = ''
   let taskError: string | undefined
   let taskContent: string | undefined
+  let taskStatusMessage: string | undefined
 
   if (
     apiMessage.message_content?.message_text
-    && (apiMessage.message_type !== 'agent' || !messageTask)
+    && (
+      apiMessage.message_type !== 'agent'
+      || !messageTask
+      || taskStatus === TASK_STATE.COMPLETED
+    )
   ) {
     content = apiMessage.message_content.message_text
   }
@@ -99,8 +110,14 @@ export async function convertApiMessageToIncoming(
   // Only backend-labeled public text may become a visible task description.
   const publicTaskLabel = extendInfo?.public_task_label
   if (typeof publicTaskLabel === 'string' && publicTaskLabel.trim()) {
-    taskContent = publicTaskLabel.trim()
+    const publicLabel = publicTaskLabel.trim()
+    taskContent = publicLabel
+    taskStatusMessage = publicLabel
   }
+  const publicDispatchText = extendInfo?.public_dispatch_text
+  const dispatchText = typeof publicDispatchText === 'string' && publicDispatchText.trim()
+    ? publicDispatchText.trim()
+    : undefined
 
   // ── Resolve sender name ──────────────────────────────────────
   let senderName: string
@@ -239,6 +256,9 @@ export async function convertApiMessageToIncoming(
   // ── Build IncomingMessage ────────────────────────────────────
   const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
   const turnCompletionKind = parseTurnCompletionKind(extendInfo?.turn_completion_kind)
+  const turnTerminalStatus = apiMessage.message_type === 'user'
+    ? parseTurnTerminalStatus(extendInfo?.orchestration_status)
+    : undefined
   const quotedText = typeof extendInfo?.quoted_text === 'string' ? extendInfo.quoted_text : undefined
   const quotedSenderName = typeof extendInfo?.quoted_sender_name === 'string' ? extendInfo.quoted_sender_name : undefined
   const extQuoteId = typeof extendInfo?.quote_id === 'string' ? extendInfo.quote_id : undefined
@@ -264,7 +284,9 @@ export async function convertApiMessageToIncoming(
 
     taskStatus,
     taskError: messageTask ? (taskError || null) : undefined,
+    taskStatusMessage,
     taskContent,
+    dispatchText,
 
     stepNumber: apiMessage.step_number ?? undefined,
     totalSteps: apiMessage.total_steps ?? undefined,
@@ -289,6 +311,7 @@ export async function convertApiMessageToIncoming(
     attachments,
     artifacts,
     summaryOrigin,
+    turnTerminalStatus,
     turnCompletionKind,
     quotedText,
     quotedSenderName,

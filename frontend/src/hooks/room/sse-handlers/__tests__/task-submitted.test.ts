@@ -1,29 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { handleTaskUpdate } from '../handlers/task-update'
+import { handleTaskSubmitted } from '../handlers/task-submitted'
 import { createProcessingLifecycle } from '../../processing-lifecycle'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import type { RoomSSEFrameMap } from '@/lib/types/sse'
 import type { SSEHandlerDeps } from '../types'
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: {
-    error: vi.fn(),
-  },
-}))
-
 vi.mock('@/lib/room-timeline/event-log', () => ({
   appendEvent: vi.fn(),
-}))
-
-vi.mock('@/lib/room-timeline/stamp-live-turn-terminal', () => ({
-  stampLiveTurnTerminalIfInferable: vi.fn(() => true),
-}))
-
-vi.mock('@/lib/room-timeline/turn-terminal-stamp', () => ({
-  buildTurnForRecoveryHint: vi.fn(),
-  scheduleTurnTerminalBackendTruthCheck: vi.fn(),
-  shouldScheduleTurnTerminalRecovery: vi.fn(() => false),
 }))
 
 function makeDeps(): SSEHandlerDeps {
@@ -39,54 +23,38 @@ function makeDeps(): SSEHandlerDeps {
   }
 }
 
-function makeTaskUpdate(
-  data: Partial<RoomSSEFrameMap['task_update']['data']>,
-): RoomSSEFrameMap['task_update'] {
+function makeTaskSubmitted(
+  data: Partial<RoomSSEFrameMap['task_submitted']['data']>,
+): RoomSSEFrameMap['task_submitted'] {
   return {
-    type: 'task_update',
+    type: 'task_submitted',
     timestamp: '2026-02-17T10:00:00Z',
     room_id: 'room-1',
     data: {
       message_id: 'agent-message-1',
-      status: TASK_STATE.COMPLETED,
+      task_id: 'task-1',
+      agent_name: 'Insurer Agent',
+      agent_id: 'agent-1',
+      status: TASK_STATE.WORKING,
+      related_message_id: 'user-message-1',
       client_request_id: 'client-request-1',
       ...data,
     },
   }
 }
 
-describe('handleTaskUpdate', () => {
+describe('handleTaskSubmitted', () => {
   beforeEach(() => {
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
   })
 
-  it('does not store arbitrary completed status_message as taskStatusMessage', async () => {
-    const privateSentinel = 'PRIVATE_SENTINEL_completed_sse_status_message'
-
-    await handleTaskUpdate(
-      makeDeps(),
-      makeTaskUpdate({
-        status_message: privateSentinel,
-        content: '',
-      }),
-      { shouldDrop: false, shouldBuffer: false },
-    )
-
-    const entity = useMessageStore.getState().entities['agent-message-1']
-    expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
-    expect(entity.taskStatusMessage).toBeUndefined()
-    expect(JSON.stringify(entity)).not.toContain(privateSentinel)
-  })
-
-  it('stores non-terminal status_message as public status without raw task_content', async () => {
+  it('does not store raw SSE task_content on the message entity', async () => {
     const privateTaskContent = 'Evaluate the confidential renewal file and include the internal premium ceiling'
 
-    await handleTaskUpdate(
+    await handleTaskSubmitted(
       makeDeps(),
-      makeTaskUpdate({
-        status: TASK_STATE.WORKING,
-        status_message: 'Requesting Insurer Agent',
+      makeTaskSubmitted({
         task_content: privateTaskContent,
       }),
       { shouldDrop: false, shouldBuffer: false },
@@ -95,7 +63,7 @@ describe('handleTaskUpdate', () => {
     const entity = useMessageStore.getState().entities['agent-message-1']
     expect(entity.taskStatus).toBe(TASK_STATE.WORKING)
     expect(entity.clientRequestId).toBe('client-request-1')
-    expect(entity.taskStatusMessage).toBe('Requesting Insurer Agent')
+    expect(entity.relatedMessageId).toBe('user-message-1')
     expect(entity.taskContent).toBeUndefined()
     expect(JSON.stringify(entity)).not.toContain(privateTaskContent)
   })

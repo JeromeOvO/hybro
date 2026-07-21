@@ -108,6 +108,7 @@ function mergeIncoming(
       taskRequiresInput: incoming.taskRequiresInput,
       taskRequiresAuth: incoming.taskRequiresAuth,
       taskContent: incoming.taskContent,
+      dispatchText: incoming.dispatchText,
       taskCreatedAt: incoming.taskCreatedAt,
       taskUpdatedAt: incoming.taskUpdatedAt,
       stepNumber: incoming.stepNumber,
@@ -154,6 +155,7 @@ function mergeIncoming(
     taskRequiresInput: incoming.taskRequiresInput !== undefined ? incoming.taskRequiresInput : existing.taskRequiresInput,
     taskRequiresAuth: incoming.taskRequiresAuth !== undefined ? incoming.taskRequiresAuth : existing.taskRequiresAuth,
     taskContent: incoming.taskContent !== undefined ? incoming.taskContent : existing.taskContent,
+    dispatchText: incoming.dispatchText !== undefined ? incoming.dispatchText : existing.dispatchText,
     taskCreatedAt: incoming.taskCreatedAt !== undefined ? incoming.taskCreatedAt : existing.taskCreatedAt,
     taskUpdatedAt: incoming.taskUpdatedAt !== undefined ? incoming.taskUpdatedAt : existing.taskUpdatedAt,
     stepNumber: incoming.stepNumber !== undefined ? incoming.stepNumber : existing.stepNumber,
@@ -247,6 +249,7 @@ export function isNoOpUpdate(
     existing.stepNumber        === coalesce(incoming.stepNumber, existing.stepNumber) &&
     existing.totalSteps        === coalesce(incoming.totalSteps, existing.totalSteps) &&
     existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
+    existing.dispatchText      === coalesce(incoming.dispatchText, existing.dispatchText) &&
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
     existing.hitlResolved      === coalesce(incoming.hitlResolved, existing.hitlResolved) &&

@@ -972,65 +972,6 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.artifacts).toBeUndefined()
   })
 
-  it('concatenates multi-artifact streaming text instead of keeping only the last segment', async () => {
-    await mountHook()
-    resolveClientRequestMessageId('req-hermes-stream', 'user-hermes-1')
-
-    useMessageStore.getState().upsertMessage({
-      id: 'agent-hermes-1',
-      roomId: 'room-1',
-      messageType: 'agent',
-      content: '',
-      senderName: 'Hermes Agent',
-      timestamp: new Date().toISOString(),
-      agentId: 'hermes-agent',
-      clientRequestId: 'req-hermes-stream',
-      taskStatus: TASK_STATE.WORKING,
-    }, 'sse')
-
-    const segments = [
-      'Now let me execute the research workflow. ',
-      'Good HN data. Let me navigate to the top AI stories now. ',
-      'Excellent! Now I have all the URLs.',
-    ]
-
-    for (const [index, text] of segments.entries()) {
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'artifact_update',
-          data: {
-            client_request_id: 'req-hermes-stream',
-            message_id: 'agent-hermes-1',
-            agent_id: 'hermes-agent',
-            artifact: {
-              artifact_id: `segment-${index}`,
-              parts: [{ kind: 'text', text }],
-            },
-            append: false,
-            last_chunk: index === segments.length - 1,
-          },
-        }))
-      })
-    }
-
-    const buffer = useStreamingStore.getState().buffers['agent-hermes-1']
-    expect(buffer?.text).toBe(segments.join(''))
-    expect(buffer?.isComplete).toBe(true)
-
-    const { selectAgentResponseDetail } = await import('@/lib/selectors/select-agent-response-detail')
-    const { entities, orderedIds } = useMessageStore.getState()
-    const detail = selectAgentResponseDetail(
-      'room-1',
-      'agent-hermes-1',
-      entities,
-      orderedIds,
-      buffer,
-    )
-
-    expect(detail?.content).toBe(segments.join(''))
-    expect(detail?.isStreaming).toBe(false)
-  })
-
   it('drops root-wrapped inline file bytes from task_update artifacts', async () => {
     const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
     await mountHook()

@@ -36,12 +36,15 @@ export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
       return make(name, 'Canceled', 'muted', false)
 
     case 'input-required':
+      if (!entity.hitlRequestId) return make(name, 'Working', 'accent', true)
       return make(name, 'Needs Input', 'warning', true)
 
     case 'auth-required':
+      if (!entity.hitlRequestId) return make(name, 'Working', 'accent', true)
       return make(name, 'Auth Required', 'warning', false)
 
     case 'policy-required':
+      if (!entity.hitlRequestId) return make(name, 'Working', 'accent', true)
       return make(name, 'Policy Required', 'warning', false)
 
     case 'expired':

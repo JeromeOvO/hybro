@@ -80,8 +80,15 @@ export function selectAgentResponseDetail(
   const artifacts = resolveDetailArtifacts(effectiveBuffer, agent.artifacts)
 
   const isActivelyWorking = agent.taskStatus == null || agent.taskStatus === 'working' || agent.taskStatus === 'submitted'
-  const staticDescription = agent.taskContent ?? agent.taskStatusMessage ?? ''
-  const taskDescription = staticDescription || (isActivelyWorking ? 'Working on your request…' : '')
+  const staticDescription = typeof agent.taskStatusMessage === 'string'
+    ? agent.taskStatusMessage.trim()
+    : ''
+  const dispatchDescription = typeof agent.dispatchText === 'string'
+    ? agent.dispatchText.trim()
+    : ''
+  const taskDescription = dispatchDescription
+    || staticDescription
+    || (isActivelyWorking ? 'Working on your request…' : '')
 
   const baseDisplay = mapAgentDisplayProps(agent)
   const display = isBufferStreaming(effectiveBuffer)

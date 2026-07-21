@@ -5,7 +5,7 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockUseUser = vi.fn()
-vi.mock('@clerk/nextjs', () => ({
+vi.mock('@/lib/auth', () => ({
   useUser: () => mockUseUser(),
   useAuth: () => ({ getToken: async () => 'test-token' }),
 }))

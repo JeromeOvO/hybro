@@ -3,6 +3,7 @@ import type { TurnViewModel } from '@/lib/room-timeline/types'
 import {
   getActivityStripListMaxHeight,
   getAgentIndexSummary,
+  getSupervisorStatusLine,
   defaultAgentIndexOpen,
   STRIP_COMPACT_ROW_HEIGHT_PX,
   STRIP_LIST_MAX_HEIGHT_CAP_PX,
@@ -146,6 +147,34 @@ describe('getAgentIndexSummary', () => {
     const summary = getAgentIndexSummary(turn, agents)
     expect(summary).toContain('Activity')
     expect(summary).toContain('2 working')
+  })
+})
+
+describe('getSupervisorStatusLine', () => {
+  it('does not expose a persisted supervisor stage after the turn completes', () => {
+    const turn = makeTurn({
+      status: 'completed',
+      phase: 'completed',
+      supervisorStage: {
+        status: 'completed',
+        details: 'Requesting Cyber Insurer Agent',
+      },
+    })
+
+    expect(getSupervisorStatusLine(turn)).toBeNull()
+  })
+
+  it('keeps a short supervisor stage visible while work is active', () => {
+    const turn = makeTurn({
+      status: 'active',
+      phase: 'collecting',
+      supervisorStage: {
+        status: 'working',
+        details: 'Evaluating agent results...',
+      },
+    })
+
+    expect(getSupervisorStatusLine(turn)).toBe('Evaluating agent results...')
   })
 })
 

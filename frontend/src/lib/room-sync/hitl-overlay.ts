@@ -30,6 +30,7 @@ export async function overlayPendingHitlRequests(
       roomId,
       messageId: req.message_id,
       requestId: req.request_id,
+      source: req.source,
       prompt: req.prompt,
       promptType: req.prompt_type,
       choices: req.choices,
