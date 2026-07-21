@@ -1065,6 +1065,7 @@ class TestInteractiveEvent:
     @pytest.mark.asyncio
     async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(self):
         private_prompt = "PRIVATE_SENTINEL_async_interactive_prompt"
+        generic_prompt = "The agent needs additional information."
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -1100,7 +1101,8 @@ class TestInteractiveEvent:
         await h.handle(event)
 
         hitl.request_input.assert_awaited_once()
-        assert hitl.request_input.await_args.kwargs["prompt"] == private_prompt
+        assert hitl.request_input.await_args.kwargs["prompt"] == generic_prompt
+        assert private_prompt not in repr(hitl.request_input.await_args.kwargs)
         persisted_kwargs = db.update_task_state_on_message.await_args.kwargs
         assert persisted_kwargs["message_text"] is None
         notify_payload = mock_impl.await_args.kwargs
@@ -1164,7 +1166,7 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="need input",
+            prompt="The agent needs additional information.",
             agent_id="agent-001",
             agent_name="Agent X",
             a2a_task_id="t-1",
@@ -1229,7 +1231,7 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="Please authenticate.",
+            prompt="The agent needs additional information.",
             agent_id="agent-001",
             agent_name="Agent X",
             a2a_task_id="t-1",
@@ -1298,7 +1300,7 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="need input",
+            prompt="The agent needs additional information.",
             agent_id="agent-001",
             agent_name=None,
             a2a_task_id="t-1",

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 # ------------------------------------------------------------------
@@ -461,10 +462,7 @@ class QueueExecutor:
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="agent",
-                            prompt=(
-                                result.status_message
-                                or "The agent needs additional information."
-                            ),
+                            prompt=_GENERIC_AGENT_INPUT_PROMPT,
                             agent_id=current_message.agent_id,
                             agent_name=(agent.agent_card.name if agent else None),
                             a2a_task_id=result.a2a_task_id,

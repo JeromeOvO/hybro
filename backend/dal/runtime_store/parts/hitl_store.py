@@ -487,40 +487,37 @@ class HITLRuntimeStorePart:
         group_index: int | None,
     ) -> bool:
         try:
-            await self._ensure_message_task_metadata(message_id)
-            metadata_prefix = "message_content.message_task.metadata"
+            metadata: dict[str, Any] = {
+                "hitl_request_id": request_id,
+                "hitl_prompt": prompt,
+                "hitl_prompt_type": getattr(prompt_type, "value", prompt_type),
+                "user_answer": None,
+            }
+            if choices is not None:
+                metadata["hitl_choices"] = choices
+            optional_metadata = {
+                "hitl_a2a_task_id": a2a_task_id,
+                "hitl_a2a_context_id": a2a_context_id,
+                "hitl_group_id": group_id,
+                "hitl_group_total": group_total,
+                "hitl_group_index": group_index,
+            }
+            metadata.update(
+                {
+                    key: value
+                    for key, value in optional_metadata.items()
+                    if value is not None
+                }
+            )
             updates: dict[str, Any] = {
                 "message_content.message_task.status.state": "input-required",
-                f"{metadata_prefix}.hitl_request_id": request_id,
-                f"{metadata_prefix}.hitl_prompt": prompt,
-                f"{metadata_prefix}.hitl_prompt_type": getattr(
-                    prompt_type, "value", prompt_type
-                ),
-                f"{metadata_prefix}.hitl_choices": choices,
-                f"{metadata_prefix}.user_answer": None,
+                "message_content.message_task.metadata": metadata,
                 "task_updated_at": utcnow(),
             }
-            optional_metadata = {
-                f"{metadata_prefix}.hitl_a2a_task_id": a2a_task_id,
-                f"{metadata_prefix}.hitl_a2a_context_id": a2a_context_id,
-                f"{metadata_prefix}.hitl_group_id": group_id,
-                f"{metadata_prefix}.hitl_group_total": group_total,
-                f"{metadata_prefix}.hitl_group_index": group_index,
-            }
-            unsets: dict[str, str] = {}
-            for path, value in optional_metadata.items():
-                if value is None:
-                    unsets[path] = ""
-                else:
-                    updates[path] = value
-
-            update_doc: dict[str, Any] = {"$set": updates}
-            if unsets:
-                update_doc["$unset"] = unsets
 
             projected = await self._room_agent_messages.find_one_and_update(
                 {"message_id": message_id},
-                update_doc,
+                {"$set": updates},
                 return_document=ReturnDocument.AFTER,
             )
             if not projected:

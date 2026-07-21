@@ -379,15 +379,20 @@ class DirectTransport(AgentTransport):
                     if hasattr(task, "model_dump")
                     else {}
                 )
-                status_msg = (
-                    interactive_status_context.get("status_message")
-                    or None
-                )
-                if (
-                    not status_msg
-                    and state_str(task.status.state) == CommonTaskState.AUTH_REQUIRED.value
-                ):
+                status_value = state_str(task.status.state)
+                if status_value == CommonTaskState.AUTH_REQUIRED.value:
                     status_msg = "Authentication required"
+                else:
+                    status_msg = interactive_status_context.get("status_message") or (
+                        self._public_interactive_status_message(
+                            ProcessingContext(
+                                room_id=room_id,
+                                current_message=message,
+                                agent_card=agent.agent_card,
+                                user_message_id=user_message_id,
+                            )
+                        )
+                    )
                 return ProcessingResult(
                     ProcessingStatus.AWAITING_INPUT,
                     response_text="",
@@ -395,13 +400,12 @@ class DirectTransport(AgentTransport):
                     a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
                     a2a_context_id=task.context_id if hasattr(task, "context_id") else task_data.get("contextId"),
                     status_message=status_msg,
-                    interactive_state=state_str(task.status.state),
+                    interactive_state=status_value,
                     requires_auth=(
-                        state_str(task.status.state)
-                        == CommonTaskState.AUTH_REQUIRED.value
+                        status_value == CommonTaskState.AUTH_REQUIRED.value
                     ),
                     requires_policy=bool(
-                        state_str(task.status.state) == CommonTaskState.POLICY_REQUIRED.value
+                        status_value == CommonTaskState.POLICY_REQUIRED.value
                         or
                         (task_data.get("metadata") or {}).get("requires_policy")
                         or (task_data.get("metadata") or {}).get("policy_required")
@@ -1183,7 +1187,7 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(state):
                 if interactive_status_context is not None:
                     interactive_status_context["status_message"] = (
-                        a2a_status_message_text
+                        self._public_interactive_status_message(ctx)
                     )
             await self.tsm.notify_task(
                 ctx,
@@ -1564,9 +1568,6 @@ class DirectTransport(AgentTransport):
                 parsed["requires_auth"] = (
                     state_value == CommonTaskState.AUTH_REQUIRED.value
                 )
-                status_message = get_text_from_message(result.status.message)
-                if status_message:
-                    parsed["message"] = status_message
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import (
                     extract_parts_from_artifacts as _epfa,
@@ -1927,7 +1928,9 @@ class DirectTransport(AgentTransport):
             raw_status_message = response.get("message")
             if is_interactive_state(status):
                 if interactive_status_context is not None:
-                    interactive_status_context["status_message"] = raw_status_message
+                    interactive_status_context["status_message"] = (
+                        self._public_interactive_status_message(ctx)
+                    )
             if task_info:
                 await self.tsm.notify_task(
                     ctx,
@@ -2067,11 +2070,10 @@ class DirectTransport(AgentTransport):
         # and return paused_message_id so the dispatch method detects it
         # and triggers HITL.
         if state in INTERACTIVE_STATES:
-            raw_status_message = None
-            if completed_task.status.message:
-                raw_status_message = get_text_from_message(completed_task.status.message)
-            if raw_status_message and interactive_status_context is not None:
-                interactive_status_context["status_message"] = raw_status_message
+            if interactive_status_context is not None:
+                interactive_status_context["status_message"] = (
+                    self._public_interactive_status_message(ctx)
+                )
             if task_info:
                 await self._task_updater.update_task_on_message(
                     message_id,

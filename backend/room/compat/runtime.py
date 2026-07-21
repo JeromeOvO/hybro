@@ -118,6 +118,14 @@ _PUBLIC_ATTACHMENT_PREFLIGHT_MESSAGES = {
     "encoding_failed": "An attached file could not be encoded.",
 }
 
+_PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
+    "quoted_text",
+    "quoted_sender_name",
+    "quote_id",
+)
+_PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
+_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
+
 
 def _public_attachment_preflight_failure(
     failure: AttachmentPreflightFailure,
@@ -129,6 +137,22 @@ def _public_attachment_preflight_failure(
             "Attachment preflight failed.",
         ),
     }
+
+
+def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | None:
+    if not isinstance(extend_info, dict):
+        return None
+
+    public_extend_info = {
+        key: value
+        for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
+        if isinstance((value := extend_info.get(key)), str)
+    }
+    turn_completion_kind = extend_info.get("turn_completion_kind")
+    if turn_completion_kind in _PUBLIC_TURN_COMPLETION_KINDS:
+        public_extend_info["turn_completion_kind"] = turn_completion_kind
+
+    return public_extend_info or None
 
 
 @dataclass(slots=True)
@@ -4015,13 +4039,22 @@ class RoomServices:
         if request_context_id is not None and request_context_id != task.context_id:
             return None, None
 
+        if request.get("source") == "agent":
+            prompt = _GENERIC_AGENT_INPUT_PROMPT
+            prompt_type = "text"
+            choices = None
+        else:
+            prompt = request.get("prompt")
+            prompt_type = getattr(
+                request.get("prompt_type"), "value", request.get("prompt_type")
+            )
+            choices = request.get("choices")
+
         trusted: dict[str, object] = {
             "hitl_request_id": request_id,
-            "hitl_prompt": request.get("prompt"),
-            "hitl_prompt_type": getattr(
-                request.get("prompt_type"), "value", request.get("prompt_type")
-            ),
-            "hitl_choices": request.get("choices"),
+            "hitl_prompt": prompt,
+            "hitl_prompt_type": prompt_type,
+            "hitl_choices": choices,
         }
         optional_fields = {
             "hitl_a2a_task_id": request.get("a2a_task_id"),
@@ -4081,7 +4114,9 @@ class RoomServices:
                         message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
                         user_id=user_msg.user_id,
-                        extend_info=user_msg.extend_info,
+                        extend_info=_public_user_message_extend_info(
+                            user_msg.extend_info
+                        ),
                     )
                     combined_messages.append(room_message)
 

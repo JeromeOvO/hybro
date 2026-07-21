@@ -97,6 +97,7 @@ _PUBLIC_TERMINAL_ERRORS = {
     "canceled": "Task was canceled",
     "expired": "Task expired",
 }
+_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 def _safe_terminal_error(status: str | None) -> str:
@@ -467,7 +468,7 @@ class AgentResponseHandler:
 
     async def _on_interactive(self, e: AgentEvent) -> None:
         state = e.state or "input-required"
-        prompt = e.text or "The agent needs additional information."
+        prompt = _GENERIC_AGENT_INPUT_PROMPT
         e.text = ""
         e.details = None
         e.parts = None
@@ -542,7 +543,7 @@ class AgentResponseHandler:
             room_id=e.room_id,
             user_message_id=user_message_id,
             source="agent",
-            prompt=prompt or "The agent needs additional information.",
+            prompt=prompt or _GENERIC_AGENT_INPUT_PROMPT,
             agent_id=e.agent_id,
             agent_name=agent_name,
             a2a_task_id=e.task_id,

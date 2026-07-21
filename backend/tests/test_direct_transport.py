@@ -2292,6 +2292,7 @@ class TestDispatchInteractive:
 
     @pytest.mark.asyncio
     async def test_dispatch_requires_auth_without_status_returns_awaiting_input(self):
+        private_prompt = "PRIVATE_SENTINEL_direct_auth_prompt"
         proc = _make_processor()
         message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
@@ -2321,7 +2322,7 @@ class TestDispatchInteractive:
                 "type": "task",
                 "requires_auth": True,
                 "task_id": "agent-task-auth",
-                "message": "Please provide your OAuth token.",
+                "message": private_prompt,
             }
         )
         proc.tsm.notify_task = AsyncMock()
@@ -2339,7 +2340,10 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == "Please provide your OAuth token."
+        assert result.status_message == "Authentication required"
+        assert private_prompt not in json.dumps(
+            result.__dict__, sort_keys=True, default=str
+        )
         assert not hasattr(proc, "_internal_interactive_status_messages")
         task = message.message_content.message_task
         assert task is not None
@@ -2416,7 +2420,10 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == private_prompt
+        assert result.status_message == "Requesting test-agent"
+        assert private_prompt not in json.dumps(
+            result.__dict__, sort_keys=True, default=str
+        )
         persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         in_memory_json = message.message_content.message_task.model_dump_json()
