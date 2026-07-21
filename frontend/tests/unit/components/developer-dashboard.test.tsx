@@ -13,7 +13,7 @@ vi.mock('next/navigation', () => ({
 
 const mockUseUser = vi.fn()
 const mockGetToken = vi.fn().mockResolvedValue(null)
-vi.mock('@clerk/nextjs', () => ({
+vi.mock('@/lib/auth', () => ({
   useUser: () => mockUseUser(),
   useAuth: () => ({ getToken: mockGetToken }),
 }))

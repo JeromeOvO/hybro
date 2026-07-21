@@ -94,7 +94,7 @@ describe('RoomPageShell agent detail pane', () => {
       relatedMessageId: 'user-1',
       agentId: 'researcher-1',
       senderName: 'Researcher Alex',
-      taskContent: 'Research a2a agents',
+      dispatchText: 'Research a2a agents',
       taskStatus: TASK_STATE.COMPLETED,
       content: '# Report\n\nA2A findings.',
     }), 'db')

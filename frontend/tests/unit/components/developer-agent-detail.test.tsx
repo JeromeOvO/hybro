@@ -14,7 +14,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 const mockUseAuth = vi.fn()
-vi.mock('@clerk/nextjs', () => ({
+vi.mock('@/lib/auth', () => ({
   useAuth: () => mockUseAuth(),
 }))
 

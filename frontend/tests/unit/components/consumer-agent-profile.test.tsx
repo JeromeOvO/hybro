@@ -31,7 +31,7 @@ vi.mock('next/link', () => ({
   ),
 }))
 
-vi.mock('@clerk/nextjs', () => ({
+vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ userId: 'owner-user' }),
 }))
 
