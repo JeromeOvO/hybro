@@ -117,6 +117,12 @@ class RoomCenterPort(Protocol):
 
     async def run_message_preflight_to_room(self, context: Any) -> Any: ...
 
+    async def update_user_message_orchestration_status(
+        self,
+        message_id: str,
+        status: str,
+    ) -> bool: ...
+
 
 class RoomMessageCenterPort(Protocol):
     async def process_room_user_message(
@@ -676,7 +682,27 @@ class ExecutionFacade:
             return False
         await self._cancellation_state.cancel_message_and_broadcast(message_id)
         await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
-        await self._cancel_orchestration_sidecar(message_id)
+        sidecar_canceled = await self._cancel_orchestration_sidecar(message_id)
+        if sidecar_canceled:
+            try:
+                projected = (
+                    await self._room_center.update_user_message_orchestration_status(
+                        message_id,
+                        OrchestrationStatus.CANCELED.value,
+                    )
+                )
+            except Exception:
+                projected = False
+                logger.warning(
+                    "failed to project canceled orchestration status",
+                    extra={"message_id": message_id, "room_id": room_id},
+                    exc_info=True,
+                )
+            if not projected:
+                logger.warning(
+                    "canceled orchestration status was not persisted",
+                    extra={"message_id": message_id, "room_id": room_id},
+                )
         await emit_processing_status(
             room_id=room_id,
             status="canceled",
@@ -696,16 +722,18 @@ class ExecutionFacade:
             logger.warning("agent task cleanup failed for cancellation", exc_info=True)
         return True
 
-    async def _cancel_orchestration_sidecar(self, user_message_id: str) -> None:
+    async def _cancel_orchestration_sidecar(self, user_message_id: str) -> bool:
         """Terminalize the paused orchestration state when a run is canceled."""
         if self._orchestration_run_store is None:
-            return
+            return False
         for _ in range(3):
             current = await self._orchestration_run_store.get_latest_by_user_message_id(
                 user_message_id
             )
-            if current is None or current.status in TERMINAL_ORCHESTRATION_STATUSES:
-                return
+            if current is None:
+                return False
+            if current.status in TERMINAL_ORCHESTRATION_STATUSES:
+                return current.status == OrchestrationStatus.CANCELED
             updated = deepcopy(current)
             updated.status = OrchestrationStatus.CANCELED
             updated.terminal_reason = "request canceled"
@@ -721,13 +749,14 @@ class ExecutionFacade:
                     updated,
                     expected_version=current.state_version,
                 )
-                return
+                return True
             except OrchestrationStoreConflict:
                 continue
         logger.warning(
             "failed to terminalize orchestration sidecar after cancellation",
             extra={"user_message_id": user_message_id},
         )
+        return False
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         return await self._run_reader.get_run(run_id)

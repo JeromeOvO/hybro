@@ -4426,6 +4426,27 @@ class RoomServices:
                 status_code=500,
             )
 
+    async def update_user_message_orchestration_status(
+        self,
+        message_id: str,
+        status: str,
+    ) -> bool:
+        """Persist the public orchestration status on a user message."""
+        user_message = await self._store.get_room_user_message_by_message_id(
+            message_id
+        )
+        if user_message is None:
+            return False
+        if not isinstance(user_message.extend_info, dict):
+            user_message.extend_info = {}
+        user_message.extend_info["orchestration_status"] = status
+        return bool(
+            await self._store.update_room_user_message_by_message_id(
+                message_id,
+                user_message,
+            )
+        )
+
     async def handle_a2a_response_for_room(
         self,
         room_agent_message: RoomAgentMessage,

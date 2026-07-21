@@ -53,6 +53,9 @@ def _make_facade(**overrides):
     room_center.run_message_preflight_to_room = AsyncMock(
         side_effect=run_message_preflight_to_room
     )
+    room_center.update_user_message_orchestration_status = AsyncMock(
+        return_value=True
+    )
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
         request_input=AsyncMock(),
@@ -973,7 +976,7 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
             open_questions=[{"request_id": "hitl-1", "status": "open"}],
         )
     )
-    facade, _ = _make_facade(orchestration_run_store=run_store)
+    facade, deps = _make_facade(orchestration_run_store=run_store)
 
     assert await facade.cancel(
         "room-1",
@@ -988,6 +991,12 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
     assert saved.open_questions == [
         {"request_id": "hitl-1", "status": "canceled"}
     ]
+    deps[
+        "room_center"
+    ].update_user_message_orchestration_status.assert_awaited_once_with(
+        "msg-1",
+        "canceled",
+    )
 
 
 @pytest.mark.asyncio

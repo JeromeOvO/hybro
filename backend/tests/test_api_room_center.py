@@ -94,6 +94,37 @@ def _agent_text_message(text: str, *, metadata: dict | None = None) -> Message:
 
 
 @pytest.mark.asyncio
+async def test_update_user_message_orchestration_status_persists_extend_info():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={"orchestration_run_id": "run-1"},
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=True),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "canceled",
+    )
+
+    assert updated is True
+    assert user_message.extend_info == {
+        "orchestration_run_id": "run-1",
+        "orchestration_status": "canceled",
+    }
+    runtime._store.update_room_user_message_by_message_id.assert_awaited_once_with(
+        "user-message-1",
+        user_message,
+    )
+
+
+@pytest.mark.asyncio
 async def test_legacy_runtime_task_branch_projects_before_persistence():
     private_sentinel = "PRIVATE_SENTINEL_legacy_full_task"
     runtime = _legacy_runtime_with_update_spy()
