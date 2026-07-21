@@ -7,6 +7,7 @@ import pytest
 
 from common.types import (
     Artifact,
+    DataPart,
     Message,
     MessageRole,
     Part,
@@ -253,6 +254,95 @@ class TestRoomMessageRetrieval:
         assert projected_task.history is None
         assert projected_task.metadata is None
         assert private_sentinel not in json.dumps(result.model_dump(mode="json"))
+
+    async def test_agent_projection_preserves_dispatch_and_separate_response_text(
+        self,
+        room_runtime,
+    ):
+        task = Task(
+            id="task-data-only",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[
+                Artifact(
+                    artifact_id="quote-artifact",
+                    name="cyber_quote_decision",
+                    parts=[Part(root=DataPart(data={"premium": 35700}))],
+                )
+            ],
+        )
+        agent_msg = RoomAgentMessage(
+            room_id="room1",
+            message_id="agent-response",
+            agent_id="insurer-agent",
+            message_content=MessageContent(
+                message_text="I can offer an indicative cyber quote.",
+                message_task=task,
+            ),
+            task_content="Requesting Cyber Insurer Agent",
+            extend_info={
+                "public_task_label": "Requesting Cyber Insurer Agent",
+                "public_dispatch_text": "Review the submission and return a quote.",
+                "internal_planner_state": "must-not-leak",
+            },
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[])
+        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        room_runtime.bind_facade(facade)
+        room_runtime.bind_s3_service(SimpleNamespace(get_presigned_url=AsyncMock()))
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1")
+        )
+
+        projected = result.message_list[0]
+        assert (
+            projected.message_content.message_text
+            == "I can offer an indicative cyber quote."
+        )
+        assert projected.task_content == "Requesting Cyber Insurer Agent"
+        assert projected.extend_info == {
+            "public_task_label": "Requesting Cyber Insurer Agent",
+            "public_dispatch_text": "Review the submission and return a quote.",
+        }
+
+    async def test_system_hybro_projection_does_not_fabricate_request_label(
+        self,
+        room_runtime,
+    ):
+        agent_msg = RoomAgentMessage(
+            room_id="room1",
+            message_id="summary-user-message",
+            agent_id="system:hybro",
+            message_content=MessageContent(message_text="Final synthesized answer."),
+            extend_info={
+                "is_coordinator_summary": True,
+                "source_user_message_id": "user-message",
+                "summary_origin": "supervisor",
+                "internal_planner_state": "must-not-leak",
+            },
+        )
+        facade = MagicMock()
+        facade.get_user_messages_for_room = AsyncMock(return_value=[])
+        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        room_runtime.bind_facade(facade)
+        room_runtime.bind_s3_service(SimpleNamespace(get_presigned_url=AsyncMock()))
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1")
+        )
+
+        projected = result.message_list[0]
+        assert projected.message_content.message_text == "Final synthesized answer."
+        assert projected.task_content is None
+        assert projected.extend_info == {
+            "is_coordinator_summary": True,
+            "source_user_message_id": "user-message",
+            "summary_origin": "supervisor",
+        }
+        assert "Requesting system:hybro" not in json.dumps(
+            result.model_dump(mode="json")
+        )
 
 
 class TestRefreshArtifactPresignedUrls:

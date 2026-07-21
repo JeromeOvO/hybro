@@ -36,6 +36,10 @@ class AgentEvent:
 
     # Content (populated per kind)
     text: str = ""
+    # Explicitly public, human-readable agent output. This remains separate
+    # from transport text so structured responses do not accidentally promote
+    # arbitrary remote status/history content at the public boundary.
+    public_text: str | None = None
     state: str | None = None
     parts: list[dict] | None = None
     artifacts: list[dict] | None = None

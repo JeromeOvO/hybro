@@ -492,11 +492,29 @@ class DelegationOutcomeEvaluator:
             and outcome.result_fingerprint == legacy_result_fingerprint
             for outcome in before_state.delegation_outcomes
         )
+        interactive_output = output.status in {
+            "awaiting_input",
+            "input_required",
+            "input-required",
+        } or (output.interactive_state or "").replace("_", "-") in {
+            "input-required",
+            "auth-required",
+            "policy-required",
+        }
+        has_material_result = bool(
+            (output.text and output.text.strip())
+            or output.artifact_keys
+            or changed_artifact_keys
+            or changed_fact_keys
+            or newly_satisfied
+        )
         has_matching_output_evidence = _has_matching_output_evidence(
             after_state, intent.expected_outputs, output
         )
 
-        if output.status == "failed" or open_failure_ids:
+        if interactive_output:
+            status = "blocked"
+        elif output.status == "failed" or open_failure_ids:
             status = "failed"
         elif blockers:
             status = "blocked"
@@ -508,7 +526,11 @@ class DelegationOutcomeEvaluator:
             and has_matching_output_evidence
         ):
             status = "fulfilled"
-        elif not intent.expected_outputs and not prior_legacy_result:
+        elif (
+            not intent.expected_outputs
+            and has_material_result
+            and not prior_legacy_result
+        ):
             status = "fulfilled"
         elif newly_satisfied:
             status = "partial"

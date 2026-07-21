@@ -44,12 +44,14 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.base import AgentTransport
+from execution.hitl.public_prompt import safe_agent_input_prompt
 from execution.state.task_state_manager import (
     TaskStateManager,
     get_task,
     state_str,
 )
 from execution.task_tracking import (
+    extract_public_completed_status_text,
     public_artifact_data,
     public_message_data,
     public_part_data,
@@ -102,6 +104,7 @@ class MessageStreamingState:
     """Tracks mutable streaming state across sub-handlers during a single streaming session."""
 
     full_response_text: str = ""
+    public_message_text: str | None = None
     accumulated_parts: list[Any] = field(default_factory=list)
     non_text_parts: list[dict] = field(default_factory=list)
     inline_conversion_count: int = 0
@@ -170,6 +173,7 @@ class DirectTransport(AgentTransport):
         *,
         error: str | None = None,
         parts: list[dict] | None = None,
+        public_text: str | None = None,
     ) -> None:
         """Emit a terminal AgentEvent through the shared response handler.
 
@@ -196,15 +200,16 @@ class DirectTransport(AgentTransport):
                 for part in parts
                 if (public_part := public_part_data(part)) is not None
             ]
-        public_text = error or ""
-        if not public_text:
+        explicit_public_text = public_text
+        event_text = error or explicit_public_text or ""
+        if not event_text:
             task = get_task(msg)
             if task is not None:
                 public_task = Task.model_validate(public_persisted_task_data(task))
-                public_text = get_text_from_message(get_message_from_task(public_task))
-        if not public_text:
+                event_text = get_text_from_message(get_message_from_task(public_task))
+        if not event_text:
             agent_name = getattr(ctx.agent_card, "name", None)
-            public_text = resolve_public_task_label(
+            event_text = resolve_public_task_label(
                 msg.extend_info,
                 agent_name if isinstance(agent_name, str) else msg.agent_id or "agent",
             )
@@ -215,7 +220,8 @@ class DirectTransport(AgentTransport):
                 message_id=msg.message_id,
                 room_id=ctx.room_id,
                 agent_id=msg.agent_id or "",
-                text=public_text,
+                text=event_text,
+                public_text=(explicit_public_text if kind == "response" else None),
                 error_text=error if kind == "error" else None,
                 state=state.value if hasattr(state, "value") else str(state),
                 related_message_id=msg.related_message_id,
@@ -282,7 +288,8 @@ class DirectTransport(AgentTransport):
                     exc_info=True,
                 )
                 await self.tsm.transition_task(
-                    message, CommonTaskState.FAILED,
+                    message,
+                    CommonTaskState.FAILED,
                     error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                     persist=True,
                 )
@@ -293,7 +300,8 @@ class DirectTransport(AgentTransport):
                     user_message_id=user_message_id,
                 )
                 await self._emit_terminal(
-                    fallback_ctx, CommonTaskState.FAILED,
+                    fallback_ctx,
+                    CommonTaskState.FAILED,
                     error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                 )
                 await self.delivery.send_error(
@@ -354,9 +362,10 @@ class DirectTransport(AgentTransport):
             )
             if not success:
                 task = get_task(message)
-                was_canceled = (
-                    (token and token.is_cancelled)
-                    or (task and task.status and task.status.state == CommonTaskState.CANCELED)
+                was_canceled = (token and token.is_cancelled) or (
+                    task
+                    and task.status
+                    and task.status.state == CommonTaskState.CANCELED
                 )
                 if was_canceled:
                     return ProcessingResult(ProcessingStatus.CANCELED)
@@ -397,17 +406,18 @@ class DirectTransport(AgentTransport):
                     ProcessingStatus.AWAITING_INPUT,
                     response_text="",
                     message_id=paused_message_id,
-                    a2a_task_id=agent_task_id or task_data.get("id") or (task.id if hasattr(task, "id") else None),
-                    a2a_context_id=task.context_id if hasattr(task, "context_id") else task_data.get("contextId"),
+                    a2a_task_id=agent_task_id
+                    or task_data.get("id")
+                    or (task.id if hasattr(task, "id") else None),
+                    a2a_context_id=task.context_id
+                    if hasattr(task, "context_id")
+                    else task_data.get("contextId"),
                     status_message=status_msg,
                     interactive_state=status_value,
-                    requires_auth=(
-                        status_value == CommonTaskState.AUTH_REQUIRED.value
-                    ),
+                    requires_auth=(status_value == CommonTaskState.AUTH_REQUIRED.value),
                     requires_policy=bool(
                         status_value == CommonTaskState.POLICY_REQUIRED.value
-                        or
-                        (task_data.get("metadata") or {}).get("requires_policy")
+                        or (task_data.get("metadata") or {}).get("requires_policy")
                         or (task_data.get("metadata") or {}).get("policy_required")
                     ),
                 )
@@ -431,10 +441,8 @@ class DirectTransport(AgentTransport):
             )
             return ProcessingResult(ProcessingStatus.SUCCESS)
 
-        message = (
-            await self._message_reader.get_room_agent_message_by_message_id(
-                message.message_id
-            )
+        message = await self._message_reader.get_room_agent_message_by_message_id(
+            message.message_id
         )
 
         if message is None:
@@ -443,7 +451,10 @@ class DirectTransport(AgentTransport):
         return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
     async def _convert_inline_bytes_to_s3(
-        self, artifact, room_id: str, message_id: str,
+        self,
+        artifact,
+        room_id: str,
+        message_id: str,
         conversion_counter: list[int] | None = None,
     ) -> None:
         """Convert inline base64 bytes and external URIs in artifact parts to S3 URIs.
@@ -461,7 +472,9 @@ class DirectTransport(AgentTransport):
             conversion_counter = [0]
 
         new_total = await convert_pydantic_artifacts_to_s3(
-            [artifact], room_id, message_id,
+            [artifact],
+            room_id,
+            message_id,
             converted_so_far=conversion_counter[0],
         )
         conversion_counter[0] = new_total
@@ -482,7 +495,9 @@ class DirectTransport(AgentTransport):
         from common.utils.a2a_helpers import convert_inline_bytes_to_s3
 
         return await convert_inline_bytes_to_s3(
-            non_text_parts, room_id, message_id,
+            non_text_parts,
+            room_id,
+            message_id,
             converted_so_far=converted_so_far,
         )
 
@@ -544,7 +559,7 @@ class DirectTransport(AgentTransport):
 
     @staticmethod
     def _drop_unaddressable_public_file_parts(
-        task_data: dict[str, Any]
+        task_data: dict[str, Any],
     ) -> dict[str, Any]:
         artifacts = task_data.get("artifacts")
         if not isinstance(artifacts, list):
@@ -563,8 +578,12 @@ class DirectTransport(AgentTransport):
                 if not isinstance(part, dict):
                     public_parts.append(part)
                     continue
-                payload = part.get("root") if isinstance(part.get("root"), dict) else part
-                file_payload = payload.get("file") if isinstance(payload, dict) else None
+                payload = (
+                    part.get("root") if isinstance(part.get("root"), dict) else part
+                )
+                file_payload = (
+                    payload.get("file") if isinstance(payload, dict) else None
+                )
                 if isinstance(file_payload, dict) and not file_payload.get("uri"):
                     continue
                 public_parts.append(part)
@@ -590,7 +609,15 @@ class DirectTransport(AgentTransport):
     ) -> str:
         return resolve_public_task_label(current_message.extend_info, agent_name)
 
-    def _public_interactive_status_message(self, ctx: ProcessingContext) -> str:
+    def _public_interactive_status_message(
+        self,
+        ctx: ProcessingContext,
+        raw_status_message: str | None = None,
+    ) -> str:
+        if raw_status_message:
+            safe_prompt = safe_agent_input_prompt(raw_status_message)
+            if safe_prompt:
+                return safe_prompt
         agent_name = getattr(ctx.agent_card, "name", None)
         return self._public_task_label(
             ctx.current_message,
@@ -900,7 +927,9 @@ class DirectTransport(AgentTransport):
         streaming_state = MessageStreamingState()
 
         async for a2a_response in self.a2a_transport.send_message_streaming(
-            agent_card, prepared_message, agent_id=current_message.agent_id,
+            agent_card,
+            prepared_message,
+            agent_id=current_message.agent_id,
         ):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
@@ -935,7 +964,8 @@ class DirectTransport(AgentTransport):
                 case _:
                     logger.warning(
                         "DirectTransport: Unknown streaming event kind '%s' for message %s",
-                        result.kind, ctx.user_message_id,
+                        result.kind,
+                        ctx.user_message_id,
                     )
 
         return await self._finalize_streaming(ctx, streaming_state)
@@ -1067,7 +1097,9 @@ class DirectTransport(AgentTransport):
 
         task = get_task(ctx.current_message)
         if task:
-            ctx.current_message.message_content.message_task = self._public_task_model(task)
+            ctx.current_message.message_content.message_task = self._public_task_model(
+                task
+            )
             await self.tsm.persist_message(ctx.current_message)
 
     @staticmethod
@@ -1120,6 +1152,21 @@ class DirectTransport(AgentTransport):
         a2a_status_message_text: str | None = None
         if result.status.message:
             a2a_status_message_text = get_text_from_message(result.status.message)
+        if (
+            is_final
+            and state_str(state) == CommonTaskState.COMPLETED.value
+            and a2a_status_message_text
+        ):
+            streaming_state.public_message_text = (
+                a2a_status_message_text.strip() or None
+            )
+            if (
+                streaming_state.public_message_text
+                and ctx.current_message.message_content
+            ):
+                ctx.current_message.message_content.message_text = (
+                    streaming_state.public_message_text
+                )
 
         task = get_task(ctx.current_message)
         if task:
@@ -1133,9 +1180,7 @@ class DirectTransport(AgentTransport):
                 ctx.current_message.message_content.message_task = (
                     self._public_task_model(task)
                 )
-                await self.tsm.transition_task(
-                    ctx.current_message, state, persist=True
-                )
+                await self.tsm.transition_task(ctx.current_message, state, persist=True)
             else:
                 task.status = build_task_status(state)
                 ctx.current_message.message_content.message_task = (
@@ -1153,7 +1198,12 @@ class DirectTransport(AgentTransport):
                 ctx.agent_card, result.task_id
             )
             if fetched_task is not None:
-                await self._handle_a2a_response_for_room(ctx.current_message, fetched_task)
+                fetched_public_text = extract_public_completed_status_text(fetched_task)
+                if fetched_public_text:
+                    streaming_state.public_message_text = fetched_public_text
+                await self._handle_a2a_response_for_room(
+                    ctx.current_message, fetched_task
+                )
                 public_fetched_task = self._public_terminal_output_task_model(
                     fetched_task
                 )
@@ -1187,12 +1237,16 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(state):
                 if interactive_status_context is not None:
                     interactive_status_context["status_message"] = (
-                        self._public_interactive_status_message(ctx)
+                        self._public_interactive_status_message(
+                            ctx, a2a_status_message_text
+                        )
                     )
             await self.tsm.notify_task(
                 ctx,
                 state,
-                status_message=self._public_interactive_status_message(ctx),
+                status_message=self._public_interactive_status_message(
+                    ctx, a2a_status_message_text
+                ),
             )
 
     async def _handle_stream_artifact_update(
@@ -1282,14 +1336,17 @@ class DirectTransport(AgentTransport):
             streaming_state.inline_conversion_count = new_total
             if task:
                 self._materialize_non_text_parts_as_artifact(
-                    task, streaming_state.non_text_parts,
+                    task,
+                    streaming_state.non_text_parts,
                 )
                 ctx.current_message.message_content.message_task = (
                     self._public_task_model(task)
                 )
 
         if task:
-            ctx.current_message.message_content.message_task = self._public_task_model(task)
+            ctx.current_message.message_content.message_task = self._public_task_model(
+                task
+            )
             task = get_task(ctx.current_message)
 
         if task and not already_terminal:
@@ -1336,7 +1393,11 @@ class DirectTransport(AgentTransport):
                             self._public_terminal_output_task_model(task)
                         )
                     await self.tsm.persist_message(ctx.current_message)
-                    await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
+                    await self._emit_terminal(
+                        ctx,
+                        CommonTaskState.COMPLETED,
+                        public_text=streaming_state.public_message_text,
+                    )
             elif streaming_state.full_response_text:
                 self._materialize_text_as_response_artifact(
                     task,
@@ -1357,7 +1418,11 @@ class DirectTransport(AgentTransport):
                         self._public_terminal_output_task_model(task)
                     )
                 await self.tsm.persist_message(ctx.current_message)
-                await self._emit_terminal(ctx, CommonTaskState.COMPLETED)
+                await self._emit_terminal(
+                    ctx,
+                    CommonTaskState.COMPLETED,
+                    public_text=streaming_state.public_message_text,
+                )
             else:
                 logger.warning(
                     "DirectTransport: Stream ended without terminal status or content for %s",
@@ -1400,17 +1465,29 @@ class DirectTransport(AgentTransport):
                     self._public_terminal_output_task_model(task)
                 )
             await self.tsm.persist_message(ctx.current_message)
-            await self._emit_terminal(ctx, final_state, error=final_error)
+            await self._emit_terminal(
+                ctx,
+                final_state,
+                error=final_error,
+                public_text=streaming_state.public_message_text,
+            )
 
             if is_failure_state(final_state):
-                return ProcessingStatus.FAILED, final_error or _PUBLIC_AGENT_FAILURE_MESSAGE
+                return (
+                    ProcessingStatus.FAILED,
+                    final_error or _PUBLIC_AGENT_FAILURE_MESSAGE,
+                )
 
         # Non-text parts are already delivered via task_update SSE (which
         # carries the parts field).  A separate send_agent_response here
         # would create a duplicate entity on the frontend with a different
         # message_id, causing the agent response to render twice.
 
-        return ProcessingStatus.SUCCESS, streaming_state.full_response_text
+        return ProcessingStatus.SUCCESS, (
+            streaming_state.full_response_text
+            or streaming_state.public_message_text
+            or ""
+        )
 
     async def _handle_a2a_response_for_room(
         self, room_agent_message: RoomAgentMessage, message_data: Any | None
@@ -1420,6 +1497,9 @@ class DirectTransport(AgentTransport):
             return False
 
         if getattr(message_data, "kind", None) == "task":
+            public_message_text = extract_public_completed_status_text(message_data)
+            if public_message_text and room_agent_message.message_content:
+                room_agent_message.message_content.message_text = public_message_text
             existing_task = get_task(room_agent_message)
             if (
                 existing_task
@@ -1447,12 +1527,12 @@ class DirectTransport(AgentTransport):
                         self._public_task_model(existing_task)
                     )
                 else:
-                    room_agent_message.message_content.message_task = self._public_task_model(
-                        message_data
+                    room_agent_message.message_content.message_task = (
+                        self._public_task_model(message_data)
                     )
             else:
-                room_agent_message.message_content.message_task = self._public_task_model(
-                    message_data
+                room_agent_message.message_content.message_task = (
+                    self._public_task_model(message_data)
                 )
             return await self.tsm.persist_message(room_agent_message)
 
@@ -1661,7 +1741,8 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, CommonTaskState.CANCELED,
+                current_message,
+                CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
@@ -1701,7 +1782,8 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, CommonTaskState.CANCELED,
+                current_message,
+                CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
@@ -1756,7 +1838,8 @@ class DirectTransport(AgentTransport):
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, CommonTaskState.CANCELED,
+                current_message,
+                CommonTaskState.CANCELED,
                 persist=True,
             )
             if task_info:
@@ -1794,12 +1877,15 @@ class DirectTransport(AgentTransport):
         interactive_status_context: dict[str, str | None] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """
-            Process the parsed sync response (message or task type).
-            Returns: Tuple of (success, response_text, paused_message_id, agent_task_id).
+        Process the parsed sync response (message or task type).
+        Returns: Tuple of (success, response_text, paused_message_id, agent_task_id).
         """
         # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
+            public_message_text = response.get("public_message_text")
+            if not isinstance(public_message_text, str):
+                public_message_text = None
             error_text = response.get("error")
             non_text_parts = response.get("parts")
 
@@ -1824,15 +1910,19 @@ class DirectTransport(AgentTransport):
                     )
                     public_error_text = _PUBLIC_AGENT_FAILURE_MESSAGE
 
-            if full_response_text:
-                current_message.message_content.message_text = full_response_text
+            if public_message_text or full_response_text:
+                current_message.message_content.message_text = (
+                    public_message_text or full_response_text
+                )
             elif public_error_text:
                 current_message.message_content.message_text = public_error_text
 
             # Convert inline base64 file parts to S3 URIs
             if non_text_parts:
                 await self._convert_streaming_parts_to_s3(
-                    non_text_parts, room_id, message_id,
+                    non_text_parts,
+                    room_id,
+                    message_id,
                 )
                 non_text_parts = [
                     public_part
@@ -1842,7 +1932,8 @@ class DirectTransport(AgentTransport):
                 task = get_task(current_message)
                 if task:
                     self._materialize_non_text_parts_as_artifact(
-                        task, non_text_parts,
+                        task,
+                        non_text_parts,
                     )
                     current_message.message_content.message_task = (
                         self._public_task_model(task)
@@ -1889,9 +1980,11 @@ class DirectTransport(AgentTransport):
                 persist=should_persist,
             )
             await self._emit_terminal(
-                ctx, actual_state,
+                ctx,
+                actual_state,
                 error=public_error_text,
                 parts=non_text_parts if non_text_parts else None,
+                public_text=public_message_text,
             )
 
             if not task_info:
@@ -1929,7 +2022,12 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(status):
                 if interactive_status_context is not None:
                     interactive_status_context["status_message"] = (
-                        self._public_interactive_status_message(ctx)
+                        self._public_interactive_status_message(
+                            ctx,
+                            raw_status_message
+                            if isinstance(raw_status_message, str)
+                            else None,
+                        )
                     )
             if task_info:
                 await self.tsm.notify_task(
@@ -1944,7 +2042,12 @@ class DirectTransport(AgentTransport):
                         or status == CommonTaskState.AUTH_REQUIRED
                     ),
                     status_message=(
-                        self._public_interactive_status_message(ctx)
+                        self._public_interactive_status_message(
+                            ctx,
+                            raw_status_message
+                            if isinstance(raw_status_message, str)
+                            else None,
+                        )
                         if raw_status_message
                         else None
                     ),
@@ -1960,8 +2063,7 @@ class DirectTransport(AgentTransport):
                     task_obj.status.message = None
                 if not task_info:
                     current_message.agent_url = (
-                        current_message.agent_url
-                        or self._agent_card_url(agent_card)
+                        current_message.agent_url or self._agent_card_url(agent_card)
                     )
                     await self.tsm.persist_message(current_message)
                 return True, None, message_id, response.get("task_id")
@@ -1994,7 +2096,8 @@ class DirectTransport(AgentTransport):
                     message_id,
                 )
                 await self.tsm.transition_task(
-                    current_message, CommonTaskState.CANCELED,
+                    current_message,
+                    CommonTaskState.CANCELED,
                     persist=True,
                 )
                 if task_info:
@@ -2021,7 +2124,8 @@ class DirectTransport(AgentTransport):
                     message_id,
                 )
                 await self.tsm.transition_task(
-                    current_message, CommonTaskState.FAILED,
+                    current_message,
+                    CommonTaskState.FAILED,
                     error=_PUBLIC_AGENT_FAILURE_MESSAGE,
                     persist=True,
                 )
@@ -2054,25 +2158,35 @@ class DirectTransport(AgentTransport):
             conversion_counter: list[int] = [0]
             for artifact in completed_task.artifacts:
                 await self._convert_inline_bytes_to_s3(
-                    artifact, room_id, message_id,
+                    artifact,
+                    room_id,
+                    message_id,
                     conversion_counter=conversion_counter,
                 )
 
+        public_message_text = extract_public_completed_status_text(completed_task)
         projected_task_data = public_persisted_task_data(completed_task)
         public_task = Task.model_validate(projected_task_data)
         state = public_task.status.state
         state_value = state_str(state)
         if current_message.message_content:
             current_message.message_content.message_task = public_task
+            if public_message_text:
+                current_message.message_content.message_text = public_message_text
 
         # --- Interactive states (input_required / auth_required) ---
         # The polled agent needs user interaction.  Persist the task state
         # and return paused_message_id so the dispatch method detects it
         # and triggers HITL.
         if state in INTERACTIVE_STATES:
+            raw_status_message = (
+                get_text_from_message(completed_task.status.message)
+                if completed_task.status.message
+                else None
+            )
             if interactive_status_context is not None:
                 interactive_status_context["status_message"] = (
-                    self._public_interactive_status_message(ctx)
+                    self._public_interactive_status_message(ctx, raw_status_message)
                 )
             if task_info:
                 await self._task_updater.update_task_on_message(
@@ -2108,11 +2222,16 @@ class DirectTransport(AgentTransport):
             await self._task_updater.update_task_on_message(
                 message_id,
                 projected_task_data,
-                message_text=final_content or None,
+                message_text=public_message_text or final_content or None,
             )
 
         if task_info:
-            await self._emit_terminal(ctx, state, error=final_error)
+            await self._emit_terminal(
+                ctx,
+                state,
+                error=final_error,
+                public_text=public_message_text,
+            )
         else:
             logger.info(
                 "DirectTransport: Degraded mode — sending polled task_update for %s",
@@ -2122,7 +2241,7 @@ class DirectTransport(AgentTransport):
                 room_id=room_id,
                 message_id=message_id,
                 status=state,
-                content=final_content,
+                content=final_content or public_message_text,
                 error=final_error,
                 agent_name=agent_card.name if agent_card else None,
                 agent_id=current_message.agent_id,
@@ -2130,9 +2249,16 @@ class DirectTransport(AgentTransport):
                 total_steps=total_steps,
                 client_request_id=current_message.client_request_id,
             )
-        return state_str(state) == CommonTaskState.COMPLETED.value, (
-            final_content if final_error is None else final_error
-        ), None, None
+        return (
+            state_str(state) == CommonTaskState.COMPLETED.value,
+            (
+                (final_content or public_message_text)
+                if final_error is None
+                else final_error
+            ),
+            None,
+            None,
+        )
 
 
 def _safe_terminal_error(state: Any) -> str:

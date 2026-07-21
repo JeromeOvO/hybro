@@ -10,6 +10,7 @@ Tests cover:
 - SSE event emission
 """
 
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -21,7 +22,7 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
-from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
+from execution.hitl.service import MAX_HITL_ROUNDS, HITLService, _prompt_hash
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.hitl import (
@@ -420,9 +421,11 @@ class TestRequestInput:
 
         assert result is not None
         assert result.prompt == generic_prompt
+        assert result.agent_prompt_hash
         assert result.prompt_type == HITLPromptType.TEXT
         assert result.choices is None
         assert persisted_docs[0]["prompt"] == generic_prompt
+        assert persisted_docs[0]["agent_prompt_hash"] == result.agent_prompt_hash
         assert persisted_docs[0]["prompt_type"] == HITLPromptType.TEXT.value
         assert "choices" not in persisted_docs[0]
         projection_kwargs = (
@@ -436,6 +439,39 @@ class TestRequestInput:
         assert event.prompt == generic_prompt
         assert private_prompt not in serialized
         assert private_choice not in serialized
+
+    @pytest.mark.asyncio
+    async def test_agent_request_input_preserves_safe_concrete_question(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
+    ):
+        prompt = (
+            "Please provide the customer's completed cyber insurance application "
+            "so I can prepare the quote."
+        )
+
+        async def create_or_reuse_pending_hitl_request(request_data):
+            return request_data, True
+
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request = AsyncMock(
+            side_effect=create_or_reuse_pending_hitl_request
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt=prompt,
+            agent_id="agent-broker",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+        )
+
+        assert result is not None
+        assert result.prompt == prompt
+        event = mock_hitl_delivery.emit.await_args.args[0]
+        assert event.prompt == prompt
 
     @pytest.mark.asyncio
     async def test_agent_hitl_projection_persists_all_display_message_metadata(
@@ -490,7 +526,7 @@ class TestRequestInput:
         mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once_with(
             "agent-display-msg",
             request_id=result.request_id,
-            prompt="The agent needs additional information.",
+            prompt="Need policy effective date",
             prompt_type=HITLPromptType.TEXT,
             choices=None,
             a2a_task_id="a2a-task-1",
@@ -1180,9 +1216,6 @@ class TestRequestInput:
         assert result.client_request_id == "cr-reused-hitl"
         mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
             "hitl-reused",
-            prompt="The agent needs additional information.",
-            prompt_type=HITLPromptType.TEXT.value,
-            choices=None,
             client_request_id="cr-reused-hitl",
         )
         event = mock_hitl_delivery.emit.await_args.args[0]
@@ -1442,16 +1475,6 @@ class TestRequestInput:
         update_calls = mock_hitl_db_service.update_hitl_request.await_args_list
         assert any(
             call.args == ("hitl-legacy",)
-            and call.kwargs
-            == {
-                "prompt": "The agent needs additional information.",
-                "prompt_type": HITLPromptType.TEXT.value,
-                "choices": None,
-            }
-            for call in update_calls
-        )
-        assert any(
-            call.args == ("hitl-legacy",)
             and call.kwargs == {"display_message_id": "agent-paused-msg"}
             for call in update_calls
         )
@@ -1665,6 +1688,145 @@ class TestRequestInput:
         assert followup_doc["orchestration_schema_version"] == 2
         mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
         continuation.resume_queue_from_continuation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blocking_followup_without_state_or_output_keeps_hitl_open(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        request = HITLRequest(
+            request_id="hitl-old",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Need the complete broker submission.",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="agent-insurer",
+            agent_name="Cyber Insurer Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+            status=HITLStatus.PENDING,
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._agent_reply = SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": None,
+                    "response_text": "",
+                }
+            )
+        )
+        followup = request.model_copy(
+            update={"request_id": "hitl-next"}
+        )
+        hitl_service.request_input = AsyncMock(return_value=followup)
+
+        result = await hitl_service._handle_agent_response(request, "5000000")
+
+        assert result["resume_execution"] is False
+        assert result["task_state"] == "input-required"
+        assert result["followup_hitl_request_id"] == "hitl-next"
+        hitl_service.request_input.assert_awaited_once()
+        assert (
+            hitl_service.request_input.await_args.kwargs["prompt"]
+            == "Need the complete broker submission."
+        )
+
+    @pytest.mark.asyncio
+    async def test_unchanged_agent_prompt_returns_control_to_orchestrator(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        request = HITLRequest(
+            request_id="hitl-old",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Please provide the complete broker submission.",
+            agent_id="agent-insurer",
+            agent_name="Insurer Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+            orchestration_run_id="run-msg-1",
+            orchestration_schema_version=2,
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._agent_reply = SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": (
+                        "  Please provide the complete broker submission.  "
+                    ),
+                }
+            )
+        )
+        hitl_service.request_input = AsyncMock()
+
+        result = await hitl_service._handle_agent_response(
+            request,
+            '{"client":{"name":"Acme SaaS Inc."}}',
+        )
+
+        assert result["resume_execution"] is True
+        assert result["agent_no_progress"] is True
+        assert result["task_state"] == "input-required"
+        assert result["response_text"] == (
+            "Please provide the complete broker submission."
+        )
+        hitl_service.request_input.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_distinct_private_followup_prompt_does_not_signal_no_progress(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        first_private_prompt = "PRIVATE_SENTINEL_first_agent_question"
+        second_private_prompt = "PRIVATE_SENTINEL_second_agent_question"
+        request = HITLRequest(
+            request_id="hitl-old",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="The agent needs additional information.",
+            agent_prompt_hash=_prompt_hash(first_private_prompt),
+            agent_id="agent-insurer",
+            agent_name="Insurer Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+            orchestration_run_id="run-msg-1",
+            orchestration_schema_version=2,
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._agent_reply = SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": second_private_prompt,
+                }
+            )
+        )
+        followup = request.model_copy(update={"request_id": "hitl-next"})
+        hitl_service.request_input = AsyncMock(return_value=followup)
+
+        result = await hitl_service._handle_agent_response(request, "user answer")
+
+        assert result["resume_execution"] is False
+        assert "agent_no_progress" not in result
+        assert result["followup_hitl_request_id"] == "hitl-next"
+        hitl_service.request_input.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(

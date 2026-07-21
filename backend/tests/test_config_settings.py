@@ -42,7 +42,7 @@ def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.feature_run_event_sse is False
     assert settings.feature_run_watchdog is True
     assert settings.execution_orchestration_v2 is False
-    assert settings.orchestration_outcome_guardrails is False
+    assert settings.orchestration_outcome_guardrails is True
     assert settings.supervisor_max_steps == 8
     assert settings.run_watchdog_stale_minutes == 90
     assert settings.match_vector_weight == 0.85
@@ -54,6 +54,12 @@ def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.compaction_concurrency == 5
     assert settings.pinecone_index_name == PINECONE_INDEX_NAME_DEFAULT
     assert settings.memory_search_index_name == MEMORY_SEARCH_INDEX_NAME_DEFAULT
+
+
+def test_orchestration_outcome_guardrails_defaults_on(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATION_OUTCOME_GUARDRAILS", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.orchestration_outcome_guardrails is True
 
 
 @pytest.mark.parametrize(

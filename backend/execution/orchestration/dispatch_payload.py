@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,6 +33,8 @@ class ResolvedResourcePayload(BaseModel):
     kind: str
     mime_type: str | None = None
     text: str | None = None
+    data: dict[str, Any] | None = None
+    file: dict[str, Any] | None = None
     summary: str | None = None
     content_fingerprint: str | None = Field(default=None, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -57,11 +60,12 @@ async def resolve_dispatch_payload_refs(
     resource_provider: Any | None = None,
     max_resource_text_chars: int = 120_000,
 ) -> ResolvedDispatchPayload:
-    artifact_keys = {
-        str(artifact.get("artifact_key"))
+    artifacts_by_key = {
+        str(artifact.get("artifact_key")): artifact
         for artifact in run_state.artifacts
         if isinstance(artifact, dict) and artifact.get("artifact_key") is not None
     }
+    artifact_keys = set(artifacts_by_key)
     (
         effective_context_refs,
         effective_artifact_refs,
@@ -74,14 +78,31 @@ async def resolve_dispatch_payload_refs(
         artifact_keys=artifact_keys,
         original_attachments=original_attachments,
     )
+    context_refs_to_resolve: list[DispatchContentRef] = []
+    artifact_ref_ids = {ref.ref_id for ref in effective_artifact_refs}
+    for ref in effective_context_refs:
+        if ref.ref_id in artifact_keys:
+            if ref.ref_id not in artifact_ref_ids:
+                effective_artifact_refs.append(
+                    ref.model_copy(update={"kind": DispatchRefKind.ARTIFACT})
+                )
+                artifact_ref_ids.add(ref.ref_id)
+            continue
+        context_refs_to_resolve.append(ref)
+
     selected_context_refs, resource_payloads = await _resolve_context_refs(
         run_state=run_state,
-        context_refs=effective_context_refs,
+        context_refs=context_refs_to_resolve,
         original_attachments=original_attachments,
         resource_provider=resource_provider,
         max_resource_text_chars=max_resource_text_chars,
     )
     _validate_artifact_refs(effective_artifact_refs, artifact_keys)
+    artifact_resource_payloads = _artifact_resource_payloads(
+        artifact_refs=effective_artifact_refs,
+        artifacts_by_key=artifacts_by_key,
+        max_resource_text_chars=max_resource_text_chars,
+    )
     (
         selected_attachment_refs,
         attachment_failures,
@@ -113,7 +134,7 @@ async def resolve_dispatch_payload_refs(
         ],
         selected_attachment_refs=selected_attachment_refs,
         attachment_failures=attachment_failures,
-        resource_payloads=resource_payloads,
+        resource_payloads=[*resource_payloads, *artifact_resource_payloads],
     )
 
 
@@ -283,7 +304,20 @@ async def _resolve_context_refs(
             )
             invalid_code = _context_payload_invalid_code(resolved_payload)
             if invalid_code is not None:
-                if ref.required:
+                fallback_payload = await _resolve_context_projection_fallback(
+                    ref=ref,
+                    run_id=run_state.run_id,
+                    original_attachments=original_attachments,
+                    resource_provider=resource_provider,
+                )
+                fallback_invalid_code = (
+                    _context_payload_invalid_code(fallback_payload)
+                    if fallback_payload is not None
+                    else None
+                )
+                if fallback_payload is None or fallback_invalid_code is not None:
+                    if not ref.required:
+                        continue
                     raise DispatchPayloadValidationError(
                         _context_payload_invalid_message(
                             ref_id=ref.ref_id,
@@ -291,14 +325,14 @@ async def _resolve_context_refs(
                         ),
                         code=invalid_code,
                     )
-                continue
+                resolved_payload = fallback_payload
             text = resolved_payload.text
             if isinstance(text, str) and len(text) > max_resource_text_chars:
                 raise DispatchPayloadValidationError(
                     f"Resource payload too large: {ref.ref_id}.",
                     code="resource_payload_too_large",
                 )
-            selected.append(ref.ref_id)
+            selected.append(resolved_payload.ref_id)
             payloads.append(resolved_payload)
             continue
         if ref.required:
@@ -307,6 +341,54 @@ async def _resolve_context_refs(
                 code="context_ref_not_found",
             )
     return selected, payloads
+
+
+async def _resolve_context_projection_fallback(
+    *,
+    ref: DispatchContentRef,
+    run_id: str,
+    original_attachments: Sequence[UserAttachment],
+    resource_provider: Any | None,
+) -> ResolvedResourcePayload | None:
+    if resource_provider is None or not hasattr(resource_provider, "ensure_projection"):
+        return None
+    try:
+        projection = resource_provider.ensure_projection(
+            ref.ref_id,
+            run_id=run_id,
+            attachments=original_attachments,
+            target_mime="text/plain",
+        )
+        if hasattr(projection, "__await__"):
+            projection = await projection
+    except KeyError:
+        return None
+
+    projection_ref_id = getattr(projection, "ref_id", None)
+    if (
+        not isinstance(projection_ref_id, str)
+        or not projection_ref_id
+        or projection_ref_id == ref.ref_id
+        or getattr(projection, "status", None) != "ready"
+    ):
+        return None
+    payload = await _resolve_resource_payload(
+        ref=DispatchContentRef(
+            kind=DispatchRefKind.CONTEXT,
+            ref_id=projection_ref_id,
+            source_agent_message_id=ref.source_agent_message_id,
+            mime_type=getattr(projection, "mime_type", None),
+            required=ref.required,
+        ),
+        run_id=run_id,
+        original_attachments=original_attachments,
+        resource_provider=resource_provider,
+    )
+    if payload is None:
+        return None
+    return ResolvedResourcePayload.model_validate(
+        payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+    )
 
 
 def _validate_artifact_refs(
@@ -319,6 +401,171 @@ def _validate_artifact_refs(
                 f"unknown artifact ref: {ref.ref_id}",
                 code="artifact_ref_not_found",
             )
+
+
+def _bounded_artifact_text(
+    value: Any,
+    *,
+    ref_id: str,
+    max_resource_text_chars: int,
+) -> str:
+    text = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, sort_keys=True, default=str)
+    )
+    if len(text) > max_resource_text_chars:
+        raise DispatchPayloadValidationError(
+            f"Resource payload too large: {ref_id}.",
+            code="resource_payload_too_large",
+        )
+    return text
+
+
+def _artifact_part_resource_payload(
+    *,
+    ref_id: str,
+    artifact: dict[str, Any],
+    part: dict[str, Any],
+    metadata: dict[str, Any],
+    max_resource_text_chars: int,
+) -> ResolvedResourcePayload | None:
+    kind = part.get("kind")
+    artifact_mime = artifact.get("mime_type") or artifact.get("mimeType")
+    common = {
+        "ref_id": ref_id,
+        "kind": "artifact",
+        "summary": artifact.get("summary"),
+        "metadata": metadata,
+    }
+    if kind == "data" and isinstance(part.get("data"), dict):
+        data = part["data"]
+        _bounded_artifact_text(
+            data,
+            ref_id=ref_id,
+            max_resource_text_chars=max_resource_text_chars,
+        )
+        return ResolvedResourcePayload(
+            **common,
+            mime_type=artifact_mime or "application/json",
+            data=data,
+        )
+    if kind == "text" and isinstance(part.get("text"), str):
+        text = _bounded_artifact_text(
+            part["text"],
+            ref_id=ref_id,
+            max_resource_text_chars=max_resource_text_chars,
+        )
+        return ResolvedResourcePayload(
+            **common,
+            mime_type=(
+                artifact_mime
+                if isinstance(artifact_mime, str) and artifact_mime.startswith("text/")
+                else "text/plain"
+            ),
+            text=text,
+        )
+    if kind == "file" and isinstance(part.get("file"), dict):
+        file_payload = part["file"]
+        return ResolvedResourcePayload(
+            **common,
+            mime_type=(
+                file_payload.get("mimeType")
+                or file_payload.get("mime_type")
+                or artifact_mime
+            ),
+            file=file_payload,
+        )
+    return None
+
+
+def _artifact_resource_payloads(
+    *,
+    artifact_refs: Sequence[DispatchContentRef],
+    artifacts_by_key: dict[str, dict[str, Any]],
+    max_resource_text_chars: int,
+) -> list[ResolvedResourcePayload]:
+    resource_payloads: list[ResolvedResourcePayload] = []
+    projection_fields = {
+        "artifact_key",
+        "artifact_id",
+        "artifactId",
+        "name",
+        "title",
+        "summary",
+        "description",
+        "source_agent_message_id",
+        "source_agent_id",
+        "mime_type",
+        "mimeType",
+        "parts",
+    }
+    for ref in artifact_refs:
+        artifact = artifacts_by_key.get(ref.ref_id)
+        if artifact is None:
+            continue
+        base_metadata = {
+            "artifact_name": artifact.get("name") or artifact.get("title"),
+            "source_agent_message_id": artifact.get("source_agent_message_id"),
+            "source_agent_id": artifact.get("source_agent_id"),
+        }
+        base_metadata = {
+            key: value for key, value in base_metadata.items() if value is not None
+        }
+        materialized_count = 0
+        parts = artifact.get("parts")
+        if isinstance(parts, list):
+            for part_index, wrapped_part in enumerate(parts):
+                if not isinstance(wrapped_part, dict):
+                    continue
+                part = wrapped_part.get("root", wrapped_part)
+                if not isinstance(part, dict):
+                    continue
+                metadata = {
+                    **base_metadata,
+                    **(
+                        part.get("metadata")
+                        if isinstance(part.get("metadata"), dict)
+                        else {}
+                    ),
+                    "part_index": part_index,
+                }
+                resource = _artifact_part_resource_payload(
+                    ref_id=ref.ref_id,
+                    artifact=artifact,
+                    part=part,
+                    metadata=metadata,
+                    max_resource_text_chars=max_resource_text_chars,
+                )
+                if resource is not None:
+                    resource_payloads.append(resource)
+                    materialized_count += 1
+        if materialized_count:
+            continue
+        fallback_data = {
+            key: value for key, value in artifact.items() if key not in projection_fields
+        }
+        if fallback_data:
+            _bounded_artifact_text(
+                fallback_data,
+                ref_id=ref.ref_id,
+                max_resource_text_chars=max_resource_text_chars,
+            )
+            resource_payloads.append(
+                ResolvedResourcePayload(
+                    ref_id=ref.ref_id,
+                    kind="artifact",
+                    mime_type=(
+                        artifact.get("mime_type")
+                        or artifact.get("mimeType")
+                        or "application/json"
+                    ),
+                    data=fallback_data,
+                    summary=artifact.get("summary"),
+                    metadata=base_metadata,
+                )
+            )
+    return resource_payloads
 
 
 def _text_payload_is_accepted_by_agent(

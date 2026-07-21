@@ -10,6 +10,7 @@ import pytest
 from common.a2a_constants import SSEProcessingStatus
 from common.types import (
     Artifact,
+    DataPart,
     Message,
     MessageRole,
     Part,
@@ -274,12 +275,49 @@ class TestNotifyTaskUpdate:
             call_kw = notifier.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Hello world"
 
+    @pytest.mark.asyncio
+    async def test_completed_prefers_persisted_response_for_data_only_artifact(self):
+        response_text = "The insurer returned an indicative quote."
+        task = _make_task(
+            TaskState.completed,
+            artifacts=[
+                Artifact(
+                    artifactId="quote-1",
+                    name="quote",
+                    parts=[Part(root=DataPart(data={"premium": 59300}))],
+                )
+            ],
+        )
+        msg = _make_message(task=task, message_text=response_text)
+        extracted = _extracted_parts_mock(has_non_text=True)
+        extracted.data_parts = [{"kind": "data", "data": {"premium": 59300}}]
+
+        with (
+            patch(PATCH_DB) as db,
+            patch(PATCH_NOTIFIER) as notifier,
+            patch(PATCH_DELIVERY) as delivery,
+            patch(PATCH_SLEEP, new_callable=AsyncMock),
+            patch(PATCH_EXTRACT_PARTS, return_value=extracted),
+            patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
+        ):
+            _setup_db_mock(db, msg=msg)
+            _setup_notifier_mock(notifier)
+            _setup_delivery_mock(delivery)
+
+            result = await notify_task_update(**CALL_KWARGS)
+
+            assert result is True
+            call_kw = notifier.send_task_update.call_args.kwargs
+            assert call_kw["content"] == response_text
+            assert call_kw["parts"][0]["kind"] == "data"
+            assert call_kw["parts"][0]["data"] == {"premium": 59300}
+
     # --------------------------------------------------------------------- #
     # 6. Completed tasks do not backfill artifacts from private history
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_completed_does_not_backfill_artifacts_from_agent_history(self):
-        private_sentinel = "PRIVATE_SENTINEL_backfill_message_text"
+        public_response = "Persisted public response"
         task = _make_task(TaskState.completed, artifacts=[])
         task.history = [
             Message(
@@ -287,7 +325,7 @@ class TestNotifyTaskUpdate:
                 parts=[Part(root=TextPart(text="Backfilled public answer"))],
             )
         ]
-        msg = _make_message(task=task, message_text=private_sentinel)
+        msg = _make_message(task=task, message_text=public_response)
 
         with (
             patch(PATCH_DB) as db,
@@ -305,9 +343,8 @@ class TestNotifyTaskUpdate:
             assert result is True
             db.update_room_agent_message_by_message_id.assert_not_awaited()
             call_kw = notifier.send_task_update.call_args.kwargs
-            assert call_kw["content"] is None
+            assert call_kw["content"] == public_response
             assert "Backfilled public answer" not in repr(call_kw)
-            assert private_sentinel not in repr(call_kw)
 
     # --------------------------------------------------------------------- #
     # 7. Failed state extracts error

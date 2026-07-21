@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
 from common.types import (
     Artifact,
+    DataPart,
     Message,
     Part,
     Task,
@@ -47,9 +49,11 @@ from execution.orchestration.candidate_scope import (
 )
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from execution.task_tracking import (
+    extract_public_completed_status_text,
     public_artifact_data,
     public_message_data,
     public_persisted_task_data,
+    resolve_public_agent_response_text,
     resolve_public_task_label,
 )
 from llm_gateway.errors import LLMServiceNotBoundError
@@ -125,6 +129,12 @@ _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
 )
 _PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
 _GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
+_PUBLIC_ORCHESTRATION_STATUS_MAP = {
+    "completed": "completed",
+    "failed": "failed",
+    "canceled": "canceled",
+    "budget_exhausted": "failed",
+}
 
 
 def _public_attachment_preflight_failure(
@@ -151,6 +161,11 @@ def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | No
     turn_completion_kind = extend_info.get("turn_completion_kind")
     if turn_completion_kind in _PUBLIC_TURN_COMPLETION_KINDS:
         public_extend_info["turn_completion_kind"] = turn_completion_kind
+    orchestration_status = _PUBLIC_ORCHESTRATION_STATUS_MAP.get(
+        extend_info.get("orchestration_status")
+    )
+    if orchestration_status is not None:
+        public_extend_info["orchestration_status"] = orchestration_status
 
     return public_extend_info or None
 
@@ -2389,6 +2404,23 @@ class RoomServices:
                 ),
                 None,
             )
+        logger.info(
+            "room_send_message_persist_started room_id=%s user_id=%s "
+            "client_request_id=%s target_group=%s supervisor=%s debate=%s "
+            "orchestration_requested=%s candidate_scope_mode=%s "
+            "selected_count=%d mentioned_count=%d message_len=%d",
+            request.room_id,
+            request.user_id,
+            client_request_id,
+            target_group,
+            use_supervisor,
+            is_debate_mode,
+            orchestration_requested,
+            candidate_scope_mode,
+            len(selected_agent_ids or []),
+            len(mentioned_agent_ids or []),
+            len(message_text or ""),
+        )
 
         if (
             orchestration_requested
@@ -2513,6 +2545,15 @@ class RoomServices:
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
         token = self.delivery.create_token(user_message.message_id)
+        logger.info(
+            "room_send_message_persisted room_id=%s message_id=%s "
+            "client_request_id=%s supervisor=%s target_group=%s",
+            request.room_id,
+            user_message.message_id,
+            client_request_id,
+            use_supervisor,
+            target_group,
+        )
 
         return (
             RoomCenterUserMessageResponse(
@@ -2681,6 +2722,20 @@ class RoomServices:
             **(user_message.extend_info or {}),
             "dispatch_strategy": dispatch_strategy.value,
         }
+        logger.info(
+            "room_send_message_preflight_ready room_id=%s message_id=%s "
+            "client_request_id=%s supervisor=%s orchestration_active=%s "
+            "target_group=%s candidate_count=%d auto_assign=%s dispatch_strategy=%s",
+            request.room_id,
+            user_message.message_id,
+            client_request_id,
+            use_supervisor,
+            v2_orchestration_active,
+            target_group,
+            len(selected_agent_set),
+            auto_assign,
+            dispatch_strategy.value,
+        )
 
         # Fetch room memory for legacy context assembly. Orchestration requests
         # persist only the lightweight orchestration envelope here.
@@ -2772,6 +2827,15 @@ class RoomServices:
             )
 
         if not parse_result.success:
+            logger.warning(
+                "room_send_message_preflight_failed room_id=%s message_id=%s "
+                "client_request_id=%s supervisor=%s canceled=%s",
+                request.room_id,
+                user_message.message_id,
+                client_request_id,
+                use_supervisor,
+                parse_result.canceled,
+            )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
@@ -2784,6 +2848,16 @@ class RoomServices:
                 else "Failed to parse user message",
             )
 
+        logger.info(
+            "room_send_message_preflight_completed room_id=%s message_id=%s "
+            "client_request_id=%s supervisor=%s orchestration_active=%s "
+            "preflight_outcome=ready",
+            request.room_id,
+            user_message.message_id,
+            client_request_id,
+            use_supervisor,
+            v2_orchestration_active,
+        )
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
             dispatch_root_message_id=user_message.message_id,
@@ -3644,6 +3718,8 @@ class RoomServices:
 
         resolved_resource_payloads = request.resolved_resource_payloads
         if resolved_resource_payloads is None:
+            resolved_resource_payloads = request.dispatch_resource_payloads
+        if resolved_resource_payloads is None:
             resolved_payload_refs = (
                 message.extend_info.get("resolved_dispatch_payload_refs")
                 if isinstance(message.extend_info, dict)
@@ -3661,18 +3737,98 @@ class RoomServices:
                 else None
             )
         if isinstance(resolved_resource_payloads, list):
+            target_agent_card = getattr(agent, "agent_card", None)
+            accepted_modes = agent_input_modes(target_agent_card)
             for payload in resolved_resource_payloads:
                 if not isinstance(payload, dict):
                     continue
                 text = payload.get("text")
+                data = payload.get("data")
+                file_payload = payload.get("file")
+                ref_id = payload.get("ref_id")
+                mime_type = str(payload.get("mime_type") or "").split(";", 1)[0]
+                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
+                metadata = {
+                    **(
+                        payload.get("metadata")
+                        if isinstance(payload.get("metadata"), dict)
+                        else {}
+                    ),
+                    "ref_id": label,
+                    "resource_kind": payload.get("kind") or "context",
+                }
+                if mime_type:
+                    metadata["mime_type"] = mime_type
+
+                if isinstance(data, dict):
+                    if mime_type_is_accepted(
+                        mime_type or "application/json", accepted_modes
+                    ):
+                        agent_message.parts.append(
+                            Part(root=DataPart(data=data, metadata=metadata))
+                        )
+                    else:
+                        agent_message.parts.append(
+                            Part(
+                                root=TextPart(
+                                    text=(
+                                        f"[Selected resource: {label}]\n"
+                                        + json.dumps(data, default=str)
+                                    ),
+                                    metadata=metadata,
+                                )
+                            )
+                        )
+                    continue
+
+                if isinstance(file_payload, dict):
+                    if mime_type_is_accepted(
+                        mime_type or "application/octet-stream", accepted_modes
+                    ):
+                        try:
+                            agent_message.parts.append(
+                                Part.model_validate(
+                                    {
+                                        "kind": "file",
+                                        "file": file_payload,
+                                        "metadata": metadata,
+                                    }
+                                )
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Skipping invalid selected artifact file part %s",
+                                label,
+                                exc_info=True,
+                            )
+                    continue
+
                 if not isinstance(text, str) or not text.strip():
                     continue
-                if payload.get("mime_type") != "text/plain":
-                    continue
-                ref_id = payload.get("ref_id")
-                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
+                if mime_type == "application/json" and mime_type_is_accepted(
+                    mime_type, accepted_modes
+                ):
+                    try:
+                        parsed_data = json.loads(text)
+                    except (TypeError, ValueError):
+                        parsed_data = None
+                    if isinstance(parsed_data, dict):
+                        agent_message.parts.append(
+                            Part(
+                                root=DataPart(
+                                    data=parsed_data,
+                                    metadata=metadata,
+                                )
+                            )
+                        )
+                        continue
                 agent_message.parts.append(
-                    Part(root=TextPart(text=f"[Selected resource: {label}]\n{text}"))
+                    Part(
+                        root=TextPart(
+                            text=f"[Selected resource: {label}]\n{text}",
+                            metadata=metadata,
+                        )
+                    )
                 )
 
         # Append file parts from user attachments after explicit preflight checks.
@@ -3719,6 +3875,11 @@ class RoomServices:
         )
         if user_attachments and forwarding_policy == "explicit_refs_only":
             raw_attachment_refs = request.explicit_attachment_refs
+            if (
+                raw_attachment_refs is None
+                and request.selected_attachment_refs is not None
+            ):
+                raw_attachment_refs = list(request.selected_attachment_refs)
             if raw_attachment_refs is None:
                 ref_payload = (
                     resolved_dispatch_payload_refs
@@ -4141,43 +4302,80 @@ class RoomServices:
                         public_task = Task.model_validate(public_task_data)
                     else:
                         public_task = None
-                    agent_content = (
-                        get_text_from_message(get_message_from_task(public_task))
-                        if public_task is not None
-                        else ""
-                    )
-                    legacy_message_text = (
-                        agent_msg.message_content.message_text
-                        if agent_msg.message_content is not None
+                    preferred_agent_content = (
+                        extract_public_completed_status_text(stored_task)
+                        if stored_task is not None
                         else None
                     )
+                    fallback_agent_content = (
+                        get_text_from_message(get_message_from_task(public_task))
+                        if public_task is not None
+                        else None
+                    )
+                    agent_content = resolve_public_agent_response_text(
+                        agent_msg,
+                        preferred_text=preferred_agent_content,
+                        fallback_text=fallback_agent_content,
+                    )
                     public_state = (
-                        getattr(public_task.status.state, "value", public_task.status.state)
+                        getattr(
+                            public_task.status.state,
+                            "value",
+                            public_task.status.state,
+                        )
                         if public_task is not None and public_task.status is not None
                         else None
                     )
                     if (
-                        not agent_content
+                        agent_content
                         and public_task is not None
                         and public_state == TaskState.completed.value
-                        and isinstance(legacy_message_text, str)
-                        and legacy_message_text
+                        and not public_task.artifacts
                     ):
-                        legacy_artifact = Artifact(
-                            artifact_id=f"{agent_msg.message_id}-legacy-response",
-                            name="response",
-                            parts=[Part(root=TextPart(text=legacy_message_text))],
-                        )
                         public_task.artifacts = [
-                            *(public_task.artifacts or []),
-                            legacy_artifact,
+                            Artifact(
+                                artifact_id=(
+                                    f"{agent_msg.message_id}-legacy-response"
+                                ),
+                                name="response",
+                                parts=[Part(root=TextPart(text=agent_content))],
+                            )
                         ]
-                        agent_content = legacy_message_text
-                    public_task_label = resolve_public_task_label(
-                        agent_msg.extend_info,
-                        agent_msg.agent_id or "agent",
+
+                    is_system_hybro = (
+                        agent_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
                     )
-                    public_extend_info = {"public_task_label": public_task_label}
+                    public_task_label = None
+                    public_extend_info: dict[str, object] = {}
+                    if not is_system_hybro:
+                        public_task_label = resolve_public_task_label(
+                            agent_msg.extend_info,
+                            agent_msg.agent_id or "agent",
+                        )
+                        public_extend_info["public_task_label"] = public_task_label
+                        public_dispatch_text = (
+                            agent_msg.extend_info.get("public_dispatch_text")
+                            if isinstance(agent_msg.extend_info, dict)
+                            else None
+                        )
+                        if (
+                            isinstance(public_dispatch_text, str)
+                            and public_dispatch_text.strip()
+                        ):
+                            public_extend_info["public_dispatch_text"] = (
+                                public_dispatch_text.strip()
+                            )
+                    elif isinstance(agent_msg.extend_info, dict):
+                        for key in (
+                            "is_coordinator_summary",
+                            "source_user_message_id",
+                            "summary_origin",
+                            "summary_type",
+                            "turn_completion_kind",
+                        ):
+                            value = agent_msg.extend_info.get(key)
+                            if value is not None:
+                                public_extend_info[key] = value
                     if trusted_hitl_request_id is not None:
                         public_extend_info["hitl_request_id"] = trusted_hitl_request_id
 
@@ -4187,7 +4385,7 @@ class RoomServices:
                         client_request_id=agent_msg.client_request_id,
                         message_type="agent",
                         message_content=MessageContent(
-                            message_text=agent_content,
+                            message_text=agent_content or "",
                             message_task=public_task,
                         ),
                         message_created_at=agent_msg.message_created_at,
@@ -4197,7 +4395,7 @@ class RoomServices:
                         total_steps=agent_msg.total_steps,
                         task_updated_at=agent_msg.task_updated_at,
                         task_content=public_task_label,
-                        extend_info=public_extend_info,
+                        extend_info=public_extend_info or None,
                     )
                     combined_messages.append(room_message)
 
@@ -4227,6 +4425,27 @@ class RoomServices:
                 error=str(e),
                 status_code=500,
             )
+
+    async def update_user_message_orchestration_status(
+        self,
+        message_id: str,
+        status: str,
+    ) -> bool:
+        """Persist the public orchestration status on a user message."""
+        user_message = await self._store.get_room_user_message_by_message_id(
+            message_id
+        )
+        if user_message is None:
+            return False
+        if not isinstance(user_message.extend_info, dict):
+            user_message.extend_info = {}
+        user_message.extend_info["orchestration_status"] = status
+        return bool(
+            await self._store.update_room_user_message_by_message_id(
+                message_id,
+                user_message,
+            )
+        )
 
     async def handle_a2a_response_for_room(
         self,

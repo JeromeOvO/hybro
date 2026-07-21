@@ -518,9 +518,12 @@ async def test_run_materializes_only_selected_resource_refs_for_dispatch():
     assert result.status == RunStatus.COMPLETED
     processor_call = executor.agent_message_processor.process_single_message.await_args
     dispatched_message = processor_call.args[0]
-    assert dispatched_message.extend_info == {
-        "public_task_label": "Requesting Agent One"
-    }
+    assert dispatched_message.extend_info["public_task_label"] == (
+        "Requesting Agent One"
+    )
+    assert dispatched_message.extend_info["public_dispatch_text"] == (
+        processor_call.kwargs["dispatch_task"]
+    )
     assert processor_call.kwargs["resolved_resource_payloads"][0]["ref_id"] == (
         "ctx:file-file-1:text"
     )
@@ -669,6 +672,248 @@ def _executor(
     executor.bind_execution_event_deps(AsyncMock())
     executor._stream_supervisor_synthesis = AsyncMock(return_value="Final summary")
     return executor
+
+
+@pytest.mark.asyncio
+async def test_agent_result_records_same_shadow_observations_regardless_of_guardrails(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "execution.orchestration.result_ingestor.uuid4",
+        lambda: SimpleNamespace(hex="stable-input-required-failure"),
+    )
+
+    async def run_case(guardrails_enabled: bool) -> dict[str, object]:
+        store = InMemoryOrchestrationRunStore()
+        user_message = RoomUserMessage(
+            room_id="room-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Produce quote"),
+            message_id="msg-1",
+        )
+        state = await store.create_run(
+            _run_state(
+                status=OrchestrationStatus.DISPATCHING,
+                dispatch_intents=[
+                    DispatchIntent(
+                        step_id="run-1:step-1",
+                        step_target_id="run-1:step-1:target-1",
+                        dispatch_intent_id="intent-1",
+                        planned_agent_message_id="agent-msg-1",
+                        agent_id="agent-1",
+                        task="Produce quote",
+                        task_hash="hash-1",
+                        goal_family_fingerprint="family-1",
+                        goal_revision_fingerprint="revision-1",
+                    )
+                ],
+            )
+        )
+        executor = _executor(
+            store=store,
+            planner=RecordingPlanner(),
+            user_message=user_message,
+            guardrails_enabled=guardrails_enabled,
+        )
+        result = StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Produce quote",
+            response_text="Missing annual revenue",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        )
+
+        await executor._ingest_v2_results(
+            state=state,
+            results=[result],
+            status=OrchestrationStatus.AWAITING_USER,
+            advance_step=False,
+        )
+
+        saved = await store.get_run("run-1")
+        assert saved is not None
+        comparable = {
+            "outcomes": [
+                outcome.model_dump(mode="json", exclude={"created_at"})
+                for outcome in saved.delegation_outcomes
+            ],
+            "goal_progress": [
+                progress.model_dump(mode="json", exclude={"updated_at"})
+                for progress in saved.goal_progress
+            ],
+            "blockers": [
+                blocker.model_dump(mode="json")
+                for blocker in saved.blockers
+            ],
+            "continuations": [
+                continuation.model_dump(mode="json", exclude={"updated_at"})
+                for continuation in saved.pending_agent_continuations
+            ],
+        }
+        assert comparable["outcomes"]
+        assert comparable["continuations"]
+        return comparable
+
+    assert await run_case(False) == await run_case(True)
+
+
+@pytest.mark.asyncio
+async def test_input_required_continuation_supersession_runs_when_guardrails_disabled():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Produce quote"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.RUNNING,
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="run-1:step-1:target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Produce quote",
+                    task_hash="hash-1",
+                    status="awaiting_input",
+                )
+            ],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status="awaiting_input",
+                    text="Missing annual revenue",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+            open_failures=[
+                OpenFailureRecord(
+                    failure_id="failure-1",
+                    fingerprint="agent-1:agent-msg-1:agent_input_required",
+                    source="a2a_adapter",
+                    agent_id="agent-1",
+                    agent_message_id="agent-msg-1",
+                    dispatch_intent_id="intent-1",
+                    error_code="agent_input_required",
+                    error_message="Agent requested additional input.",
+                    recoverable=True,
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=False,
+    )
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_targets=[
+            PlannedDelegateTarget(agent_id="agent-2", task="Continue elsewhere"),
+        ],
+    )
+
+    assert saved.pending_agent_continuations[0].status == "abandoned"
+    assert saved.agent_outputs[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_publishes_the_exact_external_dispatch_task():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Public user request"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.DELEGATE,
+                reasoning="delegate privately",
+                targets=[
+                    PlannedDelegateTarget(
+                        agent_id="agent-1",
+                        agent_name="Risk Agent",
+                        task="INTERNAL DISPATCH TASK",
+                    )
+                ],
+            ),
+            PlannerAction(
+                action=PlannerActionType.COMPLETE,
+                reasoning="complete",
+                completion_evidence=CompletionEvidence(
+                    satisfied_criteria=["Delegation completed"],
+                    referenced_fact_ids=[],
+                    referenced_artifact_keys=[],
+                    unresolved_questions=[],
+                    final_answer_intent="summarize",
+                    confidence=1.0,
+                ),
+            ),
+        ),
+        user_message=user_message,
+    )
+
+    def create_agent_message(**kwargs):
+        return RoomAgentMessage(
+            room_id=kwargs["room_id"],
+            related_message_id=kwargs["related_message_id"],
+            agent_id=kwargs["agent_id"],
+            user_id=kwargs["user_id"],
+            message_id="agent-msg-1",
+            message_content=MessageContent(message_text=kwargs["content"]),
+            task_content=kwargs["task_content"],
+            client_request_id=kwargs["client_request_id"],
+        )
+
+    executor.room_runtime.create_agent_message = MagicMock(
+        side_effect=create_agent_message
+    )
+
+    await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Public user request",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Risk Agent")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    persisted = executor.message_writer.add_room_agent_message.await_args.args[0]
+    dispatch = executor.agent_message_processor.process_single_message.await_args
+    assert persisted.message_content.message_text == "Requesting Risk Agent"
+    assert persisted.task_content == "Requesting Risk Agent"
+    assert persisted.extend_info["public_task_label"] == "Requesting Risk Agent"
+    assert persisted.extend_info["public_dispatch_text"] == "INTERNAL DISPATCH TASK"
+    assert "INTERNAL DISPATCH TASK" in persisted.model_dump_json()
+    assert dispatch.kwargs["dispatch_task"] == "INTERNAL DISPATCH TASK"
 
 
 def _duplicate_generic_delegate_action() -> PlannerAction:
@@ -1433,7 +1678,7 @@ async def test_supervisor_records_dispatch_status_through_run_reducer():
 
 
 @pytest.mark.asyncio
-async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
+async def test_run_delegate_path_publishes_exact_dispatched_task(
     monkeypatch,
 ):
     dispatch_task_sentinel = "INTERNAL DISPATCH TASK: private"
@@ -1569,25 +1814,28 @@ async def test_run_delegate_path_keeps_persisted_dispatch_message_public_only(
     delegated_message = executor.message_writer.add_room_agent_message.await_args_list[
         -1
     ].args[0]
+    processor_call = executor.agent_message_processor.process_single_message.await_args
     assert delegated_message.message_id == intent.planned_agent_message_id
     assert delegated_message.message_content.message_text == public_task_label
     assert delegated_message.task_content == public_task_label
-    assert delegated_message.extend_info == {"public_task_label": public_task_label}
+    assert delegated_message.extend_info == {
+        "public_task_label": public_task_label,
+        "public_dispatch_text": processor_call.kwargs["dispatch_task"],
+    }
     persisted_json = json.dumps(
         delegated_message.model_dump(mode="json"),
         sort_keys=True,
     )
     assert public_task_label in persisted_json
-    assert dispatch_task_sentinel not in persisted_json
+    assert dispatch_task_sentinel in persisted_json
     assert "dispatch_payload_refs" not in persisted_json
     assert "resolved_dispatch_resource_payloads" not in persisted_json
     assert "attachment_forwarding_policy" not in persisted_json
 
-    processor_call = executor.agent_message_processor.process_single_message.await_args
     assert processor_call.args[0] == delegated_message
     assert dispatch_task_sentinel in processor_call.kwargs["dispatch_task"]
     assert processor_call.kwargs["resolved_resource_payloads"] == [
-        resolved_resource_payload.model_dump(mode="json")
+        resolved_resource_payload.model_dump(mode="json", exclude_none=True)
     ]
     assert processor_call.kwargs["explicit_attachment_refs"] == ["file-1"]
     assert processor_call.kwargs["attachment_forwarding_policy"] == (
@@ -1699,7 +1947,8 @@ async def test_attachment_preflight_failure_update_uses_public_task_label(
     assert result[0].error_code == "agent_does_not_accept_file_type"
     executor.tsm.fail_pre_dispatch_task.assert_awaited_once()
     fail_message = executor.tsm.fail_pre_dispatch_task.await_args.args[0]
-    assert fail_message.extend_info == {"public_task_label": public_task_label}
+    assert fail_message.extend_info["public_task_label"] == public_task_label
+    assert fail_message.extend_info["public_dispatch_text"]
     assert executor.tsm.fail_pre_dispatch_task.await_args.kwargs == {
         "error": "Agent does not accept the uploaded file type.",
         "error_code": "agent_does_not_accept_file_type",
@@ -1709,7 +1958,8 @@ async def test_attachment_preflight_failure_update_uses_public_task_label(
     assert update_kwargs["error"] == "Agent does not accept the uploaded file type."
     assert private_task_sentinel not in str(update_kwargs)
     persisted_message = executor.message_writer.add_room_agent_message.await_args.args[0]
-    assert persisted_message.extend_info == {"public_task_label": public_task_label}
+    assert persisted_message.extend_info["public_task_label"] == public_task_label
+    assert persisted_message.extend_info["public_dispatch_text"]
 
 
 def test_v2_dispatch_intent_preserves_dispatch_metadata():
@@ -1823,7 +2073,7 @@ async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
 
 
 @pytest.mark.asyncio
-async def test_run_replans_after_invalid_complete_action():
+async def test_run_complete_without_evidence_synthesizes_after_dispatch():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -1853,11 +2103,6 @@ async def test_run_replans_after_invalid_complete_action():
             action=PlannerActionType.COMPLETE,
             reasoning="Done without structured evidence",
         ),
-        PlannerAction(
-            action=PlannerActionType.FAIL,
-            reasoning="Stop after the invalid completion was rejected.",
-            failure_reason="test stop",
-        ),
     )
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
@@ -1872,13 +2117,14 @@ async def test_run_replans_after_invalid_complete_action():
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.FAILED
+    assert result.status == RunStatus.COMPLETED
+    assert result.synthesis_text == "Final summary"
+    executor._stream_supervisor_synthesis.assert_awaited_once()
     state = await store.get_latest_by_user_message_id("message-1")
     assert state is not None
-    assert state.status == OrchestrationStatus.FAILED
-    assert state.terminal_reason == "test stop"
-    assert state.open_failures[0].error_code == "completion_evidence_invalid"
-    assert state.open_failures[0].status == "resolved"
+    assert state.status == OrchestrationStatus.COMPLETED
+    assert state.terminal_reason == "Done without structured evidence"
+    assert state.open_failures == []
 
 
 @pytest.mark.asyncio
@@ -8119,7 +8365,7 @@ async def test_goal_family_disposition_through_revision_terminalizes_earlier_wor
 
 
 @pytest.mark.asyncio
-async def test_run_complete_creates_referenced_goal_family_disposition_before_terminalizing(
+async def test_run_complete_treats_goal_family_disposition_as_non_authoritative_metadata(
     monkeypatch,
 ):
     user_message = RoomUserMessage(
@@ -8221,17 +8467,15 @@ async def test_run_complete_creates_referenced_goal_family_disposition_before_te
     assert result.status == RunStatus.COMPLETED
     saved = await store.get_run("message-1")
     assert saved is not None
-    assert saved.dispatch_intents[0].status == "abandoned"
-    assert saved.goal_family_dispositions[0].event_id == "dispose-1"
-    assert (
-        saved.goal_family_dispositions[0].replacement_goal_family_fingerprint
-        == "family-2"
-    )
+    assert saved.dispatch_intents[0].status == "planned"
+    assert saved.goal_family_dispositions == []
+    assert saved.completion_evidence is not None
+    assert saved.completion_evidence.abandoned_goal_disposition_event_ids == [
+        "dispose-1"
+    ]
     event_types = [event.type for event in store._events_by_run["message-1"]]
-    assert OrchestrationEventType.GOAL_FAMILY_DISPOSED in event_types
-    assert event_types.index(OrchestrationEventType.GOAL_FAMILY_DISPOSED) < event_types.index(
-        OrchestrationEventType.RUN_TERMINAL
-    )
+    assert OrchestrationEventType.GOAL_FAMILY_DISPOSED not in event_types
+    assert OrchestrationEventType.RUN_TERMINAL in event_types
 
 
 @pytest.mark.asyncio
@@ -9309,7 +9553,8 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
     replayed_message = executor.message_writer.add_room_agent_message.await_args_list[
         1
     ].args[0]
-    assert replayed_message.extend_info == {"public_task_label": "Requesting Agent One"}
+    assert replayed_message.extend_info["public_task_label"] == "Requesting Agent One"
+    assert replayed_message.extend_info["public_dispatch_text"]
     replayed_call = executor.agent_message_processor.process_single_message.await_args
     assert replayed_call.kwargs["attachment_forwarding_policy"] == (
         "explicit_refs_only"
@@ -10145,9 +10390,12 @@ async def test_state_validation_rejection_replans_with_failure_context():
         user_message=user_message,
     )
 
+    assert result.status == RunStatus.FAILED
+    assert result.run_state.status == OrchestrationStatus.FAILED
     assert len(planner.contexts) == 2
-    assert planner.contexts[1].state_context.open_failures[0]["error_code"] == (
-        "target_out_of_scope"
+    assert (
+        planner.contexts[1].state_context.open_failures[0]["error_code"]
+        == "target_out_of_scope"
     )
     assert result.run_state.open_failures[0].status == "resolved"
 
@@ -10243,6 +10491,7 @@ async def test_nonrecoverable_adapter_validation_error_is_terminal():
     assert result.status == RunStatus.FAILED
     assert result.run_state.status == OrchestrationStatus.BUDGET_EXHAUSTED
     assert result.run_state.open_failures == []
+    assert result.run_state.steps_used == 0
     assert not [
         failure
         for failure in result.run_state.open_failures
@@ -10671,7 +10920,7 @@ async def test_agent_input_required_ignores_unrelated_projection():
 
 
 @pytest.mark.asyncio
-async def test_agent_input_required_uses_existing_dispatch_ref_provider_before_hitl():
+async def test_agent_input_required_does_not_replay_original_dispatch_refs():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -10697,6 +10946,7 @@ async def test_agent_input_required_uses_existing_dispatch_ref_provider_before_h
                     task="Need projection",
                     task_hash="hash-1",
                     context_refs=[context_ref],
+                    selected_resource_fingerprints=["already-delivered"],
                 )
             ],
             agent_outputs=[
@@ -10742,7 +10992,9 @@ async def test_agent_input_required_uses_existing_dispatch_ref_provider_before_h
         }
     )
     executor.hitl_coordinator = SimpleNamespace(
-        request_input=AsyncMock(),
+        request_input=AsyncMock(
+            return_value=SimpleNamespace(request_id="hitl-agent-1")
+        ),
         agent_reply=SimpleNamespace(reply_to_task=reply_to_task),
     )
 
@@ -10763,13 +11015,10 @@ async def test_agent_input_required_uses_existing_dispatch_ref_provider_before_h
         user_message=user_message,
     )
 
-    assert result.status == StepStatus.SUCCESS
-    executor.hitl_coordinator.request_input.assert_not_awaited()
-    executor.orchestration_resource_provider.resolve_ref.assert_awaited_once()
-    reply_kwargs = reply_to_task.await_args.kwargs
-    assert reply_kwargs["task_id"] == "task-1"
-    assert reply_kwargs["context_id"] == "ctx-1"
-    assert "resource provider" in reply_kwargs["user_input"]
+    assert result.status == StepStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_awaited_once()
+    executor.orchestration_resource_provider.resolve_ref.assert_not_awaited()
+    reply_to_task.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -11370,6 +11619,65 @@ async def test_same_agent_retry_that_still_needs_input_requires_hitl():
     assert result.paused_message_id == "agent-msg-1"
     assert result.status_message == "Still need the broker submission pack."
     assert SupervisorExecutor._awaiting_result_requires_hitl(result) is False
+
+
+@pytest.mark.asyncio
+async def test_continuation_without_state_or_output_stays_awaiting_input():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": None,
+                    "response_text": "",
+                }
+            )
+        )
+    )
+
+    result = await executor._continue_agent_task_with_resolved_refs(
+        claimed_continuation=_claimed_continuation(),
+        awaiting_output=AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status=StepStatus.AWAITING_INPUT.value,
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Need the broker submission pack.",
+        ),
+        target=DelegateTarget(
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="retry",
+        ),
+        resolved_payload=ResolvedDispatchPayload(
+            selected_context_refs=["ctx:file-file-1:text"],
+            resource_payloads=[
+                ResolvedResourcePayload(
+                    ref_id="ctx:file-file-1:text",
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected input",
+                )
+            ],
+        ),
+    )
+
+    assert result is not None
+    assert result.status == StepStatus.AWAITING_INPUT
+    assert result.status_message == "Need the broker submission pack."
+    assert result.interactive_state == "input-required"
 
 
 def test_awaiting_result_requires_hitl_only_for_auth_or_policy():
@@ -12164,6 +12472,109 @@ async def test_plain_continuation_preserves_policy_required_classification():
 
 
 @pytest.mark.asyncio
+async def test_sync_resumed_plain_input_required_creates_hitl_request():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Use uploaded PDF"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        run_id="message-1",
+        user_message_id="message-1",
+        room_id="room-1",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.RUNNING,
+    )
+    await store.create_run(state)
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=True,
+    )
+    request_input = AsyncMock(return_value=SimpleNamespace(request_id="hitl-agent-1"))
+    executor.hitl_coordinator = SimpleNamespace(request_input=request_input)
+    executor.continuation_store.save_continuation_on_message = AsyncMock(
+        return_value=True
+    )
+    trajectory = SupervisorTrajectory(
+        entries=[
+            TrajectoryEntry(
+                step_number=1,
+                action=SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="Need projected resource",
+                    targets=[
+                        DelegateTarget(
+                            agent_id="agent-1",
+                            agent_name="Agent One",
+                            task="Review the selected resource",
+                        )
+                    ],
+                ),
+                results=[
+                    StepResult(
+                        step_number=1,
+                        agent_id="agent-1",
+                        agent_name="Agent One",
+                        task="Review the selected resource",
+                        response_text="",
+                        success=True,
+                        status=StepStatus.AWAITING_INPUT,
+                        agent_message_id="agent-msg-1",
+                        paused_message_id="agent-msg-1",
+                        a2a_task_id="task-1",
+                        a2a_context_id="ctx-1",
+                        status_message="Need the uploaded application",
+                    )
+                ],
+                started_at=utcnow(),
+            )
+        ]
+    )
+
+    synced, status = await executor._sync_v2_resumed_trajectory(
+        state,
+        trajectory,
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Use uploaded PDF",
+        conversation_context=None,
+        request_user_id="user-1",
+        quoted_text=None,
+    )
+
+    request_input.assert_awaited_once()
+    request_input_kwargs = request_input.await_args.kwargs
+    assert request_input_kwargs["a2a_task_id"] == "task-1"
+    assert request_input_kwargs["a2a_context_id"] == "ctx-1"
+    assert status == RunStatus.AWAITING_INPUT
+    assert synced.status == OrchestrationStatus.AWAITING_USER
+    assert synced.pending_hitl_request_ids == ["hitl-agent-1"]
+    assert synced.open_questions[0]["request_id"] == "hitl-agent-1"
+    assert synced.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
+    assert synced.agent_outputs[0].a2a_task_id == "task-1"
+    assert synced.agent_outputs[0].a2a_context_id == "ctx-1"
+    executor.continuation_store.save_continuation_on_message.assert_awaited_once()
+    message_id, interrupted_state = (
+        executor.continuation_store.save_continuation_on_message.await_args.args
+    )
+    assert message_id == "agent-msg-1"
+    assert interrupted_state["hitl_request_id"] == "hitl-agent-1"
+    interrupted_result = interrupted_state["trajectory"]["entries"][0]["results"][0]
+    assert interrupted_result["a2a_task_id"] == "task-1"
+    assert interrupted_result["a2a_context_id"] == "ctx-1"
+    persisted = await store.get_run("message-1")
+    assert persisted is not None
+    assert persisted.status == OrchestrationStatus.AWAITING_USER
+    assert persisted.pending_hitl_request_ids == ["hitl-agent-1"]
+
+
+@pytest.mark.asyncio
 async def test_supersede_unresolved_input_required_outputs_for_other_agents():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -12344,13 +12755,9 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("guardrails_enabled", "expected_status"),
-    [(False, "open"), (True, "abandoned")],
-)
-async def test_continuation_supersession_respects_injected_guardrail_flag(
+@pytest.mark.parametrize("guardrails_enabled", [False, True])
+async def test_continuation_supersession_runs_for_both_injected_guardrail_modes(
     guardrails_enabled: bool,
-    expected_status: str,
 ):
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -12419,13 +12826,9 @@ async def test_continuation_supersession_respects_injected_guardrail_flag(
         chosen_targets=[PlannedDelegateTarget(agent_id="agent-2", task="Consume it")],
     )
 
-    assert saved.pending_agent_continuations[0].status == expected_status
-    if guardrails_enabled:
-        assert saved.agent_outputs[0].status == "abandoned"
-        assert saved.open_failures[0].status == "abandoned"
-    else:
-        assert saved.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
-        assert saved.open_failures[0].status == "open"
+    assert saved.pending_agent_continuations[0].status == "abandoned"
+    assert saved.agent_outputs[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
 
 
 @pytest.mark.asyncio
@@ -12687,7 +13090,7 @@ async def test_delegate_recovery_reuses_message_and_closes_current_intent():
 
 
 @pytest.mark.asyncio
-async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch():
+async def test_pdf_capable_upstream_gets_projection_and_source_attachment_before_downstream_dispatch():
     pdf_bytes = _text_pdf_bytes("Insured has 250 employees and 50M revenue.")
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -12736,7 +13139,8 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
                     ],
                     expected_outputs=[
                         DispatchExpectedOutput(
-                            kind="submission_pack",
+                            output_key="submission_pack",
+                            kind="artifact",
                             required=True,
                             description="Structured submission pack.",
                         )
@@ -12843,32 +13247,52 @@ async def test_text_only_upstream_gets_pdf_projection_before_downstream_dispatch
     broker_kwargs = processor_calls[0].kwargs
     insurer_dispatch = processor_calls[1].args[0]
     insurer_kwargs = processor_calls[1].kwargs
+    expected_projection_payload = {
+        "ref_id": "ctx:file-file-1:text",
+        "kind": "context",
+        "mime_type": "text/plain",
+        "text": "Insured has 250 employees and 50M revenue.",
+        "summary": "Extracted 42 characters from 1 PDF page(s).",
+        "metadata": {
+            "source_ref_id": "file:file-1",
+            "file_id": "file-1",
+            "file_name": "submission.pdf",
+            "char_count": 42,
+            "page_count": 1,
+            "is_truncated": False,
+        },
+    }
+    expected_artifact_payload = {
+        "ref_id": "broker-msg:artifact_id:submission",
+        "kind": "artifact",
+        "mime_type": "text/plain",
+        "text": "Insured has 250 employees and 50M revenue.",
+        "summary": "",
+        "metadata": {
+            "source_agent_message_id": "broker-msg",
+            "source_agent_id": "broker-agent",
+            "part_index": 0,
+        },
+    }
+
     assert broker_dispatch.message_id == "broker-msg"
-    assert broker_dispatch.extend_info == {"public_task_label": "Requesting Broker"}
+    assert broker_dispatch.extend_info["public_task_label"] == "Requesting Broker"
+    assert broker_dispatch.extend_info["public_dispatch_text"]
     assert broker_kwargs["attachment_forwarding_policy"] == "explicit_refs_only"
-    assert broker_kwargs["resolved_resource_payloads"] == [
-        {
-            "ref_id": "ctx:file-file-1:text",
-            "kind": "context",
-            "mime_type": "text/plain",
-            "text": "Insured has 250 employees and 50M revenue.",
-            "summary": "Extracted 42 characters from 1 PDF page(s).",
-            "metadata": {
-                "source_ref_id": "file:file-1",
-                "file_id": "file-1",
-                "file_name": "submission.pdf",
-                "char_count": 42,
-                "page_count": 1,
-                "is_truncated": False,
-            },
-        }
-    ]
+    assert broker_kwargs["resolved_resource_payloads"] == [expected_projection_payload]
+    assert broker_kwargs["dispatch_resource_payloads"] == [expected_projection_payload]
     assert broker_kwargs["explicit_attachment_refs"] == []
+    assert broker_kwargs["selected_attachment_refs"] == []
     assert insurer_dispatch.message_id == "insurer-msg"
-    assert insurer_dispatch.extend_info == {"public_task_label": "Requesting Insurer"}
+    assert insurer_dispatch.extend_info["public_task_label"] == "Requesting Insurer"
+    assert insurer_dispatch.extend_info["public_dispatch_text"]
     assert insurer_kwargs["attachment_forwarding_policy"] == "explicit_refs_only"
     assert insurer_kwargs["explicit_attachment_refs"] == []
-    assert insurer_kwargs["resolved_resource_payloads"] == []
+    assert insurer_kwargs["selected_attachment_refs"] == []
+    assert insurer_kwargs["resolved_resource_payloads"] == [expected_artifact_payload]
+    assert insurer_kwargs["dispatch_resource_payloads"] == [expected_artifact_payload]
+    assert "Selected artifact refs:" in insurer_kwargs["dispatch_task"]
+    assert "broker-msg:artifact_id:submission" in insurer_kwargs["dispatch_task"]
 
     dispatched_agents = [intent.agent_id for intent in result.run_state.dispatch_intents]
     assert dispatched_agents == ["broker-agent", "insurer-agent"]

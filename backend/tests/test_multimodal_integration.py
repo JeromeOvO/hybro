@@ -7,6 +7,7 @@ import pytest
 
 from common.dto import RoomMessageInfo
 from common.types import (
+    DataPart,
     Message,
     MessageRole,
     Part,
@@ -390,6 +391,69 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_awaited_once_with(
             "uploads/r/f2/report.pdf",
             max_bytes=1024,
+        )
+
+    async def test_json_artifact_resource_is_compiled_to_data_part(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="unused",
+            s3_key="uploads/r/unused/file.txt",
+            mime_type="text/plain",
+            file_name="file.txt",
+            size_bytes=1,
+        )
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(
+                name="Structured Agent",
+                default_input_modes=["text/plain", "application/json"],
+            ),
+        )
+        svc._build_room_awareness = AsyncMock(return_value=None)
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-msg-json",
+            agent_id="agent-1",
+            related_message_id="missing-user-message",
+            message_content=MessageContent(message_text="public label"),
+            task_content="public label",
+            extend_info={},
+        )
+
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                room_id=message.room_id,
+                message_id=message.message_id,
+                agent_id=message.agent_id,
+                related_message_id=message.related_message_id,
+                message=message,
+                dispatch_task="Underwrite the selected submission.",
+                resolved_resource_payloads=[
+                    {
+                        "ref_id": "broker-msg:artifact_id:submission",
+                        "kind": "artifact",
+                        "mime_type": "application/json",
+                        "data": {
+                            "client": {"name": "Acme SaaS Inc."},
+                            "requested_coverage": {"currency": "GBP"},
+                        },
+                        "metadata": {"artifact_name": "cyber_submission"},
+                    }
+                ],
+            )
+        )
+
+        assert result.success is True
+        data_parts = [
+            part.root
+            for part in result.a2a_message.parts
+            if isinstance(part.root, DataPart)
+        ]
+        assert len(data_parts) == 1
+        assert data_parts[0].data["requested_coverage"]["currency"] == "GBP"
+        assert data_parts[0].metadata["ref_id"] == (
+            "broker-msg:artifact_id:submission"
         )
 
     async def test_compatible_pdf_attachment_appends_inline_bytes(self):

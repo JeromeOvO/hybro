@@ -394,6 +394,69 @@ forwarding policy. The resource provider and projection service are assembled in
 `container.py`; failure recovery and retry policy remain separate orchestration
 concerns.
 
+### Execution Control Plane
+
+Execution is the authoritative orchestration control plane for supervisor runs.
+Planner output is business-level only; Execution binds resources against Agent
+cards, creates dispatch intents, interprets Agent results, records shadow
+observations, creates HITL pauses, resumes existing A2A continuations, and marks
+terminal run state.
+
+The persisted `OrchestrationRunState.goal` is the durable goal for the loop. On
+each iteration the planner compares that goal with the bounded state-context
+projection of facts, artifacts, agent outputs, and open questions. It either
+chooses the next business action or declares the goal complete. Completion is
+LLM-judged; Execution only enforces mechanical blockers such as pending HITL,
+active dispatches, unresolved questions, and open runtime failures. Legacy
+`synthesize` decisions are normalized to `complete`.
+
+`complete` is not itself a terminal side effect. Execution first runs final
+synthesis, streams the user-facing response, and only then persists the run as
+completed. Synthesis is therefore a presentation action owned by Execution, not
+an independent planner termination decision.
+
+The loop emits non-persistent processing-status details for progress review,
+planning, continued delegation, result evaluation, goal re-checking, goal
+completion, and final synthesis. The frontend projects these details into work
+logs without adding a second durable orchestration state model.
+
+Every planner `required_resource_ref` is materialized into a required context,
+artifact, or attachment dispatch ref before the agent call. Resolution failure
+is a dispatch failure and must not be reclassified as a business-level
+`input-required` response from the external agent.
+
+Selected canonical artifacts are materialized from their stored A2A parts into
+transport-neutral resource payloads. The room runtime then compiles each payload
+for the target Agent Card: structured JSON becomes an A2A `DataPart` when the
+agent accepts `application/json`, text becomes a `TextPart`, and compatible file
+content remains a `FilePart`. When a structured target modality is unavailable,
+JSON may be serialized as bounded text. Planner selection therefore operates on
+semantic resources rather than depending on the source agent's original part
+format, and selected artifact content is not replaced by a truncated task-text
+preview.
+
+Room modules persist messages and emit room events but do not decide next
+orchestration steps. A2A adapters and `DirectTransport` perform protocol
+conversion, send/stream/cancel, and normalized result production only.
+`HITLService` owns HITL request/response lifecycle CAS and persistence;
+`ExecutionFacade` records HITL answers onto orchestration runs and resumes
+Execution.
+
+An external A2A `input-required` state is not automatically user-facing HITL.
+Execution first performs a bounded, silent recovery using information that was
+not already delivered to that A2A task. Original dispatch refs and previously
+attempted content fingerprints cannot be replayed as new evidence. An explicit
+continuation result with material output resumes the loop; a push continuation
+pauses for its callback. If no new information exists, the blocking reply still
+requires input, or a blocking reply has neither state nor output, Execution
+preserves `awaiting_input` and upgrades it through `HITLService`. This recovery
+does not return to the planner or consume the remaining orchestration budget.
+
+Internal dispatch prompts are private Execution/adapter data. Agent-originated
+HITL status messages pass through a bounded public-text sanitizer; safe concrete
+questions may be projected to the HITL request, while internal markers,
+oversized text, and control content fall back to a generic public prompt.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,
@@ -776,8 +839,10 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - Build agent registry and room config.
    - Assemble room/conversation context.
    - Run the adaptive `SupervisorExecutor` loop.
-   - The supervisor decides when to delegate, ask for clarification, continue,
-     synthesize, or finish.
+   - The supervisor compares the persisted goal with accumulated context and
+     decides whether to delegate, ask for clarification, fail, or complete.
+   - Execution performs final synthesis after `complete` and marks the run
+     terminal only after the user-facing response has been streamed.
    - Agent messages are created dynamically instead of being pre-generated.
    - Terminal status is emitted after synthesis or final failure/cancellation.
 
@@ -852,12 +917,18 @@ the idempotency update plus message, room, and client-request-id reads needed by
 `execution.dispatch.task_notifications`.
 
 **Agent display text:** Public A2A task projections never expose remote
-`Task.history`; completed output is represented only by sanitized completed
-artifacts, public labels, or safe terminal errors. Streaming text that should
-survive reconnect is materialized as a completed `response` artifact before
-terminal persistence and delivery. Remote status messages, failure details,
-interactive prompts, noncompleted artifact/message content, and inline
-`file.bytes` are not persisted or emitted; file artifacts must be converted to
+`Task.history`. For a completed task, agent-role `TextPart` content from
+`TaskStatus.message` is extracted into Hybro's explicit public `message_text`
+channel before the original status message is removed; structured completed
+artifacts remain a separate public output channel and can be displayed beside
+that text. Terminal task SSE prefers the persisted `message_text`, including
+when the returned artifact contains only `DataPart` or `FilePart` content; a
+legacy message whose stored text is still equal to its dispatch seed falls back
+to extracted artifact text. Streaming text that should survive reconnect is materialized as a
+completed `response` artifact before terminal persistence and delivery. Status
+messages for other roles or states, failure details, interactive prompts,
+noncompleted artifact/message content, and inline `file.bytes` are not persisted
+or emitted; file artifacts must be converted to
 addressable URIs or dropped from public projection. List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
@@ -872,6 +943,13 @@ owned by `update_task_state_on_message`; streaming text parts collapse to a
 single canonical text part while file/data parts are preserved. SSE terminal
 `content` is authoritative for display text; `parts` carries only non-text
 payloads.
+
+Supervisor delegation publishes the exact task sent across the external-agent
+boundary as `extend_info.public_dispatch_text`, alongside the short
+`public_task_label`. This field contains the dispatched task after reference
+projection, but not private planner reasoning or separately transported resource
+payload bodies. It reuses the existing room-message `extend_info` document and
+does not add a persistence model.
 
 ## Hub Relay Workflow
 
@@ -943,9 +1021,11 @@ Cancellation flow:
 2. `ExecutionFacade.cancel` persists cancellation in MongoDB.
 3. Delivery/SSE cancellation state is updated and broadcast.
 4. Pending HITL requests for the message are cancelled.
-5. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
-6. Best-effort remote agent task cleanup is attempted.
-7. Executors observe cancellation tokens at checkpoints and stop gracefully.
+5. Any paused orchestration sidecar is terminalized as canceled; pending HITL
+   ids, continuations, and open-question state are cleared.
+6. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
+7. Best-effort remote agent task cleanup is attempted.
+8. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
 typed SSE frames and cancellation state cross worker boundaries.
@@ -983,20 +1063,32 @@ persistence, and stale processing iteration.
 ### HITL Lifecycle Consistency
 
 HITL is a durable backend lifecycle object, not a transient streaming-only UI
-state. When an agent returns A2A `input-required`, backend execution must create
-or reuse a pending HITL request and project that request onto exactly one display
-agent message before emitting live SSE. The projection sets the agent message
+state. When backend execution determines that an A2A `input-required` request
+cannot be satisfied silently, it must create or reuse a pending HITL request and
+project that request onto exactly one display agent message before emitting live
+SSE. The projection sets the agent message
 task state to `input-required` and writes `hitl_request_id`, prompt metadata, A2A
 task/context ids, group metadata, and clears any stale HITL answer. It does not
 copy HITL lifecycle status into agent message metadata; the durable HITL request
 document remains the source of truth for pending, responded, canceled, and
 expired states.
 
-Remote agent input prompts may be used only for the immediate local HITL request
-creation call. Orchestration run state keeps request identity, source, agent, A2A
-task/context ids, and generic input-required summaries; it does not duplicate raw
-remote prompts into `open_questions`, `AgentOutputRecord.status_message`,
-observations, blockers, failures, or interrupted trajectory shadows.
+Remote agent input prompts may be used only through the bounded public HITL
+projection. Orchestration run state keeps request identity, source, agent, A2A
+task/context ids, and a safe public prompt or fallback; it does not duplicate
+raw remote prompts into observations, blockers, failures, or private task
+payloads. A delegation outcome in an interactive state is blocked, never
+fulfilled, and a terminal result without material text, artifacts, facts, or
+required-output evidence is not sufficient to mark a legacy delegation
+fulfilled.
+
+For orchestration-linked agent HITL, an unchanged `input-required` prompt after
+the user's reply is a no-progress signal rather than a new HITL round. The reply
+is recorded as a canonical run fact, the repeated prompt is recorded in the
+decision log, and control returns to Execution for re-planning. A genuinely new
+agent question may still create a follow-up HITL request. This prevents an
+external agent from producing an unbounded chain of identical pending requests
+while preserving legitimate multi-round clarification.
 
 The frontend treats `hitl_request` and `hitl_response` as durable lifecycle
 events keyed by `room_id`, `request_id`, and `message_id`. `client_request_id` is

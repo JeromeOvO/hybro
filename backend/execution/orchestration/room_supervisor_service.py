@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from common.prompts.markdown_response_format import HYBRO_MARKDOWN_RESPONSE_FORMAT
 from common.utils.logger import get_logger
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
-from models.orchestration import CompletionEvidence, PlannerAction, PlannerActionType
+from models.orchestration import PlannerAction, PlannerActionType
 from models.supervisor import (
     ActionType,
     AgentProfile,
@@ -181,6 +181,9 @@ Actions remaining: {steps_remaining}.
 
 SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
 
+## Original User Goal
+{user_goal}
+
 ## Execution Trajectory
 {trajectory_summary}
 
@@ -188,6 +191,19 @@ SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from mu
 {synthesis_instruction}
 
 ## Rules
+- Answer the original user goal directly, as HYBRO AI after completing the work.
+  The response is the final answer, not an execution report or a summary of the
+  fact that agents were called.
+- Lead with the outcome the user asked for. Select only the facts, decisions,
+  caveats, and next actions needed to make that outcome useful.
+- Treat agent responses and artifacts as evidence. Do not copy full artifacts,
+  JSON payloads, dispatch instructions, or agent responses into the answer unless
+  the user explicitly asked to see them. Refer to attached artifacts by name when
+  detailed supporting data is available there.
+- Never output internal orchestration text such as "Requesting ...", step numbers,
+  dispatch status, planner reasoning, task labels, or synthesis instructions.
+- Do not invent, estimate, or fill gaps in agent results. Clearly distinguish
+  confirmed results from conditions, assumptions, and unresolved items.
 - You are HYBRO AI. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
 - Attribute insights to their source agent when helpful: "According to [Agent Name]..."
 - Resolve contradictions by noting both perspectives.
@@ -397,26 +413,27 @@ class RoomSupervisorService:
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
+        user_goal: str | None = None,
     ) -> tuple[str, str]:
         trajectory_summary = self._format_trajectory(trajectory)
         system_prompt = SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT.format(
+            user_goal=user_goal or "Not provided",
             trajectory_summary=trajectory_summary,
             synthesis_instruction=synthesis_instruction
             or "Combine the agent responses into a unified, coherent answer.",
         )
-        user_prompt = (
-            "Synthesize the agent results into a unified response for the user."
-        )
+        user_prompt = "Write the final answer that best fulfills the original user goal."
         return system_prompt, user_prompt
 
     async def synthesize_stream(
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
+        user_goal: str | None = None,
     ):
         """Stream synthesis tokens from the supervisor LLM (adaptive loop)."""
         system_prompt, user_prompt = self._synthesis_prompts(
-            trajectory, synthesis_instruction
+            trajectory, synthesis_instruction, user_goal
         )
         try:
             stream = self._supervisor_llm_text_stream(
@@ -448,6 +465,7 @@ class RoomSupervisorService:
         self,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
+        user_goal: str | None = None,
     ) -> str:
         """Produce a synthesis from collected results (adaptive loop).
 
@@ -455,7 +473,11 @@ class RoomSupervisorService:
         budget is exhausted and results need combining.
         """
         parts: list[str] = []
-        async for token in self.synthesize_stream(trajectory, synthesis_instruction):
+        async for token in self.synthesize_stream(
+            trajectory,
+            synthesis_instruction,
+            user_goal,
+        ):
             parts.append(token)
         return "".join(parts)
 
@@ -843,7 +865,10 @@ class RoomSupervisorService:
             "clarify": PlannerActionType.ASK_USER,
             "done": PlannerActionType.COMPLETE,
             "delegate": PlannerActionType.DELEGATE,
-            "synthesize": PlannerActionType.SYNTHESIZE,
+            # Legacy providers used "synthesize" to mean that agent work was
+            # complete. V2 normalizes it to COMPLETE; Execution owns the final
+            # synthesis step and only then marks the run terminal.
+            "synthesize": PlannerActionType.COMPLETE,
         }
         try:
             planner_action_type = legacy_action_mapping.get(
@@ -931,27 +956,6 @@ class RoomSupervisorService:
                 }
             )
 
-        completion_evidence = response_json.get("completion_evidence")
-        if (
-            planner_action_type == PlannerActionType.COMPLETE
-            and completion_evidence is None
-        ):
-            reasoning = str(response_json.get("reasoning") or "").strip()
-            final_answer_intent = (
-                str(response_json.get("final_answer_intent") or "").strip()
-                or str(response_json.get("synthesis_instruction") or "").strip()
-                or reasoning
-                or "Complete the orchestration with available agent responses"
-            )
-            completion_evidence = CompletionEvidence(
-                satisfied_criteria=[
-                    reasoning
-                    or "Legacy supervisor marked the orchestration complete"
-                ],
-                final_answer_intent=final_answer_intent,
-                confidence=0.7,
-            )
-
         return PlannerAction(
             action=planner_action_type,
             reasoning=response_json.get("reasoning", ""),
@@ -959,7 +963,7 @@ class RoomSupervisorService:
             questions=questions,
             synthesis_instruction=response_json.get("synthesis_instruction"),
             failure_reason=response_json.get("failure_reason"),
-            completion_evidence=completion_evidence,
+            completion_evidence=response_json.get("completion_evidence"),
         )
 
     @staticmethod

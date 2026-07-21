@@ -178,7 +178,8 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
         error_code="file_too_large",
     )
     se.delivery.send_task_update.assert_awaited_once()
-    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
+    assert message.extend_info["public_task_label"] == "Requesting Test Agent"
+    assert message.extend_info["public_dispatch_text"] == "Read the attachment."
     assert se.delivery.send_task_update.await_args.kwargs == {
         "room_id": "room-1",
         "message_id": "amsg-1",
@@ -194,7 +195,7 @@ async def test_supervisor_preflight_failed_result_persists_and_notifies_task():
 
 
 @pytest.mark.asyncio
-async def test_supervisor_dispatch_keeps_public_message_metadata_label_only():
+async def test_supervisor_dispatch_publishes_label_and_dispatched_task():
     se = _make_supervisor_executor()
     message = _make_supervisor_agent_message(preflight=False)
     target = _make_dispatch_target()
@@ -230,16 +231,19 @@ async def test_supervisor_dispatch_keeps_public_message_metadata_label_only():
 
     assert result[0].success is True
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    process_kwargs = se.agent_message_processor.process_single_message.await_args.kwargs
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
-    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
-    processor_call = se.agent_message_processor.process_single_message.await_args
-    assert processor_call.kwargs["dispatch_task"] == "Read the attachment."
-    assert processor_call.kwargs["attachment_forwarding_policy"] == (
+    assert message.extend_info == {
+        "public_task_label": "Requesting Test Agent",
+        "public_dispatch_text": "Read the attachment.",
+    }
+    assert process_kwargs["dispatch_task"] == "Read the attachment."
+    assert process_kwargs["attachment_forwarding_policy"] == (
         "explicit_refs_only"
     )
-    assert processor_call.kwargs["resolved_resource_payloads"] == []
-    assert processor_call.kwargs["explicit_attachment_refs"] == []
+    assert process_kwargs["resolved_resource_payloads"] == []
+    assert process_kwargs["explicit_attachment_refs"] == []
 
 
 @pytest.mark.asyncio
@@ -321,12 +325,13 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
         "artifact-1",
     ]
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    process_kwargs = se.agent_message_processor.process_single_message.await_args.kwargs
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
-    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
-    processor_call = se.agent_message_processor.process_single_message.await_args
-    assert "artifact-1" in processor_call.kwargs["dispatch_task"]
-    assert "Broker submission" in processor_call.kwargs["dispatch_task"]
+    assert message.extend_info["public_task_label"] == "Requesting Test Agent"
+    assert message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    assert "artifact-1" in process_kwargs["dispatch_task"]
+    assert "Broker submission" in process_kwargs["dispatch_task"]
 
 
 @pytest.mark.asyncio
@@ -455,14 +460,60 @@ async def test_supervisor_dispatch_projects_valid_context_ref_into_agent_task():
 
     assert result[0].success is True
     create_kwargs = se.room_runtime.create_agent_message.call_args.kwargs
+    process_kwargs = se.agent_message_processor.process_single_message.await_args.kwargs
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
-    assert message.extend_info == {"public_task_label": "Requesting Test Agent"}
-    processor_call = se.agent_message_processor.process_single_message.await_args
-    assert "[Backend-selected references]" in processor_call.kwargs["dispatch_task"]
-    assert "Selected context refs:" in processor_call.kwargs["dispatch_task"]
-    assert "ref=fact-1" in processor_call.kwargs["dispatch_task"]
-    assert "Replacement cost is 1.2M" in processor_call.kwargs["dispatch_task"]
+    assert message.extend_info["public_task_label"] == "Requesting Test Agent"
+    assert message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    assert "[Backend-selected references]" in process_kwargs["dispatch_task"]
+    assert "Selected context refs:" in process_kwargs["dispatch_task"]
+    assert "ref=fact-1" in process_kwargs["dispatch_task"]
+    assert "Replacement cost is 1.2M" in process_kwargs["dispatch_task"]
+
+
+def test_dispatch_task_projects_selected_artifact_content_into_agent_task():
+    artifact_key = "broker-msg:artifact_id:submission"
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Underwrite the broker submission",
+        candidate_agent_ids=["agent-1"],
+        artifacts=[
+            {
+                "artifact_key": artifact_key,
+                "artifact_id": "submission",
+                "name": "Broker submission",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "applicant": "Acme SaaS Inc",
+                            "coverage_limit": "$2M",
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    target = _make_dispatch_target()
+    target.task = "Use the broker submission."
+    target.artifact_refs = [
+        DispatchContentRef(kind=DispatchRefKind.ARTIFACT, ref_id=artifact_key)
+    ]
+    payload = ResolvedDispatchPayload(selected_artifact_refs=[artifact_key])
+
+    task = SupervisorExecutor._dispatch_task_with_ref_projection(
+        task=target.task,
+        target=target,
+        run_state=state,
+        resolved_payload=payload,
+    )
+
+    assert "Selected artifact refs:" in task
+    assert "Broker submission" in task
+    assert "Acme SaaS Inc" in task
+    assert "coverage_limit" in task
 
 
 @pytest.mark.asyncio
@@ -570,7 +621,11 @@ async def test_supervisor_logs_planner_decision_with_refs(caplog):
 
     assert any(
         record.message == "supervisor_planner_decision"
+        and record.__dict__.get("run_id") == "run-1"
+        and record.__dict__.get("room_id") == "room-1"
+        and record.__dict__.get("user_message_id") == "msg-1"
         and record.__dict__.get("action") == "delegate"
+        and record.__dict__.get("target_count") == 1
         for record in caplog.records
     )
 
@@ -1362,9 +1417,16 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         assert result.status == RunStatus.FAILED
-        emit.assert_awaited_once()
+        assert emit.await_count == 3
         se.delivery.send_processing_status.assert_not_called()
-        assert order == ["emit"]
+        assert order == ["emit", "emit", "emit"]
+        assert [
+            call.kwargs["details"]["message"] for call in emit.await_args_list
+        ] == [
+            "Reviewing progress (step 1 of 1)...",
+            "Planning next action...",
+            "Unable to continue the workflow.",
+        ]
 
     @pytest.mark.asyncio
     async def test_stage_notification_helper_failure_is_swallowed(self):
@@ -1391,7 +1453,7 @@ class TestProcessingStatusLifecycleOrder:
         )
 
         assert result.status == RunStatus.FAILED
-        emit.assert_awaited_once()
+        assert emit.await_count == 3
         se.delivery.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio

@@ -1137,6 +1137,10 @@ async def test_openai_provider_generates_structured_responses_and_embeddings():
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
     structured_call = client.chat.completions.create.await_args_list[1].kwargs
     assert structured_call["response_format"]["type"] == "json_schema"
+    assert structured_call["response_format"]["json_schema"]["strict"] is True
+    assert structured_call["response_format"]["json_schema"]["schema"] == {
+        "type": "object"
+    }
 
 
 @pytest.mark.asyncio

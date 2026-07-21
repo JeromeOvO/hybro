@@ -25,7 +25,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": [
                 "delegate",
-                "synthesize",
                 "complete",
                 "ask_user",
                 "fail",
@@ -92,7 +91,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                             ],
                         },
                     },
-                    "repair_of_intent_id": {"type": ["string", "null"]},
                 },
                 "required": [
                     "agent_id",
@@ -126,10 +124,6 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     "reason": {
                         "type": "string",
                         "enum": ["initial_clarification", "blocker"],
-                    },
-                    "blocker_keys": {
-                        "type": "array",
-                        "items": {"type": "string"},
                     },
                 },
                 "required": [
@@ -227,6 +221,7 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                                     "through_goal_revision_fingerprint",
                                     "status",
                                     "reason",
+                                    "replacement_goal_family_fingerprint",
                                 ],
                             },
                         },
@@ -238,6 +233,10 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         "unresolved_questions",
                         "final_answer_intent",
                         "confidence",
+                        "satisfied_output_keys",
+                        "waived_outputs",
+                        "abandoned_goal_disposition_event_ids",
+                        "requested_goal_family_dispositions",
                     ],
                 },
                 {"type": "null"},
@@ -337,9 +336,25 @@ class RoomSupervisorPlannerAdapter:
 
         system_prompt = (
             "You are a Supervisor coordinating specialist agents in a chat room. "
-            "Choose the next action using only the structured context provided.\n\n"
+            "Choose the next action using only the structured context provided. "
+            "Treat state_context.run.goal as the durable user goal. Compare that "
+            "goal with the accumulated facts, artifacts, agent outputs, and open "
+            "questions on every turn.\n\n"
             "Return valid JSON only. The JSON object must include \"action\" and "
             "\"reasoning\".\n\n"
+            "If the goal is not yet complete, delegate the next useful task or use "
+            "ask_user only when user-only information truly blocks progress. If the "
+            "available results satisfy the goal, return complete. Execution will "
+            "then synthesize the final user-facing response before ending the run; "
+            "do not return a separate synthesize action. Completion evidence is "
+            "compatibility metadata, not a completion checklist; set it to null.\n\n"
+            "Respect state_context.current_step.steps_remaining as a hard safety "
+            "limit. When it is 1, delegate only if the action uses new evidence and "
+            "is likely to complete the goal in that step. When it is 0, never "
+            "delegate: return complete when the accumulated evidence satisfies the "
+            "goal, ask_user only for a concrete user-only blocker, otherwise fail "
+            "with an actionable reason. Never repeat the same agent and goal when "
+            "the accumulated evidence has not changed.\n\n"
             "For a delegate action, \"targets\" is required and each target object "
             "must include \"agent_id\" and a non-empty \"task\" string. The task "
             "must be the exact instruction the target agent should execute, with "
@@ -359,8 +374,8 @@ class RoomSupervisorPlannerAdapter:
             "For ask_user, ask the smallest concrete question needed to continue. "
             "Do not invent blocker keys, repair lineage, retry policy, artifact "
             "lineage, or disposition records; Execution owns those decisions.\n\n"
-            "Valid action values are delegate, synthesize, complete, ask_user, "
-            "fail, plus legacy aliases done and clarify. Include unused arrays "
+            "Valid action values are delegate, complete, ask_user, fail, plus "
+            "legacy aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."
         )
         user_prompt = json.dumps(

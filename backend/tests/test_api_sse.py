@@ -447,11 +447,41 @@ class TestCancelMessage:
 
         assert result["success"] is True
         assert result["message_id"] == sample_user_message.message_id
+        assert result["status"] == "canceled"
+        assert result["outcome"] == "canceled"
         deps["execution_engine"].cancel.assert_awaited_once_with(
             room_id=sample_user_message.room_id,
             message_id=sample_user_message.message_id,
             requested_by_user_id=mock_user.user_id,
         )
+
+    @pytest.mark.asyncio
+    async def test_terminal_message_cancel_is_idempotent(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        deps = patch_sse_deps
+        terminal_message = sample_user_message.model_copy(deep=True)
+        terminal_message.extend_info = {"orchestration_status": "budget_exhausted"}
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = terminal_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        result = await cancel_message(
+            terminal_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result == {
+            "success": True,
+            "message_id": terminal_message.message_id,
+            "message": "Message processing had already finished",
+            "status": "failed",
+            "outcome": "already_terminal",
+        }
+        deps["execution_engine"].cancel.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):

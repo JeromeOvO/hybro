@@ -12,6 +12,7 @@ See docs/HITL_DESIGN.md §6 for full design details.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import re
 from datetime import timedelta
@@ -28,6 +29,10 @@ from execution.hitl.exceptions import (
     HITLRequestProjectionError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,
+)
+from execution.hitl.public_prompt import (
+    GENERIC_AGENT_INPUT_PROMPT,
+    public_agent_input_prompt,
 )
 from models.hitl import (
     HITLEventType,
@@ -49,8 +54,27 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+def _short_prompt_hash(prompt: str | None) -> str:
+    prompt_hash = _prompt_hash(prompt)
+    if prompt_hash is None:
+        return "-"
+    return prompt_hash[:12]
+
+
+def _normalized_prompt(prompt: str | None) -> str:
+    return " ".join(str(prompt or "").split()).strip().casefold()
+
+
+def _prompt_hash(prompt: str | None) -> str | None:
+    normalized = _normalized_prompt(prompt)
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 MAX_HITL_ROUNDS = 15
-_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
+_GENERIC_AGENT_INPUT_PROMPT = GENERIC_AGENT_INPUT_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +193,9 @@ class HITLService:
 
         Returns the created request, or None if max rounds exceeded.
         """
+        agent_prompt_hash = _prompt_hash(prompt) if source == "agent" else None
         if source == "agent":
-            prompt = _GENERIC_AGENT_INPUT_PROMPT
+            prompt = public_agent_input_prompt(prompt)
             prompt_type = HITLPromptType.TEXT
             choices = None
         resolved_display_message_id = display_message_id
@@ -229,6 +254,7 @@ class HITLService:
             user_message_id=user_message_id,
             source=source,
             prompt=prompt,
+            agent_prompt_hash=agent_prompt_hash,
             prompt_type=prompt_type,
             choices=choices,
             agent_id=agent_id,
@@ -266,20 +292,21 @@ class HITLService:
                 **{k: v for k, v in persisted_doc.items() if k != "_id"}
             )
             backfill_update: dict[str, Any] = {}
+            safe_persisted_prompt = public_agent_input_prompt(request.prompt)
             sanitize_backfill_required = (
-                request.prompt != _GENERIC_AGENT_INPUT_PROMPT
+                request.prompt != safe_persisted_prompt
                 or request.prompt_type != HITLPromptType.TEXT
                 or request.choices is not None
             )
             if sanitize_backfill_required:
                 backfill_update.update(
                     {
-                        "prompt": _GENERIC_AGENT_INPUT_PROMPT,
+                        "prompt": safe_persisted_prompt,
                         "prompt_type": HITLPromptType.TEXT.value,
                         "choices": None,
                     }
                 )
-                request.prompt = _GENERIC_AGENT_INPUT_PROMPT
+                request.prompt = safe_persisted_prompt
                 request.prompt_type = HITLPromptType.TEXT
                 request.choices = None
             if (
@@ -583,12 +610,24 @@ class HITLService:
                 )
 
             logger.info(
-                "hitl_request_created",
+                "hitl_request_created room_id=%s source=%s request_id=%s "
+                "group_id=%s group_index=%s group_total=%s prompt_hash=%s",
+                room_id,
+                source,
+                request.request_id,
+                request.group_id or "-",
+                request.group_index if request.group_index is not None else "-",
+                request.group_total if request.group_total is not None else "-",
+                _short_prompt_hash(request.prompt),
                 extra={
                     "hitl_request_id": request.request_id,
                     "hitl_source": source,
                     "hitl_prompt_type": prompt_type,
                     "room_id": room_id,
+                    "hitl_group_id": request.group_id,
+                    "hitl_group_index": request.group_index,
+                    "hitl_group_total": request.group_total,
+                    "hitl_prompt_hash": _short_prompt_hash(request.prompt),
                 },
             )
         else:
@@ -1084,7 +1123,11 @@ class HITLService:
                         }
 
         # Persist user's answer on the agent message for DB hydration
-        if request.display_message_id and not route_result.get("followup_hitl_request_id"):
+        if (
+            request.display_message_id
+            and not route_result.get("followup_hitl_request_id")
+            and not route_result.get("agent_no_progress")
+        ):
             await self._project_completed_hitl_display(
                 display_message_id=request.display_message_id,
                 user_input=user_input,
@@ -1228,15 +1271,61 @@ class HITLService:
                 "resume_execution": False,
             }
 
-        task_state = str(reply_result.get("task_state") or "completed")
-        task_state = task_state.strip().lower().replace("_", "-")
+        raw_task_state = reply_result.get("task_state")
+        response_text = reply_result.get("response_text") or ""
+        task_state = (
+            str(raw_task_state).strip().lower().replace("_", "-")
+            if raw_task_state
+            else ("completed" if response_text.strip() else "input-required")
+        )
 
         # If the agent asked for more input, don't resume the queue — create
         # a new HITL request so the frontend has a pending record for the next
         # answer.  Without this, multi-round blocking HITL conversations get
         # stuck after the second prompt.
         if task_state in ("input-required", "auth-required", "policy-required"):
-            response_text = reply_result.get("response_text")
+            public_response_text = public_agent_input_prompt(
+                response_text or request.prompt
+            )
+            response_prompt_hash = _prompt_hash(response_text)
+            same_raw_agent_prompt = bool(
+                request.agent_prompt_hash
+                and response_prompt_hash
+                and request.agent_prompt_hash == response_prompt_hash
+            )
+            same_concrete_public_prompt = bool(
+                request.agent_prompt_hash is None
+                and request.prompt != _GENERIC_AGENT_INPUT_PROMPT
+                and public_response_text != _GENERIC_AGENT_INPUT_PROMPT
+                and _normalized_prompt(public_response_text)
+                == _normalized_prompt(request.prompt)
+            )
+            if (
+                request.orchestration_run_id
+                and task_state == "input-required"
+                and (same_raw_agent_prompt or same_concrete_public_prompt)
+            ):
+                logger.warning(
+                    "hitl_agent_no_progress message_id=%s task_id=%s "
+                    "prompt_hash=%s; returning control to orchestrator",
+                    request.continuation_message_id,
+                    request.a2a_task_id,
+                    _short_prompt_hash(public_response_text),
+                )
+                return {
+                    "blocking": True,
+                    "task_state": task_state,
+                    "response_text": public_response_text,
+                    "resume_execution": True,
+                    "agent_no_progress": True,
+                    "agent_no_progress_code": "agent_repeated_input_required",
+                    "agent_id": request.agent_id,
+                    "agent_name": request.agent_name,
+                    "display_message_id": request.display_message_id,
+                    "continuation_message_id": request.continuation_message_id,
+                    "a2a_task_id": request.a2a_task_id,
+                    "a2a_context_id": request.a2a_context_id,
+                }
             logger.info(
                 "hitl: blocking reply returned input_required for %s — "
                 "creating new HITL request (not resuming queue)",
@@ -1246,7 +1335,7 @@ class HITLService:
                 room_id=request.room_id,
                 user_message_id=request.user_message_id,
                 source="agent",
-                prompt=response_text or "The agent is requesting additional input.",
+                prompt=public_response_text,
                 agent_id=request.agent_id,
                 agent_name=request.agent_name,
                 a2a_task_id=request.a2a_task_id,

@@ -64,6 +64,21 @@ def test_record_planner_action_increments_step_and_logs_decision():
     )
 
 
+def test_record_planner_action_never_exceeds_step_budget():
+    from execution.orchestration.run_reducer import record_planner_action
+
+    state = _state(steps_used=8, step_budget=8)
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="No safe action remains.",
+        failure_reason="Budget exhausted",
+    )
+
+    updated = record_planner_action(state, action)
+
+    assert updated.steps_used == 8
+
+
 def test_record_dispatch_intents_sets_dispatching_and_active_dispatches():
     from execution.orchestration.run_reducer import record_dispatch_intents
 
@@ -161,3 +176,40 @@ def test_record_step_result_clears_matched_dispatch_without_result_message_id():
 
     assert updated.dispatch_intents[0].status == "success"
     assert updated.active_dispatches == []
+
+
+def test_record_hitl_no_progress_adds_canonical_fact_and_replan_signal():
+    from execution.orchestration.run_reducer import record_hitl_resolution
+
+    state = _state(
+        status=OrchestrationStatus.AWAITING_USER,
+        pending_hitl_request_ids=["hitl-1"],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "agent",
+                "status": "open",
+                "prompt": "Provide the submission.",
+            }
+        ],
+    )
+
+    updated = record_hitl_resolution(
+        state,
+        request_id="hitl-1",
+        response='{"client":{"name":"Acme"}}',
+        hitl_result={
+            "source": "agent",
+            "agent_id": "agent-1",
+            "agent_name": "Insurer",
+            "agent_no_progress": True,
+            "agent_no_progress_code": "agent_repeated_input_required",
+            "response_text": "Provide the submission.",
+        },
+    )
+
+    assert updated.status == OrchestrationStatus.RUNNING
+    assert updated.pending_hitl_request_ids == []
+    assert updated.facts[-1]["source"] == "hitl_user_reply"
+    assert updated.facts[-1]["text"] == '{"client":{"name":"Acme"}}'
+    assert updated.decision_log[-1]["code"] == "agent_repeated_input_required"

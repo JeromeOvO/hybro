@@ -33,6 +33,7 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.transports.base import AgentTransport
+from execution.task_tracking import extract_public_completed_status_text
 
 if TYPE_CHECKING:
     from execution.dispatch.dispatch_middleware import DispatchContext
@@ -45,12 +46,11 @@ if TYPE_CHECKING:
         ) -> tuple[bool, str | None]: ...
 
     class WebhookMessageReader(Protocol):
-        async def get_room_agent_message_by_message_id(
-            self, message_id: str
-        ): ...
+        async def get_room_agent_message_by_message_id(self, message_id: str): ...
 
     class WebhookCancellationReader(Protocol):
         async def is_message_cancelled(self, message_id: str) -> bool: ...
+
 
 logger = get_logger(__name__)
 
@@ -101,7 +101,9 @@ class WebhookTransport(AgentTransport):
         """Called by the FastAPI route. Validate, parse, delegate."""
         # 1. Validate webhook token (hash-based)
         if not token:
-            logger.warning("Webhook for task %s: Missing authorization token", message_id)
+            logger.warning(
+                "Webhook for task %s: Missing authorization token", message_id
+            )
             raise HTTPException(status_code=401, detail="Missing authorization token")
 
         is_valid, error_reason = await self._webhook_auth.verify_webhook_token_for_task(
@@ -123,7 +125,8 @@ class WebhookTransport(AgentTransport):
             else:
                 logger.error(
                     "Webhook for task %s: Token verification error: %s",
-                    message_id, error_reason,
+                    message_id,
+                    error_reason,
                 )
                 raise HTTPException(status_code=500, detail="Token verification failed")
 
@@ -137,7 +140,9 @@ class WebhookTransport(AgentTransport):
         )
 
         # 3. Load current message, check idempotency
-        current_msg = await self._message_reader.get_room_agent_message_by_message_id(message_id)
+        current_msg = await self._message_reader.get_room_agent_message_by_message_id(
+            message_id
+        )
         if not current_msg or not current_msg.has_task_tracking:
             logger.warning("Webhook for unknown task %s", message_id)
             raise HTTPException(status_code=404, detail="Task not found")
@@ -171,7 +176,9 @@ class WebhookTransport(AgentTransport):
             current_state = current_task.status.state
             if is_terminal_state(current_state):
                 logger.debug(
-                    "Webhook for task %s: Already terminal (%s)", message_id, current_state
+                    "Webhook for task %s: Already terminal (%s)",
+                    message_id,
+                    current_state,
                 )
                 return {
                     "status": "already_terminal",
@@ -242,13 +249,13 @@ class WebhookTransport(AgentTransport):
             serialized_artifacts = None
             if task.artifacts:
                 serialized_artifacts = [
-                    a.model_dump(mode="json", exclude_none=True)
-                    for a in task.artifacts
+                    a.model_dump(mode="json", exclude_none=True) for a in task.artifacts
                 ]
             return AgentEvent(
                 kind="response",
                 **base,
                 text=text or "",
+                public_text=extract_public_completed_status_text(task),
                 state=state_value,
                 parts=parts,
                 artifacts=serialized_artifacts,

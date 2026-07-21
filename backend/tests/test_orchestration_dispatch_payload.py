@@ -29,6 +29,15 @@ def _state():
                 "name": "Broker submission",
                 "mime_type": "application/json",
                 "summary": "Structured broker submission.",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "client": {"name": "Acme SaaS Inc."},
+                            "requested_coverage": {"currency": "GBP"},
+                        },
+                    }
+                ],
             }
         ],
         facts=[
@@ -211,6 +220,40 @@ async def test_resolver_rejects_unknown_required_artifact_ref():
 
 
 @pytest.mark.asyncio
+async def test_resolver_materializes_selected_artifact_parts_for_dispatch():
+    artifact_key = "broker-msg:artifact_id:submission"
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(
+            default_input_modes=["text/plain", "application/json"]
+        ),
+        context_refs=[],
+        artifact_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.ARTIFACT,
+                ref_id=artifact_key,
+                required=True,
+            )
+        ],
+        attachment_refs=[],
+        original_attachments=[],
+    )
+
+    assert payload.selected_artifact_refs == [artifact_key]
+    assert len(payload.resource_payloads) == 1
+    resource = payload.resource_payloads[0]
+    assert resource.ref_id == artifact_key
+    assert resource.kind == "artifact"
+    assert resource.mime_type == "application/json"
+    assert resource.data == {
+        "client": {"name": "Acme SaaS Inc."},
+        "requested_coverage": {"currency": "GBP"},
+    }
+    assert resource.metadata["artifact_name"] == "Broker submission"
+
+
+@pytest.mark.asyncio
 async def test_resolver_rejects_unknown_required_context_ref():
     with pytest.raises(
         DispatchPayloadValidationError,
@@ -231,6 +274,26 @@ async def test_resolver_rejects_unknown_required_context_ref():
         )
 
     assert exc_info.value.code == "context_ref_not_found"
+
+
+@pytest.mark.asyncio
+async def test_resolver_promotes_misclassified_artifact_context_ref():
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="broker-msg:artifact_id:submission",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[],
+    )
+
+    assert payload.selected_context_refs == []
+    assert payload.selected_artifact_refs == ["broker-msg:artifact_id:submission"]
 
 
 @pytest.mark.asyncio
@@ -319,6 +382,54 @@ async def test_resolver_omits_unknown_optional_context_ref():
     assert payload.selected_context_refs == ["fact-1"]
 
 
+class FakeResourceProvider:
+    async def resolve_ref(self, ref_id, *, run_id, attachments):
+        assert run_id == "run-1"
+        if ref_id == "ctx:file-file-1:text":
+            return ResourcePayload(
+                ref_id=ref_id,
+                kind="context",
+                mime_type="text/plain",
+                text="Extracted submission text",
+                summary="Extracted 25 characters from 1 PDF page.",
+                metadata={"source_ref_id": "file:file-1"},
+            )
+        raise KeyError(ref_id)
+
+
+@pytest.mark.asyncio
+async def test_resolver_does_not_add_source_attachment_for_text_projection():
+    attachment = UserAttachment(
+        file_id="file-1",
+        s3_key="uploads/room-1/file-1/report.pdf",
+        mime_type="application/pdf",
+        file_name="report.pdf",
+        size_bytes=16,
+    )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(
+            default_input_modes=["text/plain", "application/pdf"]
+        ),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="ctx:file-file-1:text",
+                mime_type="text/plain",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[attachment],
+        resource_provider=FakeResourceProvider(),
+    )
+
+    assert payload.selected_context_refs == ["ctx:file-file-1:text"]
+    assert payload.selected_attachment_refs == []
+    assert payload.attachment_failures == []
+
+
 @pytest.mark.asyncio
 async def test_required_context_ref_rejects_raw_attachment_resource_kind():
     provider = SimpleNamespace(
@@ -349,6 +460,74 @@ async def test_required_context_ref_rejects_raw_attachment_resource_kind():
         )
 
     assert exc_info.value.code == "context_ref_wrong_kind"
+
+
+@pytest.mark.asyncio
+async def test_required_context_ref_can_fall_back_from_attachment_ref_to_text_projection():
+    class AttachmentProjectionProvider:
+        async def resolve_ref(self, ref_id, *, run_id, attachments):
+            assert run_id == "run-1"
+            if ref_id == "file:file-1":
+                return ResourcePayload(
+                    ref_id=ref_id,
+                    kind="attachment",
+                    mime_type="application/pdf",
+                    summary="Raw PDF attachment",
+                )
+            if ref_id == "ctx:file-file-1:text":
+                return ResourcePayload(
+                    ref_id=ref_id,
+                    kind="context",
+                    mime_type="text/plain",
+                    text="Projected PDF text",
+                )
+            raise KeyError(ref_id)
+
+        async def ensure_projection(
+            self,
+            ref_id,
+            *,
+            run_id,
+            attachments,
+            target_mime="text/plain",
+        ):
+            assert run_id == "run-1"
+            assert ref_id == "file:file-1"
+            return ResourceProjectionRef(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                source_ref_id="file:file-1",
+                mime_type=target_mime,
+                status="ready",
+                recommended_for_input_modes=["text"],
+            )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=_state(),
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="file:file-1",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[
+            UserAttachment(
+                file_id="file-1",
+                s3_key="uploads/room-1/file-1/report.pdf",
+                mime_type="application/pdf",
+                file_name="report.pdf",
+                size_bytes=16,
+            )
+        ],
+        resource_provider=AttachmentProjectionProvider(),
+    )
+
+    assert payload.selected_context_refs == ["ctx:file-file-1:text"]
+    assert len(payload.resource_payloads) == 1
+    assert payload.resource_payloads[0].text == "Projected PDF text"
 
 
 @pytest.mark.asyncio

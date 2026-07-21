@@ -364,18 +364,31 @@ class AgentResponseHandler:
                         "parts": sanitized_parts,
                     }
                 ]
-        elif e.text:
-            artifacts_for_db = [_materialized_text_artifact(e.message_id, e.text)]
+        elif e.public_text or e.text:
+            artifacts_for_db = [
+                _materialized_text_artifact(e.message_id, e.public_text or e.text)
+            ]
 
-        display_text = extract_text_from_artifact_dicts(artifacts_for_db)
-        if e.text and not display_text and not artifacts_for_db and not had_structured_output:
+        display_text = e.public_text or extract_text_from_artifact_dicts(
+            artifacts_for_db
+        )
+        if (
+            e.text
+            and not display_text
+            and not artifacts_for_db
+            and not had_structured_output
+        ):
             artifacts_for_db = [_materialized_text_artifact(e.message_id, e.text)]
             display_text = e.text
 
         display_artifacts = artifacts_for_db
         e.artifacts = artifacts_for_db
         e.parts = filter_non_text_parts(
-            [part for artifact in artifacts_for_db or [] for part in artifact.get("parts") or []]
+            [
+                part
+                for artifact in artifacts_for_db or []
+                for part in artifact.get("parts") or []
+            ]
         )
         e.text = display_text or ""
         e.error_text = None
@@ -632,8 +645,8 @@ class AgentResponseHandler:
         # In that case neither _on_response nor _on_error ever runs, so close the
         # task before any persistence, notification, lifecycle, or orchestration
         # ingestion side effects run.
-        terminal_result_status, terminal_task_state = (
-            self._processing_terminal_status(e)
+        terminal_result_status, terminal_task_state = self._processing_terminal_status(
+            e
         )
         emit_details = None
         if terminal_result_status is not None:

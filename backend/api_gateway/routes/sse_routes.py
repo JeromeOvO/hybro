@@ -18,6 +18,13 @@ from common.utils.time import utcnow
 logger = get_logger(__name__)
 router = APIRouter()
 
+_PUBLIC_TERMINAL_ORCHESTRATION_STATUS = {
+    "completed": "completed",
+    "failed": "failed",
+    "canceled": "canceled",
+    "budget_exhausted": "failed",
+}
+
 
 @router.get("/sse/room/{room_id}/stream")
 async def stream_room_messages(
@@ -157,6 +164,24 @@ async def cancel_message(
                 detail="You do not have permission to cancel this message",
             )
 
+        extend_info = getattr(message, "extend_info", None)
+        persisted_status = (
+            extend_info.get("orchestration_status")
+            if isinstance(extend_info, dict)
+            else None
+        )
+        terminal_status = _PUBLIC_TERMINAL_ORCHESTRATION_STATUS.get(
+            persisted_status
+        )
+        if terminal_status is not None:
+            return {
+                "success": True,
+                "message_id": message_id,
+                "message": "Message processing had already finished",
+                "status": terminal_status,
+                "outcome": "already_terminal",
+            }
+
         success = await engine.cancel(
             room_id=message.room_id,
             message_id=message_id,
@@ -173,6 +198,8 @@ async def cancel_message(
             "success": True,
             "message_id": message_id,
             "message": "Message cancellation requested",
+            "status": "canceled",
+            "outcome": "canceled",
         }
 
     except HTTPException:

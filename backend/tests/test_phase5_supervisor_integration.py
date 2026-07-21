@@ -1517,8 +1517,12 @@ class _FakePhase5App:
             )
         )
 
+        async def synthesize_stream(*, trajectory, synthesis_instruction, user_goal):
+            del trajectory, synthesis_instruction, user_goal
+            yield "Final synthesized response."
+
         self._executor = SupervisorExecutor(
-            supervisor_service=SimpleNamespace(synthesize_stream=AsyncMock()),
+            supervisor_service=SimpleNamespace(synthesize_stream=synthesize_stream),
             room_runtime=self.room_runtime,
             tsm=SimpleNamespace(),
             delivery=self.delivery,

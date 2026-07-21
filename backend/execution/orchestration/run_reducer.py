@@ -60,7 +60,7 @@ def record_planner_action(
     action: PlannerAction,
 ) -> OrchestrationRunState:
     updated = state.model_copy(deep=True)
-    updated.steps_used += 1
+    updated.steps_used = min(updated.steps_used + 1, updated.step_budget)
     updated.last_planner_action = PlannerActionRecord(
         action=str(action.action),
         reasoning=action.reasoning,
@@ -116,7 +116,7 @@ def record_step_result_metadata(
     updated = state.model_copy(deep=True)
     updated.status = status
     if advance_step:
-        updated.steps_used += 1
+        updated.steps_used = min(updated.steps_used + 1, updated.step_budget)
     result_status = str(
         result.status.value if hasattr(result.status, "value") else result.status
     )
@@ -136,6 +136,33 @@ def record_step_result_metadata(
         if active.status not in TERMINAL_DISPATCH_STATUSES
     ]
     return _bump(updated)
+
+
+def _record_agent_no_progress(
+    state: OrchestrationRunState,
+    *,
+    request_id: str,
+    hitl_result: dict,
+    resolved_at: str,
+) -> None:
+    if not hitl_result.get("agent_no_progress"):
+        return
+    state.decision_log.append(
+        {
+            "code": hitl_result.get("agent_no_progress_code")
+            or "agent_repeated_input_required",
+            "request_id": request_id,
+            "agent_id": hitl_result.get("agent_id"),
+            "agent_name": hitl_result.get("agent_name"),
+            "prompt": hitl_result.get("response_text"),
+            "reason": (
+                "The agent returned the same input request after the user's "
+                "answer; re-plan from canonical context instead of creating "
+                "another identical HITL request."
+            ),
+            "created_at": resolved_at,
+        }
+    )
 
 
 def record_hitl_resolution(
@@ -190,6 +217,13 @@ def record_hitl_resolution(
             "request_ids": [request_id],
             "created_at": resolved_at,
         }
+    )
+
+    _record_agent_no_progress(
+        updated,
+        request_id=request_id,
+        hitl_result=hitl_result,
+        resolved_at=resolved_at,
     )
 
     if isinstance(followup_request_id, str) and followup_request_id:

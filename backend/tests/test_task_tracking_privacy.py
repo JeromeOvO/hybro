@@ -5,6 +5,7 @@ import pytest
 
 from common.types import (
     Artifact,
+    DataPart,
     FileContent,
     FilePart,
     Message,
@@ -357,8 +358,8 @@ async def test_terminal_failed_task_result_projects_before_persisting_and_respon
 
 
 @pytest.mark.asyncio
-async def test_terminal_completed_task_result_ignores_status_message_fallback():
-    private_sentinel = "PRIVATE_SENTINEL_terminal_completed_status"
+async def test_terminal_completed_task_result_promotes_agent_status_text_with_data_artifact():
+    public_text = "The agent completed the request."
     store = MagicMock()
     store.update_task_on_message = AsyncMock(return_value=True)
     service = A2ATaskTrackingService(store)
@@ -367,8 +368,15 @@ async def test_terminal_completed_task_result_ignores_status_message_fallback():
         context_id="remote-context",
         status=TaskStatus(
             state=TaskState.completed,
-            message=_message(MessageRole.AGENT, private_sentinel),
+            message=_message(MessageRole.AGENT, public_text),
         ),
+        artifacts=[
+            Artifact(
+                artifact_id="submission-1",
+                name="cyber_submission",
+                parts=[Part(root=DataPart(data={"company": "Acme SaaS Inc."}))],
+            )
+        ],
     )
 
     result = await service._handle_terminal_task_result(
@@ -380,13 +388,13 @@ async def test_terminal_completed_task_result_ignores_status_message_fallback():
     persisted = store.update_task_on_message.await_args.args[1]
     update_kwargs = store.update_task_on_message.await_args.kwargs
     assert persisted["status"]["message"] is None
-    assert update_kwargs["message_text"] is None
+    assert persisted["artifacts"][0]["name"] == "cyber_submission"
+    assert update_kwargs["message_text"] == public_text
     assert result["status"] == "completed"
-    assert result["content"] is None
-    assert "message" not in result
-    assert private_sentinel not in json.dumps(persisted)
-    assert private_sentinel not in json.dumps(update_kwargs)
-    assert private_sentinel not in json.dumps(result)
+    assert result["content"] == public_text
+    assert result["public_message_text"] == public_text
+    assert result["parts"][0]["data"] == {"company": "Acme SaaS Inc."}
+    assert public_text not in json.dumps(persisted)
 
 
 @pytest.mark.asyncio
@@ -480,9 +488,7 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
                 {
                     "artifactId": "final-artifact",
                     "name": "response",
-                    "parts": [
-                        {"kind": "text", "text": "Public final agent result"}
-                    ],
+                    "parts": [{"kind": "text", "text": "Public final agent result"}],
                 }
             ],
         },

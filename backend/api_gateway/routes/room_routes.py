@@ -39,6 +39,17 @@ def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
     )
 
 
+def _message_text_len(message: dict | None) -> int:
+    if not isinstance(message, dict):
+        return 0
+    message_content = message.get("message_content")
+    if isinstance(message_content, dict):
+        text = message_content.get("message_text")
+    else:
+        text = message.get("message_text")
+    return len(text) if isinstance(text, str) else 0
+
+
 async def _active_run_refs_for_room(
     room_id: str,
     engine: ExecutionEngine,
@@ -579,6 +590,26 @@ async def send_message(
     if err is not None:
         return err
 
+    logger.info(
+        "gateway_send_message_received room_id=%s user_id=%s "
+        "client_request_id=%s mode=%s schema=%s room_supervisor=%s "
+        "target_mode=%s target_group_id=%s mentioned_count=%d "
+        "selected_count=%d attachment_count=%d inline_file_count=%d message_len=%d",
+        room_id,
+        user.user_id,
+        client_request_id,
+        mode,
+        orchestration_schema_version,
+        room_uses_supervisor,
+        message_target_mode,
+        target_group_id,
+        len(mentioned_agent_ids or []),
+        len(selected_agent_ids or []),
+        len(attachments or []),
+        len(inline_file_ids or []),
+        _message_text_len(message),
+    )
+
     related_message_id = ""
     if isinstance(message, dict):
         related_message_id = message.get("related_message_id") or ""
@@ -603,9 +634,28 @@ async def send_message(
         mode=mode,
     )
     ack = await engine.execute(execution_request)
+    logger.info(
+        "gateway_send_message_ack room_id=%s message_id=%s "
+        "client_request_id=%s success=%s status_code=%s "
+        "should_start_orchestration=%s preflight_outcome=%s",
+        room_id,
+        ack.message_id,
+        client_request_id,
+        ack.success,
+        ack.status_code,
+        ack.should_start_orchestration,
+        ack.preflight_outcome,
+    )
 
     # Auto-trigger processing as background task if message was created successfully
     if ack.success and ack.message_id and ack.should_start_orchestration:
+        logger.info(
+            "gateway_send_message_background_scheduled room_id=%s "
+            "message_id=%s client_request_id=%s",
+            room_id,
+            ack.message_id,
+            client_request_id,
+        )
         background_tasks.add_task(
             engine.start_orchestration,
             execution_request,

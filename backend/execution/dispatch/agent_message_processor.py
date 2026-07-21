@@ -173,6 +173,8 @@ class AgentMessageProcessor:
         dispatch_task: str | None = None,
         resolved_resource_payloads: list[dict[str, Any]] | None = None,
         explicit_attachment_refs: list[str | dict[str, Any]] | None = None,
+        dispatch_resource_payloads: list[dict[str, Any]] | None = None,
+        selected_attachment_refs: list[str] | None = None,
         attachment_forwarding_policy: str | None = None,
     ) -> ProcessingResult:
         """Process a single agent message.
@@ -190,6 +192,8 @@ class AgentMessageProcessor:
                 dispatch_task=dispatch_task,
                 resolved_resource_payloads=resolved_resource_payloads,
                 explicit_attachment_refs=explicit_attachment_refs,
+                dispatch_resource_payloads=dispatch_resource_payloads,
+                selected_attachment_refs=selected_attachment_refs,
                 attachment_forwarding_policy=attachment_forwarding_policy,
             ),
             room_memory=room_memory,
