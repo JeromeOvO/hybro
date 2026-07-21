@@ -70,7 +70,7 @@ class Settings(BaseSettings):
             "FEATURE_ORCHESTRATION_V2",
         ),
     )
-    orchestration_outcome_guardrails: bool = False
+    orchestration_outcome_guardrails: bool = True
 
     # Execution Tuning
     supervisor_max_steps: int = 8

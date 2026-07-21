@@ -34,6 +34,7 @@ from common.utils.logger import get_logger
 from execution.task_tracking import (
     public_part_data,
     public_persisted_task_data,
+    resolve_public_agent_response_text,
     resolve_public_task_label,
 )
 
@@ -332,7 +333,11 @@ async def _notify_task_update_impl(
                 extract_status_message(task) or "Authentication required"
             )
 
-    public_agent_text = content
+    # The A2A adapter persists the agent's human-readable response separately
+    # from Task artifacts.  DataPart-only artifacts intentionally produce no
+    # extracted text, so terminal SSE must use the canonical persisted response
+    # instead of treating artifact text as the only public body.
+    public_agent_text = resolve_public_agent_response_text(room_agent_message)
 
     # --- Write-side: artifact backfill + message_text backfill ------------
     # Only write back to DB when a backfill actually modifies the message.

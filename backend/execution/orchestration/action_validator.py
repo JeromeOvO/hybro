@@ -101,12 +101,12 @@ class PlannerActionValidator:
             )
 
         if (
-            run_state is not None
-            and action.action == PlannerActionType.SYNTHESIZE
-            and guardrails_enabled
+            action.action in (
+                PlannerActionType.SYNTHESIZE,
+                PlannerActionType.COMPLETE,
+            )
+            and run_state is not None
         ):
-            _validate_no_blocking_recoverable_failures(action, run_state)
-        if action.action == PlannerActionType.COMPLETE and run_state is not None:
             PlannerActionValidator._validate_completion(
                 action,
                 run_state,
@@ -127,17 +127,18 @@ class PlannerActionValidator:
         guardrails_enabled: bool,
     ) -> None:
         evidence = action.completion_evidence
-        if evidence is None:
-            raise PlannerActionValidationError(
-                "complete action requires completion evidence",
-                code="completion_evidence_invalid",
-            )
-        PlannerActionValidator._validate_completion_disposition_requests(evidence)
         _validate_completion_blockers(
             run_state,
             evidence,
             guardrails_enabled=guardrails_enabled,
         )
+        if (
+            action.action != PlannerActionType.COMPLETE
+            or not guardrails_enabled
+            or evidence is None
+        ):
+            return
+        PlannerActionValidator._validate_completion_disposition_requests(evidence)
         _validate_completion_references(run_state, evidence)
         if not evidence.satisfied_criteria or any(
             not criterion.strip() for criterion in evidence.satisfied_criteria
@@ -158,6 +159,15 @@ class PlannerActionValidator:
         guardrails_enabled: bool,
     ) -> None:
         if run_state is None or not guardrails_enabled:
+            return
+        participant_snapshot = run_state.participant_snapshot
+        if participant_snapshot is not None and participant_snapshot.turn_policy in {
+            "debate_rounds",
+            "sequential_rounds",
+        }:
+            # The participant policy owns ordering and repeat eligibility for
+            # structured rounds. Treating the shared debate prompt as a
+            # fulfilled goal would incorrectly block the next participant.
             return
 
         target_fingerprints = [
@@ -542,6 +552,8 @@ def _validate_step_budget(
 ) -> None:
     if steps_used >= step_budget and action.action not in (
         PlannerActionType.SYNTHESIZE,
+        PlannerActionType.COMPLETE,
+        PlannerActionType.ASK_USER,
         PlannerActionType.FAIL,
     ):
         raise PlannerActionValidationError(
@@ -609,7 +621,7 @@ def _validate_terminal_output(
 
 def _validate_completion_blockers(
     run_state: OrchestrationRunState,
-    evidence: CompletionEvidence,
+    evidence: CompletionEvidence | None,
     *,
     guardrails_enabled: bool,
 ) -> None:
@@ -623,7 +635,7 @@ def _validate_completion_blockers(
             ),
         )
     if any(
-        item.status not in TERMINAL_DISPATCH_STATUSES
+        item.status not in TERMINAL_DISPATCH_STATUSES | {"success"}
         for item in run_state.active_dispatches
     ):
         raise PlannerActionValidationError(
@@ -656,7 +668,7 @@ def _validate_completion_blockers(
         )
         for question in run_state.open_questions
     )
-    if has_unresolved_question or evidence.unresolved_questions:
+    if has_unresolved_question or (evidence and evidence.unresolved_questions):
         raise PlannerActionValidationError(
             "complete action is blocked by unresolved questions",
             code="completion_evidence_invalid",

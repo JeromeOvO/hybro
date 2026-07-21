@@ -35,6 +35,7 @@ from api.room_center import (
 from common.dto import ExecutionAck
 from common.types import (
     Artifact,
+    DataPart,
     FileContent,
     FilePart,
     Message,
@@ -1178,6 +1179,7 @@ class TestInquiryRoomMessages:
             "quoted_sender_name": "Agent One",
             "quote_id": "quote-public-001",
             "turn_completion_kind": "synthesis",
+            "orchestration_status": "failed",
         }
         user_message = RoomUserMessage(
             room_id=sample_room.room_id,
@@ -1190,7 +1192,6 @@ class TestInquiryRoomMessages:
                 "client_request_id": private_sentinel,
                 "orchestration": True,
                 "orchestration_run_id": private_sentinel,
-                "orchestration_status": private_sentinel,
                 "candidate_scope_snapshot_id": private_sentinel,
                 "candidate_agent_ids": [private_sentinel],
                 "supervisor_trajectory": {
@@ -1333,10 +1334,43 @@ class TestInquiryRoomMessages:
             message_content=MessageContent(message_task=supervisor_task),
             extend_info={"public_task_label": "Clarifying request"},
         )
+        status_text_task = Task(
+            id="status-text-task",
+            status=TaskStatus(
+                state=TaskState.completed,
+                message=Message(
+                    message_id="status-text-message",
+                    role=MessageRole.AGENT,
+                    parts=[Part(root=TextPart(text="Quote approved at GBP 42,000."))],
+                ),
+            ),
+            artifacts=[
+                Artifact(
+                    artifact_id="quote-data",
+                    name="cyber_quote_decision",
+                    parts=[Part(root=DataPart(data={"currency": "GBP"}))],
+                )
+            ],
+        )
+        status_text_message = RoomAgentMessage(
+            room_id=sample_room.room_id,
+            message_id="agent-msg-status-text",
+            agent_id="insurer-agent",
+            related_message_id=sample_user_message.message_id,
+            message_content=MessageContent(
+                message_text=private_sentinel,
+                message_task=status_text_task,
+            ),
+        )
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[])
         facade.get_agent_messages_for_room = AsyncMock(
-            return_value=[remote_message, local_message, supervisor_message]
+            return_value=[
+                remote_message,
+                local_message,
+                supervisor_message,
+                status_text_message,
+            ]
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)
@@ -1399,6 +1433,7 @@ class TestInquiryRoomMessages:
         remote_public = by_id[remote_message.message_id]
         local_public = by_id[local_message.message_id]
         supervisor_public = by_id[supervisor_message.message_id]
+        status_text_public = by_id[status_text_message.message_id]
         assert remote_public.message_content.message_text == "Public final result"
         assert remote_public.message_content.message_task.metadata is None
         assert local_public.client_request_id == client_request_id
@@ -1429,6 +1464,10 @@ class TestInquiryRoomMessages:
             "public_task_label": "Clarifying request",
             "hitl_request_id": "local-supervisor-hitl-request",
         }
+        assert (
+            status_text_public.message_content.message_text
+            == "Quote approved at GBP 42,000."
+        )
         assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
 
     @pytest.mark.asyncio

@@ -6,6 +6,7 @@ Tests for Supervisor Improvements:
 
 import inspect
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -144,7 +145,7 @@ class TestQualityEvaluationPrompt:
 # =============================================================================
 
 
-def _make_executor() -> SupervisorExecutor:
+def _make_executor() -> SupervisorExecutor:  # noqa: C901
     """Create a SupervisorExecutor with all dependencies mocked."""
     se = object.__new__(SupervisorExecutor)
     se.message_reader = AsyncMock()
@@ -157,6 +158,9 @@ def _make_executor() -> SupervisorExecutor:
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
     se.agent_message_processor = MagicMock()
+    se.orchestration_resource_provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+    )
     se.room_memory = AsyncMock()
     se.rate_limit_service = MagicMock()
     se.MAX_STEPS = 8
@@ -173,6 +177,12 @@ def _make_executor() -> SupervisorExecutor:
     se.orchestration_planner = RoomSupervisorPlannerAdapter(
         raw_action_provider=raw_action_provider
     )
+
+    async def synthesize_stream(*, trajectory, synthesis_instruction, user_goal=None):
+        del trajectory, synthesis_instruction, user_goal
+        yield "Final summary"
+
+    se.supervisor_service.synthesize_stream = synthesize_stream
 
     async def emit_processing_status(**kwargs):
         detail = kwargs.get("details")
@@ -387,7 +397,8 @@ class TestSupervisorSSEStageNotifications:
             return_value=None
         )
 
-        async def synthesize_stream(trajectory, synthesis_instruction):
+        async def synthesize_stream(trajectory, synthesis_instruction, user_goal=None):
+            del user_goal
             yield "synthesized"
 
         se.supervisor_service.synthesize_stream = synthesize_stream
@@ -436,10 +447,16 @@ class TestSupervisorSSEStageNotifications:
 
         details = _get_sse_details(se)
         assert details == [
+            "Reviewing progress (step 1 of 8)...",
             "Planning next action...",
+            "Goal is not complete yet. Continuing with 1 agent(s)...",
             "Delegating to 1 agent(s)...",
             "Evaluating agent results...",
+            "Agent results recorded. Checking whether the goal is complete...",
+            "Reviewing progress (step 2 of 8)...",
             "Planning next action...",  # second loop iteration before DONE
+            "Goal complete. Preparing final response...",
+            "Synthesizing responses...",
         ]
 
     @pytest.mark.asyncio

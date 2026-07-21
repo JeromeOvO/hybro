@@ -33,6 +33,7 @@ from common.utils.a2a_helpers import artifacts_to_dicts
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.hitl.public_prompt import public_agent_input_prompt
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
@@ -733,6 +734,7 @@ class SupervisorExecutor:
         user_message_id: str,
         trajectory: SupervisorTrajectory,
         synthesis_instruction: str,
+        user_goal: str,
         client_request_id: str | None,
     ) -> str:
         """Run supervisor LLM synthesis with live artifact_update streaming."""
@@ -750,6 +752,7 @@ class SupervisorExecutor:
             token_stream=self.supervisor_service.synthesize_stream(
                 trajectory=trajectory,
                 synthesis_instruction=synthesis_instruction,
+                user_goal=user_goal,
             ),
             client_request_id=client_request_id,
         )
@@ -912,6 +915,17 @@ class SupervisorExecutor:
                     room_id=room_id,
                     user_message_id=user_message_id,
                     client_request_id=state.client_request_id,
+                    details=(
+                        "Reviewing progress (step "
+                        f"{min(state.steps_used + 1, state.step_budget)} of "
+                        f"{state.step_budget})..."
+                    ),
+                    stage="reviewing_progress",
+                )
+                await self._emit_supervisor_stage(
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    client_request_id=state.client_request_id,
                     details="Planning next action...",
                     stage="planning",
                 )
@@ -1008,6 +1022,13 @@ class SupervisorExecutor:
                     str(exc),
                 )
                 if isinstance(exc, PlannerActionValidationError) and not exc.recoverable:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="Unable to continue the workflow.",
+                        stage="unable_to_continue",
+                    )
                     terminal_status = (
                         OrchestrationStatus.BUDGET_EXHAUSTED
                         if exc.code == "step_budget_exhausted"
@@ -1031,6 +1052,13 @@ class SupervisorExecutor:
                     stage="adapter",
                 )
                 if exhausted or state.steps_used >= state.step_budget:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="Unable to continue the workflow.",
+                        stage="unable_to_continue",
+                    )
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.FAILED,
@@ -1187,6 +1215,16 @@ class SupervisorExecutor:
 
             match planner_action.action:
                 case PlannerActionType.DELEGATE:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details=(
+                            "Goal is not complete yet. Continuing with "
+                            f"{len(planner_action.targets)} agent(s)..."
+                        ),
+                        stage="continuing",
+                    )
                     state, paused_status = await self._run_delegate_action(
                         state=state,
                         planner_action=planner_action,
@@ -1213,6 +1251,13 @@ class SupervisorExecutor:
                         )
 
                 case PlannerActionType.SYNTHESIZE:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="Goal complete. Preparing final response...",
+                        stage="goal_complete",
+                    )
                     return await self._run_synthesis_action(
                         state=state,
                         planner_action=planner_action,
@@ -1222,59 +1267,50 @@ class SupervisorExecutor:
                     )
 
                 case PlannerActionType.COMPLETE:
-                    if self.guardrails_enabled:
-                        disposition_by_event_id = {
-                            disposition.event_id: disposition
-                            for disposition in state.goal_family_dispositions
-                        }
-                        disposition_by_event_id.update(
-                            {
-                                disposition.event_id: disposition
-                                for disposition in (
-                                    planner_action.completion_evidence.requested_goal_family_dispositions
-                                )
-                            }
-                        )
-                        for event_id in (
-                            planner_action.completion_evidence.abandoned_goal_disposition_event_ids
-                        ):
-                            disposition = disposition_by_event_id[event_id]
-                            state = await self._dispose_v2_goal_family(
-                                state,
-                                goal_family_fingerprint=disposition.goal_family_fingerprint,
-                                through_goal_revision_fingerprint=(
-                                    disposition.through_goal_revision_fingerprint
-                                ),
-                                status=disposition.status,
-                                reason=disposition.reason,
-                                replacement_goal_family_fingerprint=(
-                                    disposition.replacement_goal_family_fingerprint
-                                ),
-                                event_id=disposition.event_id,
-                            )
-
-                    def record_completion_evidence(
-                        updated: OrchestrationRunState,
-                        evidence=planner_action.completion_evidence,
-                    ) -> None:
-                        updated.completion_evidence = evidence
-
-                    state = await self._mark_v2_terminal(
-                        state,
-                        OrchestrationStatus.COMPLETED,
-                        reason=planner_action.reasoning,
-                        mutate=record_completion_evidence,
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="Goal complete. Preparing final response...",
+                        stage="goal_complete",
                     )
-                    return await self._log_state_and_return(
-                        room_id,
-                        state,
-                        self._state_run_result(
-                            status=RunStatus.COMPLETED,
-                            state=state,
-                        ),
+                    if state.participant_snapshot is not None:
+                        def record_completion_evidence(
+                            updated: OrchestrationRunState,
+                            evidence=planner_action.completion_evidence,
+                        ) -> None:
+                            updated.completion_evidence = evidence
+
+                        state = await self._mark_v2_terminal(
+                            state,
+                            OrchestrationStatus.COMPLETED,
+                            reason=planner_action.reasoning,
+                            mutate=record_completion_evidence,
+                        )
+                        return await self._log_state_and_return(
+                            room_id,
+                            state,
+                            self._state_run_result(
+                                status=RunStatus.COMPLETED,
+                                state=state,
+                            ),
+                        )
+                    return await self._run_synthesis_action(
+                        state=state,
+                        planner_action=planner_action,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        token=token,
                     )
 
                 case PlannerActionType.ASK_USER:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="More information is needed to continue...",
+                        stage="awaiting_information",
+                    )
                     result = await self._run_ask_user_action(
                         state=state,
                         planner_action=planner_action,
@@ -1290,6 +1326,13 @@ class SupervisorExecutor:
                     return result
 
                 case PlannerActionType.FAIL:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="Unable to continue the workflow.",
+                        stage="unable_to_continue",
+                    )
                     state = await self._mark_v2_terminal(
                         state,
                         OrchestrationStatus.FAILED,
@@ -2093,26 +2136,30 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-            if awaiting:
-                state = await self._ingest_v2_results(
-                    state,
-                    results,
-                    status=OrchestrationStatus.RUNNING,
-                    advance_step=True,
-                    available_resource_refs=blocker_available_resource_refs,
-                    attempted_agent_ids=blocker_attempted_agent_ids,
-                    eligible_alternate_agent_ids=(
-                        blocker_eligible_alternate_agent_ids
-                    ),
-                    conditional_result_viable=blocker_conditional_result_viable,
-                )
-                logger.info(
-                    "orchestration_input_required_recoverable run_id=%s "
-                    "awaiting_count=%d",
-                    state.run_id,
-                    len(awaiting),
-                )
-                return state, None
+            state = await self._ingest_v2_results(
+                state,
+                results,
+                status=OrchestrationStatus.RUNNING,
+                advance_step=False,
+                available_resource_refs=blocker_available_resource_refs,
+                attempted_agent_ids=blocker_attempted_agent_ids,
+                eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
+                conditional_result_viable=False,
+            )
+            logger.info(
+                "orchestration_input_required_recoverable run_id=%s "
+                "awaiting_count=%d",
+                state.run_id,
+                len(awaiting),
+            )
+            await self._emit_supervisor_stage(
+                room_id=room_id,
+                user_message_id=user_message_id,
+                client_request_id=state.client_request_id,
+                details="Agent results recorded. Checking whether the goal is complete...",
+                stage="checking_goal",
+            )
+            return state, None
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
@@ -2158,6 +2205,13 @@ class SupervisorExecutor:
             attempted_agent_ids=blocker_attempted_agent_ids,
             eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
             conditional_result_viable=blocker_conditional_result_viable,
+        )
+        await self._emit_supervisor_stage(
+            room_id=room_id,
+            user_message_id=user_message_id,
+            client_request_id=state.client_request_id,
+            details="Agent results recorded. Checking whether the goal is complete...",
+            stage="checking_goal",
         )
         return state, None
 
@@ -2661,7 +2715,14 @@ class SupervisorExecutor:
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
         )
-        if not reply_result.get("blocking", False):
+        raw_task_state = reply_result.get("task_state")
+        response_text = reply_result.get("response_text") or ""
+        task_state = (
+            str(raw_task_state).strip().lower().replace("_", "-")
+            if raw_task_state
+            else ""
+        )
+        if reply_result.get("blocking") is False:
             return StepResult(
                 step_number=0,
                 agent_id=awaiting_output.agent_id,
@@ -2674,10 +2735,10 @@ class SupervisorExecutor:
                 paused_message_id=awaiting_output.agent_message_id,
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
+                status_message=awaiting_output.status_message,
             )
-        task_state = str(reply_result.get("task_state") or "completed")
-        task_state = task_state.strip().lower().replace("_", "-")
-        response_text = reply_result.get("response_text") or ""
+        if not task_state:
+            task_state = "completed" if response_text.strip() else "input-required"
         requires_policy = bool(
             reply_result.get("requires_policy")
             or reply_result.get("policy_required")
@@ -2688,6 +2749,7 @@ class SupervisorExecutor:
             task_state in {"input-required", "auth-required", "policy-required"}
             or requires_policy
         ):
+            status_message = response_text or awaiting_output.status_message
             return StepResult(
                 step_number=0,
                 agent_id=awaiting_output.agent_id,
@@ -2700,7 +2762,7 @@ class SupervisorExecutor:
                 paused_message_id=awaiting_output.agent_message_id,
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
-                status_message=response_text,
+                status_message=status_message,
                 interactive_state=interactive_state,
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
@@ -3268,13 +3330,13 @@ class SupervisorExecutor:
             resource_payloads=resource_payloads,
         )
 
-    async def _resolved_payload_from_continuation_refs(
-        self,
+    @staticmethod
+    def _new_input_required_payload(
         state: OrchestrationRunState,
         continuation: PendingAgentContinuation | None,
-        result: StepResult,
+        resolved: ResolvedDispatchPayload | None,
     ) -> ResolvedDispatchPayload | None:
-        if continuation is None:
+        if continuation is None or resolved is None:
             return None
         source_intent = next(
             (
@@ -3286,40 +3348,51 @@ class SupervisorExecutor:
             ),
             None,
         )
-        if source_intent is None:
-            return None
-        if not (
-            source_intent.context_refs
-            or source_intent.artifact_refs
-            or source_intent.attachment_refs
-        ):
-            return None
-        try:
-            resolved = await resolve_dispatch_payload_refs(
-                run_state=state,
-                target_agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
-                context_refs=source_intent.context_refs,
-                artifact_refs=source_intent.artifact_refs,
-                attachment_refs=source_intent.attachment_refs,
-                original_attachments=[],
-                resource_provider=self.orchestration_resource_provider,
+        source_refs = (
+            (
+                *source_intent.context_refs,
+                *source_intent.artifact_refs,
+                *source_intent.attachment_refs,
             )
-        except DispatchPayloadValidationError:
-            return None
-        except Exception:
-            logger.debug(
-                "Failed to resolve input-required dispatch refs",
-                extra={
-                    "run_id": state.run_id,
-                    "agent_id": result.agent_id,
-                    "agent_message_id": result.agent_message_id,
-                },
-                exc_info=True,
+            if source_intent is not None
+            else ()
+        )
+        delivered_ref_ids = {ref.ref_id for ref in source_refs}
+        attempted_fingerprints = set(continuation.attempted_resource_fingerprints)
+        if source_intent is not None:
+            attempted_fingerprints.update(
+                source_intent.selected_resource_fingerprints
             )
+        resource_payloads = [
+            payload
+            for payload in resolved.resource_payloads
+            if payload.ref_id not in delivered_ref_ids
+            and canonical_content_fingerprint(payload.model_dump(mode="json"))
+            not in attempted_fingerprints
+        ]
+        if not resource_payloads:
             return None
-        if resolved.resource_payloads:
-            return resolved
-        return None
+        new_ref_ids = {payload.ref_id for payload in resource_payloads}
+        return resolved.model_copy(
+            update={
+                "selected_context_refs": [
+                    ref
+                    for ref in resolved.selected_context_refs
+                    if ref in new_ref_ids
+                ],
+                "selected_artifact_refs": [
+                    ref
+                    for ref in resolved.selected_artifact_refs
+                    if ref in new_ref_ids
+                ],
+                "selected_attachment_refs": [
+                    ref
+                    for ref in resolved.selected_attachment_refs
+                    if ref in new_ref_ids
+                ],
+                "resource_payloads": resource_payloads,
+            }
+        )
 
     def _find_or_create_pending_continuation(
         self,
@@ -3372,6 +3445,11 @@ class SupervisorExecutor:
             goal_revision_fingerprint=goal_revision_fingerprint,
             a2a_task_id=result.a2a_task_id,
             a2a_context_id=result.a2a_context_id,
+            attempted_resource_fingerprints=(
+                list(intent.selected_resource_fingerprints)
+                if intent is not None
+                else []
+            ),
         )
 
     async def _resume_agent_continuation_after_hitl_answer(
@@ -3451,6 +3529,7 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         result: StepResult,
         user_message,
+        create_hitl: bool = True,
     ) -> StepResult:
         prompt = self._extract_input_required_prompt(result)
         continuation = self._find_or_create_pending_continuation(state, result)
@@ -3464,13 +3543,11 @@ class SupervisorExecutor:
                 answer=answer,
                 user_message=user_message,
             )
-        resolved_payload = await self._resolved_payload_from_continuation_refs(
+        resolved_payload = self._new_input_required_payload(
             state,
             continuation,
-            result,
+            self._resolved_payload_for_input_required(state, prompt),
         )
-        if resolved_payload is None:
-            resolved_payload = self._resolved_payload_for_input_required(state, prompt)
         if resolved_payload is not None and continuation is not None:
             awaiting_output = next(
                 (
@@ -3505,6 +3582,98 @@ class SupervisorExecutor:
                 )
                 if continued is not None:
                     return continued
+
+        source_intent = (
+            next(
+                (
+                    intent
+                    for intent in state.dispatch_intents
+                    if continuation is not None
+                    and intent.dispatch_intent_id == continuation.source_intent_id
+                ),
+                None,
+            )
+            if continuation is not None
+            else None
+        )
+        has_delivered_source_refs = source_intent is not None and bool(
+            source_intent.context_refs
+            or source_intent.artifact_refs
+            or source_intent.attachment_refs
+        )
+        if not create_hitl or not has_delivered_source_refs:
+            return result
+
+        return await self._create_agent_input_required_hitl(
+            state=state,
+            result=result,
+            prompt=prompt,
+            continuation=continuation,
+        )
+
+    async def _create_agent_input_required_hitl(
+        self,
+        *,
+        state: OrchestrationRunState,
+        result: StepResult,
+        prompt: str,
+        continuation: PendingAgentContinuation | None,
+    ) -> StepResult:
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
+        request = await self.hitl_coordinator.request_input(
+            room_id=state.room_id,
+            user_message_id=state.user_message_id,
+            source="agent",
+            prompt=prompt,
+            agent_id=result.agent_id,
+            agent_name=result.agent_name,
+            a2a_task_id=result.a2a_task_id,
+            a2a_context_id=result.a2a_context_id,
+            continuation_message_id=(
+                result.paused_message_id or result.agent_message_id
+            ),
+            display_message_id=result.agent_message_id,
+            orchestration_run_id=state.run_id,
+            orchestration_schema_version=state.schema_version,
+        )
+        request_id = getattr(request, "request_id", request)
+        if not isinstance(request_id, str) or not request_id:
+            raise RuntimeError("failed to create agent HITL request")
+
+        def mutate(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.AWAITING_USER
+            if continuation is not None and not any(
+                item.continuation_id == continuation.continuation_id
+                for item in updated.pending_agent_continuations
+            ):
+                updated.pending_agent_continuations.append(continuation)
+            if request_id not in updated.pending_hitl_request_ids:
+                updated.pending_hitl_request_ids.append(request_id)
+            if not any(
+                question.get("request_id") == request_id
+                for question in updated.open_questions
+            ):
+                updated.open_questions.append(
+                    {
+                        "request_id": request_id,
+                        "source": "agent",
+                        "agent_id": result.agent_id,
+                        "prompt": public_agent_input_prompt(prompt),
+                        "status": "open",
+                        "created_at": utcnow().isoformat(),
+                    }
+                )
+
+        await self._save_v2_state(
+            state,
+            event_type=OrchestrationEventType.HITL_REQUESTED,
+            payload={
+                "status": OrchestrationStatus.AWAITING_USER.value,
+                "request_ids": [request_id],
+            },
+            mutate=mutate,
+        )
         return result
 
     async def _resolve_agent_input_required_results(
@@ -3525,6 +3694,7 @@ class SupervisorExecutor:
                 state=current,
                 result=result,
                 user_message=user_message,
+                create_hitl=False,
             )
             resolved_results.append(resolved)
             if (
@@ -3668,7 +3838,7 @@ class SupervisorExecutor:
             )
             return state, RunStatus.FAILED
 
-        awaiting_result.status_message = _GENERIC_AGENT_INPUT_REQUIRED_PROMPT
+        awaiting_result.status_message = public_agent_input_prompt(hitl_prompt)
 
         try:
             saved = await self._save_interrupted_state(
@@ -4165,12 +4335,12 @@ class SupervisorExecutor:
                 for result in entry.results
                 if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
             ]
-            follow_up_hitl_message_ids: set[str] = set()
+            _follow_up_hitl_message_ids: set[str] = set()
             if any(result.status == StepStatus.AWAITING_INPUT for result in pending):
                 (
                     synced,
                     resolved_results,
-                    follow_up_hitl_message_ids,
+                    _follow_up_hitl_message_ids,
                 ) = await self._resolve_agent_input_required_results(
                     state=synced,
                     results=entry.results,
@@ -4186,21 +4356,33 @@ class SupervisorExecutor:
                     for result in entry.results
                     if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
                 ]
+            can_rehydrate_agent_hitl = (
+                agent_registry is not None
+                and room_config is not None
+                and room_id is not None
+                and user_message_id is not None
+                and message_text is not None
+                and getattr(self, "hitl_coordinator", None) is not None
+            )
+            # When full resume context is available, the trajectory has already
+            # exhausted its automatic continuation opportunity. Rehydrate any
+            # remaining input request as HITL. Partial state-only recovery keeps
+            # plain A2A input pending for a later fully bound resume.
             hitl_required_pending = [
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
                 and (
-                    self._awaiting_result_requires_hitl(result)
-                    or result.agent_message_id in follow_up_hitl_message_ids
+                    can_rehydrate_agent_hitl
+                    or self._awaiting_result_requires_hitl(result)
+                    or result.agent_message_id in _follow_up_hitl_message_ids
                 )
             ]
             plain_awaiting_pending = [
                 result
                 for result in pending
                 if result.status == StepStatus.AWAITING_INPUT
-                and not self._awaiting_result_requires_hitl(result)
-                and result.agent_message_id not in follow_up_hitl_message_ids
+                and result not in hitl_required_pending
             ]
             has_awaiting_input = bool(hitl_required_pending)
             has_paused_pending = bool(plain_awaiting_pending) or any(
@@ -5174,6 +5356,7 @@ class SupervisorExecutor:
             user_message_id=user_message_id,
             trajectory=trajectory,
             synthesis_instruction=planner_action.synthesis_instruction or "",
+            user_goal=state.goal,
             client_request_id=client_req_id,
         )
         try:
@@ -5224,10 +5407,14 @@ class SupervisorExecutor:
 
         entry.completed_at = utcnow()
         trajectory.status = TrajectoryStatus.COMPLETED
+        def record_completion_evidence(updated: OrchestrationRunState) -> None:
+            updated.completion_evidence = planner_action.completion_evidence
+
         state = await self._mark_v2_terminal(
             state,
             OrchestrationStatus.COMPLETED,
             reason=planner_action.reasoning,
+            mutate=record_completion_evidence,
         )
         return await self._log_state_and_return(
             room_id,
@@ -6124,7 +6311,7 @@ class SupervisorExecutor:
                 ):
                     intent.status = result.status.value
         if advance_step:
-            state.steps_used += 1
+            state.steps_used = min(state.steps_used + 1, state.step_budget)
 
     @staticmethod
     def _v2_dispatch_intent(
@@ -6824,8 +7011,8 @@ class SupervisorExecutor:
             "artifact_refs": list(payload.selected_artifact_refs),
             "attachment_refs": list(payload.selected_attachment_refs),
             "resource_payloads": [
-                resource.model_dump(mode="json")
-                for resource in payload.resource_payloads
+                resource_payload.model_dump(mode="json", exclude_none=True)
+                for resource_payload in payload.resource_payloads
             ],
         }
 
@@ -7322,7 +7509,7 @@ class SupervisorExecutor:
                 )
                 public_task_label = f"Requesting {target.agent_name or target.agent_id}"
                 resolved_resource_payloads = [
-                    resource_payload.model_dump(mode="json")
+                    resource_payload.model_dump(mode="json", exclude_none=True)
                     for resource_payload in (
                         resolved_payload.resource_payloads if resolved_payload else []
                     )
@@ -7352,7 +7539,12 @@ class SupervisorExecutor:
                     preflight_failure = _normalize_attachment_preflight_failure(
                         message.extend_info.get("attachment_preflight_failure")
                     )
-                message.extend_info = {"public_task_label": public_task_label}
+                message.extend_info = {
+                    "public_task_label": public_task_label,
+                    # This is the exact task sent across the external-agent
+                    # boundary, not private planner reasoning or payload data.
+                    "public_dispatch_text": dispatch_task,
+                }
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)
@@ -7436,6 +7628,8 @@ class SupervisorExecutor:
                     dispatch_task=dispatch_task,
                     resolved_resource_payloads=resolved_resource_payloads,
                     explicit_attachment_refs=explicit_attachment_refs,
+                    dispatch_resource_payloads=resolved_resource_payloads,
+                    selected_attachment_refs=explicit_attachment_refs,
                     attachment_forwarding_policy=(
                         target.attachment_policy
                         if getattr(target, "attachment_policy", None)
@@ -7462,7 +7656,10 @@ class SupervisorExecutor:
                         )
                         or preflight_failure
                     )
-                message.extend_info = {"public_task_label": public_task_label}
+                message.extend_info = {
+                    "public_task_label": public_task_label,
+                    "public_dispatch_text": dispatch_task,
+                }
 
                 if result.status in (
                     ProcessingStatus.PAUSED,

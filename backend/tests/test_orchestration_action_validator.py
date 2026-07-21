@@ -131,7 +131,7 @@ def test_terminal_synthesis_allowed_after_agent_output():
     assert result is action
 
 
-def test_budget_exhaustion_rejects_delegate_and_complete():
+def test_budget_exhaustion_rejects_delegate_but_allows_complete():
     delegate = _action(PlannerActionType.DELEGATE, targets=[_target()])
     complete = _action(PlannerActionType.COMPLETE)
 
@@ -143,17 +143,24 @@ def test_budget_exhaustion_rejects_delegate_and_complete():
     assert delegate_error.value.code == "step_budget_exhausted"
     assert delegate_error.value.recoverable is False
 
-    with pytest.raises(PlannerActionValidationError, match="step budget"):
+    assert (
         _validate(
             complete,
             steps_used=8,
             step_budget=8,
             has_agent_output=True,
         )
+        is complete
+    )
 
 
-def test_budget_exhaustion_allows_synthesize_and_fail():
+def test_budget_exhaustion_allows_synthesize_ask_user_and_fail():
     synthesize = _action(PlannerActionType.SYNTHESIZE)
+    ask_user = PlannerAction(
+        action=PlannerActionType.ASK_USER,
+        reasoning="Need a user-only value",
+        questions=[PlannerQuestion(prompt="What is the approved limit?")],
+    )
     fail = PlannerAction(
         action=PlannerActionType.FAIL,
         reasoning="cannot continue",
@@ -169,6 +176,7 @@ def test_budget_exhaustion_allows_synthesize_and_fail():
         )
         is synthesize
     )
+    assert _validate(ask_user, steps_used=8, step_budget=8) is ask_user
     assert _validate(fail, steps_used=8, step_budget=8) is fail
 
 
@@ -917,6 +925,46 @@ def test_planner_schema_rejects_blank_completion_disposition_reason():
         )
 
 
+def test_planner_response_schema_is_openai_strict_compatible():
+    def assert_object_required_matches_properties(schema, path="$"):
+        if isinstance(schema, dict):
+            properties = schema.get("properties")
+            if properties:
+                assert set(schema.get("required", [])) == set(properties), path
+            for key, value in schema.items():
+                assert_object_required_matches_properties(value, f"{path}.{key}")
+        elif isinstance(schema, list):
+            for index, value in enumerate(schema):
+                assert_object_required_matches_properties(value, f"{path}[{index}]")
+
+    assert_object_required_matches_properties(PLANNER_ACTION_RESPONSE_SCHEMA)
+
+
+def test_completion_disposition_schema_accepts_nullable_replacement_fingerprint():
+    completion_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"][
+        "completion_evidence"
+    ]["anyOf"][0]
+    disposition_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"][
+        "completion_evidence"
+    ]["anyOf"][0]["properties"]["requested_goal_family_dispositions"]["items"]
+
+    assert set(completion_schema["required"]) == set(completion_schema["properties"])
+    assert set(disposition_schema["required"]) == set(
+        disposition_schema["properties"]
+    )
+    validate(
+        {
+            "event_id": "dispose-1",
+            "goal_family_fingerprint": "family-1",
+            "through_goal_revision_fingerprint": "revision-1",
+            "status": "abandoned",
+            "reason": "The user withdrew the request.",
+            "replacement_goal_family_fingerprint": None,
+        },
+        disposition_schema,
+    )
+
+
 def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
     payload = {
         "action": "complete",
@@ -940,6 +988,8 @@ def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
                     "blocker_keys": [],
                 }
             ],
+            "abandoned_goal_disposition_event_ids": [],
+            "requested_goal_family_dispositions": [],
         },
     }
 
@@ -953,7 +1003,7 @@ def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
     )
 
 
-def test_completion_validator_rejects_constructed_blank_disposition_reason():
+def test_completion_validator_does_not_treat_dispositions_as_terminal_authority():
     action = _complete_action()
     action.completion_evidence.requested_goal_family_dispositions.append(
         GoalFamilyDispositionRequest.model_construct(
@@ -965,13 +1015,13 @@ def test_completion_validator_rejects_constructed_blank_disposition_reason():
         )
     )
 
-    with pytest.raises(PlannerActionValidationError, match="nonempty") as exc_info:
-        PlannerActionValidator.validate(action, run_state=_state_for_validation())
+    assert PlannerActionValidator.validate(
+        action,
+        run_state=_complete_run_state(),
+    ) is action
 
-    assert exc_info.value.code == "completion_disposition_request_invalid"
 
-
-def test_completion_validator_rejects_requested_unknown_disposition_revision():
+def test_completion_validator_ignores_unknown_disposition_revision_metadata():
     action = _complete_action(
         abandoned_goal_disposition_event_ids=["dispose-1"],
         requested_goal_family_dispositions=[
@@ -990,7 +1040,7 @@ def test_completion_validator_rejects_requested_unknown_disposition_revision():
         ]
     )
 
-    assert _validation_code(action, state) == "completion_disposition_unreferenced"
+    assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
 def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
@@ -1121,6 +1171,9 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
         "Execution will decide the compatible representation"
         in supervisor_service.system_prompt
     )
+    assert "synthesize" not in supervisor_service.schema["properties"]["action"]["enum"]
+    assert "state_context.run.goal" in supervisor_service.system_prompt
+    assert "Execution will then synthesize" in supervisor_service.system_prompt
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():
@@ -1333,8 +1386,6 @@ def _completion_case(case: str):
 @pytest.mark.parametrize(
     ("case", "expected_code"),
     [
-        ("active_missing_obligation", "completion_required_output_missing"),
-        ("unreferenced_disposition", "completion_disposition_unreferenced"),
         ("open_runtime_failure", "completion_open_failure"),
         ("pending_hitl", "completion_pending_hitl"),
         ("validated_open_blocker", "completion_open_blocker"),
@@ -1349,7 +1400,7 @@ def test_completion_scope_rejections(case, expected_code):
 @pytest.mark.parametrize(
     ("action", "expected_code"),
     [
-        (_synthesize_action(), "completion_blocked_by_recoverable_failure"),
+        (_synthesize_action(), "completion_open_failure"),
         (_complete_action(), "completion_open_failure"),
     ],
 )
@@ -1443,18 +1494,22 @@ def test_completion_accepts_abandoned_failure():
     assert PlannerActionValidator.validate(_complete_action(), run_state=state)
 
 
-def test_complete_requires_structured_evidence():
+def test_complete_does_not_require_structured_evidence():
     action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
 
-    with pytest.raises(PlannerActionValidationError, match="completion evidence"):
-        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+    assert PlannerActionValidator.validate(
+        action,
+        run_state=_complete_run_state(),
+    ) is action
 
 
-def test_complete_rejects_unknown_fact_reference():
+def test_complete_ignores_unknown_fact_reference_metadata():
     action = _complete_action(referenced_fact_ids=["missing-fact"])
 
-    with pytest.raises(PlannerActionValidationError, match="missing-fact"):
-        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+    assert PlannerActionValidator.validate(
+        action,
+        run_state=_complete_run_state(),
+    ) is action
 
 
 def test_complete_rejects_pending_hitl_and_active_dispatches():
@@ -1562,10 +1617,10 @@ def test_complete_allows_abandoned_recoverable_failure():
     assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
-def test_synthesize_rejected_when_recoverable_failure_is_open():
+def test_synthesize_rejected_when_runtime_failure_is_open():
     state = _complete_run_state(open_failures=[_failure("open")])
 
-    with pytest.raises(PlannerActionValidationError, match="open recoverable failure"):
+    with pytest.raises(PlannerActionValidationError, match="open runtime failure"):
         PlannerActionValidator.validate(
             _synthesize_action(),
             run_state=state,
@@ -1686,11 +1741,13 @@ def test_complete_accepts_resolved_question_history():
     )
 
 
-def test_complete_rejects_blank_satisfied_criteria():
+def test_complete_ignores_blank_satisfied_criteria_metadata():
     action = _complete_action(satisfied_criteria=["  "])
 
-    with pytest.raises(PlannerActionValidationError, match="satisfied criteria"):
-        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+    assert PlannerActionValidator.validate(
+        action,
+        run_state=_complete_run_state(),
+    ) is action
 
 
 def test_complete_accepts_valid_evidence():
@@ -1779,7 +1836,7 @@ async def test_planner_adapter_rejects_completion_with_snapshot_only():
         ("clarify", PlannerActionType.ASK_USER),
         ("done", PlannerActionType.COMPLETE),
         ("delegate", PlannerActionType.DELEGATE),
-        ("synthesize", PlannerActionType.SYNTHESIZE),
+        ("synthesize", PlannerActionType.COMPLETE),
     ],
 )
 def test_v2_adapter_maps_legacy_action_names(legacy_action, planner_action):

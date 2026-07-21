@@ -227,7 +227,9 @@ class TestArtifactUpdateEvent:
         assert event.last_chunk is True
 
     @pytest.mark.asyncio
-    async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(self):
+    async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(
+        self,
+    ):
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update",
@@ -307,9 +309,13 @@ class TestResponseEvent:
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_text_only_completed_response_materializes_public_artifact_for_refresh(self):
+    async def test_text_only_completed_response_materializes_public_artifact_for_refresh(
+        self,
+    ):
         h = _make_handler()
-        event = AgentEvent(kind="response", **_base_event(), text="Visible final answer")
+        event = AgentEvent(
+            kind="response", **_base_event(), text="Visible final answer"
+        )
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
@@ -329,7 +335,40 @@ class TestResponseEvent:
         ]
 
     @pytest.mark.asyncio
-    async def test_completed_response_sanitizes_artifacts_for_all_terminal_consumers(self):
+    async def test_completed_response_keeps_public_text_beside_data_artifact(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="raw transport text",
+            public_text="The agent completed the request.",
+            artifacts=[
+                {
+                    "artifactId": "submission-1",
+                    "name": "cyber_submission",
+                    "parts": [{"kind": "data", "data": {"company": "Acme SaaS Inc."}}],
+                }
+            ],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        kwargs = h._message_writer.update_task_state_on_message.await_args.kwargs
+        assert kwargs["message_text"] == "The agent completed the request."
+        assert kwargs["artifacts"][0]["name"] == "cyber_submission"
+        assert kwargs["artifacts"][0]["parts"][0]["data"] == {
+            "company": "Acme SaaS Inc."
+        }
+
+    @pytest.mark.asyncio
+    async def test_completed_response_sanitizes_artifacts_for_all_terminal_consumers(
+        self,
+    ):
         private_bytes = "PRIVATE_SENTINEL_completed_file_bytes"
         private_metadata = "PRIVATE_SENTINEL_completed_metadata"
         h = _make_handler(
@@ -392,7 +431,9 @@ class TestResponseEvent:
             assert "Visible completed output" in payload_json
 
     @pytest.mark.asyncio
-    async def test_completed_response_does_not_fallback_to_raw_text_when_artifacts_drop(self):
+    async def test_completed_response_does_not_fallback_to_raw_text_when_artifacts_drop(
+        self,
+    ):
         private_text = "PRIVATE_SENTINEL_completed_status_text"
         private_bytes = "PRIVATE_SENTINEL_completed_only_file_bytes"
         h = _make_handler()
@@ -780,7 +821,9 @@ class TestOrchestrationResultIngestorHook:
         )
 
     @pytest.mark.asyncio
-    async def test_failure_events_project_generic_error_before_persist_delivery_and_ingest(self):
+    async def test_failure_events_project_generic_error_before_persist_delivery_and_ingest(
+        self,
+    ):
         private_text = "PRIVATE_SENTINEL_remote_failure_text"
         private_metadata = "PRIVATE_SENTINEL_remote_failure_metadata"
         h = _make_handler(slot_lifecycle=MagicMock(terminate_slot=AsyncMock()))
@@ -1063,7 +1106,9 @@ class TestInteractiveEvent:
         h._rmc.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(self):
+    async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(
+        self,
+    ):
         private_prompt = "PRIVATE_SENTINEL_async_interactive_prompt"
         generic_prompt = "The agent needs additional information."
         mock_impl = AsyncMock(return_value=True)

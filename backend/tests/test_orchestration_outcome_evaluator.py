@@ -759,6 +759,35 @@ def test_optional_only_outputs_with_matching_evidence_return_fulfilled():
     assert outcome.status == "fulfilled"
 
 
+def test_empty_legacy_completed_result_is_not_fulfilled():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs = []
+    output = _output("agent-msg-1", "")
+    output.artifact_keys = []
+
+    outcome = evaluator.evaluate(_state(), _state(), intent, output, {})
+
+    assert outcome.status == "no_progress"
+
+
+def test_input_required_result_is_blocked_even_without_required_outputs():
+    evaluator = DelegationOutcomeEvaluator()
+    intent = _intent("agent-msg-1")
+    intent.expected_outputs = []
+    output = AgentOutputRecord(
+        agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        status="awaiting_input",
+        status_message="Need the complete broker submission.",
+        interactive_state="input-required",
+    )
+
+    outcome = evaluator.evaluate(_state(), _state(), intent, output, {})
+
+    assert outcome.status == "blocked"
+
+
 def test_repeated_legacy_text_with_same_normalized_fingerprint_returns_no_progress():
     evaluator = DelegationOutcomeEvaluator()
     intent = _intent("agent-msg-1")

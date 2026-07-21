@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from common.utils.a2a_helpers import is_terminal_task_state_value
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +67,18 @@ class AgentTaskCleanupAdapter:
         for agent_msg in agent_msgs:
             if not getattr(agent_msg, "has_task_tracking", False):
                 continue
+            task = (
+                agent_msg.message_content.message_task
+                if getattr(agent_msg, "message_content", None)
+                else None
+            )
+            task_state = (
+                getattr(getattr(task, "status", None), "state", None)
+                if task is not None
+                else None
+            )
+            if is_terminal_task_state_value(task_state):
+                continue
             await self._message_task_store.update_task_state_on_message(
                 agent_msg.message_id,
                 "canceled",
@@ -76,11 +89,6 @@ class AgentTaskCleanupAdapter:
                 state="canceled",
                 room_id=agent_msg.room_id,
                 user_id=agent_msg.user_id or "",
-            )
-            task = (
-                agent_msg.message_content.message_task
-                if getattr(agent_msg, "message_content", None)
-                else None
             )
             if getattr(agent_msg, "agent_url", None) and task and getattr(task, "id", None):
                 try:

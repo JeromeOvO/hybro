@@ -392,7 +392,9 @@ class TestWebhookTransportAuth:
     @pytest.mark.asyncio
     async def test_rejects_invalid_token(self):
         db = MagicMock()
-        db.verify_webhook_token_for_task = AsyncMock(return_value=(False, "invalid_token"))
+        db.verify_webhook_token_for_task = AsyncMock(
+            return_value=(False, "invalid_token")
+        )
         wt = _make_webhook_transport(db=db)
         with pytest.raises(HTTPException) as exc:
             await wt.handle_webhook("msg-001", {}, "bad-token")
@@ -401,7 +403,9 @@ class TestWebhookTransportAuth:
     @pytest.mark.asyncio
     async def test_returns_404_when_task_not_found(self):
         db = MagicMock()
-        db.verify_webhook_token_for_task = AsyncMock(return_value=(False, "task_not_found"))
+        db.verify_webhook_token_for_task = AsyncMock(
+            return_value=(False, "task_not_found")
+        )
         wt = _make_webhook_transport(db=db)
         with pytest.raises(HTTPException) as exc:
             await wt.handle_webhook("msg-001", {}, "some-token")
@@ -434,7 +438,9 @@ class TestWebhookTransportFlow:
                 "id": "task-001",
                 "contextId": "ctx-001",
                 "status": {"state": "completed"},
-                "artifacts": [{"artifactId": "a1", "name": "r", "parts": [{"text": "done"}]}],
+                "artifacts": [
+                    {"artifactId": "a1", "name": "r", "parts": [{"text": "done"}]}
+                ],
             }
         }
         result = await wt.handle_webhook("msg-001", payload, "valid-token")
@@ -507,15 +513,16 @@ class TestWebhookTransportNormalize:
     def test_completed_task(self):
         wt = _make_webhook_transport()
         msg = _make_tracked_message()
-        task = self._make_task("completed", [
-            Artifact(artifact_id="a1", name="r", parts=[TextPart(text="done")])
-        ])
+        task = self._make_task(
+            "completed",
+            [Artifact(artifact_id="a1", name="r", parts=[TextPart(text="done")])],
+        )
         event = wt._task_to_event(task, msg)
         assert event.kind == "response"
         assert event.text == "done"
 
-    def test_completed_task_without_artifacts_does_not_promote_status_message(self):
-        private_text = "PRIVATE_SENTINEL_webhook_completed_status"
+    def test_completed_task_promotes_agent_status_message_as_public_text(self):
+        public_text = "The agent completed the request."
         wt = _make_webhook_transport()
         msg = _make_tracked_message()
         task = Task(
@@ -525,7 +532,7 @@ class TestWebhookTransportNormalize:
                 state=TaskState.completed,
                 message=Message(
                     role=Role.agent,
-                    parts=[Part(root=TextPart(text=private_text))],
+                    parts=[Part(root=TextPart(text=public_text))],
                     message_id="remote-completed-status",
                 ),
             ),
@@ -536,9 +543,9 @@ class TestWebhookTransportNormalize:
 
         assert event.kind == "response"
         assert event.text == ""
+        assert event.public_text == public_text
         assert event.parts is None
         assert event.artifacts is None
-        assert private_text not in repr(event)
 
     def test_failed_task(self):
         wt = _make_webhook_transport()

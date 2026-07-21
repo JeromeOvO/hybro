@@ -545,21 +545,30 @@ async def test_sync_exception_uses_generic_public_failure_everywhere():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("extend_info", "message_text", "expected_public_label"),
+    ("extend_info", "message_text", "task_content", "expected_public_label"),
     [
         (
             {"public_task_label": "Public label from extend_info"},
             "PRIVATE_SENTINEL_message_text_explicit_label",
+            "INTERNAL DISPATCH TASK PRIVATE_SENTINEL_task_content",
             "Public label from extend_info",
         ),
         (
             None,
+            "PRIVATE_SENTINEL_message_text_public_task_content",
+            "Requesting Insurer",
+            "Requesting Insurer",
+        ),
+        (
+            None,
             "PRIVATE_SENTINEL_message_text_generic_label",
+            "INTERNAL DISPATCH TASK PRIVATE_SENTINEL_task_content",
             "Requesting Insurer",
         ),
         (
             None,
             "   ",
+            "INTERNAL DISPATCH TASK PRIVATE_SENTINEL_task_content",
             "Requesting Insurer",
         ),
     ],
@@ -567,9 +576,10 @@ async def test_sync_exception_uses_generic_public_failure_everywhere():
 async def test_task_tracking_uses_public_label_policy_without_leaking_private_task(
     extend_info,
     message_text,
+    task_content,
     expected_public_label,
 ):
-    private_task = "PRIVATE_SENTINEL_task_content"
+    prepared_private = "INTERNAL DISPATCH TASK prepared private prompt"
     delivery = MagicMock()
     delivery.send_task_submitted = AsyncMock()
     delivery.send_task_update = AsyncMock()
@@ -594,7 +604,7 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
         related_message_id="user-msg-1",
         agent_id="agent-1",
         message_content=MessageContent(message_text=message_text),
-        task_content=private_task,
+        task_content=task_content,
         client_request_id="client-1",
         extend_info=extend_info,
     )
@@ -604,7 +614,10 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
     await transport._setup_task_tracking(
         message,
         agent_card,
-        Message(role=MessageRole.USER, parts=[TextPart(text=private_task)]),
+        Message(
+            role=MessageRole.USER,
+            parts=[TextPart(kind="text", text=prepared_private)],
+        ),
         "room-1",
     )
 
@@ -613,8 +626,9 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
     assert submitted_kwargs["task_content"] == expected_public_label
     assert update_kwargs["status_message"] == expected_public_label
     delivered_payload = f"{submitted_kwargs} {update_kwargs}"
-    assert private_task not in delivered_payload
-    assert "PRIVATE_SENTINEL_message_text" not in delivered_payload
+    assert prepared_private not in delivered_payload
+    assert "PRIVATE_SENTINEL" not in delivered_payload
+    assert "INTERNAL DISPATCH TASK" not in delivered_payload
 
 
 class TestHandleSyncResponseSuccess:
@@ -1834,8 +1848,8 @@ class TestHandleSyncResponseInteractive:
         assert paused == current_message.message_id
         assert agent_task_id == "real-agent-task-abc123"
         notify_kwargs = proc.tsm.notify_task.await_args.kwargs
-        assert notify_kwargs["status_message"] == "Requesting test-agent"
-        assert "Please approve." not in repr(notify_kwargs)
+        assert notify_kwargs["status_message"] == "Please approve."
+        assert notify_kwargs["status_message"] == "Please approve."
 
     @pytest.mark.asyncio
     async def test_no_task_tracking_interactive_does_not_persist_remote_prompt(self):

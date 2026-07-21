@@ -27,7 +27,7 @@ class SupervisorLLMService:
         response = await self._llm_provider.generate_structured(
             _supervisor_messages(system_prompt, user_prompt),
             schema=schema,
-            json_mode=True,
+            json_mode=schema is None,
             model=model or self._default_model,
             timeout_seconds=timeout_seconds,
         )

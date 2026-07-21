@@ -20,8 +20,13 @@ class SummaryLLMService:
             for item in agent_responses
         )
         system_prompt = (
-            "You are HYBRO AI synthesizing multi-agent responses. Preserve useful "
-            "agent attribution and return a concise user-facing answer.\n\n"
+            "You are HYBRO AI writing the final answer to the user's request from "
+            "multi-agent evidence. Answer the user's goal directly instead of "
+            "reporting that agents were called. Lead with the requested outcome; "
+            "include only useful facts, caveats, and next actions. Do not copy full "
+            "artifacts or JSON unless explicitly requested, and never expose internal "
+            "task labels, dispatch text, step numbers, or strings such as "
+            "'Requesting ...'. Preserve agent attribution only when it helps the user.\n\n"
             + HYBRO_MARKDOWN_RESPONSE_FORMAT
         )
         if mode == "debate":
@@ -33,7 +38,7 @@ class SummaryLLMService:
         user_prompt = (
             f"The user asked: {user_question or 'Not provided'}\n\n"
             f"Agent responses:\n{answers}\n\n"
-            "Return the final response for the user."
+            "Write the final answer that best fulfills the user's request."
         )
         return self._llm_provider.generate_stream(
             [

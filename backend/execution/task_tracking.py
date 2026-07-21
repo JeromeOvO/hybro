@@ -222,14 +222,18 @@ class A2ATaskTrackingService:
         default_request_timeout: float,
         send_hitl_reply: SendHitlReplyCall,
     ) -> dict[str, Any]:
-        msg = await self._tracking_store.get_room_agent_message_by_message_id(message_id)
+        msg = await self._tracking_store.get_room_agent_message_by_message_id(
+            message_id
+        )
         if not msg:
             raise ValueError(f"Agent message {message_id} not found")
 
         agent_url = msg.agent_url
         agent_card = None
         if msg.agent_id and (webhook_base_url or not agent_url):
-            agent_record = await self._tracking_store.get_agent_by_agent_id(msg.agent_id)
+            agent_record = await self._tracking_store.get_agent_by_agent_id(
+                msg.agent_id
+            )
             agent_card = getattr(agent_record, "agent_card", None)
             if agent_card is None and webhook_base_url:
                 logger.warning(
@@ -283,12 +287,15 @@ class A2ATaskTrackingService:
         )
 
         task_result = (
-            facade_result_to_model(response) if response.get("kind") != "error" else None
+            facade_result_to_model(response)
+            if response.get("kind") != "error"
+            else None
         )
         task_obj = task_result if getattr(task_result, "kind", None) == "task" else None
         response_text = _extract_reply_response_text(task_result)
 
         if task_obj:
+            public_status_text = extract_public_completed_status_text(task_obj)
             existing_task = (
                 msg.message_content.message_task if msg.message_content else None
             )
@@ -302,13 +309,14 @@ class A2ATaskTrackingService:
                 task_obj,
                 trusted_local_hitl_metadata=trusted_local_hitl_metadata,
             )
-            response_text = _extract_reply_response_text(
+            projected_response_text = _extract_reply_response_text(
                 _task_model_for_internal_projection(projected_task_data)
             )
+            response_text = projected_response_text or public_status_text
             await self._tracking_store.update_task_on_message(
                 message_id,
                 projected_task_data,
-                message_text=response_text,
+                message_text=public_status_text or projected_response_text,
             )
 
         logger.info(
@@ -465,14 +473,16 @@ class A2ATaskTrackingService:
                 context="terminal_task",
             )
 
+        public_status_text = extract_public_completed_status_text(task)
         projected_data = public_persisted_task_data(task)
         projected_task = _task_model_for_internal_projection(projected_data)
         state = projected_task.status.state
-        task_text = _extract_text_from_task(projected_task)
+        artifact_text = _extract_text_from_task(projected_task)
+        task_text = artifact_text or public_status_text
         persisted = await self._tracking_store.update_task_on_message(
             message_id,
             projected_data,
-            message_text=task_text or None,
+            message_text=public_status_text or artifact_text or None,
         )
 
         resp = {
@@ -482,6 +492,8 @@ class A2ATaskTrackingService:
             "status": _state_value(state),
             "persisted": persisted,
         }
+        if public_status_text:
+            resp["public_message_text"] = public_status_text
         non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
@@ -511,7 +523,9 @@ class A2ATaskTrackingService:
                 state=TaskState.failed,
                 message=Message(
                     role=Role.AGENT,
-                    parts=[Part(root=TextPart(text=_PUBLIC_SAFE_STATUS_TEXT["failed"]))],
+                    parts=[
+                        Part(root=TextPart(text=_PUBLIC_SAFE_STATUS_TEXT["failed"]))
+                    ],
                     message_id=str(uuid4()),
                 ),
             ),
@@ -692,9 +706,7 @@ def _task_model_for_internal_projection(task_data: dict[str, Any]) -> Task:
         return Task.model_validate(_drop_unaddressable_public_file_parts(task_data))
 
 
-def _drop_unaddressable_public_file_parts(
-    task_data: dict[str, Any]
-) -> dict[str, Any]:
+def _drop_unaddressable_public_file_parts(task_data: dict[str, Any]) -> dict[str, Any]:
     artifacts = task_data.get("artifacts")
     if not isinstance(artifacts, list):
         return task_data
@@ -735,6 +747,17 @@ def _extract_status_message(task: Task) -> str | None:
             if hasattr(part, "root") and hasattr(part.root, "text"):
                 return part.root.text
     return None
+
+
+def extract_public_completed_status_text(task: Task) -> str | None:
+    """Extract agent-authored public text from a completed A2A Task status."""
+    if _state_value(task.status.state) != _COMPLETED_STATE:
+        return None
+    message = task.status.message
+    if message is None or message.role != Role.AGENT:
+        return None
+    text = _extract_text_from_message(message).strip()
+    return text or None
 
 
 def _extract_reply_response_text(task_result) -> str | None:
@@ -855,7 +878,9 @@ def public_persisted_task_data(
 
     artifacts = task_data.get("artifacts")
     if state_value == _COMPLETED_STATE and isinstance(artifacts, list):
-        task_data["artifacts"] = [public_artifact_data(artifact) for artifact in artifacts]
+        task_data["artifacts"] = [
+            public_artifact_data(artifact) for artifact in artifacts
+        ]
     else:
         task_data["artifacts"] = None
 
@@ -872,7 +897,9 @@ def public_persisted_task_data(
         else:
             status["message"] = None
     elif isinstance(status, dict) and state_value in _PUBLIC_SAFE_STATUS_TEXT:
-        status["message"] = _public_status_message(_PUBLIC_SAFE_STATUS_TEXT[state_value])
+        status["message"] = _public_status_message(
+            _PUBLIC_SAFE_STATUS_TEXT[state_value]
+        )
 
     if isinstance(trusted_local_hitl_metadata, dict):
         trusted_metadata = {
@@ -894,6 +921,58 @@ def resolve_public_task_label(extend_info: Any, agent_name: str) -> str:
     return f"Requesting {agent_name}"
 
 
+def resolve_public_agent_response_text(
+    room_agent_message: Any,
+    *,
+    preferred_text: str | None = None,
+    fallback_text: str | None = None,
+) -> str | None:
+    """Resolve the public agent-authored body without exposing dispatch seeds.
+
+    Modern A2A responses may carry their human-readable text separately from a
+    DataPart-only artifact.  Legacy rows can instead have the dispatched task
+    copied into ``message_text``; those values are not agent responses and must
+    not be rendered as one.
+    """
+
+    if isinstance(preferred_text, str) and preferred_text.strip():
+        return preferred_text.strip()
+
+    message_content = getattr(room_agent_message, "message_content", None)
+    stored_message_text = getattr(message_content, "message_text", None)
+    stored_message_text = (
+        stored_message_text.strip()
+        if isinstance(stored_message_text, str) and stored_message_text.strip()
+        else None
+    )
+
+    extend_info = getattr(room_agent_message, "extend_info", None)
+    public_label = resolve_public_task_label(
+        extend_info,
+        getattr(room_agent_message, "agent_id", None) or "agent",
+    )
+    public_dispatch_text = (
+        extend_info.get("public_dispatch_text")
+        if isinstance(extend_info, dict)
+        else None
+    )
+    dispatch_seed_texts = {
+        candidate.strip()
+        for candidate in (
+            getattr(room_agent_message, "task_content", None),
+            public_label,
+            public_dispatch_text,
+        )
+        if isinstance(candidate, str) and candidate.strip()
+    }
+    if stored_message_text and stored_message_text not in dispatch_seed_texts:
+        return stored_message_text
+
+    if isinstance(fallback_text, str) and fallback_text.strip():
+        return fallback_text.strip()
+    return None
+
+
 def _state_value(state: TaskState) -> str:
     return state.value if hasattr(state, "value") else str(state)
 
@@ -907,9 +986,11 @@ def _non_text_parts(artifacts) -> list[dict] | None:
 
 __all__ = [
     "A2ATaskTrackingService",
+    "extract_public_completed_status_text",
     "public_artifact_data",
     "public_message_data",
     "public_part_data",
     "public_persisted_task_data",
+    "resolve_public_agent_response_text",
     "resolve_public_task_label",
 ]

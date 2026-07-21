@@ -303,9 +303,13 @@ class RoomCenterAgentMessageRequest(BaseModel):
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomAgentMessage | None = None
+    # Dispatch-only values. These are intentionally not copied to RoomAgentMessage
+    # or exposed through room/SSE response models.
     dispatch_task: str | None = None
     resolved_resource_payloads: list[dict[str, Any]] | None = None
     explicit_attachment_refs: list[str | dict[str, Any]] | None = None
+    dispatch_resource_payloads: list[dict[str, Any]] | None = None
+    selected_attachment_refs: list[str] | None = None
     attachment_forwarding_policy: str | None = None
 
 

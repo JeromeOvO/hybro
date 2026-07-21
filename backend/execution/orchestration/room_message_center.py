@@ -1559,6 +1559,18 @@ class RoomMessageCenter:
                     )
 
         try:
+            logger.info(
+                "room_message_supervisor_started room_id=%s user_message_id=%s "
+                "client_request_id=%s envelope=%s agent_count=%d "
+                "clarify_resume=%s quoted=%s",
+                room_id,
+                room_user_message_id,
+                getattr(user_message, "client_request_id", None),
+                has_orchestration_envelope,
+                len(agent_registry),
+                is_clarify_resume,
+                bool(quoted_text),
+            )
             result = await self.supervisor_executor.run(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
@@ -1571,6 +1583,16 @@ class RoomMessageCenter:
                 quoted_text=quoted_text,
                 resumed_trajectory=resumed_trajectory,
                 user_message=user_message,
+            )
+            logger.info(
+                "room_message_supervisor_completed room_id=%s user_message_id=%s "
+                "client_request_id=%s status=%s success=%s error=%s",
+                room_id,
+                room_user_message_id,
+                getattr(user_message, "client_request_id", None),
+                getattr(result.status, "value", result.status),
+                result.status not in (RunStatus.FAILED, RunStatus.CANCELED),
+                getattr(result, "error", None),
             )
         except self.supervisor_planning_error_cls:
             if is_clarify_resume and resumed_trajectory:

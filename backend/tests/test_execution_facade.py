@@ -959,6 +959,69 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
 
 
 @pytest.mark.asyncio
+async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state():
+    run_store = InMemoryOrchestrationRunStore()
+    await run_store.create_run(
+        OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Get quote",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.AWAITING_USER,
+            pending_hitl_request_ids=["hitl-1"],
+            open_questions=[{"request_id": "hitl-1", "status": "open"}],
+        )
+    )
+    facade, _ = _make_facade(orchestration_run_store=run_store)
+
+    assert await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    saved = await run_store.get_run("run-1")
+    assert saved is not None
+    assert saved.status == OrchestrationStatus.CANCELED
+    assert saved.pending_hitl_request_ids == []
+    assert saved.open_questions == [
+        {"request_id": "hitl-1", "status": "canceled"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_does_not_rewrite_budget_exhausted_orchestration():
+    run_store = InMemoryOrchestrationRunStore()
+    await run_store.create_run(
+        OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Get quote",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.BUDGET_EXHAUSTED,
+            terminal_reason="step budget exhausted",
+        )
+    )
+    facade, deps = _make_facade(orchestration_run_store=run_store)
+
+    assert await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    saved = await run_store.get_run("run-1")
+    assert saved is not None
+    assert saved.status == OrchestrationStatus.BUDGET_EXHAUSTED
+    assert saved.terminal_reason == "step budget exhausted"
+    deps["cancellation_store"].cancel_message.assert_not_awaited()
+    deps["cancellation_state"].cancel_message_and_broadcast.assert_not_awaited()
+    deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_cancel_clears_cancellation_when_persistence_fails():
     facade, deps = _make_facade()
     deps["cancellation_store"].cancel_message.return_value = False
