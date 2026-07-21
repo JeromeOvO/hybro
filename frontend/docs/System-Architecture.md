@@ -316,6 +316,14 @@ Key files:
 - `infer-turn-terminal-status.ts`
 - `resolve-display-type.ts`
 
+### Agent Dispatch Privacy
+
+Frontend message state treats `taskContent` as public display metadata only.
+Internal dispatch prompts are not accepted from API/SSE payloads and must not be
+rendered in timeline stage details or Agent response detail panes. Streaming
+correlation continues to rely on `client_request_id`; privacy filtering must
+not drop that correlation field.
+
 ### `src/stores/room-ui-store.ts`
 
 The room UI store contains ephemeral per-room UI state:
