@@ -143,6 +143,34 @@ def test_normalized_agent_response_deduplicates_file_parts() -> None:
     assert len(payload["parts"]) == 1
 
 
+def test_normalized_agent_response_deduplicates_canonical_and_legacy_files() -> None:
+    file_info = {
+        "uri": "s3://public-artifacts/report.pdf",
+        "mimeType": "application/pdf",
+        "name": "report.pdf",
+    }
+    payload = normalize_hub_publish_payload(
+        "agent_response",
+        "msg-1",
+        {
+            "task_id": "task-1",
+            "content": "file",
+            "parts": [
+                {"kind": "file", "file": file_info},
+                {"kind": "file", "file": file_info},
+                {
+                    "url": file_info["uri"],
+                    "mediaType": file_info["mimeType"],
+                    "filename": file_info["name"],
+                },
+            ],
+        },
+        task_id="task-1",
+    )
+
+    assert payload["parts"] == [{"kind": "file", "file": file_info}]
+
+
 @pytest.mark.asyncio
 async def test_publish_response_alias_normalizes_legacy_parts_for_public_delivery() -> None:
     private_bytes = "PRIVATE_SENTINEL_response_inline_bytes"

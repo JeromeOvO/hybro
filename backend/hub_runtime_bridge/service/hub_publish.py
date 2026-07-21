@@ -295,7 +295,12 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
             ):
                 normalized.append(part)
                 continue
-            out = {"kind": "file", "file": _normalize_hub_file_info(part)}
+            file_info = _normalize_hub_file_info(part)
+            file_key = _hub_file_key(file_info)
+            if file_key in seen_file_keys:
+                continue
+            seen_file_keys.add(file_key)
+            out = {"kind": "file", "file": file_info}
             if "metadata" in part:
                 out["metadata"] = part["metadata"]
             normalized.append(out)
@@ -308,12 +313,7 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
             normalized.append(out)
         elif "file" in part and isinstance(part.get("file"), dict):
             file_info = _normalize_hub_file_info(part)
-            file_key = (
-                file_info.get("bytes"),
-                file_info.get("uri"),
-                file_info.get("mimeType"),
-                file_info.get("name"),
-            )
+            file_key = _hub_file_key(file_info)
             if file_key in seen_file_keys:
                 continue
             seen_file_keys.add(file_key)
@@ -323,12 +323,7 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
             normalized.append(out)
         elif "raw" in part or "url" in part:
             file_info = _normalize_hub_file_info(part)
-            file_key = (
-                file_info.get("bytes"),
-                file_info.get("uri"),
-                file_info.get("mimeType"),
-                file_info.get("name"),
-            )
+            file_key = _hub_file_key(file_info)
             if file_key in seen_file_keys:
                 continue
             seen_file_keys.add(file_key)
@@ -344,6 +339,15 @@ def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
         else:
             normalized.append(part)
     return normalized
+
+
+def _hub_file_key(file_info: dict) -> tuple:
+    return (
+        file_info.get("bytes"),
+        file_info.get("uri"),
+        file_info.get("mimeType"),
+        file_info.get("name"),
+    )
 
 
 def _normalize_hub_file_info(part: dict) -> dict:
