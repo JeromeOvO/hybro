@@ -567,6 +567,12 @@ async def test_sync_exception_uses_generic_public_failure_everywhere():
         ),
         (
             None,
+            "PRIVATE_SENTINEL_message_text_unmarked_task",
+            "Review the private underwriting instructions",
+            "Requesting Insurer",
+        ),
+        (
+            None,
             "   ",
             "INTERNAL DISPATCH TASK PRIVATE_SENTINEL_task_content",
             "Requesting Insurer",

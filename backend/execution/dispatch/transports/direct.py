@@ -750,22 +750,6 @@ class DirectTransport(AgentTransport):
             logger.warning("Failed to setup task tracking: %s", exc)
             return None
 
-    @staticmethod
-    def _public_task_label(current_message: RoomAgentMessage, agent_name: str) -> str:
-        extend_info = current_message.extend_info
-        if isinstance(extend_info, dict):
-            label = extend_info.get("public_task_label")
-            if isinstance(label, str) and label.strip():
-                return label.strip()
-        task_content = current_message.task_content
-        if (
-            isinstance(task_content, str)
-            and task_content.strip()
-            and "INTERNAL DISPATCH TASK" not in task_content
-        ):
-            return task_content.strip()
-        return f"Requesting {agent_name}"
-
     async def _setup_tracking_context(
         self,
         current_message: RoomAgentMessage,
