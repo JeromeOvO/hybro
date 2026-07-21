@@ -394,6 +394,25 @@ forwarding policy. The resource provider and projection service are assembled in
 `container.py`; failure recovery and retry policy remain separate orchestration
 concerns.
 
+### Execution Control Plane
+
+Execution is the authoritative orchestration control plane for supervisor runs.
+Planner output is business-level only; Execution binds resources against Agent
+cards, creates dispatch intents, interprets Agent results, records shadow
+observations, creates HITL pauses, resumes existing A2A continuations, and marks
+terminal run state.
+
+Room modules persist messages and emit room events but do not decide next
+orchestration steps. A2A adapters and `DirectTransport` perform protocol
+conversion, send/stream/cancel, and normalized result production only.
+`HITLService` owns HITL request/response lifecycle CAS and persistence;
+`ExecutionFacade` records HITL answers onto orchestration runs and resumes
+Execution.
+
+Internal dispatch prompts are private Execution/adapter data. Public room
+messages, SSE events, frontend entities, and timeline views receive public
+labels and final results only.
+
 ### `context_memory`
 
 `context_memory.ContextMemoryFacade` owns room memory projection, assembly,

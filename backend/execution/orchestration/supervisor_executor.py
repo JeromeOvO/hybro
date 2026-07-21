@@ -2983,8 +2983,6 @@ class SupervisorExecutor:
         *,
         chosen_targets: list[PlannedDelegateTarget],
     ) -> OrchestrationRunState:
-        if not self.guardrails_enabled:
-            return state
         chosen_agent_ids = {target.agent_id for target in chosen_targets}
         repair_intent_ids = {
             target.repair_of_intent_id

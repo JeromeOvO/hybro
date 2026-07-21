@@ -671,6 +671,174 @@ def _executor(
     return executor
 
 
+@pytest.mark.asyncio
+async def test_agent_result_records_same_shadow_observations_regardless_of_guardrails(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "execution.orchestration.result_ingestor.uuid4",
+        lambda: SimpleNamespace(hex="stable-input-required-failure"),
+    )
+
+    async def run_case(guardrails_enabled: bool) -> dict[str, object]:
+        store = InMemoryOrchestrationRunStore()
+        user_message = RoomUserMessage(
+            room_id="room-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Produce quote"),
+            message_id="msg-1",
+        )
+        state = await store.create_run(
+            _run_state(
+                status=OrchestrationStatus.DISPATCHING,
+                dispatch_intents=[
+                    DispatchIntent(
+                        step_id="run-1:step-1",
+                        step_target_id="run-1:step-1:target-1",
+                        dispatch_intent_id="intent-1",
+                        planned_agent_message_id="agent-msg-1",
+                        agent_id="agent-1",
+                        task="Produce quote",
+                        task_hash="hash-1",
+                        goal_family_fingerprint="family-1",
+                        goal_revision_fingerprint="revision-1",
+                    )
+                ],
+            )
+        )
+        executor = _executor(
+            store=store,
+            planner=RecordingPlanner(),
+            user_message=user_message,
+            guardrails_enabled=guardrails_enabled,
+        )
+        result = StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Produce quote",
+            response_text="Missing annual revenue",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        )
+
+        await executor._ingest_v2_results(
+            state=state,
+            results=[result],
+            status=OrchestrationStatus.AWAITING_USER,
+            advance_step=False,
+        )
+
+        saved = await store.get_run("run-1")
+        assert saved is not None
+        comparable = {
+            "outcomes": [
+                outcome.model_dump(mode="json", exclude={"created_at"})
+                for outcome in saved.delegation_outcomes
+            ],
+            "goal_progress": [
+                progress.model_dump(mode="json", exclude={"updated_at"})
+                for progress in saved.goal_progress
+            ],
+            "blockers": [
+                blocker.model_dump(mode="json")
+                for blocker in saved.blockers
+            ],
+            "continuations": [
+                continuation.model_dump(mode="json", exclude={"updated_at"})
+                for continuation in saved.pending_agent_continuations
+            ],
+        }
+        assert comparable["outcomes"]
+        assert comparable["continuations"]
+        return comparable
+
+    assert await run_case(False) == await run_case(True)
+
+
+@pytest.mark.asyncio
+async def test_input_required_continuation_supersession_runs_when_guardrails_disabled():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Produce quote"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.RUNNING,
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="run-1:step-1:target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Produce quote",
+                    task_hash="hash-1",
+                    status="awaiting_input",
+                )
+            ],
+            agent_outputs=[
+                AgentOutputRecord(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status="awaiting_input",
+                    text="Missing annual revenue",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+            open_failures=[
+                OpenFailureRecord(
+                    failure_id="failure-1",
+                    fingerprint="agent-1:agent-msg-1:agent_input_required",
+                    source="a2a_adapter",
+                    agent_id="agent-1",
+                    agent_message_id="agent-msg-1",
+                    dispatch_intent_id="intent-1",
+                    error_code="agent_input_required",
+                    error_message="Agent requested additional input.",
+                    recoverable=True,
+                )
+            ],
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+        guardrails_enabled=False,
+    )
+
+    saved = await executor._supersede_unresolved_input_required_outputs(
+        state,
+        chosen_targets=[
+            PlannedDelegateTarget(agent_id="agent-2", task="Continue elsewhere"),
+        ],
+    )
+
+    assert saved.pending_agent_continuations[0].status == "abandoned"
+    assert saved.agent_outputs[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
+
+
 def _duplicate_generic_delegate_action() -> PlannerAction:
     return PlannerAction(
         action=PlannerActionType.DELEGATE,
@@ -12344,13 +12512,9 @@ async def test_supersede_abandons_same_agent_fresh_nonrepair_continuation_lineag
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("guardrails_enabled", "expected_status"),
-    [(False, "open"), (True, "abandoned")],
-)
-async def test_continuation_supersession_respects_injected_guardrail_flag(
+@pytest.mark.parametrize("guardrails_enabled", [False, True])
+async def test_continuation_supersession_runs_for_both_injected_guardrail_modes(
     guardrails_enabled: bool,
-    expected_status: str,
 ):
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -12419,13 +12583,9 @@ async def test_continuation_supersession_respects_injected_guardrail_flag(
         chosen_targets=[PlannedDelegateTarget(agent_id="agent-2", task="Consume it")],
     )
 
-    assert saved.pending_agent_continuations[0].status == expected_status
-    if guardrails_enabled:
-        assert saved.agent_outputs[0].status == "abandoned"
-        assert saved.open_failures[0].status == "abandoned"
-    else:
-        assert saved.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
-        assert saved.open_failures[0].status == "open"
+    assert saved.pending_agent_continuations[0].status == "abandoned"
+    assert saved.agent_outputs[0].status == "abandoned"
+    assert saved.open_failures[0].status == "abandoned"
 
 
 @pytest.mark.asyncio

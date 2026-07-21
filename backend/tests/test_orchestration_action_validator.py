@@ -511,6 +511,59 @@ def test_post_dispatch_duplicate_question_is_allowed_when_guardrails_disabled():
     )
 
 
+def test_guardrail_flag_controls_enforcement_after_shadow_state_exists():
+    target = PlannedDelegateTarget(agent_id="agent-1", task="Produce quote")
+    fingerprints = PlannerActionValidator._target_goal_fingerprints(target, {})
+    prior_intent = DispatchIntent(
+        step_id="run-1:step-1",
+        step_target_id="run-1:step-1:target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        task="Produce quote",
+        task_hash="hash-1",
+    )
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Produce quote",
+        candidate_agent_ids=["agent-1"],
+        dispatch_intents=[prior_intent],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-1",
+                dispatch_intent_id="intent-1",
+                agent_id="agent-1",
+                goal_family_fingerprint=fingerprints.goal_family_fingerprint,
+                goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
+                attempt_fingerprint="attempt-1",
+                status="no_progress",
+            )
+        ],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="Retry same work",
+        targets=[target],
+    )
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=False,
+        )
+        is action
+    )
+    with pytest.raises(PlannerActionValidationError):
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+        )
+
+
 def test_post_dispatch_empty_question_list_requires_blocker_keys():
     state = _guardrail_state(intents=[_completed_quote_intent()])
     action = PlannerAction(
