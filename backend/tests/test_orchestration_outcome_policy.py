@@ -395,6 +395,23 @@ def test_alternate_agent_has_an_independent_attempt_chain():
     assert decision.code is None
 
 
+def test_alternate_agent_can_attempt_a_revision_fulfilled_by_another_agent():
+    state = _state(
+        [_outcome("o1", "i1", "fulfilled", ["quote:$present"], [])],
+        [_intent("i1", "completed")],
+    )
+
+    decision = evaluate_retry(
+        state,
+        _target(agent_id="agent-2"),
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+    )
+
+    assert decision.kind == "alternate_agent"
+    assert decision.code is None
+
+
 def test_candidate_blocker_is_rejected_as_user_only():
     blocker = BlockerRecord(
         key="missing-retention",
