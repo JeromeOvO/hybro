@@ -24,6 +24,11 @@ from execution.hitl.translators import (
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
 )
+from execution.orchestration.run_reducer import record_hitl_resolution
+from execution.orchestration.run_store import (
+    OrchestrationRunStore,
+    OrchestrationStoreConflict,
+)
 from execution.ports import (
     AgentResponseHandlerPort,
     AgentTaskCleanupPort,
@@ -37,6 +42,11 @@ from execution.ports import (
     TaskFactory,
 )
 from execution.translators import room_response_to_execution_ack
+from models.orchestration import (
+    OrchestrationEventType,
+    OrchestrationRunEvent,
+    OrchestrationRunState,
+)
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
 
 if TYPE_CHECKING:
@@ -358,6 +368,7 @@ class ExecutionFacade:
         event_publisher: EventPublisher,
         run_event_enabled: RunEventEnabled,
         client_request_id_resolver: ClientRequestIdResolver,
+        orchestration_run_store: OrchestrationRunStore | None = None,
         task_factory: TaskFactory = traced_create_task,
     ) -> None:
         self._room_center = room_center
@@ -373,6 +384,7 @@ class ExecutionFacade:
         self._event_publisher = event_publisher
         self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
+        self._orchestration_run_store = orchestration_run_store
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
         self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
@@ -744,7 +756,118 @@ class ExecutionFacade:
             user_input=response,
             user_id=responder_id,
         )
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json")
+        saved_state = await self._record_resolved_hitl_on_orchestration_run(
+            hitl_result=result,
+            response=response,
+        )
+        self._schedule_orchestration_after_hitl_if_needed(
+            state=saved_state,
+            hitl_result=result,
+        )
         return hitl_response_dict_to_common(result)
+
+    async def _record_resolved_hitl_on_orchestration_run(
+        self,
+        *,
+        hitl_result: dict[str, Any],
+        response: str,
+    ) -> OrchestrationRunState | None:
+        if self._orchestration_run_store is None:
+            return None
+        run_id = hitl_result.get("orchestration_run_id")
+        request_id = hitl_result.get("request_id")
+        if not isinstance(run_id, str) or not run_id:
+            return None
+        if not isinstance(request_id, str) or not request_id:
+            return None
+
+        for _attempt in range(2):
+            state = await self._orchestration_run_store.get_run(run_id)
+            if state is None:
+                return None
+            expected_version = state.state_version
+            updated = record_hitl_resolution(
+                state,
+                request_id=request_id,
+                response=response,
+                hitl_result=hitl_result,
+            )
+            try:
+                saved = await self._orchestration_run_store.save_state(
+                    updated,
+                    expected_version=expected_version,
+                )
+            except OrchestrationStoreConflict:
+                continue
+
+            try:
+                await self._orchestration_run_store.append_event(
+                    OrchestrationRunEvent(
+                        run_id=saved.run_id,
+                        room_id=saved.room_id,
+                        type=OrchestrationEventType.HITL_RESOLVED,
+                        state_version=saved.state_version,
+                        payload={
+                            "request_ids": [request_id],
+                            "answer_recorded": True,
+                            "source": hitl_result.get("source"),
+                        },
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to append orchestration HITL resolution event",
+                    exc_info=True,
+                )
+            return saved
+
+        raise OrchestrationStoreConflict(
+            "failed to record resolved HITL after repeated orchestration store "
+            f"conflicts for run {run_id!r} and request {request_id!r}"
+        )
+
+    @staticmethod
+    def _has_open_pending_hitl(state: OrchestrationRunState) -> bool:
+        pending_request_ids = {
+            request_id
+            for request_id in state.pending_hitl_request_ids
+            if isinstance(request_id, str)
+        }
+        if not pending_request_ids:
+            return False
+        return any(
+            isinstance(question, dict)
+            and question.get("request_id") in pending_request_ids
+            and question.get("status") in {"open", "creating"}
+            for question in state.open_questions
+        )
+
+    def _schedule_orchestration_after_hitl_if_needed(
+        self,
+        *,
+        state: OrchestrationRunState | None,
+        hitl_result: dict[str, Any],
+    ) -> None:
+        if state is None:
+            return
+        if hitl_result.get("resume_execution") is False:
+            return
+        if self._has_open_pending_hitl(state):
+            return
+
+        request = OrchestrationRequest(
+            room_id=state.room_id,
+            room_user_message_id=state.user_message_id,
+            user_id=hitl_result.get("responder_id"),
+            is_recovery=True,
+            client_request_id=state.client_request_id,
+        )
+        self.schedule_recovery_orchestration(
+            request,
+            reason="hitl-resolved",
+        )
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
         requests = await self._hitl_manager.get_pending_requests(room_id)

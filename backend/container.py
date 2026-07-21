@@ -919,7 +919,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 task_notifications=HITLTaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
-                orchestration_run_store=orchestration_run_store,
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -1092,11 +1091,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 event_publisher=_delivery_deps.event_publisher,
                 run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=execution_client_request_id_resolver,
+                orchestration_run_store=orchestration_run_store,
             )
             _execution_deps = create_execution_deps(execution_facade)
-            hitl_manager.bind_orchestration_recovery_scheduler(
-                execution_facade.schedule_recovery_orchestration
-            )
 
             async def emit_room_processing_status(**kwargs):
                 return await emit_execution_room_processing_status(

@@ -136,3 +136,91 @@ def record_step_result_metadata(
         if active.status not in TERMINAL_DISPATCH_STATUSES
     ]
     return _bump(updated)
+
+
+def record_hitl_resolution(
+    state: OrchestrationRunState,
+    *,
+    request_id: str,
+    response: str,
+    hitl_result: dict,
+) -> OrchestrationRunState:
+    updated = state.model_copy(deep=True)
+    resolved_at = utcnow().isoformat()
+    followup_request_id = hitl_result.get("followup_hitl_request_id")
+
+    updated.pending_hitl_request_ids = [
+        existing
+        for existing in updated.pending_hitl_request_ids
+        if existing != request_id and existing != followup_request_id
+    ]
+
+    resolved_existing = False
+    for question in updated.open_questions:
+        if not isinstance(question, dict):
+            continue
+        if question.get("request_id") != request_id:
+            continue
+        question["status"] = "resolved"
+        question["resolved"] = True
+        question["answer"] = response
+        question["resolved_at"] = resolved_at
+        if isinstance(followup_request_id, str) and followup_request_id:
+            question["followup_request_id"] = followup_request_id
+        resolved_existing = True
+        break
+
+    if not resolved_existing:
+        updated.open_questions.append(
+            {
+                "request_id": request_id,
+                "source": hitl_result.get("source"),
+                "status": "resolved",
+                "resolved": True,
+                "answer": response,
+                "resolved_at": resolved_at,
+            }
+        )
+
+    updated.facts.append(
+        {
+            "fact_id": f"{updated.run_id}:hitl-reply:{updated.state_version + 1}",
+            "source": "hitl_user_reply",
+            "text": response,
+            "request_ids": [request_id],
+            "created_at": resolved_at,
+        }
+    )
+
+    if isinstance(followup_request_id, str) and followup_request_id:
+        updated.pending_hitl_request_ids.append(followup_request_id)
+        if not any(
+            isinstance(question, dict)
+            and question.get("request_id") == followup_request_id
+            for question in updated.open_questions
+        ):
+            updated.open_questions.append(
+                {
+                    "request_id": followup_request_id,
+                    "source": hitl_result.get("source") or "agent",
+                    "agent_id": hitl_result.get("agent_id"),
+                    "agent_name": hitl_result.get("agent_name"),
+                    "prompt": hitl_result.get("followup_prompt"),
+                    "status": "open",
+                    "resolved": False,
+                    "display_message_id": hitl_result.get("display_message_id"),
+                    "continuation_message_id": hitl_result.get(
+                        "continuation_message_id"
+                    ),
+                    "a2a_task_id": hitl_result.get("a2a_task_id"),
+                    "a2a_context_id": hitl_result.get("a2a_context_id"),
+                    "created_at": resolved_at,
+                }
+            )
+        updated.status = OrchestrationStatus.AWAITING_USER
+    elif updated.pending_hitl_request_ids:
+        updated.status = OrchestrationStatus.AWAITING_USER
+    elif updated.status == OrchestrationStatus.AWAITING_USER:
+        updated.status = OrchestrationStatus.RUNNING
+
+    return _bump(updated)

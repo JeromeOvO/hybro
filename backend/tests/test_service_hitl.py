@@ -22,6 +22,7 @@ from execution.hitl.exceptions import (
     HITLRoutingFailedError,
 )
 from execution.hitl.service import MAX_HITL_ROUNDS, HITLService
+from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.hitl import (
     HITLEventType,
@@ -1501,7 +1502,8 @@ class TestRequestInput:
             user_id="user-1",
         )
 
-        assert result == {"status": "ok", "request_id": "hitl-legacy"}
+        assert result["status"] == "ok"
+        assert result["request_id"] == "hitl-legacy"
         assert any(
             call.kwargs.get("display_message_id") == "agent-paused-msg"
             for call in mock_hitl_db_service.fenced_update_hitl_request.await_args_list
@@ -1575,7 +1577,11 @@ class TestRequestInput:
             user_id="user-1",
         )
 
-        assert result == {"status": "ok", "request_id": "hitl-old"}
+        assert result["status"] == "ok"
+        assert result["request_id"] == "hitl-old"
+        assert result["followup_hitl_request_id"] == "hitl-next"
+        assert result["a2a_task_id"] == "a2a-task-1"
+        assert result["a2a_context_id"] == "a2a-context-1"
         mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
         projection_call = (
             mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
@@ -2122,7 +2128,8 @@ class TestHandleResponseErrors:
             user_id="user-1",
         )
 
-        assert result == {"status": "ok", "request_id": request.request_id}
+        assert result["status"] == "ok"
+        assert result["request_id"] == request.request_id
         mock_hitl_db_service.persist_hitl_user_answer.assert_awaited_once_with(
             "display-msg-1", "A"
         )
@@ -2131,7 +2138,7 @@ class TestHandleResponseErrors:
         )
 
     @pytest.mark.asyncio
-    async def test_supervisor_response_missing_continuation_resolves_orchestration_state(
+    async def test_supervisor_response_defers_orchestration_state_to_facade(
         self,
         hitl_service,
         mock_hitl_db_service,
@@ -2157,10 +2164,6 @@ class TestHandleResponseErrors:
         )
         await run_store.create_run(state)
         hitl_service._persistence = mock_hitl_db_service
-        hitl_service._orchestration_run_store = run_store
-        hitl_service._orchestration_recovery_scheduler = MagicMock(
-            return_value=MagicMock()
-        )
         hitl_service._continuation = MagicMock()
         hitl_service._continuation.resume_queue_from_continuation = AsyncMock(
             return_value=False
@@ -2186,22 +2189,14 @@ class TestHandleResponseErrors:
 
         persisted = await run_store.get_run("run-msg-1")
         assert persisted is not None
-        assert persisted.status == OrchestrationStatus.RUNNING
-        assert persisted.pending_hitl_request_ids == []
-        assert persisted.open_questions[0]["status"] == "resolved"
-        assert persisted.open_questions[0]["answer"] == "Use the enterprise account"
-        assert persisted.facts[0]["source"] == "hitl_user_reply"
+        assert persisted.status == OrchestrationStatus.AWAITING_USER
+        assert persisted.pending_hitl_request_ids == ["hitl-supervisor-1"]
+        assert persisted.open_questions[0]["status"] == "open"
+        assert persisted.facts == []
         hitl_service._continuation.resume_queue_from_continuation.assert_not_awaited()
-        hitl_service._orchestration_recovery_scheduler.assert_called_once()
-        recovery_call = hitl_service._orchestration_recovery_scheduler.call_args
-        assert recovery_call.args[0].room_user_message_id == "user-msg-456"
-        assert recovery_call.args[0].is_recovery is True
-        assert recovery_call.kwargs == {
-            "reason": "hitl_continuation_lost",
-        }
 
     @pytest.mark.asyncio
-    async def test_missing_continuation_keeps_response_retryable_when_recovery_unscheduled(
+    async def test_handle_response_returns_orchestration_metadata_for_facade(
         self,
         hitl_service,
         mock_hitl_db_service,
@@ -2228,7 +2223,6 @@ class TestHandleResponseErrors:
         await run_store.create_run(state)
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
-        hitl_service._orchestration_run_store = run_store
         mock_hitl_db_service.get_pending_continuation_on_message.return_value = None
         request = HITLRequest(
             request_id="hitl-supervisor-1",
@@ -2245,37 +2239,6 @@ class TestHandleResponseErrors:
         mock_hitl_db_service.get_hitl_request.return_value = request_doc
         mock_hitl_db_service.claim_hitl_request.return_value = request_doc
 
-        with pytest.raises(HITLRoutingFailedError):
-            await hitl_service.handle_response(
-                room_id=request.room_id,
-                request_id=request.request_id,
-                user_input="Account A",
-                user_id="user-1",
-            )
-
-        retry_updates = [
-            call.args[2]
-            for call in mock_hitl_db_service.fenced_update_hitl_request.await_args_list
-            if len(call.args) >= 3 and isinstance(call.args[2], dict)
-        ]
-        assert any(
-            update.get("status") == HITLStatus.PENDING.value
-            and update.get("claim_id") is None
-            for update in retry_updates
-        )
-        assert not any(
-            update.get("status") == HITLStatus.CANCELED.value
-            for update in retry_updates
-        )
-        persisted = await run_store.get_run("run-msg-1")
-        assert persisted is not None
-        assert persisted.status == OrchestrationStatus.RUNNING
-        assert persisted.open_questions[0]["answer"] == "Account A"
-        mock_hitl_delivery.emit.assert_not_awaited()
-
-        hitl_service._orchestration_recovery_scheduler = MagicMock(
-            return_value=MagicMock()
-        )
         result = await hitl_service.handle_response(
             room_id=request.room_id,
             request_id=request.request_id,
@@ -2283,20 +2246,17 @@ class TestHandleResponseErrors:
             user_id="user-1",
         )
 
-        assert result == {"status": "ok", "request_id": request.request_id}
-        persisted_after_retry = await run_store.get_run("run-msg-1")
-        assert persisted_after_retry is not None
-        assert len(persisted_after_retry.open_questions) == 1
-        assert len(persisted_after_retry.facts) == 1
-        hitl_service._orchestration_recovery_scheduler.assert_called_once()
+        assert result["status"] == "ok"
+        assert result["request_id"] == request.request_id
+        assert result["orchestration_run_id"] == "run-msg-1"
+        assert result["response"] == "Account A"
+        persisted = await run_store.get_run("run-msg-1")
+        assert persisted is not None
+        assert persisted.status == OrchestrationStatus.AWAITING_USER
+        assert persisted.open_questions[0]["status"] == "open"
+        mock_hitl_delivery.emit.assert_awaited_once()
 
-    @pytest.mark.asyncio
-    async def test_group_recovery_resolves_all_supervisor_siblings(
-        self,
-        hitl_service,
-        mock_hitl_db_service,
-    ):
-        run_store = InMemoryOrchestrationRunStore()
+    def test_reducer_resolves_only_current_supervisor_request(self):
         state = OrchestrationRunState(
             run_id="run-msg-1",
             room_id="room-123",
@@ -2320,61 +2280,22 @@ class TestHandleResponseErrors:
                 },
             ],
         )
-        await run_store.create_run(state)
-        hitl_service._persistence = mock_hitl_db_service
-        hitl_service._orchestration_run_store = run_store
-        mock_hitl_db_service.get_hitl_group_requests.return_value = [
-            {
-                "request_id": "hitl-1",
-                "room_id": "room-123",
-                "source": "supervisor",
-            },
-            {
-                "request_id": "hitl-2",
-                "room_id": "room-123",
-                "source": "supervisor",
-            },
-        ]
-        request = HITLRequest(
+        updated = record_hitl_resolution(
+            state,
             request_id="hitl-2",
-            room_id="room-123",
-            user_message_id="user-msg-456",
-            source="supervisor",
-            prompt="Second?",
-            continuation_message_id="user-msg-456",
-            orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
-            group_id="group-1",
-            group_total=2,
-            group_index=1,
-            status=HITLStatus.PENDING,
+            response="two",
+            hitl_result={"source": "supervisor"},
         )
 
-        recorded = await hitl_service._record_orchestration_supervisor_response(
-            request,
-            "Q: First?\nA: one\n\nQ: Second?\nA: two",
-        )
+        assert updated.status == OrchestrationStatus.AWAITING_USER
+        assert updated.pending_hitl_request_ids == ["hitl-1"]
+        assert [question["status"] for question in updated.open_questions] == [
+            "open",
+            "resolved",
+        ]
+        assert updated.facts[0]["request_ids"] == ["hitl-2"]
 
-        assert recorded is True
-        persisted = await run_store.get_run("run-msg-1")
-        assert persisted is not None
-        assert persisted.status == OrchestrationStatus.RUNNING
-        assert persisted.pending_hitl_request_ids == []
-        assert {question["status"] for question in persisted.open_questions} == {
-            "resolved"
-        }
-        assert [
-            question["request_id"] for question in persisted.open_questions
-        ] == ["hitl-1", "hitl-2"]
-        assert persisted.facts[0]["request_ids"] == ["hitl-2", "hitl-1"]
-
-    @pytest.mark.asyncio
-    async def test_recovery_retains_creating_and_cleanup_failed_pending_refs(
-        self,
-        hitl_service,
-        mock_hitl_db_service,
-    ):
-        run_store = InMemoryOrchestrationRunStore()
+    def test_recovery_retains_creating_and_cleanup_failed_pending_refs(self):
         state = OrchestrationRunState(
             run_id="run-msg-1",
             room_id="room-123",
@@ -2401,31 +2322,15 @@ class TestHandleResponseErrors:
                 },
             ],
         )
-        await run_store.create_run(state)
-        hitl_service._persistence = mock_hitl_db_service
-        hitl_service._orchestration_run_store = run_store
-        request = HITLRequest(
+        updated = record_hitl_resolution(
+            state,
             request_id="hitl-1",
-            room_id="room-123",
-            user_message_id="user-msg-456",
-            source="supervisor",
-            prompt="First?",
-            continuation_message_id="user-msg-456",
-            orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
-            status=HITLStatus.PENDING,
+            response="one",
+            hitl_result={"source": "supervisor"},
         )
 
-        recorded = await hitl_service._record_orchestration_supervisor_response(
-            request,
-            "one",
-        )
-
-        assert recorded is True
-        persisted = await run_store.get_run("run-msg-1")
-        assert persisted is not None
-        assert persisted.status == OrchestrationStatus.AWAITING_USER
-        assert persisted.pending_hitl_request_ids == ["hitl-2", "hitl-3"]
+        assert updated.status == OrchestrationStatus.AWAITING_USER
+        assert updated.pending_hitl_request_ids == ["hitl-2", "hitl-3"]
 
 
 class TestGroupedHandleResponse:
@@ -2464,7 +2369,8 @@ class TestGroupedHandleResponse:
             user_id="user-1",
         )
 
-        assert result == {"status": "ok", "request_id": request.request_id}
+        assert result["status"] == "ok"
+        assert result["request_id"] == request.request_id
         hitl_service._handle_supervisor_response.assert_not_awaited()
 
     @pytest.mark.asyncio
