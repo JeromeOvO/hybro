@@ -174,7 +174,10 @@ def evaluate_retry(
         if outcome.goal_family_fingerprint == goal_family_fingerprint
         and outcome.goal_revision_fingerprint == goal_revision_fingerprint
     ]
-    if any(outcome.status == "fulfilled" for outcome in revision_outcomes):
+    if any(
+        outcome.agent_id == target.agent_id and outcome.status == "fulfilled"
+        for outcome in revision_outcomes
+    ):
         return _rejected("delegate_goal_already_fulfilled")
     chain = history.chain(target.agent_id, goal_revision_fingerprint)
     latest = chain.latest_outcome
