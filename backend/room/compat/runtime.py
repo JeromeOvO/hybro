@@ -124,6 +124,7 @@ _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
     "quote_id",
 )
 _PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
+_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 def _public_attachment_preflight_failure(
@@ -4038,13 +4039,22 @@ class RoomServices:
         if request_context_id is not None and request_context_id != task.context_id:
             return None, None
 
+        if request.get("source") == "agent":
+            prompt = _GENERIC_AGENT_INPUT_PROMPT
+            prompt_type = "text"
+            choices = None
+        else:
+            prompt = request.get("prompt")
+            prompt_type = getattr(
+                request.get("prompt_type"), "value", request.get("prompt_type")
+            )
+            choices = request.get("choices")
+
         trusted: dict[str, object] = {
             "hitl_request_id": request_id,
-            "hitl_prompt": request.get("prompt"),
-            "hitl_prompt_type": getattr(
-                request.get("prompt_type"), "value", request.get("prompt_type")
-            ),
-            "hitl_choices": request.get("choices"),
+            "hitl_prompt": prompt,
+            "hitl_prompt_type": prompt_type,
+            "hitl_choices": choices,
         }
         optional_fields = {
             "hitl_a2a_task_id": request.get("a2a_task_id"),

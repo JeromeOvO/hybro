@@ -85,6 +85,15 @@ def _infer_prompt_type(prompt_text: str) -> HITLPromptType:
     return HITLPromptType.TEXT
 
 
+def _public_hitl_request_from_doc(document: dict[str, Any]) -> HITLRequest:
+    data = {key: value for key, value in document.items() if key != "_id"}
+    if data.get("source") == "agent":
+        data["prompt"] = _GENERIC_AGENT_INPUT_PROMPT
+        data["prompt_type"] = HITLPromptType.TEXT
+        data["choices"] = None
+    return HITLRequest(**data)
+
+
 class HITLService:
     """Manages the human-in-the-loop interaction lifecycle."""
 
@@ -265,11 +274,12 @@ class HITLService:
                 **{k: v for k, v in persisted_doc.items() if k != "_id"}
             )
             backfill_update: dict[str, Any] = {}
-            if (
+            sanitize_backfill_required = (
                 request.prompt != _GENERIC_AGENT_INPUT_PROMPT
                 or request.prompt_type != HITLPromptType.TEXT
                 or request.choices is not None
-            ):
+            )
+            if sanitize_backfill_required:
                 backfill_update.update(
                     {
                         "prompt": _GENERIC_AGENT_INPUT_PROMPT,
@@ -287,13 +297,41 @@ class HITLService:
             ):
                 backfill_update["client_request_id"] = resolved_client_request_id
             if backfill_update:
-                backfilled_client_request_id = (
-                    await self.persistence.update_hitl_request(
+                try:
+                    backfilled = await self.persistence.update_hitl_request(
                         request.request_id,
                         **backfill_update,
                     )
-                )
-                if backfilled_client_request_id and "client_request_id" in backfill_update:
+                except Exception as exc:
+                    logger.error(
+                        "Failed to backfill sanitized agent HITL request %s",
+                        request.request_id,
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": request.display_message_id,
+                        },
+                        exc_info=True,
+                    )
+                    raise HITLRequestProjectionError(
+                        "failed to persist sanitized agent HITL request",
+                        request_id=request.request_id,
+                    ) from exc
+                if sanitize_backfill_required and not backfilled:
+                    logger.error(
+                        "Failed to backfill sanitized agent HITL request %s",
+                        request.request_id,
+                        extra={
+                            "hitl_request_id": request.request_id,
+                            "room_id": request.room_id,
+                            "display_message_id": request.display_message_id,
+                        },
+                    )
+                    raise HITLRequestProjectionError(
+                        "failed to persist sanitized agent HITL request",
+                        request_id=request.request_id,
+                    )
+                if backfilled and "client_request_id" in backfill_update:
                     request.client_request_id = resolved_client_request_id
                 elif "client_request_id" in backfill_update:
                     logger.warning(
@@ -1500,7 +1538,7 @@ class HITLService:
     async def get_pending_requests(self, room_id: str) -> list[HITLRequest]:
         """Get all pending HITL requests for a room (SSE reconnect catch-up)."""
         docs = await self.persistence.get_pending_hitl_requests(room_id)
-        return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
+        return [_public_hitl_request_from_doc(document) for document in docs]
 
     async def get_pending_requests_for_message(
         self, user_message_id: str
@@ -1509,7 +1547,7 @@ class HITLService:
         docs = await self.persistence.get_pending_hitl_requests_for_message(
             user_message_id
         )
-        return [HITLRequest(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
+        return [_public_hitl_request_from_doc(document) for document in docs]
 
     # ------------------------------------------------------------------
     # Cancellation

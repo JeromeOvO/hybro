@@ -1362,9 +1362,9 @@ class TestInquiryRoomMessages:
         assert local_public.client_request_id == client_request_id
         assert local_public.message_content.message_task.metadata == {
             "hitl_request_id": "local-hitl-request",
-            "hitl_prompt": "Choose the approved option",
-            "hitl_prompt_type": "choice",
-            "hitl_choices": ["Approve", "Reject"],
+            "hitl_prompt": "The agent needs additional information.",
+            "hitl_prompt_type": "text",
+            "hitl_choices": None,
             "hitl_a2a_task_id": "local-hitl-task",
             "hitl_a2a_context_id": "local-hitl-context",
             "user_answer": "Approve",
