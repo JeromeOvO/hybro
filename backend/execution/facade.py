@@ -762,7 +762,7 @@ class ExecutionFacade:
             hitl_result=result,
             response=response,
         )
-        await self._resume_orchestration_after_hitl_if_needed(
+        self._schedule_orchestration_after_hitl_if_needed(
             state=saved_state,
             hitl_result=result,
         )
@@ -823,14 +823,10 @@ class ExecutionFacade:
                 )
             return saved
 
-        logger.warning(
-            "Failed to record HITL resolution after repeated orchestration store conflicts",
-            extra={
-                "orchestration_run_id": run_id,
-                "hitl_request_id": request_id,
-            },
+        raise OrchestrationStoreConflict(
+            "failed to record resolved HITL after repeated orchestration store "
+            f"conflicts for run {run_id!r} and request {request_id!r}"
         )
-        return None
 
     @staticmethod
     def _has_open_pending_hitl(state: OrchestrationRunState) -> bool:
@@ -848,7 +844,7 @@ class ExecutionFacade:
             for question in state.open_questions
         )
 
-    async def _resume_orchestration_after_hitl_if_needed(
+    def _schedule_orchestration_after_hitl_if_needed(
         self,
         *,
         state: OrchestrationRunState | None,
@@ -868,14 +864,10 @@ class ExecutionFacade:
             is_recovery=True,
             client_request_id=state.client_request_id,
         )
-        task = self._spawn_orchestration(
-            self._room_message_center.process_room_user_message(request),
-            name=f"execution-hitl-resume-{state.user_message_id}",
-            room_id=state.room_id,
-            message_id=state.user_message_id,
-            client_request_id=state.client_request_id,
+        self.schedule_recovery_orchestration(
+            request,
+            reason="hitl-resolved",
         )
-        await task
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
         requests = await self._hitl_manager.get_pending_requests(room_id)
