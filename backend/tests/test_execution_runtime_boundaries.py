@@ -3,6 +3,7 @@ import inspect
 from pathlib import Path
 
 from execution import ports
+from models.orchestration import OrchestrationRunState
 
 ROOT = Path(__file__).resolve().parents[1]
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
@@ -417,12 +418,12 @@ FORBIDDEN_CONTROL_PLANE_SYMBOLS = {
     "PlannerActionValidator",
     "PlannerActionValidationError",
     "SupervisorExecutor",
-    "apply_recoverable_planner_rejection",
     "build_terminal_summary",
     "mark_terminal",
-    "record_agent_dispatch",
-    "record_agent_observation",
+    "record_dispatch_intents",
     "record_planner_action",
+    "record_recoverable_planner_rejection",
+    "record_step_result_metadata",
     "resolve_agent_observed_blockers",
     "validate_hitl_answered_blockers",
 }
@@ -443,36 +444,19 @@ ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_SYMBOLS = {
     "DelegationOutcomeEvaluator",
     "PlannerActionValidator",
     "PlannerActionValidationError",
-    "apply_recoverable_planner_rejection",
     "build_terminal_summary",
     "mark_terminal",
-    "record_agent_dispatch",
-    "record_agent_observation",
+    "record_dispatch_intents",
     "record_planner_action",
+    "record_recoverable_planner_rejection",
+    "record_step_result_metadata",
     "resolve_agent_observed_blockers",
     "validate_hitl_answered_blockers",
 }
 
-ORCHESTRATION_RUN_STATE_CONTROL_FIELDS = {
-    "agent_outputs",
-    "blockers",
-    "candidate_agent_ids",
-    "candidate_scope",
-    "current_step_id",
-    "delegation_outcomes",
-    "dispatch_intents",
-    "dispatch_results",
-    "facts",
-    "interrupted_state",
-    "open_failures",
-    "planner_actions",
-    "status",
-    "step_budget",
-    "steps_used",
-    "terminal_reason",
-    "terminal_summary",
-    "unknowns",
-}
+ORCHESTRATION_RUN_STATE_CONTROL_FIELDS = frozenset(
+    OrchestrationRunState.model_fields
+)
 
 MUTATING_COLLECTION_METHODS = {
     "add",
@@ -874,7 +858,56 @@ def _run_state_control_mutation_violations_for_source(  # noqa: C901
             for target in node.targets:
                 record_target(target, node.lineno)
         elif isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "setattr"
+                and len(node.args) >= 2
+                and _is_run_state_name(_root_name(node.args[0]), run_state_names)
+            ):
+                field_name = _literal_subscript_key(node.args[1])
+                if (
+                    field_name is None
+                    or field_name in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+                ):
+                    violations.append(
+                        f"{rel_path}:{node.lineno}: setattr "
+                        f"{_expression_label(node.args[0])}.{field_name or '*'}"
+                    )
+                continue
             if not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "model_copy" and _is_run_state_name(
+                _root_name(node.func.value),
+                run_state_names,
+            ):
+                update = next(
+                    (keyword.value for keyword in node.keywords if keyword.arg == "update"),
+                    None,
+                )
+                if update is not None:
+                    update_fields = (
+                        {
+                            _literal_subscript_key(key)
+                            for key in update.keys
+                            if key is not None
+                        }
+                        if isinstance(update, ast.Dict)
+                        else {None}
+                    )
+                    control_fields = {
+                        field
+                        for field in update_fields
+                        if field is None
+                        or field in ORCHESTRATION_RUN_STATE_CONTROL_FIELDS
+                    }
+                    if control_fields:
+                        fields = ",".join(
+                            sorted(field or "*" for field in control_fields)
+                        )
+                        violations.append(
+                            f"{rel_path}:{node.lineno}: model_copy update "
+                            f"{_expression_label(node.func.value)}[{fields}]"
+                        )
                 continue
             if node.func.attr not in MUTATING_COLLECTION_METHODS:
                 continue
@@ -958,17 +991,17 @@ from models.orchestration import OrchestrationRunState
 
 def bad(run_state: OrchestrationRunState, agent_id: str, value: object) -> None:
     run_state.facts["x"] = value
-    run_state.dispatch_results[agent_id] = value
+    run_state.active_dispatches[agent_id] = value
     run_state.facts["x"]["nested"] = value
-    run_state["dispatch_results"][agent_id] = value
+    run_state["open_questions"][agent_id] = value
     run_state.facts.update({"x": value})
-    run_state.dispatch_results[agent_id].update({"status": "done"})
+    run_state.open_questions[agent_id].update({"status": "done"})
 
 
 def ok(run_state: OrchestrationRunState, other: dict[str, object], value: object) -> None:
     other["facts"]["x"] = value
     run_state.metadata["facts"] = value
-    run_state.local_cache["dispatch_results"].update({"x": value})
+    run_state.local_cache["open_questions"].update({"x": value})
 """
 
     violations = _run_state_control_mutation_violations_for_source(
@@ -979,20 +1012,47 @@ def ok(run_state: OrchestrationRunState, other: dict[str, object], value: object
     assert len(violations) == 6
     assert any("facts" in item and "assign" in item for item in violations)
     assert any(
-        "dispatch_results" in item and "assign" in item for item in violations
+        "active_dispatches" in item and "assign" in item for item in violations
     )
     assert any("facts" in item and "mutate" in item for item in violations)
     assert any(
-        "dispatch_results" in item and "mutate" in item for item in violations
+        "open_questions" in item and "mutate" in item for item in violations
     )
     assert not any("metadata" in item for item in violations)
     assert not any("local_cache" in item for item in violations)
 
 
+def test_boundary_ast_checks_reject_setattr_and_model_copy_updates() -> None:
+    source = """
+from models.orchestration import OrchestrationRunState
+
+
+def bad(run_state: OrchestrationRunState, updates: dict[str, object]) -> None:
+    setattr(run_state, "active_dispatches", [])
+    setattr(run_state, updates["field"], [])
+    run_state.model_copy(update={"pending_hitl_request_ids": []})
+    run_state.model_copy(update=updates)
+
+
+def ok(run_state: OrchestrationRunState, other: object) -> None:
+    setattr(other, "active_dispatches", [])
+    run_state.model_copy(deep=True)
+"""
+
+    violations = _run_state_control_mutation_violations_for_source(
+        source,
+        rel_path=Path("example.py"),
+    )
+
+    assert len(violations) == 4
+    assert sum("setattr" in item for item in violations) == 2
+    assert sum("model_copy update" in item for item in violations) == 2
+
+
 def test_boundary_ast_checks_reject_relative_control_plane_imports() -> None:
     queue_executor_source = """
 from . import run_reducer
-from .run_reducer import record_agent_dispatch
+from .run_reducer import record_dispatch_intents
 """
     direct_transport_source = """
 from ...orchestration import run_reducer
@@ -1012,7 +1072,7 @@ from ...orchestration.action_validator import PlannerActionValidator
         "execution.orchestration" in item and "run_reducer" in item
         for item in queue_violations
     )
-    assert any("record_agent_dispatch" in item for item in queue_violations)
+    assert any("record_dispatch_intents" in item for item in queue_violations)
     assert any(
         "execution.orchestration" in item and "run_reducer" in item
         for item in direct_violations
