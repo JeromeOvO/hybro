@@ -52,6 +52,31 @@ describe('selectAgentResponseDetail', () => {
     expect(detail?.requestMessage?.content).toBe('Research a2a agents')
   })
 
+  it('shows the published dispatch text instead of the generic task label', () => {
+    const { entities, orderedIds } = setup([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'agent-1',
+        roomId: 'room-1',
+        relatedMessageId: 'user-1',
+        taskStatus: TASK_STATE.COMPLETED,
+        taskStatusMessage: 'Requesting Insurer Agent',
+        dispatchText: 'Assess the supplied submission and return a quote.',
+      }),
+    ])
+
+    const detail = selectAgentResponseDetail(
+      'room-1',
+      'agent-1',
+      entities,
+      orderedIds,
+    )
+
+    expect(detail?.taskDescription).toBe(
+      'Assess the supplied submission and return a quote.',
+    )
+  })
+
   it('falls back to clientRequestId when relatedMessageId is absent', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({

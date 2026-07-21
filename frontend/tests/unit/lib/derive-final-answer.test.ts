@@ -89,11 +89,15 @@ describe('deriveFinalAnswer', () => {
       agentResults: [
         makeAgent({
           messageId: 'a1',
-          hitlPending: { prompt: 'Need more info' },
+          agentName: 'Cyber Broker Agent',
+          hitlPending: { prompt: 'Need more info', source: 'agent' },
         }),
       ],
     })
-    expect(deriveFinalAnswer(turn, ['a1']).kind).toBe('hitl')
+    const result = deriveFinalAnswer(turn, ['a1'])
+    expect(result.kind).toBe('hitl')
+    expect(result.hitl?.source).toBe('agent')
+    expect(result.hitl?.prompts[0]?.agentName).toBe('Cyber Broker Agent')
   })
 
   it('returns llm_synthesis when summary agent has content', () => {

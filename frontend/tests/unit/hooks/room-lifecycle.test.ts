@@ -430,6 +430,30 @@ describe('Room lifecycle characterization tests', () => {
   // ── Test 4: Cancel timeout safety net ──
 
   describe('Cancel timeout safety net', () => {
+    it('stops processing immediately when cancel reports an existing terminal turn', async () => {
+      const { result } = await mountAndWaitForRoom()
+      mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-terminal-before-cancel' })
+      mockCancelMessage.mockResolvedValueOnce({
+        success: true,
+        message_id: 'msg-terminal-before-cancel',
+        message: 'Message processing had already finished',
+        status: 'failed',
+        outcome: 'already_terminal',
+      })
+
+      await act(async () => {
+        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+      })
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        await result.current.cancelProcessing()
+      })
+
+      expect(flags('room-1').processing).toBe(false)
+      expect(flags('room-1').cancelling).toBe(false)
+    })
+
     it('fires timeout warning after 15s of unresolved cancellation', async () => {
       const { banner } = await import('@/components/ui/banner')
 

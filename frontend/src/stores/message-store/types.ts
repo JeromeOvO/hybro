@@ -61,6 +61,7 @@ export interface MessageEntity {
   taskRequiresInput?: boolean
   taskRequiresAuth?: boolean
   taskContent?: string
+  dispatchText?: string
   taskCreatedAt?: string
   taskUpdatedAt?: string
 
@@ -72,6 +73,7 @@ export interface MessageEntity {
 
   // ── HITL (Human-in-the-Loop) ─────────────────────────────
   hitlRequestId?: string
+  hitlSource?: 'agent' | 'supervisor'
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType
   hitlChoices?: string[] | null
@@ -142,12 +144,14 @@ export interface IncomingMessage {
   taskRequiresInput?: boolean
   taskRequiresAuth?: boolean
   taskContent?: string
+  dispatchText?: string
   taskCreatedAt?: string
   taskUpdatedAt?: string
   stepNumber?: number
   totalSteps?: number
   relatedMessageId?: string
   hitlRequestId?: string
+  hitlSource?: 'agent' | 'supervisor'
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType
   hitlChoices?: string[] | null

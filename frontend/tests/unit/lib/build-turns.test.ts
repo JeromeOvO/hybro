@@ -661,6 +661,256 @@ describe('buildTurns – V2 data model', () => {
     expect(JSON.stringify(turns[0])).not.toContain('confidential renewal file')
   })
 
+  it('keeps HYBRO AI primary surface while supervisor processing logs continue after one agent result', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Evaluating agent results...',
+          timestamp: '2026-01-01T00:00:03Z',
+          turnPhase: 'collecting',
+        },
+      ],
+    })
+    const supervisorEphemeral = makeEntity({
+      id: 'eph-hybro',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      agentId: 'system:hybro',
+      clientRequestId: 'cr-1',
+      taskStatus: 'working' as any,
+      taskContent: 'Evaluating agent results...',
+      timestamp: '2026-01-01T00:00:03Z',
+    })
+    const broker = makeAgentEntity({
+      id: 'broker-1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'broker-agent',
+      senderName: 'Cyber Broker Agent',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Broker intermediate response',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, broker, supervisorEphemeral]),
+      ['u1', 'broker-1', 'eph-hybro'],
+      [],
+    )
+
+    expect(turns[0].isSupervisorTurn).toBe(true)
+    expect(turns[0].status).toBe('active')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+    expect(turns[0].displayMode).toBe('working')
+  })
+
+  it('infers supervisor turn from processing logs before HYBRO AI entity is hydrated', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Evaluating agent results...',
+          timestamp: '2026-01-01T00:00:03Z',
+          turnPhase: 'collecting',
+        },
+      ],
+    })
+    const broker = makeAgentEntity({
+      id: 'broker-1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'broker-agent',
+      senderName: 'Cyber Broker Agent',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Broker intermediate response',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, broker]),
+      ['u1', 'broker-1'],
+      [],
+    )
+
+    expect(turns[0].isSupervisorTurn).toBe(true)
+    expect(turns[0].status).toBe('active')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+    expect(turns[0].displayMode).toBe('working')
+  })
+
+  it('does not keep HYBRO AI working after all real agents are terminal with a failure', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Thinking...',
+          timestamp: '2026-01-01T00:00:04Z',
+          turnPhase: 'collecting',
+        },
+      ],
+    })
+    const hybro = makeAgentEntity({
+      id: 'hybro-1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'system:hybro',
+      senderName: 'HYBRO AI',
+      clientRequestId: 'cr-1',
+      taskStatus: 'working',
+      content: '',
+      taskContent: 'Thinking...',
+    })
+    const broker = makeAgentEntity({
+      id: 'broker-1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'broker-agent',
+      senderName: 'Cyber Broker Agent',
+      clientRequestId: 'cr-1',
+      taskStatus: 'completed',
+      content: 'Broker submission pack',
+    })
+    const insurer = makeAgentEntity({
+      id: 'insurer-1',
+      timestamp: '2026-01-01T00:00:03Z',
+      agentId: 'insurer-agent',
+      senderName: 'Cyber Insurer Agent',
+      clientRequestId: 'cr-1',
+      taskStatus: 'failed',
+      content: 'Underwriting failed',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, hybro, broker, insurer]),
+      ['u1', 'hybro-1', 'broker-1', 'insurer-1'],
+      [],
+    )
+
+    expect(turns[0].isSupervisorTurn).toBe(true)
+    expect(turns[0].status).toBe('partial')
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+  })
+
+  it('honors persisted supervisor failure over stale HYBRO working/log state', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      turnTerminalStatus: 'failed',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'Thinking...',
+          timestamp: '2026-01-01T00:00:04Z',
+          turnPhase: 'collecting',
+        },
+      ],
+    })
+    const hybro = makeAgentEntity({
+      id: 'hybro-1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'system:hybro',
+      senderName: 'HYBRO AI',
+      relatedMessageId: 'u1',
+      taskStatus: 'working' as any,
+      content: '',
+      taskContent: 'Thinking...',
+    })
+    const broker = makeAgentEntity({
+      id: 'broker-1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'broker-agent',
+      senderName: 'Cyber Broker Agent',
+      relatedMessageId: 'u1',
+      taskStatus: 'completed',
+      content: 'Broker submission pack',
+    })
+    const insurer = makeAgentEntity({
+      id: 'insurer-1',
+      timestamp: '2026-01-01T00:00:03Z',
+      agentId: 'insurer-agent',
+      senderName: 'Cyber Insurer Agent',
+      relatedMessageId: 'u1',
+      taskStatus: 'canceled' as any,
+      content: 'Underwriting failed',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, hybro, broker, insurer]),
+      ['u1', 'hybro-1', 'broker-1', 'insurer-1'],
+      [],
+    )
+
+    expect(turns[0].status).toBe('failed')
+    expect(turns[0].phase).toBe('completed')
+    expect(turns[0].finalAnswer.kind).toBe('failed')
+    expect(turns[0].finalAnswer.label).toBe('Failed')
+  })
+
+  it('honors persisted supervisor cancellation over stale HYBRO working/log state', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientRequestId: 'cr-1',
+      turnTerminalStatus: 'canceled',
+      processingStatusLogs: [
+        {
+          id: 'log-1',
+          message: 'HYBRO AI is synthesizing the final answer',
+          timestamp: '2026-01-01T00:00:04Z',
+          turnPhase: 'synthesizing',
+        },
+      ],
+    })
+    const hybro = makeAgentEntity({
+      id: 'hybro-1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'system:hybro',
+      senderName: 'HYBRO AI',
+      relatedMessageId: 'u1',
+      taskStatus: 'working' as any,
+      content: '',
+      taskContent: 'Thinking...',
+    })
+    const broker = makeAgentEntity({
+      id: 'broker-1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'broker-agent',
+      senderName: 'Cyber Broker Agent',
+      relatedMessageId: 'u1',
+      taskStatus: 'completed',
+      content: 'Broker submission pack',
+    })
+    const insurer = makeAgentEntity({
+      id: 'insurer-1',
+      timestamp: '2026-01-01T00:00:03Z',
+      agentId: 'insurer-agent',
+      senderName: 'Cyber Insurer Agent',
+      relatedMessageId: 'u1',
+      taskStatus: 'canceled' as any,
+      content: 'Canceled before underwriting completed',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, hybro, broker, insurer]),
+      ['u1', 'hybro-1', 'broker-1', 'insurer-1'],
+      [],
+    )
+
+    expect(turns[0].status).toBe('failed')
+    expect(turns[0].phase).toBe('completed')
+    expect(turns[0].finalAnswer.kind).toBe('canceled')
+    expect(turns[0].displayMode).toBe('summary_with_sources')
+  })
+
   // ── 'working' status ──────────────────────────────────────
 
   it('non-terminal non-interactive taskStatus produces working status', () => {
@@ -721,6 +971,7 @@ describe('buildTurns – V2 data model', () => {
       id: 'a1',
       timestamp: '2026-01-01T00:00:01Z',
       taskStatus: 'input-required' as any,
+      hitlRequestId: 'hitl-1',
       hitlResolved: false,
       hitlPrompt: 'What date range?',
       content: '',
@@ -729,7 +980,25 @@ describe('buildTurns – V2 data model', () => {
     expect(turns[0].agentResults[0].status).toBe('awaiting_input')
     expect(turns[0].agentResults[0].hitlPending).toEqual({
       prompt: 'What date range?',
+      source: 'agent',
     })
+  })
+
+  it('keeps remote input-required internal until a HITL request exists', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'input-required' as any,
+      taskStatusMessage: 'Need the complete broker submission.',
+      content: '',
+    })
+
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+
+    expect(turns[0].agentResults[0].status).toBe('working')
+    expect(turns[0].agentResults[0].hitlPending).toBeUndefined()
+    expect(turns[0].status).toBe('active')
   })
 
   it('does not create HITL UI state from untrusted persisted API metadata', async () => {
@@ -805,6 +1074,7 @@ describe('buildTurns – V2 data model', () => {
     expect(turns[0].agentResults[0].status).toBe('awaiting_input')
     expect(turns[0].agentResults[0].hitlPending).toEqual({
       prompt: 'Choose an account',
+      source: 'agent',
     })
   })
 
@@ -1010,6 +1280,7 @@ describe('displayMode from finalAnswer', () => {
     const agent = makeAgentEntity({
       id: 'a1',
       taskStatus: 'input-required' as any,
+      hitlRequestId: 'hitl-1',
       hitlPrompt: 'Which region?',
       content: '',
     })
@@ -1449,6 +1720,7 @@ describe('primaryStreamMessageId', () => {
       id: 'a2',
       agentId: 'agent-b',
       taskStatus: 'input-required' as any,
+      hitlRequestId: 'hitl-1',
       hitlResolved: false,
       hitlPrompt: 'Which region?',
       content: '',

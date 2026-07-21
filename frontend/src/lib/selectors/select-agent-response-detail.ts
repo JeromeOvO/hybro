@@ -83,7 +83,12 @@ export function selectAgentResponseDetail(
   const staticDescription = typeof agent.taskStatusMessage === 'string'
     ? agent.taskStatusMessage.trim()
     : ''
-  const taskDescription = staticDescription || (isActivelyWorking ? 'Working on your request…' : '')
+  const dispatchDescription = typeof agent.dispatchText === 'string'
+    ? agent.dispatchText.trim()
+    : ''
+  const taskDescription = dispatchDescription
+    || staticDescription
+    || (isActivelyWorking ? 'Working on your request…' : '')
 
   const baseDisplay = mapAgentDisplayProps(agent)
   const display = isBufferStreaming(effectiveBuffer)

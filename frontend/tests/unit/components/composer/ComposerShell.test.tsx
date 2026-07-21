@@ -5,7 +5,12 @@ import { useMessageStore } from '@/stores/message-store'
 
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
-    <div data-testid="room-chat-input" data-disabled={props.disableSend} data-has-top-slot={props.topSlot ? 'true' : 'false'}>
+    <div
+      data-testid="room-chat-input"
+      data-disabled={props.disableSend}
+      data-processing={props.processing}
+      data-has-top-slot={props.topSlot ? 'true' : 'false'}
+    >
       {props.topSlot}
     </div>
   ),
@@ -49,6 +54,14 @@ describe('ComposerShell', () => {
   it('renders in normal mode', () => {
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByTestId('room-chat-input')).toBeDefined()
+  })
+
+  it('keeps stop mode while the room lifecycle is processing between agent tasks', () => {
+    render(<ComposerShell adapter={{ ...mockAdapter, isProcessing: true }} />)
+
+    const input = screen.getByTestId('room-chat-input')
+    expect(input.getAttribute('data-processing')).toBe('true')
+    expect(input.getAttribute('data-disabled')).toBe('true')
   })
 
   it('shows HitlResponseBar when there are pending HITLs', () => {

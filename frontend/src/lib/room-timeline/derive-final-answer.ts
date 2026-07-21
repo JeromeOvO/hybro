@@ -180,10 +180,15 @@ function buildHitlFinalAnswer(
     })
   }
 
-  const source =
-    turn.status === 'awaiting_input' || supervisorAgent
-      ? 'supervisor'
-      : 'agent'
+  const source = prompts.some(prompt => {
+    const result = turn.agentResults.find(item => item.messageId === prompt.messageId)
+    return (
+      result?.hitlPending?.source === 'supervisor'
+      || result?.agentId === 'system:clarifier'
+    )
+  })
+    ? 'supervisor'
+    : 'agent'
 
   return {
     kind: 'hitl',
@@ -267,6 +272,10 @@ export function deriveFinalAnswer(
   const real = getStripSourceResults(turn)
   const summary = turn.agentResults.find(r => r.isSummaryAgent)
   const orchestrator = turn.agentResults.find(r => r.agentId === "system:hybro")
+  const terminalTurnWithEmptyWorkingSummary =
+    isTurnTerminal(turn.status)
+    && summary?.status === 'working'
+    && summary.content.trim().length === 0
 
   // --- 1. HITL Priority ---
   if (
@@ -292,7 +301,15 @@ export function deriveFinalAnswer(
   }
 
   // --- 3. Single Agent Fast-Path ---
-  if (real.length === 1) {
+  const activeSupervisorTurn =
+    turn.isSupervisorTurn
+    && !isTurnTerminal(turn.status)
+    && (
+      orchestrator != null
+      || turn.processingStatusLogs.length > 0
+      || real.length > 1
+    )
+  if (real.length === 1 && !activeSupervisorTurn) {
     return {
       kind: "single",
       label: "Working",
@@ -302,7 +319,7 @@ export function deriveFinalAnswer(
 
   // --- 4. Orchestrator-driven Derivation (New System Agent Architecture) ---
   if (orchestrator) {
-    if (orchestrator.status === "working") {
+    if (orchestrator.status === "working" && !isTurnTerminal(turn.status)) {
       const hasRealWorking = real.some(r => r.status === "working")
       const isSynthesizing = shouldShowSynthesizingPhase(turn, real)
         || orchestrator.taskStatusMessage?.toLowerCase().includes('synthesiz')
@@ -322,7 +339,10 @@ export function deriveFinalAnswer(
       return { kind: "pending", label: "Working" }
     }
 
-    if (hasLlmSynthesisContent(summary) || turnHasSubstantiveLlmSynthesis(turn)) {
+    if (
+      !terminalTurnWithEmptyWorkingSummary
+      && (hasLlmSynthesisContent(summary) || turnHasSubstantiveLlmSynthesis(turn))
+    ) {
       const llmSummary = turn.agentResults.find(
         r => r.isSummaryAgent && r.summaryOrigin !== "deterministic"
       )

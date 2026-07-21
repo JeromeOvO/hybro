@@ -13,7 +13,7 @@ export async function handleHitlRequest(
   _correlation: CorrelationResult,
 ): Promise<void> {
   const {
-    request_id, message_id, prompt, prompt_type, choices,
+    request_id, message_id, source, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
     group_id, group_total, group_index, related_message_id,
   } = sseMessage.data
@@ -81,6 +81,7 @@ export async function handleHitlRequest(
     roomId,
     messageId: message_id,
     requestId: request_id,
+    source,
     prompt,
     promptType: prompt_type,
     choices: Array.isArray(choices) ? choices as string[] : null,

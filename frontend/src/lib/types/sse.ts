@@ -1,11 +1,10 @@
 // SSE-specific types matching the backend implementation
 
-// Re-export TaskState from the official A2A JS SDK — single source of truth.
-// This replaces the hand-maintained union type that previously used snake_case
-// variants ("input_required", "auth_required") which diverged from the A2A spec's
-// kebab-case values ("input-required", "auth-required").
-export type { TaskState } from '@a2a-js/sdk'
-import type { TaskState } from '@a2a-js/sdk'
+// Keep the official A2A states as the base contract, then add the task states
+// emitted by Hybro's backend but not yet represented by the JS SDK.
+import type { TaskState as A2ATaskState } from '@a2a-js/sdk'
+
+export type TaskState = A2ATaskState | 'policy-required' | 'expired'
 
 export type SSEFrame<T extends string, D> = {
   type: T
@@ -276,38 +275,52 @@ export const TASK_STATE = {
   WORKING: "working",
   INPUT_REQUIRED: "input-required",
   AUTH_REQUIRED: "auth-required",
+  POLICY_REQUIRED: "policy-required",
   COMPLETED: "completed",
   CANCELED: "canceled",
   FAILED: "failed",
   REJECTED: "rejected",
+  EXPIRED: "expired",
   UNKNOWN: "unknown",
 } as const satisfies Record<string, TaskState>
-
-const REMOTE_POLICY_REQUIRED_STATE = "policy-required"
-const REMOTE_EXPIRED_STATE = "expired"
 
 // States that are still in progress
 export const PENDING_STATES: TaskState[] = [TASK_STATE.SUBMITTED, TASK_STATE.WORKING]
 
 // States that require user action
-export const INTERACTIVE_STATES: TaskState[] = [TASK_STATE.INPUT_REQUIRED, TASK_STATE.AUTH_REQUIRED]
+export const INTERACTIVE_STATES: TaskState[] = [
+  TASK_STATE.INPUT_REQUIRED,
+  TASK_STATE.AUTH_REQUIRED,
+  TASK_STATE.POLICY_REQUIRED,
+]
 
 // States that indicate task is done
-export const TERMINAL_STATES: TaskState[] = [TASK_STATE.COMPLETED, TASK_STATE.FAILED, TASK_STATE.CANCELED, TASK_STATE.REJECTED]
+export const TERMINAL_STATES: TaskState[] = [
+  TASK_STATE.COMPLETED,
+  TASK_STATE.FAILED,
+  TASK_STATE.CANCELED,
+  TASK_STATE.REJECTED,
+  TASK_STATE.EXPIRED,
+]
 
 // States that indicate task ended unsuccessfully
-export const FAILURE_STATES: TaskState[] = [TASK_STATE.FAILED, TASK_STATE.REJECTED, TASK_STATE.CANCELED]
+export const FAILURE_STATES: TaskState[] = [
+  TASK_STATE.FAILED,
+  TASK_STATE.REJECTED,
+  TASK_STATE.CANCELED,
+  TASK_STATE.EXPIRED,
+]
 
 export function isTerminalState(state: TaskState): boolean {
-  return TERMINAL_STATES.includes(state) || (state as string) === REMOTE_EXPIRED_STATE
+  return TERMINAL_STATES.includes(state)
 }
 
 export function isFailureState(state: TaskState): boolean {
-  return FAILURE_STATES.includes(state) || (state as string) === REMOTE_EXPIRED_STATE
+  return FAILURE_STATES.includes(state)
 }
 
 export function isInteractiveState(state: TaskState): boolean {
-  return INTERACTIVE_STATES.includes(state) || (state as string) === REMOTE_POLICY_REQUIRED_STATE
+  return INTERACTIVE_STATES.includes(state)
 }
 
 export function isPendingState(state: TaskState): boolean {

@@ -118,6 +118,37 @@ describe('FinalAnswerSurface processing logs', () => {
     ).toBeTruthy()
   })
 
+  it('does not render a stale task label above a completed synthesis', () => {
+    render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'completed',
+          phase: 'completed',
+          supervisorStage: {
+            status: 'completed',
+            details: 'Requesting Cyber Insurer Agent',
+          },
+          finalAnswer: { kind: 'llm_synthesis', label: 'Synthesized', primaryMessageId: 'summary-1' },
+          agentResults: [
+            {
+              messageId: 'summary-1',
+              agentId: 'system:hybro',
+              agentName: 'HYBRO AI',
+              status: 'completed',
+              content: 'The requested result is ready.',
+              artifacts: [],
+              isSummaryAgent: true,
+              taskStatusMessage: 'Requesting Cyber Insurer Agent',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('The requested result is ready.')).toBeInTheDocument()
+    expect(screen.queryByText('Requesting Cyber Insurer Agent')).not.toBeInTheDocument()
+  })
+
   it('renders processing status logs for a single-agent collecting turn', () => {
     render(
       <FinalAnswerSurface

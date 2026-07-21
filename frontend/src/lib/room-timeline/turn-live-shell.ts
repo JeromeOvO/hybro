@@ -64,6 +64,11 @@ export function getAgentIndexSummary(
 }
 
 export function getSupervisorStatusLine(turn: TurnViewModel): string | null {
+  // Supervisor stage details are transient progress UI, never part of the
+  // completed user-facing answer. Persisted/hydrated turns can still carry the
+  // last stage (for example "Requesting ..."), so stop it at this boundary.
+  if (turn.status !== 'active' || turn.phase === 'completed') return null
+
   const ephemeral = turn.agentResults.find(
     r => r.isEphemeral && (r.taskStatusMessage?.trim().length ?? 0) > 0,
   )

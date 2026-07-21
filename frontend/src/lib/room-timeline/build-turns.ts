@@ -233,7 +233,12 @@ function assembleTurn(
   // Supervisor detection (spec §5.2)
   // Check against all results (including suppressed ephemerals) to preserve supervisor turn
   // status during pre-synthesis gap (anti-flashing).
-  const isSupervisorTurn = dedupedResults.some(r => isSupervisorSystemAgent(r.agentId))
+  const hasSupervisorProcessingLogs =
+    hasSupervisorContinuationLog(scaffold.userEntity?.processingStatusLogs)
+    && !isPersistedTerminalTurn(scaffold.userEntity?.turnTerminalStatus)
+  const isSupervisorTurn =
+    dedupedResults.some(r => isSupervisorSystemAgent(r.agentId))
+    || hasSupervisorProcessingLogs
 
   const status = deriveTurnStatus(agentResults, {
     isSupervisorTurn,
@@ -295,6 +300,27 @@ function assembleTurn(
   return turn
 }
 
+function hasSupervisorContinuationLog(
+  logs: MessageEntity['processingStatusLogs'] | undefined,
+): boolean {
+  if (!logs?.length) return false
+  return logs.some((entry) => {
+    const message = entry.message.toLowerCase()
+    return (
+      message.includes('evaluating agent results')
+      || message.includes('synthesiz')
+      || message.includes('orchestrat')
+      || message.includes('hybro')
+    )
+  })
+}
+
+function isPersistedTerminalTurn(
+  status: TurnViewModel['turnTerminalStatus'] | undefined,
+): boolean {
+  return status === 'completed' || status === 'failed' || status === 'canceled'
+}
+
 // ── Agent result construction ──────────────────────────────────
 
 function buildAgentResult(
@@ -340,15 +366,20 @@ function buildAgentResult(
 
   // Status derivation (spec §5.4)
   let status: AgentResultViewModel['status'] = 'completed'
-  const hitlAnswered = !!entity.hitlUserAnswer
+  const hitlAnswered = entity.hitlResolved === true || !!entity.hitlUserAnswer
 
   if (entity.taskStatus && isFailureState(entity.taskStatus)) {
     status = 'failed'
   } else if (entity.taskStatus && isInteractiveState(entity.taskStatus)) {
     if (hitlAnswered) {
       status = isSupervisorClarifyAgent(entity.agentId) ? 'completed' : 'working'
-    } else {
+    } else if (entity.hitlRequestId) {
       status = 'awaiting_input'
+    } else {
+      // A remote agent may request input while the orchestrator is still
+      // resolving it from existing context. Only a durable HITL request is
+      // actionable by the user; keep the internal recovery state as working.
+      status = 'working'
     }
   } else if (entity.taskStatus && !isTerminalState(entity.taskStatus)) {
     status = 'working'
@@ -359,8 +390,16 @@ function buildAgentResult(
   let hitlPending: AgentResultViewModel['hitlPending']
   if (entity.hitlPrompt && entity.hitlUserAnswer) {
     hitlResolved = { prompt: entity.hitlPrompt, answer: entity.hitlUserAnswer }
-  } else if (entity.hitlPrompt && !hitlAnswered) {
-    hitlPending = { prompt: entity.hitlPrompt }
+  } else if (
+    entity.hitlRequestId
+    && entity.hitlPrompt
+    && !hitlAnswered
+    && entity.hitlResolved !== true
+  ) {
+    hitlPending = {
+      prompt: entity.hitlPrompt,
+      source: entity.hitlSource ?? 'agent',
+    }
   }
 
   // Legacy hitlHistory for backward compat
@@ -640,9 +679,15 @@ function deriveTurnStatus(
   const hasCompleted = substantive.some((r) => r.status === 'completed')
 
   const orchestrator = agentResults.find(r => r.agentId === "system:hybro")
+  const real = substantive.filter(r => !r.isSummaryAgent)
+  const allRealTerminal =
+    real.length > 0 && real.every(r => r.status === 'completed' || r.status === 'failed')
+
+  if (opts.turnTerminalStatus === 'failed') return 'failed'
+
   if (orchestrator) {
-    if (orchestrator.status === "working") return "active"
     if (orchestrator.status === "awaiting_input" || hasAwaitingInput) return "awaiting_input"
+    if (orchestrator.status === "working" && !allRealTerminal) return "active"
   }
 
   if (substantive.length === 0) {
@@ -650,10 +695,17 @@ function deriveTurnStatus(
     return agentResults.some(r => r.status === 'working') ? 'active' : 'completed'
   }
 
-  const real = substantive.filter(r => !r.isSummaryAgent)
-  const hasWorking = substantive.some((r) => r.status === 'working' && !isSupervisorClarifyAgent(r.agentId))
+  const hasWorking = substantive.some((r) =>
+    r.status === 'working' && !r.isSummaryAgent && !isSupervisorClarifyAgent(r.agentId)
+  )
   const allFailed = substantive.every((r) => r.status === 'failed')
   const allCompleted = substantive.every((r) => r.status === 'completed')
+  const hasRealFailed = real.some((r) => r.status === 'failed')
+  const hasRealCompleted = real.some((r) => r.status === 'completed')
+  const hasSupervisorContinuationLogs =
+    opts.isSupervisorTurn
+    && hasSupervisorContinuationLog(opts.processingStatusLogs)
+    && !isPersistedTerminalTurn(opts.turnTerminalStatus)
 
   const summaryAgent = substantive.find(r => r.isSummaryAgent)
   const hasSummaryContent =
@@ -682,16 +734,14 @@ function deriveTurnStatus(
     && allRealAgentsTerminal(agentResults)
     && !hasSummaryContent
     && !synthesisGapActive
-    && opts.turnTerminalStatus !== 'completed'
-    && opts.turnTerminalStatus !== 'failed'
+    && !isPersistedTerminalTurn(opts.turnTerminalStatus)
 
   const awaitingSynthesisGap =
     real.length >= 2
     && allRealAgentsTerminal(agentResults)
     && !hasSummaryContent
     && synthesisGapActive
-    && opts.turnTerminalStatus !== 'completed'
-    && opts.turnTerminalStatus !== 'failed'
+    && !isPersistedTerminalTurn(opts.turnTerminalStatus)
 
   const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(agentResults, {
     turnTerminalStatus: opts.turnTerminalStatus,
@@ -702,6 +752,9 @@ function deriveTurnStatus(
 
   if (hasWorking) return 'active'
   if (hasAwaitingInput) return 'awaiting_input'
+  if (allRealTerminal && hasRealFailed && hasRealCompleted) return 'partial'
+  if (allRealTerminal && hasRealFailed) return 'failed'
+  if (hasSupervisorContinuationLogs && allCompleted) return 'active'
   if (inSynthesisGap || awaitingSynthesisGap || preOrchestrationGap || awaitingMultiAgentSynthesis) {
     return 'active'
   }

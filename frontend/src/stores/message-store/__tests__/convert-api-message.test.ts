@@ -62,6 +62,18 @@ describe('convertApiMessageToIncoming', () => {
 
       expect(result.senderName).toBe('User')
     })
+
+    it('maps persisted orchestration failure to turn terminal status', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'user',
+        extend_info: {
+          orchestration_status: 'failed',
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.turnTerminalStatus).toBe('failed')
+    })
   })
 
   describe('agent messages', () => {
@@ -364,27 +376,52 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.content).toBe('')
     })
 
-    it('ignores legacy message_text for completed agent tasks', async () => {
+    it('prefers public message_text for completed agent tasks with artifacts', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
         message_content: {
-          message_text: 'PRIVATE_SENTINEL_completed_message_text',
+          message_text: 'The agent completed the request.',
           message_task: {
             status: { state: 'completed' },
             artifacts: [{
               artifactId: 'artifact-1',
-              name: 'response',
-              parts: [{ text: 'Here is the final answer.' }],
+              name: 'cyber_submission',
+              parts: [{ kind: 'data', data: { company: 'Acme SaaS Inc.' } }],
             }],
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
-      expect(result.content).toBe('Here is the final answer.')
-      expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL')
+      expect(result.content).toBe('The agent completed the request.')
+      expect(result.artifacts).toHaveLength(1)
+      expect(result.artifacts?.[0]?.name).toBe('cyber_submission')
+    })
+
+    it('maps explicitly published dispatch text separately from the task label', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        extend_info: {
+          public_task_label: 'Requesting Insurer Agent',
+          public_dispatch_text: 'Assess the supplied submission and return a quote.',
+        },
+        message_content: {
+          message_text: 'The agent completed the request.',
+          message_task: {
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatusMessage).toBe('Requesting Insurer Agent')
+      expect(result.dispatchText).toBe(
+        'Assess the supplied submission and return a quote.',
+      )
     })
 
     it('does not promote completed task status message to content or error', async () => {

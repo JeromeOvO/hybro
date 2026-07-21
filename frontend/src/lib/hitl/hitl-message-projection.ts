@@ -8,6 +8,7 @@ export type PendingHitlProjectionInput = {
   roomId: string
   messageId: string
   requestId: string
+  source?: 'agent' | 'supervisor' | string | null | undefined
   prompt: string | null | undefined
   promptType: 'text' | 'choice' | 'confirmation' | string | null | undefined
   choices: string[] | null | undefined
@@ -46,6 +47,7 @@ export function buildPendingHitlIncomingMessage(
     agentSource: input.agentSource,
     taskStatus: 'input-required' as TaskState,
     hitlRequestId: input.requestId,
+    hitlSource: input.source === 'supervisor' ? 'supervisor' : 'agent',
     hitlPrompt: input.prompt || '',
     hitlPromptType: normalizePromptType(input.promptType),
     hitlChoices: Array.isArray(input.choices) ? input.choices : null,

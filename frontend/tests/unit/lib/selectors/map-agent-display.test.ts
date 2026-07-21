@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mapAgentDisplayProps } from '@/lib/selectors/map-agent-display'
 import { createAgentMessage, createTaskMessage, resetCounters } from '../../../fixtures'
 import { TASK_STATE } from '@/lib/types/sse'
-import type { TaskState } from '@/lib/types/sse'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 function asEntity(msg: ReturnType<typeof createAgentMessage>): MessageEntity {
@@ -76,15 +75,27 @@ describe('mapAgentDisplayProps', () => {
   })
 
   it('returns Needs Input for input-required status', () => {
-    const entity = asEntity(createTaskMessage(TASK_STATE.INPUT_REQUIRED))
+    const entity = asEntity(createTaskMessage(TASK_STATE.INPUT_REQUIRED, {
+      hitlRequestId: 'hitl-1',
+    }))
     const result = mapAgentDisplayProps(entity)
     expect(result.label).toBe('Needs Input')
     expect(result.tone).toBe('warning')
     expect(result.isAnimated).toBe(true)
   })
 
+  it('keeps input-required as Working until a HITL request exists', () => {
+    const entity = asEntity(createTaskMessage(TASK_STATE.INPUT_REQUIRED))
+    const result = mapAgentDisplayProps(entity)
+    expect(result.label).toBe('Working')
+    expect(result.tone).toBe('accent')
+    expect(result.isAnimated).toBe(true)
+  })
+
   it('returns Auth Required for auth-required status', () => {
-    const entity = asEntity(createTaskMessage(TASK_STATE.AUTH_REQUIRED))
+    const entity = asEntity(createTaskMessage(TASK_STATE.AUTH_REQUIRED, {
+      hitlRequestId: 'hitl-auth-1',
+    }))
     const result = mapAgentDisplayProps(entity)
     expect(result.label).toBe('Auth Required')
     expect(result.tone).toBe('warning')
@@ -92,7 +103,9 @@ describe('mapAgentDisplayProps', () => {
   })
 
   it('returns Policy Required for policy-required status', () => {
-    const entity = asEntity(createTaskMessage('policy-required' as TaskState))
+    const entity = asEntity(createTaskMessage(TASK_STATE.POLICY_REQUIRED, {
+      hitlRequestId: 'hitl-policy-1',
+    }))
     const result = mapAgentDisplayProps(entity)
     expect(result.label).toBe('Policy Required')
     expect(result.tone).toBe('warning')
@@ -101,7 +114,7 @@ describe('mapAgentDisplayProps', () => {
   })
 
   it('returns Expired for expired status', () => {
-    const entity = asEntity(createTaskMessage('expired' as TaskState))
+    const entity = asEntity(createTaskMessage(TASK_STATE.EXPIRED))
     const result = mapAgentDisplayProps(entity)
     expect(result.label).toBe('Expired')
     expect(result.tone).toBe('muted')

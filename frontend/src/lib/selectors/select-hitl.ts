@@ -26,6 +26,7 @@ export function selectPendingHitls(
     })
     .map(e => ({
       hitlId: e.hitlRequestId!,
+      source: e.hitlSource ?? 'agent',
       agentName: e.senderName,
       question: e.hitlPrompt ?? e.content ?? e.taskStatusMessage ?? '',
       promptType: e.hitlPromptType ?? 'text',

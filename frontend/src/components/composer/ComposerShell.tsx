@@ -15,7 +15,7 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
     hitlId: hitl.hitlId,
     turnId: hitl.messageId,
     ts: Date.now(),
-    source: 'agent',
+    source: hitl.source,
     agentName: hitl.agentName,
     prompt: hitl.question,
     promptType: hitl.promptType,
@@ -83,7 +83,7 @@ function useComposerState(roomId: string): ComposerState {
 export function ComposerShell({ adapter }: ComposerShellProps) {
   const composerState = useComposerState(adapter.roomId)
   const isHitlMode = composerState.mode === 'hitl_responding'
-  const isProcessing = composerState.isProcessing && adapter.isProcessing
+  const isProcessing = composerState.isProcessing || adapter.isProcessing
 
   const hitlBar = composerState.pendingHitls.length > 0 ? (
     <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">

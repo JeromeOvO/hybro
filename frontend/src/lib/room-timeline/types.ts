@@ -177,7 +177,7 @@ export interface AgentResultViewModel {
   /** Resolved HITL: prompt and user answer. */
   hitlResolved?: { prompt: string; answer: string }
   /** Active (unanswered) HITL prompt. */
-  hitlPending?: { prompt: string }
+  hitlPending?: { prompt: string; source: 'agent' | 'supervisor' }
   /** Event count for inline chips. */
   eventCount?: number
   /** Duration in ms for inline chips. */

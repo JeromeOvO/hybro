@@ -83,6 +83,36 @@ describe('AgentResponseDetailPane', () => {
     expect(screen.getByText('task-lifecycle -> Full task')).toBeInTheDocument()
   })
 
+  it('collapses the agent task by default and expands on click', async () => {
+    const view = render(<AgentResponseDetailPane detail={detail} onClose={vi.fn()} />)
+
+    const toggle = within(view.container).getByRole('button', { name: /expand task/i })
+    const taskText = within(view.container).getByText('Research a2a agents')
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(taskText).toHaveClass('conversation-detail-agent-task-text-collapsed')
+
+    await userEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(taskText).not.toHaveClass('conversation-detail-agent-task-text-collapsed')
+  })
+
+  it('renders the full published dispatch in the task detail region', async () => {
+    const dispatchText = 'Assess the supplied submission and return a final quote.'
+    const view = render(
+      <AgentResponseDetailPane
+        detail={{ ...detail, taskDescription: dispatchText }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const toggle = within(view.container).getByRole('button', { name: /expand task/i })
+    await userEvent.click(toggle)
+
+    expect(within(view.container).getByText(dispatchText)).toBeVisible()
+  })
+
   it('closes from the header button', async () => {
     const onClose = vi.fn()
     const view = render(<AgentResponseDetailPane detail={detail} onClose={onClose} />)

@@ -356,6 +356,8 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 - **Render-time remark plugins** (`conversation-remark-plugins.ts`, passed to Streamdown `remarkPlugins`) operate on the mdast tree Streamdown actually renders — no remark-stringify/reparse gap. The bundle includes `remark-gfm` because Streamdown replaces (not merges) default plugins when `remarkPlugins` is set. For conversation markdown, `parseMarkdownIntoBlocksFn={(md) => [md]}` parses the full message in one pass (including during streaming) so section/list surgery is not split across Streamdown blocks. Plugin order: `remark-gfm` → `remarkSplitSectionLists` → `remarkNestAdjacentBulletLists` → `remarkCoalesceOrderedLists` → `remarkAssignOrderedListStarts`.
 - **Rehype pipeline** (`markdown-content.tsx`): custom `rehypePlugins` must include Streamdown's `defaultRehypePlugins` (`rehype-raw`, `rehype-sanitize`, `rehype-harden`) before `rehype-highlight`, because passing `rehypePlugins` replaces rather than merges defaults.
 - Agent `message_text` is stored and returned by the backend as produced; markdown repair is client-side only. Hybro-controlled LLM synthesis prompts (`multi-agents-backend/common/prompts/markdown_response_format.py`) encourage `###` section headers for cleaner source text; the frontend AST pipeline is the universal compatibility layer for third-party agents.
+- Completed agent tasks treat backend-projected `message_text` as the human-readable response and render non-text Task artifacts alongside it. Raw `TaskStatus.message` and Task history are never promoted by the client; when public `message_text` is absent, a completed text-only artifact remains the compatibility fallback.
+- Agent entities retain the backend-published `extend_info.public_dispatch_text` separately from the short `public_task_label`. The main Agent Card keeps the compact label; the expanded response detail prefers the full dispatch text in its existing collapsible task region, followed by the agent `message_text` and artifacts.
 - The renderer maps top-level `<ol>` elements to `style.counterReset = 'conv-section-ol <start - 1>'` from the mdast `start` prop. CSS counters in `conversation-tokens.css` provide visible `N.` markers for ordinary lists; items that already start with `#N` (supervisor-style `**#1 — …` rows) get `conv-hash-numbered-item` and suppress the extra counter.
 
 Display helpers in `src/lib/streaming/display.ts` split live **text** (buffer) from **non-text artifacts** (files/data) during stream so the detail pane and activity strip can show file attachments while text is still growing. `AgentResponseDetailPane` uses `useDetailPaneScroll` with ChatGPT-aligned behavior: first open scrolls to top; reopening the same message restores saved scroll from `room-ui-store.detailScrollByMessageId`; optional tail-follow when pinned near bottom during stream; no scroll reset on stream complete; detail body uses `overflow-anchor: none`.
@@ -404,6 +406,16 @@ when the backend can resolve it, but the UI must still apply them by `room_id`,
 `GET /api/v1/rooms/{room_id}/hitl/pending` hydration share the same message
 projection path so a pending HITL appears whether the user stays on the page,
 reconnects, or refreshes.
+The projection preserves HITL `source` as first-class message state. Agent
+requests therefore render the external agent name (for example,
+`Cyber Broker Agent · Needs Input`), while supervisor requests render HYBRO AI.
+Raw agent task states such as `input-required`, `auth-required`, and
+`policy-required` are not actionable UI state by themselves: until the message
+has a durable `hitlRequestId`, the timeline and agent header continue to show
+Working while backend recovery runs silently. Only the durable HITL projection
+may show Needs Input or an interaction component.
+Hydration marks input-required messages that are absent from the pending set as
+resolved so canceled or expired request metadata cannot recreate stale HITL UI.
 
 `processing_status` requires `message_id`, non-empty `client_request_id`, a known status, and `details` as either an object or `null`. Active statuses such as `queued`, `processing`, and `awaiting_input` keep the user turn active; terminal statuses mark the correlated user turn and clear the send guard only when they target the user message rather than a per-agent task. HITL resume can introduce a new backend `client_request_id`; in that case, a terminal frame with an agent-task `message_id` is accepted only when `related_message_id` points at the resolved user turn and the new request id differs from the user message's original request id.
 
