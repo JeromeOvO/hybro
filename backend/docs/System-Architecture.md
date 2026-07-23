@@ -734,6 +734,15 @@ Important Mongo collections include:
 Mongo text indexes support Agent lexical matching and Context Memory keyword
 retrieval. S3 is used for file uploads and converted binary artifacts.
 
+At startup, each search index is compared with its required keys and weights.
+Because MongoDB permits only one text index per collection, a mismatched index
+is dropped before its replacement is created. The starting instance does not
+report the index as ready unless recreation succeeds, and `/health` returns 503
+after a failed recreation. During a rolling deployment against a shared
+database, existing replicas can briefly lose text search while the replacement
+is being created, so index-shape changes should be coordinated during a
+maintenance window or before application rollout.
+
 ### Application Shell
 
 The application shell is now a composition concept, not a Python package.
