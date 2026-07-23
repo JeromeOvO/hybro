@@ -302,7 +302,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from llm_gateway.config import LLMGatewayConfig
             from llm_gateway.services import (
                 AgentSelectionLLMService,
-                DiscoveryLLMService,
                 MessageParserLLMService,
                 RoomMemoryLLMService,
                 SummaryLLMService,
@@ -463,10 +462,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             supervisor_llm_service = SupervisorLLMService(
                 llm_provider=llm_provider,
                 default_model=llm_gateway_config.default_supervisor_model,
-            )
-            discovery_llm_service = DiscoveryLLMService(  # noqa: F841
-                llm_provider=llm_provider,
-                max_expansion_words=runtime.settings.discovery_query_expansion_threshold,
             )
             summary_llm_service = SummaryLLMService(llm_provider=llm_provider)
             agent_selection_llm_service = AgentSelectionLLMService(

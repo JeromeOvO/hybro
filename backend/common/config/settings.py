@@ -92,9 +92,6 @@ class Settings(BaseSettings):
 
     # Discovery API Settings
     discovery_default_limit: int = 5  # Default number of agents to return
-    discovery_query_expansion_threshold: int = (
-        5  # Maximum word count for query expansion
-    )
     discovery_rate_limit_per_key: int | None = (
         100  # Requests per API key per hour (None = unlimited)
     )
