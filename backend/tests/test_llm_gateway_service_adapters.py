@@ -92,6 +92,45 @@ async def test_agent_selection_service_propagates_routing_errors():
 
 
 @pytest.mark.asyncio
+async def test_agent_selection_ranking_accepts_fenced_json_and_sanitizes_ids():
+    class FencedGateway:
+        async def generate(self, messages, **kwargs):
+            return LLMResponse(
+                content='```json\n["agent-b", "unknown", "agent-b"]\n```',
+                model=kwargs["model"],
+            )
+
+    service = AgentSelectionLLMService(FencedGateway())
+    candidates = [
+        AgentRoutingCandidate(agent_id="agent-a", name="A"),
+        AgentRoutingCandidate(agent_id="agent-b", name="B"),
+    ]
+
+    assert await service.rank_agents_for_task("pick b", candidates) == [
+        "agent-b",
+        "agent-a",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_selection_ranking_falls_back_for_unparseable_output():
+    class InvalidGateway:
+        async def generate(self, messages, **kwargs):
+            return LLMResponse(content="agent-b first", model=kwargs["model"])
+
+    service = AgentSelectionLLMService(InvalidGateway())
+    candidates = [
+        AgentRoutingCandidate(agent_id="agent-a", name="A"),
+        AgentRoutingCandidate(agent_id="agent-b", name="B"),
+    ]
+
+    assert await service.rank_agents_for_task("pick b", candidates) == [
+        "agent-a",
+        "agent-b",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_debate_service_uses_lead_model():
     gateway = FakeWorkflowGateway()
     service = DebateLLMService(gateway)

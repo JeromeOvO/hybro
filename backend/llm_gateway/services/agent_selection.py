@@ -84,9 +84,7 @@ class AgentSelectionLLMService:
                 ],
                 model=self._default_model,
             )
-            parsed = json.loads(response.content.strip())
-            if not isinstance(parsed, list):
-                return lexical_order
+            parsed = _parse_json_array(response.content)
             allowed = set(lexical_order)
             ranked: list[str] = []
             for value in parsed:
@@ -96,6 +94,28 @@ class AgentSelectionLLMService:
             return [*ranked, *(item for item in lexical_order if item not in ranked)]
         except Exception:
             return lexical_order
+
+
+def _parse_json_array(content: str) -> list[object]:
+    stripped = content.strip()
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, list):
+        return parsed
+
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(stripped):
+        if char != "[":
+            continue
+        try:
+            candidate, _end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, list):
+            return candidate
+    raise ValueError("No JSON array found in agent ranking response")
 
 
 def _format_candidate(index: int, agent: AgentRoutingCandidate) -> str:
