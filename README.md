@@ -51,5 +51,5 @@ We welcome contributions from the community! Whether you are fixing a bug, addin
 5. Open a Pull Request
 
 ## License
-MIT License
+Apache License 2.0
 
