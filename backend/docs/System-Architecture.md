@@ -1165,6 +1165,16 @@ An optional provider-neutral `extensions.vector_store.VectorStore` protocol is
 available for future features. It has no factory, default implementation,
 container binding, application state, or current runtime consumer.
 
+Deferred follow-ups are intentionally separate from the local-default removal:
+
+- Add optional core injection hooks for Agent matching, discovery, and Context
+  Memory while keeping the default runtime unbound.
+- Implement concrete providers and default-on enterprise wiring in
+  `hybro-enterprise`.
+- Design bounded Agent-catalog retrieval that preserves visibility, ownership,
+  activity, allowed-scope, capability-issue, and input-mode filtering before
+  limiting candidates.
+
 ## Background Jobs
 
 Background jobs are initialized by the container runtime after Redis/leader
