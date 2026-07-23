@@ -155,7 +155,9 @@ class TestMultiEventSequenceWithPersist:
 
         # Terminal response resumes orchestration
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text="Hello world", failed=False,
+            message_id="msg-001",
+            task_result_text="Hello world",
+            failed=False,
         )
 
 
@@ -235,8 +237,10 @@ class TestErrorEventParity:
     async def test_error_persists_when_not_skipped(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="error", **_base(),
-            error_text="agent crashed", state="failed",
+            kind="error",
+            **_base(),
+            error_text="agent crashed",
+            state="failed",
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -252,15 +256,19 @@ class TestErrorEventParity:
             message_text="Task failed",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
     async def test_error_skips_persist(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="error", **_base(),
-            error_text="agent crashed", state="failed",
+            kind="error",
+            **_base(),
+            error_text="agent crashed",
+            state="failed",
             skip_persist=True,
         )
 
@@ -299,15 +307,19 @@ class TestCanceledEventParity:
             message_text="Task was canceled",
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
-            message_id="msg-001", task_result_text=None, failed=True,
+            message_id="msg-001",
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
     async def test_canceled_skips_persist(self):
         h = _make_handler()
         event = AgentEvent(
-            kind="canceled", **_base(),
-            text="user stopped", skip_persist=True,
+            kind="canceled",
+            **_base(),
+            text="user stopped",
+            skip_persist=True,
         )
 
         with pytest.MonkeyPatch.context() as mp:

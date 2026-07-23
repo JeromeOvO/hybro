@@ -98,7 +98,9 @@ class TestSharedInlineConversionCap:
 
             shared_counter = [streaming_state.inline_conversion_count]
             await processor._convert_inline_bytes_to_s3(
-                artifact, "room1", "msg1",
+                artifact,
+                "room1",
+                "msg1",
                 conversion_counter=shared_counter,
             )
             streaming_state.inline_conversion_count = shared_counter[0]
@@ -113,7 +115,9 @@ class TestSharedInlineConversionCap:
         ]
 
         new_total = await processor._convert_streaming_parts_to_s3(
-            non_text_parts, "room1", "msg1",
+            non_text_parts,
+            "room1",
+            "msg1",
             converted_so_far=streaming_state.inline_conversion_count,
         )
         streaming_state.inline_conversion_count = new_total

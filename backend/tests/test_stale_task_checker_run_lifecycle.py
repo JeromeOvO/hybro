@@ -20,7 +20,9 @@ from models.room import MessageContent, RoomAgentMessage
 
 
 @pytest.mark.asyncio
-async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(monkeypatch):
+async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(
+    monkeypatch,
+):
     import jobs.stale_task_checker as mod
 
     calls: list[str] = []

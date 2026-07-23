@@ -153,7 +153,9 @@ async def test_subscription_failure_rejects_without_local_admission():
     assert transport.room_connections == {}
     assert transport.connection_rooms == {}
     assert event_bus.unsubscribed == []
-    assert metrics.gauges == [("hybro_delivery_sse_connections", 0, {"worker_id": "worker-1"})]
+    assert metrics.gauges == [
+        ("hybro_delivery_sse_connections", 0, {"worker_id": "worker-1"})
+    ]
 
 
 @pytest.mark.asyncio
@@ -170,7 +172,9 @@ async def test_concurrent_first_connection_failure_has_no_partial_admission():
 
     assert transport.room_connections == {}
     assert transport.connection_rooms == {}
-    assert metrics.gauges == [("hybro_delivery_sse_connections", 0, {"worker_id": "worker-1"})]
+    assert metrics.gauges == [
+        ("hybro_delivery_sse_connections", 0, {"worker_id": "worker-1"})
+    ]
 
     event_bus.subscribe_waiter.set()
     with pytest.raises(ConnectionRefusedError):
@@ -250,11 +254,21 @@ async def test_broadcast_frame_to_room_preserves_order_and_empty_room_is_noop():
     connection = await transport.open_connection("room-1")
 
     await transport.broadcast_frame_to_room("missing", {"type": "noop"})
-    await transport.broadcast_frame_to_room("room-1", {"type": "one", "room_id": "room-1"})
-    await transport.broadcast_frame_to_room("room-1", {"type": "two", "room_id": "room-1"})
+    await transport.broadcast_frame_to_room(
+        "room-1", {"type": "one", "room_id": "room-1"}
+    )
+    await transport.broadcast_frame_to_room(
+        "room-1", {"type": "two", "room_id": "room-1"}
+    )
 
-    assert await connection.next_frame(timeout=0.01) == {"type": "one", "room_id": "room-1"}
-    assert await connection.next_frame(timeout=0.01) == {"type": "two", "room_id": "room-1"}
+    assert await connection.next_frame(timeout=0.01) == {
+        "type": "one",
+        "room_id": "room-1",
+    }
+    assert await connection.next_frame(timeout=0.01) == {
+        "type": "two",
+        "room_id": "room-1",
+    }
 
 
 @pytest.mark.asyncio

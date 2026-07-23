@@ -1432,7 +1432,7 @@ def test_health_route_delegates_to_health_check_protocol():
 
     assert "get_health_check" in source
     assert ".check(" in source
-    assert ('app_' + 'shell' + '.') not in source
+    assert ("app_" + "shell" + ".") not in source
     assert "settings." not in source
 
 

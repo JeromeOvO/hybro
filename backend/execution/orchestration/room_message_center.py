@@ -183,7 +183,9 @@ class RoomMessageCenter:
         event_publisher: EventPublisher | None = None,
     ):
         if event_publisher is None:
-            raise RuntimeError("RoomMessageCenter event_publisher dependency is required")
+            raise RuntimeError(
+                "RoomMessageCenter event_publisher dependency is required"
+            )
         self.room_runtime = room_runtime
         self.message_reader = message_reader
         self.message_writer = message_writer
@@ -395,7 +397,9 @@ class RoomMessageCenter:
         agents: list[dict] | None = None,
     ) -> None:
         if getattr(self, "_processing_status_emitter", None) is None:
-            raise RuntimeError("RoomMessageCenter execution event dependencies not bound")
+            raise RuntimeError(
+                "RoomMessageCenter execution event dependencies not bound"
+            )
         status_value = status.value if hasattr(status, "value") else str(status)
         await self._processing_status_emitter(
             room_id=room_id,
@@ -435,10 +439,8 @@ class RoomMessageCenter:
         truth-check / reconcile path can always find the value in the DB.
         """
         try:
-            user_msg = (
-                await self.message_reader.get_room_user_message_by_message_id(
-                    user_message_id
-                )
+            user_msg = await self.message_reader.get_room_user_message_by_message_id(
+                user_message_id
             )
             if user_msg:
                 if not isinstance(user_msg.extend_info, dict):
@@ -471,8 +473,9 @@ class RoomMessageCenter:
             queried_related_ids.add(related_message_id)
 
             related_messages = (
-                await self.message_reader
-                .get_room_agent_messages_by_related_message_id(related_message_id)
+                await self.message_reader.get_room_agent_messages_by_related_message_id(
+                    related_message_id
+                )
             )
             for msg in related_messages:
                 message_id = msg.message_id
@@ -523,8 +526,8 @@ class RoomMessageCenter:
     def _legacy_trajectory_status_for_result(
         result: SupervisorRunResult,
     ) -> str:
-        compatibility_trajectory = RoomMessageCenter._compat_trajectory_for_supervisor_result(
-            result
+        compatibility_trajectory = (
+            RoomMessageCenter._compat_trajectory_for_supervisor_result(result)
         )
         if compatibility_trajectory is not None:
             return compatibility_trajectory.status.value
@@ -598,9 +601,7 @@ class RoomMessageCenter:
         metadata = getattr(assembled, "metadata", {}) or {}
         return self._assembled_context_text(assembled), metadata.get("occupancy_pct")
 
-    def set_room_distributed_lock(
-        self, room_lock: RoomDistributedLock | None
-    ) -> None:
+    def set_room_distributed_lock(self, room_lock: RoomDistributedLock | None) -> None:
         self._room_distributed_lock = room_lock
         # Turn-event dual-write wiring removed. Runtime now uses
         # message/task SSE as the single source of truth.
@@ -618,7 +619,10 @@ class RoomMessageCenter:
     _RELEASE_LOCK_LUA = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end"
 
     async def _acquire_distributed_lock(
-        self, room_id: str, owner: str, ttl: int = ROOM_LOCK_HOLD_TTL_SECONDS,
+        self,
+        room_id: str,
+        owner: str,
+        ttl: int = ROOM_LOCK_HOLD_TTL_SECONDS,
     ) -> bool | None:
         """Try to acquire the Redis distributed lock for *room_id*.
 
@@ -640,7 +644,9 @@ class RoomMessageCenter:
         await self._room_distributed_lock.release(room_id, owner)
 
     async def _acquire_room_lock(
-        self, room_id: str, timeout: float = ROOM_LOCK_TIMEOUT_SECONDS,
+        self,
+        room_id: str,
+        timeout: float = ROOM_LOCK_TIMEOUT_SECONDS,
     ) -> str | None:
         """Acquire both the distributed Redis lock and the local asyncio lock.
 
@@ -665,17 +671,24 @@ class RoomMessageCenter:
             poll_interval = 0.5
             redis_errors = 0
             while elapsed < timeout:
-                result = await self._acquire_distributed_lock(room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS)
+                result = await self._acquire_distributed_lock(
+                    room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS
+                )
                 if result is True:
                     if elapsed > 1.0:
                         logger.info(
                             "Distributed lock acquired for room %s (owner=%s, waited=%.1fs, ttl=%ds)",
-                            room_id, owner[:8], elapsed, ROOM_LOCK_HOLD_TTL_SECONDS,
+                            room_id,
+                            owner[:8],
+                            elapsed,
+                            ROOM_LOCK_HOLD_TTL_SECONDS,
                         )
                     else:
                         logger.debug(
                             "Distributed lock acquired for room %s (owner=%s, waited=%.1fs)",
-                            room_id, owner[:8], elapsed,
+                            room_id,
+                            owner[:8],
+                            elapsed,
                         )
                     break
                 if result is None:
@@ -684,7 +697,8 @@ class RoomMessageCenter:
                         logger.warning(
                             "Redis unhealthy (%d consecutive errors) while acquiring "
                             "lock for room %s — falling back to local lock only",
-                            redis_errors, room_id,
+                            redis_errors,
+                            room_id,
                         )
                         use_distributed = False
                         break
@@ -696,7 +710,9 @@ class RoomMessageCenter:
             else:
                 logger.warning(
                     "Distributed lock timeout for room %s after %.1fs (owner=%s)",
-                    room_id, elapsed, owner[:8],
+                    room_id,
+                    elapsed,
+                    owner[:8],
                 )
                 return None  # timed out waiting for distributed lock
 
@@ -713,7 +729,11 @@ class RoomMessageCenter:
         return owner
 
     async def _release_room_lock(
-        self, room_id: str, owner: str | None, *, acquired_at: float | None = None,
+        self,
+        room_id: str,
+        owner: str | None,
+        *,
+        acquired_at: float | None = None,
     ) -> None:
         """Release both the local asyncio lock and the distributed Redis lock."""
         if acquired_at is not None:
@@ -722,12 +742,15 @@ class RoomMessageCenter:
                 logger.warning(
                     "Room %s held lock for %.0fs — approaching TTL of %ds. "
                     "Consider investigating slow processing or adding lock renewal.",
-                    room_id, held_seconds, ROOM_LOCK_HOLD_TTL_SECONDS,
+                    room_id,
+                    held_seconds,
+                    ROOM_LOCK_HOLD_TTL_SECONDS,
                 )
             elif held_seconds > 60:
                 logger.info(
                     "Room %s held lock for %.0fs",
-                    room_id, held_seconds,
+                    room_id,
+                    held_seconds,
                 )
         local_lock = self._room_locks.get(room_id)
         if local_lock is not None and local_lock.locked():
@@ -736,7 +759,8 @@ class RoomMessageCenter:
             await self._release_distributed_lock(room_id, owner)
             logger.debug(
                 "Distributed lock released for room %s (owner=%s)",
-                room_id, owner[:8],
+                room_id,
+                owner[:8],
             )
 
     def _get_local_lock(self, room_id: str) -> asyncio.Lock:
@@ -849,14 +873,13 @@ class RoomMessageCenter:
             )
             # Release the claim so the message can be retried (by user or
             # stale-recovery) instead of staying permanently orphaned.
-            await self.message_writer.unclaim_user_message(
-                room_user_message_id
-            )
+            await self.message_writer.unclaim_user_message(room_user_message_id)
             # Fail any descendant agent messages created during the
             # parse/prepare step so they don't remain as orphaned
             # non-terminal task bubbles in the frontend.
             await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id,
+                room_id,
+                room_user_message_id,
             )
             # Send terminal SSE so the frontend clears the processing
             # indicator.  Without this, the Stop button stays stuck because
@@ -881,9 +904,7 @@ class RoomMessageCenter:
         # stale task checker (orphan_threshold_minutes=2 min) might consider
         # the message orphaned.  Touching the timestamp here resets the clock
         # so processing won't be reclaimed prematurely.
-        await self.message_writer.refresh_processing_claim(
-            room_user_message_id
-        )
+        await self.message_writer.refresh_processing_claim(room_user_message_id)
         claim_heartbeat = asyncio.create_task(
             self._heartbeat_processing_claim(room_user_message_id),
             name=f"processing-claim-heartbeat:{room_user_message_id}",
@@ -900,10 +921,13 @@ class RoomMessageCenter:
                 "RoomMessageCenter: processing task cancelled for message %s",
                 room_user_message_id,
             )
-            if getattr(self, '_turn_event_appender', None):
+            if getattr(self, "_turn_event_appender", None):
                 try:
                     await self._turn_event_appender.append(
-                        room_id, room_user_message_id, "turn_canceled", {},
+                        room_id,
+                        room_user_message_id,
+                        "turn_canceled",
+                        {},
                     )
                 except Exception:
                     pass
@@ -924,7 +948,9 @@ class RoomMessageCenter:
                 await claim_heartbeat
             except asyncio.CancelledError:
                 pass
-            await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
+            await self._release_room_lock(
+                room_id, lock_owner, acquired_at=lock_acquired_at
+            )
 
     async def _process_room_user_message_locked(
         self,
@@ -963,9 +989,7 @@ class RoomMessageCenter:
                     room_id,
                     room_user_message_id,
                 )
-        user_id = (
-            (user_message.user_id if user_message else None) or request.user_id
-        )
+        user_id = (user_message.user_id if user_message else None) or request.user_id
 
         # Extract quoted context via TurnContext (QUOTE_REPLY: quote_id + snippet or legacy)
         quoted_text: str | None = None
@@ -1050,7 +1074,11 @@ class RoomMessageCenter:
         # bugs where _prepare_for_supervisor was skipped.
         if not has_pending_agent_messages and user_message:
             room = await self.room_reader.get_room_by_room_id(room_id)
-            if room and isinstance(room.extend_info, dict) and room.extend_info.get("use_supervisor"):
+            if (
+                room
+                and isinstance(room.extend_info, dict)
+                and room.extend_info.get("use_supervisor")
+            ):
                 logger.error(
                     "RoomMessageCenter: Room %s has use_supervisor=True but user "
                     "message %s lacks supervisor flag and has no pre-created "
@@ -1102,10 +1130,12 @@ class RoomMessageCenter:
             # related_message_id chain from these step-1 messages.
             for mid in step1_ids:
                 await self.message_writer.cancel_descendants(mid)
-            if getattr(self, '_turn_event_appender', None):
+            if getattr(self, "_turn_event_appender", None):
                 try:
                     await self._turn_event_appender.append(
-                        room_id, room_user_message_id, "turn_canceled",
+                        room_id,
+                        room_user_message_id,
+                        "turn_canceled",
                         {},
                     )
                 except Exception:
@@ -1139,10 +1169,12 @@ class RoomMessageCenter:
 
         if queue_processing_result.result == QueueResult.FAILED:
             # Emit turn_failed event
-            if getattr(self, '_turn_event_appender', None):
+            if getattr(self, "_turn_event_appender", None):
                 try:
                     await self._turn_event_appender.append(
-                        room_id, room_user_message_id, "turn_failed",
+                        room_id,
+                        room_user_message_id,
+                        "turn_failed",
                         {"reason": "Queue processing failed", "code": "error"},
                     )
                 except Exception:
@@ -1178,7 +1210,8 @@ class RoomMessageCenter:
         # QueueResult.COMPLETED — emit unified summary + completion.
         room = await self.room_reader.get_room_by_room_id(room_id)
         is_debate = bool(
-            room and isinstance(room.extend_info, dict)
+            room
+            and isinstance(room.extend_info, dict)
             and room.extend_info.get("debateMode", False)
         )
         turn_completion_kind, _ = await self._emit_unified_summary(
@@ -1190,7 +1223,9 @@ class RoomMessageCenter:
         if self._turn_event_appender:
             try:
                 await self._turn_event_appender.append(
-                    room_id, room_user_message_id, "turn_completed",
+                    room_id,
+                    room_user_message_id,
+                    "turn_completed",
                     {"duration_ms": 0},
                 )
             except Exception:
@@ -1234,8 +1269,9 @@ class RoomMessageCenter:
         """
         try:
             agent_messages = (
-                await self.message_reader
-                .get_room_agent_messages_by_related_message_id(user_message_id)
+                await self.message_reader.get_room_agent_messages_by_related_message_id(
+                    user_message_id
+                )
             )
         except Exception:
             logger.exception(
@@ -1249,11 +1285,7 @@ class RoomMessageCenter:
             if not msg.has_task_tracking:
                 continue
 
-            task = (
-                msg.message_content.message_task
-                if msg.message_content
-                else None
-            )
+            task = msg.message_content.message_task if msg.message_content else None
             if not task or not task.status:
                 continue
 
@@ -1411,13 +1443,14 @@ class RoomMessageCenter:
         try:
             room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
             if room_memory and self.context_memory_runtime is not None:
-                conversation_context, _occupancy = (
-                    await self._refresh_supervisor_conversation_context(
-                        room_id=room_id,
-                        room_memory=room_memory,
-                        room_agent_set=room_config.room_agent_set,
-                        message_text=message_text,
-                    )
+                (
+                    conversation_context,
+                    _occupancy,
+                ) = await self._refresh_supervisor_conversation_context(
+                    room_id=room_id,
+                    room_memory=room_memory,
+                    room_agent_set=room_config.room_agent_set,
+                    message_text=message_text,
                 )
         except Exception as e:
             logger.warning(
@@ -1470,9 +1503,7 @@ class RoomMessageCenter:
                     message_text,
                 )
             else:
-                agent_registry = [
-                    AgentProfile(**p) for p in extend["agent_registry"]
-                ]
+                agent_registry = [AgentProfile(**p) for p in extend["agent_registry"]]
                 room_config = RoomConfig(**extend["room_config"])
                 conversation_context = extend.get("conversation_context")
         except (KeyError, TypeError, ValueError) as e:
@@ -1539,7 +1570,8 @@ class RoomMessageCenter:
         if resumed_trajectory is None and not is_clarify_resume:
             checkpoint_data = extend.get("supervisor_trajectory")
             if isinstance(checkpoint_data, dict) and checkpoint_data.get("status") in (
-                TrajectoryStatus.RUNNING, TrajectoryStatus.RECOVERING,
+                TrajectoryStatus.RUNNING,
+                TrajectoryStatus.RECOVERING,
             ):
                 try:
                     resumed_trajectory = SupervisorTrajectory(**checkpoint_data)
@@ -1613,9 +1645,7 @@ class RoomMessageCenter:
                         room.extend_info["pending_clarification_message_id"] = (
                             original_msg_id
                         )
-                        await self.room_writer.update_room_by_room_id(
-                            room_id, room
-                        )
+                        await self.room_writer.update_room_by_room_id(room_id, room)
                     # Refresh only existing legacy trajectory state so old
                     # clarify resumes stay consistent with the room flag.
                     try:
@@ -1662,7 +1692,9 @@ class RoomMessageCenter:
             )
             # Refresh legacy failure state if this was resuming an old trajectory.
             await self._persist_failed_trajectory(
-                user_message, room_user_message_id, resumed_trajectory,
+                user_message,
+                room_user_message_id,
+                resumed_trajectory,
             )
             try:
                 await self.coordinator.emit_synthesis_message(
@@ -1703,11 +1735,16 @@ class RoomMessageCenter:
                 "for message %s",
                 room_user_message_id,
             )
-            if resumed_trajectory and resumed_trajectory.status == TrajectoryStatus.RUNNING:
+            if (
+                resumed_trajectory
+                and resumed_trajectory.status == TrajectoryStatus.RUNNING
+            ):
                 resumed_trajectory.status = TrajectoryStatus.FAILED
             # Refresh legacy failure state if this was resuming an old trajectory.
             await self._persist_failed_trajectory(
-                user_message, room_user_message_id, resumed_trajectory,
+                user_message,
+                room_user_message_id,
+                resumed_trajectory,
             )
             self.delivery.remove_token(room_user_message_id)
             await self._notify_all_non_terminal_tasks_failed(
@@ -1824,17 +1861,13 @@ class RoomMessageCenter:
 
         # 1. Deserialize trajectory
         try:
-            trajectory = SupervisorTrajectory(
-                **continuation["trajectory"]
-            )
+            trajectory = SupervisorTrajectory(**continuation["trajectory"])
         except (KeyError, TypeError) as e:
             logger.error(
                 "RoomMessageCenter: Supervisor resume failed to deserialize trajectory: %s",
                 e,
             )
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, user_message_id
-            )
+            await self._notify_all_non_terminal_tasks_failed(room_id, user_message_id)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
@@ -1880,9 +1913,7 @@ class RoomMessageCenter:
                 return fallback or {}
             serialized_room_config = continuation.get("room_config", {})
             if isinstance(serialized_room_config, dict):
-                serialized_room_agent_set = serialized_room_config.get(
-                    "room_agent_set"
-                )
+                serialized_room_agent_set = serialized_room_config.get("room_agent_set")
                 if isinstance(serialized_room_agent_set, dict):
                     return {
                         str(agent_id): str(agent_name)
@@ -1936,31 +1967,34 @@ class RoomMessageCenter:
             # HITLService._handle_supervisor_response(). Re-fetch
             # conversation_context to avoid staleness.
             try:
-                room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
+                room_memory = await self.memory_reader.get_room_memory_by_room_id(
+                    room_id
+                )
                 if room_memory and self.context_memory_runtime is not None:
                     room_tmp = await self.room_reader.get_room_by_room_id(room_id)
-                    refreshed_context, _occupancy = (
-                        await self._refresh_supervisor_conversation_context(
-                            room_id=room_id,
-                            room_memory=room_memory,
-                            room_agent_set=context_agent_set_for_resume(
-                                room_tmp.room_agent_set if room_tmp else {}
-                            ),
-                            message_text=message_text,
-                        )
+                    (
+                        refreshed_context,
+                        _occupancy,
+                    ) = await self._refresh_supervisor_conversation_context(
+                        room_id=room_id,
+                        room_memory=room_memory,
+                        room_agent_set=context_agent_set_for_resume(
+                            room_tmp.room_agent_set if room_tmp else {}
+                        ),
+                        message_text=message_text,
                     )
                     conversation_context = refreshed_context
             except Exception as e:
                 logger.warning(
                     "supervisor_resume: failed to refresh conversation_context "
                     "for %s (HITL_SUPERVISOR), using serialized fallback: %s",
-                    room_id, e,
+                    room_id,
+                    e,
                 )
 
             # Inject the HITL user reply into conversation context
             effective_reply = (
-                trajectory.hitl_user_reply
-                or trajectory.clarify_user_reply
+                trajectory.hitl_user_reply or trajectory.clarify_user_reply
             )
             if effective_reply:
                 original_question = self._extract_clarify_question(trajectory)
@@ -1980,9 +2014,7 @@ class RoomMessageCenter:
             logger.error(
                 "RoomMessageCenter: Supervisor resume room not found: %s", room_id
             )
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, user_message_id
-            )
+            await self._notify_all_non_terminal_tasks_failed(room_id, user_message_id)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
@@ -2002,15 +2034,18 @@ class RoomMessageCenter:
         # appends the hitl_block — a second refresh would overwrite the user's reply.
         if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
             try:
-                room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
+                room_memory = await self.memory_reader.get_room_memory_by_room_id(
+                    room_id
+                )
                 if room_memory and self.context_memory_runtime is not None:
-                    conversation_context, occupancy = (
-                        await self._refresh_supervisor_conversation_context(
-                            room_id=room_id,
-                            room_memory=room_memory,
-                            room_agent_set=context_room_agent_set,
-                            message_text=message_text,
-                        )
+                    (
+                        conversation_context,
+                        occupancy,
+                    ) = await self._refresh_supervisor_conversation_context(
+                        room_id=room_id,
+                        room_memory=room_memory,
+                        room_agent_set=context_room_agent_set,
+                        message_text=message_text,
                     )
                     logger.debug(
                         "supervisor_resume: refreshed conversation_context for %s "
@@ -2022,7 +2057,8 @@ class RoomMessageCenter:
                 logger.warning(
                     "supervisor_resume: failed to refresh conversation_context "
                     "for %s, using serialized fallback: %s",
-                    room_id, e,
+                    room_id,
+                    e,
                 )
 
         agent_registry: list[AgentProfile] = []
@@ -2063,13 +2099,11 @@ class RoomMessageCenter:
         if not agent_registry:
             # Fall back to serialized registry if DB refresh yields nothing
             try:
-                agent_registry = [
-                    AgentProfile(**p)
-                    for p in serialized_registry
-                ]
+                agent_registry = [AgentProfile(**p) for p in serialized_registry]
             except (TypeError, KeyError) as e:
                 logger.warning(
-                    "RoomMessageCenter: Supervisor resume fallback registry failed: %s", e
+                    "RoomMessageCenter: Supervisor resume fallback registry failed: %s",
+                    e,
                 )
 
         # Use serialized room_config from continuation as the base (preserves
@@ -2087,8 +2121,7 @@ class RoomMessageCenter:
         if has_orchestration_resume:
             if not room_config.room_agent_set:
                 room_config.room_agent_set = {
-                    profile.agent_id: profile.agent_name
-                    for profile in agent_registry
+                    profile.agent_id: profile.agent_name for profile in agent_registry
                 }
         else:
             room_config.room_agent_set = room.room_agent_set or {}
@@ -2097,19 +2130,16 @@ class RoomMessageCenter:
         # If this is a debate resume, ensure all original debate participants
         # are present in agent_registry even if they were removed from the room
         # during the pause. This prevents participant drift.
-        if (
-            trajectory.debate_agent_ids
-            and room_config.is_debate_mode
-        ):
+        if trajectory.debate_agent_ids and room_config.is_debate_mode:
             current_ids = {a.agent_id for a in agent_registry}
             missing_ids = [
-                aid for aid in trajectory.debate_agent_ids
-                if aid not in current_ids
+                aid for aid in trajectory.debate_agent_ids if aid not in current_ids
             ]
             if missing_ids:
                 serialized_registry = continuation.get("agent_registry", [])
                 serialized_map = {
-                    p["agent_id"]: p for p in serialized_registry
+                    p["agent_id"]: p
+                    for p in serialized_registry
                     if isinstance(p, dict) and "agent_id" in p
                 }
                 for mid in missing_ids:
@@ -2141,17 +2171,17 @@ class RoomMessageCenter:
                     "paused_message_id": paused_message_id,
                 },
             )
-            if getattr(self, '_turn_event_appender', None):
+            if getattr(self, "_turn_event_appender", None):
                 try:
                     await self._turn_event_appender.append(
-                        room_id, user_message_id, "turn_canceled",
+                        room_id,
+                        user_message_id,
+                        "turn_canceled",
                         {},
                     )
                 except Exception:
                     pass
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, user_message_id
-            )
+            await self._notify_all_non_terminal_tasks_failed(room_id, user_message_id)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.CANCELED,
@@ -2180,9 +2210,7 @@ class RoomMessageCenter:
             logger.exception(
                 "RoomMessageCenter: Supervisor resume supervisor_executor.run() failed"
             )
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, user_message_id
-            )
+            await self._notify_all_non_terminal_tasks_failed(room_id, user_message_id)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
@@ -2387,9 +2415,7 @@ class RoomMessageCenter:
             )
         is_orchestration_message = False
         if user_message:
-            is_orchestration_message = isinstance(
-                user_message.extend_info, dict
-            ) and (
+            is_orchestration_message = isinstance(user_message.extend_info, dict) and (
                 bool(user_message.extend_info.get("orchestration"))
                 or "orchestration_run_id" in user_message.extend_info
                 or "orchestration_run" in user_message.extend_info
@@ -2406,46 +2432,42 @@ class RoomMessageCenter:
                 user_message.extend_info = {}
             if is_orchestration_message:
                 user_message.extend_info.pop("supervisor_trajectory", None)
-                user_message.extend_info["orchestration_status"] = (
-                    orchestration_status
-                )
+                user_message.extend_info["orchestration_status"] = orchestration_status
                 if result_run_state is not None:
                     user_message.extend_info["orchestration_run_id"] = (
                         result_run_state.run_id
                     )
                     if result_run_state.candidate_scope is not None:
-                        user_message.extend_info[
-                            "candidate_scope_snapshot_id"
-                        ] = result_run_state.candidate_scope.snapshot_id
-                        user_message.extend_info[
-                            "candidate_scope_source"
-                        ] = result_run_state.candidate_scope.source
+                        user_message.extend_info["candidate_scope_snapshot_id"] = (
+                            result_run_state.candidate_scope.snapshot_id
+                        )
+                        user_message.extend_info["candidate_scope_source"] = (
+                            result_run_state.candidate_scope.source
+                        )
                     if result_run_state.client_request_id:
-                        user_message.extend_info[
-                            "client_request_id"
-                        ] = result_run_state.client_request_id
+                        user_message.extend_info["client_request_id"] = (
+                            result_run_state.client_request_id
+                        )
                 terminal_summary = result.terminal_summary
                 if terminal_summary is None and result_run_state is not None:
                     terminal_summary = result_run_state.terminal_summary
                 if terminal_summary is not None:
-                    user_message.extend_info["terminal_summary"] = (
-                        terminal_summary
-                    )
+                    user_message.extend_info["terminal_summary"] = terminal_summary
                 else:
                     user_message.extend_info.pop("terminal_summary", None)
             elif result_trajectory is None:
-                legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
+                legacy_trajectory = user_message.extend_info.get(
+                    "supervisor_trajectory"
+                )
                 if isinstance(legacy_trajectory, dict):
                     legacy_trajectory["status"] = legacy_trajectory_status
-                user_message.extend_info["orchestration_status"] = (
-                    orchestration_status
-                )
+                user_message.extend_info["orchestration_status"] = orchestration_status
             else:
-                legacy_trajectory = user_message.extend_info.get("supervisor_trajectory")
+                legacy_trajectory = user_message.extend_info.get(
+                    "supervisor_trajectory"
+                )
                 if isinstance(legacy_trajectory, dict):
-                    legacy_trajectory.update(
-                        result_trajectory.model_dump(mode="json")
-                    )
+                    legacy_trajectory.update(result_trajectory.model_dump(mode="json"))
                 user_message.extend_info["orchestration_status"] = (
                     legacy_trajectory_status
                 )
@@ -2455,7 +2477,10 @@ class RoomMessageCenter:
 
         # Update the original clarify message's trajectory so it doesn't
         # stay in "clarifying" status forever.
-        if original_clarify_message_id and original_clarify_message_id != user_message_id:
+        if (
+            original_clarify_message_id
+            and original_clarify_message_id != user_message_id
+        ):
             try:
                 orig_msg = (
                     await self.message_reader.get_room_user_message_by_message_id(
@@ -2470,8 +2495,10 @@ class RoomMessageCenter:
                             if result_trajectory is not None
                             else orchestration_status
                         )
-                        await self.message_writer.update_room_user_message_by_message_id(
-                            original_clarify_message_id, orig_msg
+                        await (
+                            self.message_writer.update_room_user_message_by_message_id(
+                                original_clarify_message_id, orig_msg
+                            )
                         )
             except Exception as e:
                 logger.warning(
@@ -2488,10 +2515,15 @@ class RoomMessageCenter:
                 trajectory_responses = (
                     self._trajectory_responses_from_supervisor_result(result)
                 )
-                is_debate = bool(
-                    room and isinstance(room.extend_info, dict)
-                    and room.extend_info.get("debateMode", False)
-                ) if room else False
+                is_debate = (
+                    bool(
+                        room
+                        and isinstance(room.extend_info, dict)
+                        and room.extend_info.get("debateMode", False)
+                    )
+                    if room
+                    else False
+                )
 
                 if result.synthesis_text is not None:
                     turn_completion_kind, _ = await self._emit_unified_summary(
@@ -2504,7 +2536,10 @@ class RoomMessageCenter:
                     )
                     turn_completion_kind = turn_completion_kind or "deterministic"
                 elif is_debate and len(trajectory_responses) >= 2:
-                    turn_completion_kind, generated_summary = await self._emit_unified_summary(
+                    (
+                        turn_completion_kind,
+                        generated_summary,
+                    ) = await self._emit_unified_summary(
                         room_id,
                         user_message_id,
                         synthesis_text=None,
@@ -2527,10 +2562,12 @@ class RoomMessageCenter:
                     turn_completion_kind = "deterministic"
 
                 # Emit turn_completed event
-                if getattr(self, '_turn_event_appender', None):
+                if getattr(self, "_turn_event_appender", None):
                     try:
                         await self._turn_event_appender.append(
-                            room_id, user_message_id, "turn_completed",
+                            room_id,
+                            user_message_id,
+                            "turn_completed",
                             {"duration_ms": 0},
                         )
                     except Exception:
@@ -2555,7 +2592,7 @@ class RoomMessageCenter:
 
             case RunStatus.AWAITING_INPUT:
                 pass  # Continuation already saved; HITLService emits the SSE event.
-                      # Token stays alive — resume path creates/reuses it.
+                # Token stays alive — resume path creates/reuses it.
 
             case RunStatus.CLARIFYING:
                 if room is None:
@@ -2566,9 +2603,7 @@ class RoomMessageCenter:
                     room.extend_info["pending_clarification_message_id"] = (
                         user_message_id
                     )
-                    await self.room_writer.update_room_by_room_id(
-                        room_id, room
-                    )
+                    await self.room_writer.update_room_by_room_id(room_id, room)
                 if result.clarification_question:
                     try:
                         await self.coordinator.emit_synthesis_message(
@@ -2584,10 +2619,12 @@ class RoomMessageCenter:
                             exc_info=True,
                         )
                 # Emit turn_completed event (CLARIFYING is a soft complete)
-                if getattr(self, '_turn_event_appender', None):
+                if getattr(self, "_turn_event_appender", None):
                     try:
                         await self._turn_event_appender.append(
-                            room_id, user_message_id, "turn_completed",
+                            room_id,
+                            user_message_id,
+                            "turn_completed",
                             {"duration_ms": 0},
                         )
                     except Exception:
@@ -2605,9 +2642,7 @@ class RoomMessageCenter:
                 cleanup_trajectory = self._compat_trajectory_for_supervisor_result(
                     result
                 )
-                for entry in (
-                    cleanup_trajectory.entries if cleanup_trajectory else []
-                ):
+                for entry in cleanup_trajectory.entries if cleanup_trajectory else []:
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             canceled_parent_ids.append(step_result.agent_message_id)
@@ -2619,10 +2654,12 @@ class RoomMessageCenter:
                         canceled_parent_ids
                     )
                 # Emit turn_canceled event
-                if getattr(self, '_turn_event_appender', None):
+                if getattr(self, "_turn_event_appender", None):
                     try:
                         await self._turn_event_appender.append(
-                            room_id, user_message_id, "turn_canceled",
+                            room_id,
+                            user_message_id,
+                            "turn_canceled",
                             {},
                         )
                     except Exception:
@@ -2658,9 +2695,7 @@ class RoomMessageCenter:
                 cleanup_trajectory = self._compat_trajectory_for_supervisor_result(
                     result
                 )
-                for entry in (
-                    cleanup_trajectory.entries if cleanup_trajectory else []
-                ):
+                for entry in cleanup_trajectory.entries if cleanup_trajectory else []:
                     for step_result in entry.results:
                         if step_result.agent_message_id:
                             failed_parent_ids.append(step_result.agent_message_id)
@@ -2672,10 +2707,12 @@ class RoomMessageCenter:
                         failed_parent_ids
                     )
                 # Emit turn_failed event
-                if getattr(self, '_turn_event_appender', None):
+                if getattr(self, "_turn_event_appender", None):
                     try:
                         await self._turn_event_appender.append(
-                            room_id, user_message_id, "turn_failed",
+                            room_id,
+                            user_message_id,
+                            "turn_failed",
                             {
                                 "reason": failure_reason,
                                 "code": failure_code,
@@ -2768,7 +2805,8 @@ class RoomMessageCenter:
         except Exception as e:
             logger.warning(
                 "RoomMessageCenter: Background room summary update failed for %s: %s",
-                room_id, e,
+                room_id,
+                e,
             )
 
     async def _trigger_compaction_safe(self, room_id: str) -> None:
@@ -2779,7 +2817,8 @@ class RoomMessageCenter:
         except Exception as e:
             logger.warning(
                 "RoomMessageCenter: Background compaction failed for %s: %s",
-                room_id, e,
+                room_id,
+                e,
             )
 
     # ------------------------------------------------------------------
@@ -2862,10 +2901,8 @@ class RoomMessageCenter:
                 )
             )
             if not locked_continuation:
-                locked_continuation = (
-                    await self.continuation_store.get_and_clear_continuation_on_user_message(
-                        message_id
-                    )
+                locked_continuation = await self.continuation_store.get_and_clear_continuation_on_user_message(
+                    message_id
                 )
 
             if not locked_continuation:
@@ -2877,7 +2914,9 @@ class RoomMessageCenter:
             )
         finally:
             if room_id is not None:
-                await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
+                await self._release_room_lock(
+                    room_id, lock_owner, acquired_at=lock_acquired_at
+                )
 
     async def _resume_continuation_locked(
         self,
@@ -2947,13 +2986,14 @@ class RoomMessageCenter:
         if result.needs_completion and result.room_id and result.user_message_id:
             room = await self.room_reader.get_room_by_room_id(result.room_id)
             is_debate = bool(
-                room and isinstance(room.extend_info, dict)
+                room
+                and isinstance(room.extend_info, dict)
                 and room.extend_info.get("debateMode", False)
             )
             turn_completion_kind, _ = await self._emit_unified_summary(
                 result.room_id, result.user_message_id, is_debate=is_debate
             ) or ("deterministic", None)
-            if getattr(self, '_turn_event_appender', None):
+            if getattr(self, "_turn_event_appender", None):
                 try:
                     await self._turn_event_appender.append(
                         result.room_id,
@@ -3050,8 +3090,10 @@ class RoomMessageCenter:
         )
 
         try:
-            user_message = await self.message_reader.get_room_user_message_by_message_id(
-                user_message_id
+            user_message = (
+                await self.message_reader.get_room_user_message_by_message_id(
+                    user_message_id
+                )
             )
             user_id = user_message.user_id if user_message else None
             summary_client_request_id = (
@@ -3125,8 +3167,10 @@ class RoomMessageCenter:
         summary_client_request_id: str | None = None
 
         try:
-            user_message = await self.message_reader.get_room_user_message_by_message_id(
-                user_message_id
+            user_message = (
+                await self.message_reader.get_room_user_message_by_message_id(
+                    user_message_id
+                )
             )
             user_id = user_message.user_id if user_message else None
             summary_client_request_id = (
@@ -3152,7 +3196,9 @@ class RoomMessageCenter:
 
                 if not working_already_emitted:
                     await self._emit_summary_working(
-                        room_id, user_message_id, summary_message_id,
+                        room_id,
+                        user_message_id,
+                        summary_message_id,
                         summary_client_request_id,
                     )
                 content = synthesis_text
@@ -3176,7 +3222,9 @@ class RoomMessageCenter:
                             and isinstance(msg.extend_info, dict)
                             and msg.extend_info.get("is_coordinator_summary")
                         ) or msg.agent_id in (
-                            CoordinatorAgentId.SYSTEM_HYBRO, CoordinatorAgentId.SYSTEM_CLARIFIER, CoordinatorAgentId.SUPERVISOR_ERROR,
+                            CoordinatorAgentId.SYSTEM_HYBRO,
+                            CoordinatorAgentId.SYSTEM_CLARIFIER,
+                            CoordinatorAgentId.SUPERVISOR_ERROR,
                         ):
                             continue
                         task = msg.message_content and msg.message_content.message_task
@@ -3189,10 +3237,13 @@ class RoomMessageCenter:
                         from common.utils.a2a_helpers import (
                             extract_agent_text_from_room_message,
                         )
+
                         text = extract_agent_text_from_room_message(msg)
                         if text and msg.agent_id:
-                            agent_name = await self.room_reader.get_agent_name_by_agent_id(
-                                msg.agent_id
+                            agent_name = (
+                                await self.room_reader.get_agent_name_by_agent_id(
+                                    msg.agent_id
+                                )
                             )
                             agent_responses.append(
                                 RoomMessageSummary(
@@ -3207,7 +3258,9 @@ class RoomMessageCenter:
                     return "deterministic", None
 
                 await self._emit_summary_working(
-                    room_id, user_message_id, summary_message_id,
+                    room_id,
+                    user_message_id,
+                    summary_message_id,
                     summary_client_request_id,
                 )
 
@@ -3228,7 +3281,9 @@ class RoomMessageCenter:
 
                 if not content:
                     await self.delivery.send_task_update(
-                        room_id, summary_message_id, "failed",
+                        room_id,
+                        summary_message_id,
+                        "failed",
                         agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                         error="Summary generation returned empty",
                         client_request_id=summary_client_request_id,
@@ -3280,7 +3335,10 @@ class RoomMessageCenter:
             logger.error(
                 "RoomMessageCenter: _emit_unified_summary failed for room %s "
                 "user message %s: %s",
-                room_id, user_message_id, exc, exc_info=True,
+                room_id,
+                user_message_id,
+                exc,
+                exc_info=True,
             )
             try:
                 await self.delivery.send_task_update(
@@ -3292,6 +3350,7 @@ class RoomMessageCenter:
                 )
             except Exception:
                 pass
+
     # ------------------------------------------------------------------
     # Monitoring
     # ------------------------------------------------------------------

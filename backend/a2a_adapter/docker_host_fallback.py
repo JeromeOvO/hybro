@@ -20,6 +20,7 @@ _NETWORK_ERROR_MARKERS = (
     "all connection attempts failed",
 )
 
+
 async def with_docker_host_fallback[T](
     card: Any,
     operation: Callable[[Any], Awaitable[T]],

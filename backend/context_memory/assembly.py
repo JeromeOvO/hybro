@@ -26,7 +26,9 @@ def build_stable_prefix(
         if room_summary.key_decisions:
             parts.append(f"Key Decisions: {'; '.join(room_summary.key_decisions[:3])}")
         if room_summary.open_questions:
-            parts.append(f"Open Questions: {'; '.join(room_summary.open_questions[:3])}")
+            parts.append(
+                f"Open Questions: {'; '.join(room_summary.open_questions[:3])}"
+            )
         if room_summary.recent_agent_contributions:
             parts.append(
                 "Recent Agent Work: "
@@ -40,7 +42,9 @@ def build_stable_prefix(
 
     if agent_registry:
         parts.append("[Available Agents]")
-        for agent in sorted(agent_registry, key=lambda item: item.get("agent_id", ""))[:10]:
+        for agent in sorted(agent_registry, key=lambda item: item.get("agent_id", ""))[
+            :10
+        ]:
             name = agent.get("agent_name") or agent.get("name", "Unknown")
             desc = (agent.get("description") or "")[:100]
             parts.append(f"- {name}: {desc}")
@@ -161,7 +165,9 @@ def build_agent_dynamic_suffix(
                     task_parts_truncated.append(room_awareness[:200] + "...")
                     task_parts_truncated.append("")
                 task_parts_truncated.append("[Current request]")
-                task_parts_truncated.append(f"User: {current_task[:max_task_chars]}... [truncated]")
+                task_parts_truncated.append(
+                    f"User: {current_task[:max_task_chars]}... [truncated]"
+                )
                 if agent_task and agent_task.strip():
                     task_parts_truncated.append("")
                     task_parts_truncated.append("[Task]")
@@ -380,7 +386,9 @@ def _finalize(
             dynamic_suffix = rebuild(selected_turns)
             dynamic_tokens = estimate_tokens(dynamic_suffix)
             total_tokens = stable_tokens + dynamic_tokens
-    context = f"{stable_prefix}\n\n{dynamic_suffix}" if stable_prefix else dynamic_suffix
+    context = (
+        f"{stable_prefix}\n\n{dynamic_suffix}" if stable_prefix else dynamic_suffix
+    )
     if total_tokens > available:
         was_truncated = True
         truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
@@ -453,7 +461,9 @@ def _truncate_context_to_token_budget(context: str, available_tokens: int) -> st
         remaining = available_tokens - quote_tokens
         if remaining > 50:
             truncated_req = _truncate_current_request_section(
-                current_request, remaining, marker,
+                current_request,
+                remaining,
+                marker,
             )
             if truncated_req is not None:
                 return f"{marker.lstrip()}\n{quoted_context}\n\n{truncated_req}"
@@ -472,7 +482,7 @@ def _truncate_context_to_token_budget(context: str, available_tokens: int) -> st
     best = marker.lstrip()
     while lo <= hi:
         mid = (lo + hi) // 2
-        candidate = f"{marker.lstrip()}\n{context[len(context) - mid:].lstrip()}"
+        candidate = f"{marker.lstrip()}\n{context[len(context) - mid :].lstrip()}"
         if estimate_tokens(candidate) <= available_tokens:
             best = candidate
             lo = mid + 1
@@ -502,7 +512,9 @@ def _truncate_context_to_char_limit(context: str, max_chars: int) -> str:
         suffix_marker = marker
         if max_chars <= len(suffix_marker):
             return suffix_marker[-max_chars:]
-        return current_request[: max_chars - len(suffix_marker)].rstrip() + suffix_marker
+        return (
+            current_request[: max_chars - len(suffix_marker)].rstrip() + suffix_marker
+        )
     prefix_marker = marker.lstrip()
     body_chars = max_chars - len(prefix_marker) - 1
     if body_chars <= 0:

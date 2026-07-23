@@ -222,9 +222,7 @@ class HITLRuntimeStorePart:
     ) -> bool:
         try:
             await self._ensure_message_task_metadata(message_id)
-            metadata_path = (
-                "message_content.message_task.metadata.hitl_request_id"
-            )
+            metadata_path = "message_content.message_task.metadata.hitl_request_id"
             update = (
                 {"$set": {metadata_path: request_id}}
                 if request_id is not None

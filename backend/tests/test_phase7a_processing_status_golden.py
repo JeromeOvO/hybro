@@ -49,9 +49,7 @@ def _make_rmc_for_supervisor_result(delivery: DeliveryFacade) -> RoomMessageCent
     rmc.room_writer = SimpleNamespace(
         update_room_by_room_id=AsyncMock(),
     )
-    rmc.coordinator = SimpleNamespace(
-        emit_synthesis_message=AsyncMock()
-    )
+    rmc.coordinator = SimpleNamespace(emit_synthesis_message=AsyncMock())
     rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "summary content"))
     rmc._trigger_compaction_safe = AsyncMock()
     rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
@@ -124,9 +122,7 @@ async def test_golden_execution_preflight_processing_status_order(monkeypatch):
         "payload": {},
     }
     record = AsyncMock(side_effect=[payload, None])
-    resolver = SimpleNamespace(
-        resolve_client_request_id=AsyncMock(return_value="cr-1")
-    )
+    resolver = SimpleNamespace(resolve_client_request_id=AsyncMock(return_value="cr-1"))
     run_lifecycle = SimpleNamespace(record_processing_status=record)
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
@@ -223,7 +219,9 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(monkeypatch):
+async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(
+    monkeypatch,
+):
     delivery = make_delivery_facade()
     conn = await delivery.add_connection("room-1")
     record = AsyncMock(return_value=None)
@@ -461,9 +459,9 @@ async def test_golden_clarify_resume_retry_failure_completed_is_transport_only(
 
 def test_clarifying_path_emits_turn_completed_via_turn_event_appender():
     """CLARIFYING must append turn_completed before completed processing_status."""
-    text = (
-        ROOT / "execution/orchestration/room_message_center.py"
-    ).read_text(encoding="utf-8")
+    text = (ROOT / "execution/orchestration/room_message_center.py").read_text(
+        encoding="utf-8"
+    )
     assert "RunStatus.CLARIFYING" in text
     assert "_turn_event_appender.append" in text
     assert '"turn_completed"' in text
@@ -502,15 +500,19 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
             entries=[
                 TrajectoryEntry(
                     step_number=1,
-                    action=SupervisorAction(action=ActionType.DELEGATE, reasoning="test"),
-                    results=[StepResult(
-                        step_number=1,
-                        agent_id="agent-a",
-                        agent_name="a",
-                        task="do something",
-                        response_text="answer",
-                        success=True,
-                    )],
+                    action=SupervisorAction(
+                        action=ActionType.DELEGATE, reasoning="test"
+                    ),
+                    results=[
+                        StepResult(
+                            step_number=1,
+                            agent_id="agent-a",
+                            agent_name="a",
+                            task="do something",
+                            response_text="answer",
+                            success=True,
+                        )
+                    ],
                     started_at=datetime.now(UTC),
                 )
             ],
@@ -527,14 +529,16 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
 
     writer = rmc.message_writer
     writer.update_room_user_message_by_message_id.assert_called()
-    persisted_msg = (
-        writer.update_room_user_message_by_message_id.call_args_list[-1][0][1]
-    )
+    persisted_msg = writer.update_room_user_message_by_message_id.call_args_list[-1][0][
+        1
+    ]
     assert persisted_msg.extend_info["turn_completion_kind"] == "deterministic"
 
     frames = await _drain_sse(conn)
     completed_frames = [
-        (kind, data) for kind, data in frames if kind == "processing_status" and data.get("status") == "completed"
+        (kind, data)
+        for kind, data in frames
+        if kind == "processing_status" and data.get("status") == "completed"
     ]
     assert len(completed_frames) == 1
     assert completed_frames[0][1]["details"]["turn_completion_kind"] == "deterministic"
@@ -566,15 +570,19 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
             entries=[
                 TrajectoryEntry(
                     step_number=1,
-                    action=SupervisorAction(action=ActionType.DELEGATE, reasoning="test"),
-                    results=[StepResult(
-                        step_number=1,
-                        agent_id="agent-a",
-                        agent_name="a",
-                        task="do something",
-                        response_text="answer",
-                        success=True,
-                    )],
+                    action=SupervisorAction(
+                        action=ActionType.DELEGATE, reasoning="test"
+                    ),
+                    results=[
+                        StepResult(
+                            step_number=1,
+                            agent_id="agent-a",
+                            agent_name="a",
+                            task="do something",
+                            response_text="answer",
+                            success=True,
+                        )
+                    ],
                     started_at=datetime.now(UTC),
                 )
             ],
@@ -590,14 +598,16 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
     )
 
     writer = rmc.message_writer
-    persisted_msg = (
-        writer.update_room_user_message_by_message_id.call_args_list[-1][0][1]
-    )
+    persisted_msg = writer.update_room_user_message_by_message_id.call_args_list[-1][0][
+        1
+    ]
     assert persisted_msg.extend_info["turn_completion_kind"] == "synthesis"
 
     frames = await _drain_sse(conn)
     completed_frames = [
-        (kind, data) for kind, data in frames if kind == "processing_status" and data.get("status") == "completed"
+        (kind, data)
+        for kind, data in frames
+        if kind == "processing_status" and data.get("status") == "completed"
     ]
     assert len(completed_frames) == 1
     assert completed_frames[0][1]["details"]["turn_completion_kind"] == "synthesis"

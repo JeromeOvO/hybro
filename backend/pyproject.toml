@@ -63,7 +63,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]
+
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -102,6 +104,9 @@ ignore = ["E501"]
 # Compatibility lint baseline. Global rules stay enabled so new files and newly
 # introduced violations outside these exact files are still checked.
 "a2a_adapter/artifact_storage.py" = ["C901"]
+"room/a2a_file_parts.py" = ["UP042"]
+"tests/test_module_room_message_center.py" = ["C901"]
+
 "a2a_adapter/runtime_service.py" = ["C901"]
 "a2a_adapter/webhook_payloads.py" = ["C901"]
 "agent/facade.py" = ["C901"]

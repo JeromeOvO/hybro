@@ -110,7 +110,7 @@ def test_a2a_runtime_service_import_boundary():
         "models",
     }
     forbidden_roots = {
-        ('app_' + 'shell'),
+        ("app_" + "shell"),
         "config",
         "container",
         "database",

@@ -53,9 +53,11 @@ class TestQueueResult:
 
 
 def test_resume_from_continuation_before_terminal_failure_is_typed():
-    annotation = inspect.signature(
-        QueueExecutor.resume_from_continuation
-    ).parameters["before_terminal_failure"].annotation
+    annotation = (
+        inspect.signature(QueueExecutor.resume_from_continuation)
+        .parameters["before_terminal_failure"]
+        .annotation
+    )
 
     assert annotation == "Callable[[str, str], Awaitable[None]] | None"
 
@@ -112,9 +114,7 @@ def _make_queue_executor():
     )
     qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
     qe.message_writer.add_room_agent_message = AsyncMock()
-    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = (
-        AsyncMock()
-    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
     qe.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
     )
@@ -221,13 +221,17 @@ class TestProcessQueue:
             return_value=ProcessingResult(ProcessingStatus.SUCCESS, "reply")
         )
 
-        result = await qe._process_single_message(
-            msg, "room-1", agent, "umsg-1"
-        )
+        result = await qe._process_single_message(msg, "room-1", agent, "umsg-1")
 
         qe._agent_message_processor.process_single_message.assert_awaited_once_with(
-            msg, "room-1", agent, "umsg-1",
-            token=None, step_number=None, total_steps=None, quoted_text=None,
+            msg,
+            "room-1",
+            agent,
+            "umsg-1",
+            token=None,
+            step_number=None,
+            total_steps=None,
+            quoted_text=None,
         )
         assert result.status == ProcessingStatus.SUCCESS
 
@@ -237,12 +241,20 @@ class TestProcessQueue:
         qe = _make_queue_executor()
 
         msg1 = MagicMock(
-            message_id="msg-1", step_number=1, total_steps=2,
-            extend_info=None, agent_id="a1", user_id="u1",
+            message_id="msg-1",
+            step_number=1,
+            total_steps=2,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
         )
         msg2 = MagicMock(
-            message_id="msg-2", step_number=2, total_steps=2,
-            extend_info=None, agent_id="a1", user_id="u1",
+            message_id="msg-2",
+            step_number=2,
+            total_steps=2,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
         )
 
         queue = deque([msg1, msg2])
@@ -315,7 +327,9 @@ class TestProcessQueue:
         )
 
     @pytest.mark.asyncio
-    async def test_process_queue_generic_failed_result_does_not_create_preflight_task(self):
+    async def test_process_queue_generic_failed_result_does_not_create_preflight_task(
+        self,
+    ):
         qe = _make_queue_executor()
         msg = MagicMock(
             message_id="msg-1",
@@ -382,10 +396,9 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.COMPLETED
-        assert (
-            qe.message_reader.get_room_agent_message_by_message_id.await_args_list[0]
-            == call("sys-umsg-1")
-        )
+        assert qe.message_reader.get_room_agent_message_by_message_id.await_args_list[
+            0
+        ] == call("sys-umsg-1")
         qe.message_writer.add_room_agent_message.assert_awaited_once_with(sys_msg)
         qe.delivery.send_task_submitted.assert_awaited_once()
         assert (
@@ -436,14 +449,14 @@ class TestProcessQueue:
             message_id="sys-umsg-1",
             status="completed",
         )
-        assert qe.message_reader.get_room_agent_message_by_message_id.await_args_list == [
-            call("sys-umsg-1"),
-            call("sys-umsg-1"),
-        ]
-        update_content = (
-            qe.message_writer
-            .update_room_agent_message_with_new_message_content_by_message_id
+        assert (
+            qe.message_reader.get_room_agent_message_by_message_id.await_args_list
+            == [
+                call("sys-umsg-1"),
+                call("sys-umsg-1"),
+            ]
         )
+        update_content = qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id
         update_content.assert_awaited_once_with(
             "sys-umsg-1",
             system_content,
@@ -456,7 +469,10 @@ class TestProcessQueue:
         order: list[str] = []
 
         msg = MagicMock(
-            message_id="msg-1", step_number=1, total_steps=1, extend_info=None,
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
         )
 
         queue = deque([msg])
@@ -533,13 +549,18 @@ class TestProcessQueue:
         assert order == ["emit"]
 
     @pytest.mark.asyncio
-    async def test_deferred_sse_status_has_no_required_post_emit_business_side_effects(self):
+    async def test_deferred_sse_status_has_no_required_post_emit_business_side_effects(
+        self,
+    ):
         """Deferred terminal delivery leaves only cancellation-token cleanup after emit."""
         qe = _make_queue_executor()
         order: list[str] = []
 
         msg = MagicMock(
-            message_id="msg-1", step_number=1, total_steps=1, extend_info=None,
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
         )
         queue = deque([msg])
         token = CancellationToken(message_id="umsg-1")
@@ -640,9 +661,7 @@ class TestProcessQueue:
         qe.continuation_store.save_continuation_on_message.assert_called_once_with(
             "paused-msg",
             {
-                "remaining_queue": [
-                    {"message_id": "msg-2", "room_id": "room-1"}
-                ],
+                "remaining_queue": [{"message_id": "msg-2", "room_id": "room-1"}],
                 "room_id": "room-1",
                 "user_message_id": "umsg-1",
                 "request_user_id": "u1",
@@ -682,7 +701,9 @@ class TestProcessQueue:
             return_value=QueueProcessingResult(result=QueueResult.COMPLETED)
         )
 
-        with patch("execution.orchestration.queue_executor.RoomAgentMessage") as MockRAM:
+        with patch(
+            "execution.orchestration.queue_executor.RoomAgentMessage"
+        ) as MockRAM:
             MockRAM.model_validate.return_value = MagicMock(message_id="msg-2")
             result = await qe.resume_from_continuation(
                 "paused-msg", task_result_text="task done"
@@ -711,7 +732,10 @@ async def test_deferred_sse_status_has_no_required_post_emit_business_side_effec
     order: list[str] = []
 
     msg = MagicMock(
-        message_id="msg-1", step_number=1, total_steps=1, extend_info=None,
+        message_id="msg-1",
+        step_number=1,
+        total_steps=1,
+        extend_info=None,
     )
     queue = deque([msg])
     token = CancellationToken(message_id="umsg-1")

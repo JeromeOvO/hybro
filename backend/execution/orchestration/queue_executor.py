@@ -279,14 +279,18 @@ class QueueExecutor:
         )
 
         sys_message_id = f"sys-{user_message_id}"
-        client_req_id = await self.task_state_store.resolve_client_request_id_for_message_id(
-            user_message_id
+        client_req_id = (
+            await self.task_state_store.resolve_client_request_id_for_message_id(
+                user_message_id
+            )
         )
 
         try:
             # Phase 1/3: Emit system:hybro task on start if not already emitted
-            existing_sys_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                sys_message_id
+            existing_sys_msg = (
+                await self.message_reader.get_room_agent_message_by_message_id(
+                    sys_message_id
+                )
             )
             if not existing_sys_msg:
                 from common.utils.time import utcnow
@@ -909,8 +913,10 @@ class QueueExecutor:
         Returns a ``ResumeResult`` indicating whether the caller should trigger
         post-completion logic (coordinator + COMPLETED SSE status).
         """
-        continuation = await self.continuation_store.get_and_clear_continuation_on_message(
-            message_id
+        continuation = (
+            await self.continuation_store.get_and_clear_continuation_on_message(
+                message_id
+            )
         )
 
         if not continuation:
@@ -1035,8 +1041,10 @@ class QueueExecutor:
             current_message.step_number,
             current_message.total_steps,
         )
-        next_messages = await self.message_reader.get_room_agent_messages_by_related_message_id(
-            current_message.message_id
+        next_messages = (
+            await self.message_reader.get_room_agent_messages_by_related_message_id(
+                current_message.message_id
+            )
         )
         logger.info(
             "QueueExecutor: Found %d next messages for message %s",
@@ -1062,10 +1070,8 @@ class QueueExecutor:
             )
 
             if is_debate_mode:
-                new_agent_message = (
-                    await self.debate_prompt_injector.inject_short_debate_for_agent_message(
-                        next_message
-                    )
+                new_agent_message = await self.debate_prompt_injector.inject_short_debate_for_agent_message(
+                    next_message
                 )
                 if new_agent_message is None:
                     logger.warning(

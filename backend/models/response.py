@@ -9,7 +9,7 @@ from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class PaginationMeta(BaseModel):
@@ -24,6 +24,7 @@ class PaginationMeta(BaseModel):
 class PaginatedResponse(BaseModel, Generic[T]):
     items: list[T]
     meta: PaginationMeta
+
 
 class Step(BaseModel):
     step_id: str
@@ -115,10 +116,9 @@ class AgentCenterResponse(BaseModel):
     @classmethod
     def _coerce_agent_card(cls, value: Any) -> Any:
         return coerce_legacy_agent_card(value)
-    
+
 
 class AgentResponse(BaseModel):
-
     # Primary identification field
     agent_id: str
 
@@ -146,7 +146,6 @@ class AgentResponse(BaseModel):
     dislike_count: int = 0
 
 
-
 class ChatResponse(BaseModel):
     user_name: str
     user_input: str
@@ -164,14 +163,18 @@ class ChatMemoryResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
+
 class RoomAgentRef(BaseModel):
     """Resolved agent reference with availability status."""
+
     id: str
     name: str | None = None
     availability: str = "available"  # available | inaccessible | inactive | deleted
 
+
 class ScopeResolutionError(BaseModel):
     """Structured error for dispatch scope resolution failures."""
+
     code: str  # invalid_target | group_not_usable | unauthorized_mention | empty_scope
     message: str
 
@@ -208,6 +211,7 @@ class RoomCenterActiveRunsResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
+
 class RoomCenterUserMessageResponse(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
@@ -223,6 +227,7 @@ class RoomCenterUserMessageResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
+
 class RoomCenterAgentMessageResponse(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
@@ -236,13 +241,15 @@ class RoomCenterAgentMessageResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
-class RoomCenterMemoryResponse(BaseModel):  
+
+class RoomCenterMemoryResponse(BaseModel):
     room_id: str | None = None
     memory_id: str | None = None
     memory: RoomMemory | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
+
 
 class RoomCenterRoomMessageResponse(BaseModel):
     room_id: str | None = None
@@ -257,18 +264,21 @@ class RoomCenterRoomMessageResponse(BaseModel):
 
 class DiscoveryErrorResponse(BaseModel):
     """Standardized error response for Discovery API."""
+
     error: str  # Error code: "invalid_key", "no_agent_found", "missing_key", etc.
     message: str  # Human-readable error message
 
 
 class DiscoveryAgentResult(BaseModel):
     """A single agent result from the Discovery API."""
+
     agent_card: dict  # A2A Protocol AgentCard as dictionary
     match_score: float  # Similarity score (0.0 to 1.0)
 
 
 class DiscoveryResponse(BaseModel):
     """Successful response from the Discovery API."""
+
     query: str  # The original search query
     agents: list[DiscoveryAgentResult]  # List of matching agents
     count: int  # Number of agents returned

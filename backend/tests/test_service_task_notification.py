@@ -159,13 +159,16 @@ class TestNotifyTaskUpdate:
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_proceeds_on_idempotency_db_error(self):
-        task = _make_task(TaskState.completed, artifacts=[
-            Artifact(
-                artifactId="a1",
-                name="response",
-                parts=[Part(root=TextPart(text="Hello"))],
-            ),
-        ])
+        task = _make_task(
+            TaskState.completed,
+            artifacts=[
+                Artifact(
+                    artifactId="a1",
+                    name="response",
+                    parts=[Part(root=TextPart(text="Hello"))],
+                ),
+            ],
+        )
         msg = _make_message(task=task)
 
         with (
@@ -174,7 +177,9 @@ class TestNotifyTaskUpdate:
             patch(PATCH_DELIVERY) as delivery,
             patch(PATCH_SLEEP, new_callable=AsyncMock),
             patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
-            patch(PATCH_EXTRACT_PARTS, return_value=_extracted_parts_mock(text="Hello")),
+            patch(
+                PATCH_EXTRACT_PARTS, return_value=_extracted_parts_mock(text="Hello")
+            ),
         ):
             _setup_db_mock(db, msg=msg, idempotency_error=True)
             _setup_notifier_mock(notifier)
@@ -676,13 +681,16 @@ class TestNotifyTaskUpdate:
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_agent_name_resolved_from_room(self):
-        task = _make_task(TaskState.completed, artifacts=[
-            Artifact(
-                artifactId="a1",
-                name="response",
-                parts=[Part(root=TextPart(text="Result"))],
-            ),
-        ])
+        task = _make_task(
+            TaskState.completed,
+            artifacts=[
+                Artifact(
+                    artifactId="a1",
+                    name="response",
+                    parts=[Part(root=TextPart(text="Result"))],
+                ),
+            ],
+        )
         msg = _make_message(task=task)
         room = _make_room(agent_name="SuperAgent")
         extracted = _extracted_parts_mock(text="Result")

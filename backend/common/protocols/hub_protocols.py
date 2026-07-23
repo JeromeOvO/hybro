@@ -14,7 +14,9 @@ from common.dto import (
 from common.protocols.platform_protocols import APIKeyPrincipal
 
 HubJsonScalar: TypeAlias = str | int | float | bool | None
-HubJsonValue: TypeAlias = HubJsonScalar | list["HubJsonValue"] | dict[str, "HubJsonValue"]
+HubJsonValue: TypeAlias = (
+    HubJsonScalar | list["HubJsonValue"] | dict[str, "HubJsonValue"]
+)
 
 
 @runtime_checkable
@@ -68,13 +70,22 @@ class HubManagement(Protocol):
         self, hub_id: str, api_key: Any, last_event_id: str | None = None
     ) -> AsyncIterator[dict]: ...
     def connect_hub_stream(self, hub_id: str, **kwargs) -> AsyncIterator[dict]: ...
-    async def process_publish(self, hub_id: str, request: Any, api_key: Any) -> None: ...
+    async def process_publish(
+        self, hub_id: str, request: Any, api_key: Any
+    ) -> None: ...
     async def publish_from_hub(self, hub_id: str, payload: dict) -> None: ...
     async def sync_agents(
-        self, hub_id: str, agents: list[Any], owner_id: str, *, prune_missing: bool = True
+        self,
+        hub_id: str,
+        agents: list[Any],
+        owner_id: str,
+        *,
+        prune_missing: bool = True,
     ) -> list[dict]: ...
     async def get_hub_status(self, owner_id: str) -> list[Any]: ...
-    async def record_hub_heartbeat(self, hub_id: str, owner_id: str | None = None) -> None: ...
+    async def record_hub_heartbeat(
+        self, hub_id: str, owner_id: str | None = None
+    ) -> None: ...
     async def hub_status_for_user(self, owner_id: str) -> list[Any]: ...
     async def start_heartbeat_monitor(self) -> None: ...
     async def stop(self) -> None: ...
@@ -149,7 +160,9 @@ class HubInternalResponseDispatcher(Protocol):
 
 @runtime_checkable
 class OfflineHubFailurePort(Protocol):
-    async def mark_hub_message_failed(self, command: OfflineHubFailureCommand) -> None: ...
+    async def mark_hub_message_failed(
+        self, command: OfflineHubFailureCommand
+    ) -> None: ...
 
 
 __all__ = [

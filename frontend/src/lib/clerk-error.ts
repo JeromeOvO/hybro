@@ -1,4 +1,8 @@
-export function isClerkAPIResponseError(err: unknown): err is { errors: any[] } { return false; }
+export function isClerkAPIResponseError(
+  err: unknown,
+): err is { errors: Array<{ code?: string; message?: string; longMessage?: string }> } {
+  return false
+}
 
 /**
  * Extract a user-friendly error message from a Clerk API error.

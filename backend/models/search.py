@@ -56,7 +56,9 @@ class MemorySearchResult(BaseModel):
 
     # Metadata
     timestamp: datetime | None = None
-    role: str | None = None  # "user", "agent", "supervisor" (uses memory.TurnRole values)
+    role: str | None = (
+        None  # "user", "agent", "supervisor" (uses memory.TurnRole values)
+    )
     agent_name: str | None = None
 
     # For expansion

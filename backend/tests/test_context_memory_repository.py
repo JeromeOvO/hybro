@@ -32,7 +32,9 @@ class FakeMongoCollection:
         docs = [deepcopy(doc) for doc in self.documents if _matches(doc, query)]
         return docs[:limit] if limit is not None else docs
 
-    async def find_one_and_update(self, query: dict, update: dict | list[dict], **kwargs):
+    async def find_one_and_update(
+        self, query: dict, update: dict | list[dict], **kwargs
+    ):
         for doc in self.documents:
             if _matches(doc, query):
                 _apply_update(doc, update)
@@ -55,8 +57,12 @@ class FakeMongoCollection:
         self.documents.append(doc)
         return str(doc["_id"])
 
-    async def update_one(self, query: dict, update: dict | list[dict], **kwargs) -> bool:
-        self.update_one_calls.append((deepcopy(query), deepcopy(update), deepcopy(kwargs)))
+    async def update_one(
+        self, query: dict, update: dict | list[dict], **kwargs
+    ) -> bool:
+        self.update_one_calls.append(
+            (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+        )
         if self.raise_on_update_one:
             raise RuntimeError("write failed")
         if self.update_one_exception is not None:
@@ -97,14 +103,18 @@ class FakeMongoCollection:
                 group_id = stage["$group"]["_id"].lstrip("$")
                 for doc in docs:
                     key = _get_path(doc, group_id)
-                    row = grouped.setdefault(key, {"_id": key, "count": 0, "total_size": 0})
+                    row = grouped.setdefault(
+                        key, {"_id": key, "count": 0, "total_size": 0}
+                    )
                     row["count"] += 1
                     row["total_size"] += len(doc.get("content", "").encode())
                 docs = list(grouped.values())
         return docs
 
     async def find_one_by_stable_or_native_id(self, field: str, value: str):
-        return await self.find_one({field: value}) or await self.find_one({"_id": value})
+        return await self.find_one({field: value}) or await self.find_one(
+            {"_id": value}
+        )
 
 
 class FakeMongo:
@@ -141,10 +151,16 @@ async def test_get_room_memory_returns_none_for_missing(memory_repo):
 
 @pytest.mark.asyncio
 async def test_create_and_get_room_memory(memory_repo):
-    memory_id = await memory_repo.create_room_memory({"room_id": "r1", "memory_id": "m1"})
+    memory_id = await memory_repo.create_room_memory(
+        {"room_id": "r1", "memory_id": "m1"}
+    )
 
     assert memory_id == "m1"
-    assert await memory_repo.get_room_memory("r1") == {"room_id": "r1", "memory_id": "m1", "_id": "id-1"}
+    assert await memory_repo.get_room_memory("r1") == {
+        "room_id": "r1",
+        "memory_id": "m1",
+        "_id": "id-1",
+    }
 
 
 @pytest.mark.asyncio
@@ -158,7 +174,9 @@ async def test_ensure_room_memory_creates_on_first_call(memory_repo):
 @pytest.mark.asyncio
 async def test_ensure_room_memory_idempotent(memory_repo):
     await memory_repo.ensure_room_memory("r1", {"memory_id": "first", "value": 1})
-    doc = await memory_repo.ensure_room_memory("r1", {"memory_id": "second", "value": 2})
+    doc = await memory_repo.ensure_room_memory(
+        "r1", {"memory_id": "second", "value": 2}
+    )
 
     assert doc["memory_id"] == "first"
     assert doc["value"] == 1
@@ -192,7 +210,9 @@ async def test_upsert_room_memory_insert_has_no_mongo_path_conflicts(memory_repo
 
 
 @pytest.mark.asyncio
-async def test_update_room_memory_by_room_id_returns_true_for_idempotent_match(memory_repo):
+async def test_update_room_memory_by_room_id_returns_true_for_idempotent_match(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {"room_id": "r1", "memory_id": "m1", "status": "same"}
     )
@@ -203,7 +223,9 @@ async def test_update_room_memory_by_room_id_returns_true_for_idempotent_match(m
 
 
 @pytest.mark.asyncio
-async def test_update_room_memory_by_room_id_does_not_mutate_identity_fields(memory_repo):
+async def test_update_room_memory_by_room_id_does_not_mutate_identity_fields(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {"room_id": "r1", "memory_id": "m1", "status": "old"}
     )
@@ -239,7 +261,9 @@ async def test_push_and_trim_conversation_turn_appends(memory_repo):
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_seeds_direct_history_from_legacy_nested_history(memory_repo):
+async def test_push_and_trim_seeds_direct_history_from_legacy_nested_history(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -262,7 +286,9 @@ async def test_push_and_trim_seeds_direct_history_from_legacy_nested_history(mem
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    assert [turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]] == [
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == [
         "legacy",
         "new",
     ]
@@ -270,14 +296,18 @@ async def test_push_and_trim_seeds_direct_history_from_legacy_nested_history(mem
         "legacy",
         "new",
     ]
-    assert [turn.turn_id for turn in normalize_room_memory(doc).conversation_history] == [
+    assert [
+        turn.turn_id for turn in normalize_room_memory(doc).conversation_history
+    ] == [
         "legacy",
         "new",
     ]
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_stale(memory_repo):
+async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_stale(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -305,9 +335,13 @@ async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_s
 
     doc = await memory_repo.get_room_memory("r1")
     expected = ["legacy-1", "legacy-2", "new"]
-    assert [turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]] == expected
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == expected
     assert [turn["turn_id"] for turn in doc["conversation_history"]] == expected
-    assert [turn.turn_id for turn in normalize_room_memory(doc).conversation_history] == expected
+    assert [
+        turn.turn_id for turn in normalize_room_memory(doc).conversation_history
+    ] == expected
 
 
 def test_normalize_room_memory_prefers_fuller_legacy_history_when_direct_history_is_stale():
@@ -362,9 +396,13 @@ async def test_push_and_trim_reconciles_equal_length_divergent_histories(memory_
 
     doc = await memory_repo.get_room_memory("r1")
     expected = ["legacy-only", "direct-only", "new"]
-    assert [turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]] == expected
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == expected
     assert [turn["turn_id"] for turn in doc["conversation_history"]] == expected
-    assert [turn.turn_id for turn in normalize_room_memory(doc).conversation_history] == expected
+    assert [
+        turn.turn_id for turn in normalize_room_memory(doc).conversation_history
+    ] == expected
 
 
 def test_normalize_room_memory_reconciles_equal_length_divergent_histories():
@@ -479,9 +517,7 @@ async def test_push_and_trim_keeps_multiple_no_id_turns(memory_repo):
                 ],
                 "summary": "",
             },
-            "conversation_history": [
-                {"role": "agent", "content": "direct without id"}
-            ],
+            "conversation_history": [{"role": "agent", "content": "direct without id"}],
         }
     )
 
@@ -626,7 +662,9 @@ async def test_push_and_trim_summary_ignores_non_string_legacy_content(memory_re
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_appends_summary_only_when_trimmed_and_keeps_tail(memory_repo):
+async def test_push_and_trim_appends_summary_only_when_trimmed_and_keeps_tail(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -684,12 +722,16 @@ async def test_push_and_trim_if_absent_rejects_duplicate(memory_repo):
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_if_absent_duplicate_check_ignores_malformed_entries(memory_repo):
+async def test_push_and_trim_if_absent_duplicate_check_ignores_malformed_entries(
+    memory_repo,
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
             "memory_id": "m1",
-            "memory_content": {"conversation_history": [None, "bad", {"turn_id": "t1"}]},
+            "memory_content": {
+                "conversation_history": [None, "bad", {"turn_id": "t1"}]
+            },
             "conversation_history": [None, {"content": "missing id"}],
         }
     )
@@ -707,7 +749,9 @@ async def test_push_and_trim_if_absent_duplicate_check_ignores_malformed_entries
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_if_absent_handles_concurrent_duplicate_race(memory_repo, monkeypatch):
+async def test_push_and_trim_if_absent_handles_concurrent_duplicate_race(
+    memory_repo, monkeypatch
+):
     doc = {
         "room_id": "r1",
         "memory_id": "m1",
@@ -716,7 +760,9 @@ async def test_push_and_trim_if_absent_handles_concurrent_duplicate_race(memory_
     }
     pushes = []
 
-    async def fake_push(room_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None):
+    async def fake_push(
+        room_id, turn, max_turns, summary_stub, max_summary_chars, *, query=None
+    ):
         pushes.append(turn)
         if len(pushes) == 2:
             doc["memory_content"]["conversation_history"].append({"turn_id": "t1"})
@@ -768,7 +814,9 @@ async def test_update_turn_notes(memory_repo):
 
     assert await memory_repo.update_turn_notes("r1", "t1", {"one_liner": "hi"})
     doc = await memory_repo.get_room_memory("r1")
-    assert doc["memory_content"]["conversation_history"][0]["turn_notes"] == {"one_liner": "hi"}
+    assert doc["memory_content"]["conversation_history"][0]["turn_notes"] == {
+        "one_liner": "hi"
+    }
     assert doc["conversation_history"][0]["turn_notes"] == {"one_liner": "hi"}
 
 
@@ -795,8 +843,16 @@ async def test_compact_turns_bulk(memory_repo, mongo):
     ok = await memory_repo.compact_turns_bulk(
         "r1",
         [
-            {"turn_id": "t1", "content_ref": {"document_id": "d1"}, "estimated_tokens_compact": 7},
-            {"turn_id": "t2", "content_ref": {"document_id": "d2"}, "estimated_tokens_compact": 8},
+            {
+                "turn_id": "t1",
+                "content_ref": {"document_id": "d1"},
+                "estimated_tokens_compact": 7,
+            },
+            {
+                "turn_id": "t2",
+                "content_ref": {"document_id": "d2"},
+                "estimated_tokens_compact": 8,
+            },
         ],
     )
 
@@ -807,8 +863,14 @@ async def test_compact_turns_bulk(memory_repo, mongo):
     assert isinstance(update, list)
     assert update[0]["$set"]["last_activity_at"] == "$$NOW"
     assert doc["total_compactions"] == 1
-    assert [t["representation"] for t in doc["conversation_history"]] == ["compact", "compact"]
-    assert [t["content_ref"]["document_id"] for t in doc["conversation_history"]] == ["d1", "d2"]
+    assert [t["representation"] for t in doc["conversation_history"]] == [
+        "compact",
+        "compact",
+    ]
+    assert [t["content_ref"]["document_id"] for t in doc["conversation_history"]] == [
+        "d1",
+        "d2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -882,7 +944,9 @@ async def test_compact_turns_bulk_preserves_absent_history_shapes(memory_repo, m
     assert ok is True
     assert direct_history_expression["$cond"][2] == "$$REMOVE"
     assert "conversation_history" not in doc
-    assert doc["memory_content"]["conversation_history"][0]["representation"] == "compact"
+    assert (
+        doc["memory_content"]["conversation_history"][0]["representation"] == "compact"
+    )
 
 
 @pytest.mark.asyncio
@@ -914,7 +978,9 @@ async def test_compact_turns_bulk_allows_missing_turn_ids(memory_repo):
 
 
 @pytest.mark.asyncio
-async def test_compact_turns_bulk_returns_false_on_atomic_write_failure(memory_repo, mongo):
+async def test_compact_turns_bulk_returns_false_on_atomic_write_failure(
+    memory_repo, mongo
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -935,7 +1001,9 @@ async def test_compact_turns_bulk_returns_false_on_atomic_write_failure(memory_r
 
 
 @pytest.mark.asyncio
-async def test_compact_turns_bulk_returns_false_on_mongo_write_failure(memory_repo, mongo):
+async def test_compact_turns_bulk_returns_false_on_mongo_write_failure(
+    memory_repo, mongo
+):
     class MongoWriteFailure(Exception):
         pass
 
@@ -948,7 +1016,9 @@ async def test_compact_turns_bulk_returns_false_on_mongo_write_failure(memory_re
             ],
         }
     )
-    mongo.collections["room_memories"].update_one_exception = MongoWriteFailure("write failed")
+    mongo.collections["room_memories"].update_one_exception = MongoWriteFailure(
+        "write failed"
+    )
 
     ok = await memory_repo.compact_turns_bulk(
         "r1",
@@ -1019,7 +1089,9 @@ async def test_content_get_by_document_id_with_legacy_fallback(content_repo, mon
         {"_id": "legacy-id", "room_id": "r1", "turn_id": "t1", "content": "legacy"}
     )
 
-    assert (await content_repo.get_content_by_document_id("legacy-id"))["content"] == "legacy"
+    assert (await content_repo.get_content_by_document_id("legacy-id"))[
+        "content"
+    ] == "legacy"
 
 
 @pytest.mark.asyncio
@@ -1046,7 +1118,9 @@ async def test_content_stats(content_repo, mongo):
 
 
 @pytest.mark.asyncio
-async def test_content_text_search_projection_excludes_full_content(content_repo, mongo):
+async def test_content_text_search_projection_excludes_full_content(
+    content_repo, mongo
+):
     await content_repo.text_search("r1", "query", limit=10)
 
     _query, kwargs = mongo.collections["conversation_content"].find_calls[-1]
@@ -1073,7 +1147,9 @@ async def test_content_text_search_filters_expired_documents(content_repo, mongo
 
 
 @pytest.mark.asyncio
-async def test_content_hydrate_turn_notes_filters_expired_documents(content_repo, mongo):
+async def test_content_hydrate_turn_notes_filters_expired_documents(
+    content_repo, mongo
+):
     coll = mongo.collections["conversation_content"]
     await coll.insert_one(
         {
@@ -1158,7 +1234,9 @@ def _values_for_path(doc: dict, path: str) -> list:
         next_values = []
         for value in values:
             if isinstance(value, list):
-                next_values.extend(item.get(part) for item in value if isinstance(item, dict))
+                next_values.extend(
+                    item.get(part) for item in value if isinstance(item, dict)
+                )
             elif isinstance(value, dict):
                 found = value.get(part)
                 if isinstance(found, list):
@@ -1169,12 +1247,16 @@ def _values_for_path(doc: dict, path: str) -> list:
     return values
 
 
-def _apply_update(doc: dict, update: dict | list[dict], *, array_filters=None, is_insert=False) -> None:
+def _apply_update(
+    doc: dict, update: dict | list[dict], *, array_filters=None, is_insert=False
+) -> None:
     if isinstance(update, list):
         for stage in update:
             stage_source = deepcopy(doc)
             for path, value in stage.get("$set", {}).items():
-                if path.endswith("conversation_history") and ("$map" in value or "$cond" in value):
+                if path.endswith("conversation_history") and (
+                    "$map" in value or "$cond" in value
+                ):
                     entries = _compact_entries_from_expression(value)
                     turns = _get_path(doc, path) or []
                     for turn in turns:
@@ -1186,10 +1268,16 @@ def _apply_update(doc: dict, update: dict | list[dict], *, array_filters=None, i
                             turn["representation"] = "compact"
                             turn["content"] = None
                             turn["content_ref"] = deepcopy(entry["content_ref"])
-                            turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
+                            turn["estimated_tokens_compact"] = entry[
+                                "estimated_tokens_compact"
+                            ]
                 elif path.endswith("conversation_history"):
                     if "$let" in value:
-                        _set_path(doc, path, _eval_history_append_expression(stage_source, value))
+                        _set_path(
+                            doc,
+                            path,
+                            _eval_history_append_expression(stage_source, value),
+                        )
                     elif "$concatArrays" in value:
                         existing = _get_path(stage_source, path) or []
                         turn = value["$concatArrays"][1][0]
@@ -1199,17 +1287,23 @@ def _apply_update(doc: dict, update: dict | list[dict], *, array_filters=None, i
                         source = _get_path(stage_source, source_path) or []
                         limit_expr = value["$slice"][1]
                         if isinstance(limit_expr, dict) and "$multiply" in limit_expr:
-                            limit = limit_expr["$multiply"][0] * limit_expr["$multiply"][1]
+                            limit = (
+                                limit_expr["$multiply"][0] * limit_expr["$multiply"][1]
+                            )
                         else:
                             limit = limit_expr
                         _set_path(doc, path, deepcopy(source[limit:]))
                 elif path == "memory_content.summary":
                     if "$cond" in value:
-                        _set_path(doc, path, _eval_summary_expression(stage_source, value))
+                        _set_path(
+                            doc, path, _eval_summary_expression(stage_source, value)
+                        )
                     else:
                         current = _get_path(doc, path) or ""
                         stub = value["$substrCP"][0]["$concat"][2]
-                        _set_path(doc, path, (current + "\n" + stub)[: value["$substrCP"][2]])
+                        _set_path(
+                            doc, path, (current + "\n" + stub)[: value["$substrCP"][2]]
+                        )
                 elif path == "last_activity_at":
                     _set_path(doc, path, "$$NOW")
                 elif path == "total_messages":
@@ -1251,9 +1345,15 @@ def _assert_no_update_path_conflicts(update: dict | list[dict]) -> None:
     for operator in ("$set", "$setOnInsert"):
         paths.extend(update.get(operator, {}).keys())
     for index, left in enumerate(paths):
-        for right in paths[index + 1:]:
-            if left == right or left.startswith(f"{right}.") or right.startswith(f"{left}."):
-                raise RuntimeError(f"Mongo update path conflict: {left} conflicts with {right}")
+        for right in paths[index + 1 :]:
+            if (
+                left == right
+                or left.startswith(f"{right}.")
+                or right.startswith(f"{left}.")
+            ):
+                raise RuntimeError(
+                    f"Mongo update path conflict: {left} conflicts with {right}"
+                )
 
 
 def _eval_summary_expression(doc: dict, expression: dict) -> str:
@@ -1264,13 +1364,17 @@ def _eval_summary_expression(doc: dict, expression: dict) -> str:
     if len(history) <= max_turns:
         return existing
 
-    concatenated_expr = cond["then"]["$let"]["in"]["$let"]["vars"]["concatenated"]["$cond"]
+    concatenated_expr = cond["then"]["$let"]["in"]["$let"]["vars"]["concatenated"][
+        "$cond"
+    ]
     summary_addition = concatenated_expr["then"]
-    concatenated = summary_addition if existing == "" else f"{existing}\n{summary_addition}"
+    concatenated = (
+        summary_addition if existing == "" else f"{existing}\n{summary_addition}"
+    )
     cap_cond = cond["then"]["$let"]["in"]["$let"]["in"]["$cond"]
     max_summary_chars = cap_cond["if"]["$gt"][1]
     if len(concatenated) > max_summary_chars:
-        return "..." + concatenated[-(max_summary_chars - 3):]
+        return "..." + concatenated[-(max_summary_chars - 3) :]
     return concatenated
 
 

@@ -76,7 +76,12 @@ async def _run(query: str, limit: int | None, output_json: bool) -> int:
             _print_json({"error": "missing_api_key", "message": msg})
             return EXIT_MISSING_CONFIG
         if msg.startswith("service_unavailable:"):
-            _print_json({"error": "service_unavailable", "message": msg.split(":", 1)[1].strip()})
+            _print_json(
+                {
+                    "error": "service_unavailable",
+                    "message": msg.split(":", 1)[1].strip(),
+                }
+            )
             return EXIT_NETWORK_ERROR
         error = normalize_error({"message": msg})
         _print_json(error)
@@ -93,9 +98,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Query the Hybro Discovery API for matching agents.",
         epilog="Examples:\n"
-               '  discover "data analysis agent"\n'
-               '  discover "finance" --limit 3\n'
-               '  discover "hr automation" --limit 5 --json',
+        '  discover "data analysis agent"\n'
+        '  discover "finance" --limit 3\n'
+        '  discover "hr automation" --limit 5 --json',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -125,10 +130,14 @@ def main() -> int:
 
     if args.limit is not None:
         if args.limit < 1 or args.limit > 100:
-            _print_json({"error": "invalid_args", "message": "limit must be between 1 and 100"})
+            _print_json(
+                {"error": "invalid_args", "message": "limit must be between 1 and 100"}
+            )
             return EXIT_BAD_ARGS
 
-    return asyncio.run(_run(query=query, limit=args.limit, output_json=args.output_json))
+    return asyncio.run(
+        _run(query=query, limit=args.limit, output_json=args.output_json)
+    )
 
 
 if __name__ == "__main__":

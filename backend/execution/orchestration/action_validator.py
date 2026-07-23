@@ -90,10 +90,7 @@ class PlannerActionValidator:
             )
         if action.action != PlannerActionType.COMPLETE:
             _validate_terminal_output(action, has_agent_output=has_agent_output)
-        if (
-            action.action == PlannerActionType.ASK_USER
-            and run_state is not None
-        ):
+        if action.action == PlannerActionType.ASK_USER and run_state is not None:
             PlannerActionValidator._validate_ask_user(
                 action,
                 run_state,
@@ -101,7 +98,8 @@ class PlannerActionValidator:
             )
 
         if (
-            action.action in (
+            action.action
+            in (
                 PlannerActionType.SYNTHESIZE,
                 PlannerActionType.COMPLETE,
             )
@@ -223,7 +221,11 @@ class PlannerActionValidator:
         question_prompts = [
             normalized
             for question in action.questions
-            if (normalized := PlannerActionValidator._normalize_question_prompt(question.prompt))
+            if (
+                normalized := PlannerActionValidator._normalize_question_prompt(
+                    question.prompt
+                )
+            )
         ]
         if len(question_prompts) != len(set(question_prompts)):
             raise PlannerActionValidationError(
@@ -304,11 +306,7 @@ class PlannerActionValidator:
         for question in action.questions:
             prompt = PlannerActionValidator._normalize_question_prompt(question.prompt)
             blocker_keys = question.blocker_keys
-            if (
-                not prompt
-                or question.reason != "blocker"
-                or not question.blocker_keys
-            ):
+            if not prompt or question.reason != "blocker" or not question.blocker_keys:
                 raise PlannerActionValidationError(
                     "post-dispatch ask_user action requires blocker keys",
                     code="ask_user_blocker_keys_required",
@@ -332,9 +330,7 @@ class PlannerActionValidator:
                     or not blocker.claimed_user_only
                     or not blocker.validated_user_only
                     or blocker.validation_status != "validated"
-                    or not (
-                        set(blocker.blocked_output_keys) & required_output_keys
-                    )
+                    or not (set(blocker.blocked_output_keys) & required_output_keys)
                 ):
                     raise PlannerActionValidationError(
                         "ask_user action references a non-validated blocker",
@@ -345,8 +341,7 @@ class PlannerActionValidator:
                 for item in run_state.open_questions
                 if isinstance(item, dict)
                 and item.get("source") == "supervisor"
-                and set(item.get("blocker_keys") or [])
-                & set(question.blocker_keys)
+                and set(item.get("blocker_keys") or []) & set(question.blocker_keys)
             ]
             if any(item.get("status") == "resolved" for item in previously_asked):
                 raise PlannerActionValidationError(
@@ -388,7 +383,8 @@ class PlannerActionValidator:
                 code="completion_disposition_unreferenced",
             )
         disposition_event_ids = {
-            disposition.event_id for disposition in completion_state.goal_family_dispositions
+            disposition.event_id
+            for disposition in completion_state.goal_family_dispositions
         }
         try:
             active_scope = active_completion_scope(
@@ -578,8 +574,7 @@ def _validate_delegate(
     if len(action.targets) > 1:
         parallel_groups = {target.parallel_group for target in action.targets}
         has_single_group = len(parallel_groups) == 1 and all(
-            isinstance(group, str) and bool(group.strip())
-            for group in parallel_groups
+            isinstance(group, str) and bool(group.strip()) for group in parallel_groups
         )
         has_intra_action_dependency = any(
             target.depends_on for target in action.targets
@@ -605,15 +600,20 @@ def _validate_delegate(
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)
 
+
 def _validate_terminal_output(
     action: PlannerAction,
     *,
     has_agent_output: bool,
 ) -> None:
-    if action.action in (
-        PlannerActionType.SYNTHESIZE,
-        PlannerActionType.COMPLETE,
-    ) and not has_agent_output:
+    if (
+        action.action
+        in (
+            PlannerActionType.SYNTHESIZE,
+            PlannerActionType.COMPLETE,
+        )
+        and not has_agent_output
+    ):
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} requires agent output"
         )
@@ -700,6 +700,7 @@ def _validate_no_blocking_recoverable_failures(
             f"{action.action.value} action is blocked by open recoverable failure",
             code="completion_blocked_by_recoverable_failure",
         )
+
 
 def _validate_completion_references(
     run_state: OrchestrationRunState,

@@ -539,11 +539,15 @@ def test_container_wires_execution_with_focused_port_names():
     assert "QuotedSnippet.model_validate" in source
     assert "execution_inquiry_agent_messages_by_related_message_id" in source
     assert (
-        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)" in source
+        "RoomCenterAgentMessageRequest(\n                    related_message_id=related_message_id\n                )"
+        in source
+        or "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
+        in source
     )
+
     assert (
-        ('from ' + 'app_' + 'shell' + '.') + "compaction_service import compaction_service" not in source
-    )
+        "from " + "app_" + "shell" + "."
+    ) + "compaction_service import compaction_service" not in source
     assert "compaction_service.bind_content_storage" not in source
     assert "compaction_service.bind_room_memory_reader" not in source
     assert "compaction_service.bind_facade" not in source
@@ -639,7 +643,7 @@ def test_room_message_center_uses_common_room_lock_protocol():
     source = Path("execution/orchestration/room_message_center.py").read_text()
     hints = get_type_hints(RoomMessageCenter.set_room_distributed_lock)
 
-    assert ('App' + 'Shell' + 'RedisService') not in source
+    assert ("App" + "Shell" + "RedisService") not in source
     assert "._client" not in source
     assert hints["room_lock"] == RoomDistributedLock | None
     assert (

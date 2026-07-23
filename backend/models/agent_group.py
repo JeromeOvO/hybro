@@ -78,4 +78,3 @@ def create_builtin_room_team_group() -> AgentGroup:
         owner_id=None,
         agents=[],
     )
-

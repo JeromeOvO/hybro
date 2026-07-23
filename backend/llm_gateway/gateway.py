@@ -77,7 +77,9 @@ class LLMGatewayImpl:
             model or self.config.default_embedding_model
         )
         if "embedding" not in model_info.capabilities:
-            raise ValueError(f"Model {model_info.logical_name} does not support embeddings")
+            raise ValueError(
+                f"Model {model_info.logical_name} does not support embeddings"
+            )
         return await self._with_retry(
             lambda: provider.embed(text, model=model_info.model_id),
             timeout_seconds=self.config.request_timeout_seconds,
@@ -92,7 +94,9 @@ class LLMGatewayImpl:
             model or self.config.default_embedding_model
         )
         if "embedding" not in model_info.capabilities:
-            raise ValueError(f"Model {model_info.logical_name} does not support embeddings")
+            raise ValueError(
+                f"Model {model_info.logical_name} does not support embeddings"
+            )
         return await self._with_retry(
             lambda: provider.embed_batch(texts, model=model_info.model_id),
             timeout_seconds=self.config.request_timeout_seconds,
@@ -300,7 +304,9 @@ class LLMGatewayImpl:
             )
         provider = self._providers.get(model_info.provider)
         if provider is None:
-            raise LLMModelRoutingError(f"No provider configured for {model_info.provider}")
+            raise LLMModelRoutingError(
+                f"No provider configured for {model_info.provider}"
+            )
         return model_info, provider
 
     async def _with_retry(

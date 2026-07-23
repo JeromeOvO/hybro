@@ -44,10 +44,7 @@ def classify_agent_failure(
 
 def _error_code(*, error: str | None, status_message: str | None) -> str | None:
     combined = f"{status_message or ''}\n{error or ''}".lower()
-    if (
-        "attachment_ref_not_found" in combined
-        or "attachment ref not found" in combined
-    ):
+    if "attachment_ref_not_found" in combined or "attachment ref not found" in combined:
         return "attachment_ref_not_found"
     if "context_ref_not_found" in combined or "context ref not found" in combined:
         return "context_ref_not_found"

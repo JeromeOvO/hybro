@@ -4,34 +4,36 @@ import hashlib
 import re
 from collections.abc import Awaitable, Callable
 
-RESERVED_SUBDOMAINS = frozenset({
-    "admin",
-    "api",
-    "www",
-    "mail",
-    "ftp",
-    "app",
-    "dashboard",
-    "docs",
-    "help",
-    "support",
-    "status",
-    "blog",
-    "cdn",
-    "static",
-    "assets",
-    "auth",
-    "login",
-    "register",
-    "account",
-    "settings",
-    "dev",
-    "staging",
-    "prod",
-    "test",
-    "demo",
-    "sandbox",
-})
+RESERVED_SUBDOMAINS = frozenset(
+    {
+        "admin",
+        "api",
+        "www",
+        "mail",
+        "ftp",
+        "app",
+        "dashboard",
+        "docs",
+        "help",
+        "support",
+        "status",
+        "blog",
+        "cdn",
+        "static",
+        "assets",
+        "auth",
+        "login",
+        "register",
+        "account",
+        "settings",
+        "dev",
+        "staging",
+        "prod",
+        "test",
+        "demo",
+        "sandbox",
+    }
+)
 
 
 class PublicUrlGenerator:

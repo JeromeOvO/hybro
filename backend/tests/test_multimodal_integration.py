@@ -1,4 +1,5 @@
 """Integration tests for multimodal flows (upload -> sendMessage -> verify)."""
+
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -63,6 +64,7 @@ class TestUploadToSendFlow:
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
         from room.compat.runtime import _ResolvedAttachments
+
         assert isinstance(result, _ResolvedAttachments)
         assert len(result.attachments) == 1
         att = result.attachments[0]
@@ -74,6 +76,7 @@ class TestUploadToSendFlow:
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
         from room.compat.runtime import _ResolvedAttachments
+
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
         assert result.content_summary["attachment_count"] == 1
@@ -88,11 +91,14 @@ class TestUploadToSendFlow:
                 return _file_meta(file_id, room_id)
             return pdf_meta
 
-        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(side_effect=mixed_reader)
+        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(
+            side_effect=mixed_reader
+        )
 
         result = await room_svc._resolve_attachments(["f1", "f2"], "room1")
 
         from room.compat.runtime import _ResolvedAttachments
+
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
         assert result.content_summary["has_files"] is True
@@ -114,8 +120,11 @@ class TestBuildMessageParts:
         card.default_input_modes = ["file"]
         card.defaultInputModes = None
         att = UserAttachment(
-            file_id="f1", s3_key="uploads/r/f1/photo.png",
-            mime_type="image/png", file_name="photo.png", size_bytes=1024,
+            file_id="f1",
+            s3_key="uploads/r/f1/photo.png",
+            mime_type="image/png",
+            file_name="photo.png",
+            size_bytes=1024,
         )
 
         parts = await room_svc._build_message_parts("hello", [att], card)
@@ -136,8 +145,11 @@ class TestBuildMessageParts:
         card.default_input_modes = ["text"]
         card.defaultInputModes = None
         att = UserAttachment(
-            file_id="f1", s3_key="uploads/r/f1/photo.png",
-            mime_type="image/png", file_name="photo.png", size_bytes=1024,
+            file_id="f1",
+            s3_key="uploads/r/f1/photo.png",
+            mime_type="image/png",
+            file_name="photo.png",
+            size_bytes=1024,
         )
 
         result = await room_svc._build_message_parts("hello", [att], card)
@@ -152,8 +164,11 @@ class TestBuildMessageParts:
         card.default_input_modes = ["*/*"]
         card.defaultInputModes = None
         att = UserAttachment(
-            file_id="f1", s3_key="uploads/r/f1/photo.png",
-            mime_type="image/png", file_name="photo.png", size_bytes=1024,
+            file_id="f1",
+            s3_key="uploads/r/f1/photo.png",
+            mime_type="image/png",
+            file_name="photo.png",
+            size_bytes=1024,
         )
         parts = await room_svc._build_message_parts("hello", [att], card)
         assert len(parts) == 2
@@ -164,8 +179,11 @@ class TestBuildMessageParts:
         card.default_input_modes = ["application/pdf"]
         card.defaultInputModes = None
         att = UserAttachment(
-            file_id="f2", s3_key="uploads/r/f2/report.pdf",
-            mime_type="application/pdf", file_name="report.pdf", size_bytes=4,
+            file_id="f2",
+            s3_key="uploads/r/f2/report.pdf",
+            mime_type="application/pdf",
+            file_name="report.pdf",
+            size_bytes=4,
         )
 
         parts = await room_svc._build_message_parts("summarize", [att], card)
@@ -452,9 +470,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         ]
         assert len(data_parts) == 1
         assert data_parts[0].data["requested_coverage"]["currency"] == "GBP"
-        assert data_parts[0].metadata["ref_id"] == (
-            "broker-msg:artifact_id:submission"
-        )
+        assert data_parts[0].metadata["ref_id"] == ("broker-msg:artifact_id:submission")
 
     async def test_compatible_pdf_attachment_appends_inline_bytes(self):
         svc = RoomServices()

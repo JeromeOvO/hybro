@@ -28,7 +28,9 @@ class TestInspectAgent:
     @pytest.mark.asyncio
     async def test_delegates_to_inspection_center(self):
         request = MagicMock()
-        request.json = AsyncMock(return_value={"agent_url": "https://agent.example.com"})
+        request.json = AsyncMock(
+            return_value={"agent_url": "https://agent.example.com"}
+        )
         expected = {"name": "TestAgent", "status": "ok"}
 
         mock_ic = MagicMock()
@@ -55,7 +57,9 @@ class TestInspectA2AConnection:
     @pytest.mark.asyncio
     async def test_delegates_to_inspection_center(self):
         request = MagicMock()
-        request.json = AsyncMock(return_value={"agent_url": "https://agent.example.com"})
+        request.json = AsyncMock(
+            return_value={"agent_url": "https://agent.example.com"}
+        )
         expected = {"connected": True}
 
         mock_ic = MagicMock()

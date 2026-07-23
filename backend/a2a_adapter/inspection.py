@@ -149,7 +149,10 @@ def _validate_response(result: Any) -> dict[str, Any]:
 
     response_data = result.root.result.model_dump(exclude_none=True)
     validation_errors = validate_message_data(response_data)
-    return {"result": validation_errors, "status_code": 500 if validation_errors else 200}
+    return {
+        "result": validation_errors,
+        "status_code": 500 if validation_errors else 200,
+    }
 
 
 def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:

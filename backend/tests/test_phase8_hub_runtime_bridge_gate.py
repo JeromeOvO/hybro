@@ -174,7 +174,7 @@ def test_relay_service_runtime_is_owned_by_hub_runtime_bridge() -> None:
     assert deleted_modules["delivery_runtime"] not in relay_imports
     assert deleted_modules["delivery_runtime"] not in relay_text
     assert "sse_manager" not in relay_text
-    assert ('App' + 'Shell' + 'RelayStreamService') not in relay_text
+    assert ("App" + "Shell" + "RelayStreamService") not in relay_text
     assert not any(name.startswith("modules") for name in relay_imports)
     assert "execution.facade" not in relay_text
     assert "AgentResponseHandler" not in relay_text
@@ -201,8 +201,8 @@ def test_legacy_relay_does_not_import_redis_runtime_concretes() -> None:
     redis_runtime_module = _application_shell_module("redis_runtime")
 
     assert redis_runtime_module not in relay_imports
-    assert ('App' + 'Shell' + 'RelayStreamService') not in relay_text
-    assert ('App' + 'Shell' + 'LeaderElection') not in relay_text
+    assert ("App" + "Shell" + "RelayStreamService") not in relay_text
+    assert ("App" + "Shell" + "LeaderElection") not in relay_text
 
 
 def test_legacy_relay_has_single_transport_state() -> None:
@@ -243,8 +243,8 @@ def test_container_uses_owner_runtime_modules_for_delivery_redis_and_relay() -> 
     assert deleted_modules["delivery_runtime"] not in container_imports
     assert deleted_modules["redis_runtime"] not in container_imports
     assert deleted_modules["room_lock"] not in container_imports
-    assert ('create_' + 'app_' + 'shell' + '_redis_runtime') not in container
-    assert ('App' + 'Shell' + 'RelayHubStore') not in container
+    assert ("create_" + "app_" + "shell" + "_redis_runtime") not in container
+    assert ("App" + "Shell" + "RelayHubStore") not in container
     assert "RedisRoomDistributedLock" not in container
     assert "class RedisRuntimeDeps" in container
     assert "def create_redis_runtime_deps" in container

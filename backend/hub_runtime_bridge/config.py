@@ -32,9 +32,7 @@ def config_from_settings(settings_obj: Any) -> HubRuntimeBridgeConfig:
         heartbeat_miss_limit=int(
             getattr(settings_obj, "relay_hub_agent_heartbeat_miss_limit", 3)
         ),
-        heartbeat_ttl_seconds=int(
-            getattr(settings_obj, "relay_hub_heartbeat_ttl", 90)
-        ),
+        heartbeat_ttl_seconds=int(getattr(settings_obj, "relay_hub_heartbeat_ttl", 90)),
         offline_queue_max=int(getattr(settings_obj, "relay_offline_queue_max", 1000)),
         offline_queue_ttl_seconds=int(
             getattr(settings_obj, "relay_offline_queue_ttl", 3600)

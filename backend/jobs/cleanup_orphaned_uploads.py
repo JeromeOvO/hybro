@@ -113,9 +113,7 @@ class OrphanedUploadCleaner:
             if deleted:
                 logger.info("Cleaned up %d orphaned uploads", deleted)
 
-    async def cleanup_orphaned_uploads(
-        self, max_age_hours: int = MAX_AGE_HOURS
-    ) -> int:
+    async def cleanup_orphaned_uploads(self, max_age_hours: int = MAX_AGE_HOURS) -> int:
         """Delete file_uploads not referenced by any message after max_age_hours."""
         deps = self._require_cleanup_deps()
         cutoff = utcnow() - timedelta(hours=max_age_hours)

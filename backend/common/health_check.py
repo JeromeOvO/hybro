@@ -31,12 +31,8 @@ class RuntimeHealthCheck:
             delivery_kv_connected=bool(
                 delivery_facade and delivery_facade.delivery_kv_connected
             ),
-            redis_runtime_connected=bool(
-                redis_service and redis_service.is_connected
-            ),
-            relay_streams_available=bool(
-                relay_streams and relay_streams.is_connected
-            ),
+            redis_runtime_connected=bool(redis_service and redis_service.is_connected),
+            relay_streams_available=bool(relay_streams and relay_streams.is_connected),
             redis_url=self._redis_url,
             change_stream_connected=bool(
                 delivery_facade and delivery_facade.change_stream_connected

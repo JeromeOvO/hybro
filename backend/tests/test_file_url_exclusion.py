@@ -9,7 +9,7 @@ class TestStripFileUrls:
                 "attachments": [
                     {"file_id": "f1", "s3_key": "k1", "file_url": "https://presigned"},
                     {"file_id": "f2", "s3_key": "k2"},
-                ]
+                ],
             }
         }
         _strip_file_urls(doc)
@@ -41,9 +41,13 @@ class TestStripFileUrls:
 
     def test_model_dump_excludes_file_url_when_none(self):
         from models.room import UserAttachment
+
         att = UserAttachment(
-            file_id="f1", s3_key="k1", mime_type="image/png",
-            file_name="a.png", size_bytes=100,
+            file_id="f1",
+            s3_key="k1",
+            mime_type="image/png",
+            file_name="a.png",
+            size_bytes=100,
         )
         dumped = att.model_dump(mode="json")
         assert dumped["file_url"] is None

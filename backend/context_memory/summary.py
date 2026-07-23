@@ -120,7 +120,8 @@ async def update_room_summary(
         if extracted.get("important_constraints") is not None
         else existing.get("important_constraints", []),
         "last_updated_at": now(),
-        "updated_after_turn_id": synthesis_turn_id or existing.get("updated_after_turn_id"),
+        "updated_after_turn_id": synthesis_turn_id
+        or existing.get("updated_after_turn_id"),
     }
 
     existing_contents = {

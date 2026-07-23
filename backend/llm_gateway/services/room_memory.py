@@ -11,9 +11,7 @@ class RoomMemoryLLMService:
         self._llm_provider = llm_provider
         self._default_model = default_model
 
-    async def generate_chat_context(
-        self, request: ChatContextGenerationInput
-    ) -> str:
+    async def generate_chat_context(self, request: ChatContextGenerationInput) -> str:
         system_prompt = (
             "You are an expert context summarizer for multi-agent conversations. "
             "Maintain a comprehensive evolving context summary that preserves "

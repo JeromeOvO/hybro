@@ -387,9 +387,7 @@ async def test_redis_streams_impl_normalizes_xread():
 
     client = MagicMock()
     client.xadd = AsyncMock(return_value="1-0")
-    client.xread = AsyncMock(
-        return_value=[("stream-a", [("1-0", {"payload": "one"})])]
-    )
+    client.xread = AsyncMock(return_value=[("stream-a", [("1-0", {"payload": "one"})])])
 
     streams = RedisStreamsImpl(client=client)
 
@@ -1147,7 +1145,9 @@ async def test_object_storage_dal_delete_prefix_deletes_all_objects_and_counts()
 def test_object_storage_dal_public_url_uses_bucket_region_and_key():
     from dal.s3.client import ObjectStorageDALImpl
 
-    storage = ObjectStorageDALImpl(session=MagicMock(), bucket="bucket", region="us-west-2")
+    storage = ObjectStorageDALImpl(
+        session=MagicMock(), bucket="bucket", region="us-west-2"
+    )
 
     assert (
         storage.get_public_url("agent-avatars/a.png")

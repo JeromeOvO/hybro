@@ -37,7 +37,9 @@ class HubTransportMiddleware:
                 decision = self._policy.is_hub_online(ctx.agent.hub_id)
             else:
                 decision = False
-            can_dispatch = await decision if inspect.isawaitable(decision) else bool(decision)
+            can_dispatch = (
+                await decision if inspect.isawaitable(decision) else bool(decision)
+            )
             if not can_dispatch:
                 marker = getattr(self._policy, "mark_hub_agents_offline", None)
                 if marker is not None:

@@ -15,7 +15,7 @@ Hybro AI allows you to run, manage, and coordinate a cluster of intelligent agen
 
 ### Prerequisites
 - Docker and Docker Compose
-- Node.js 20.9+ (if running the frontend outside of Docker)
+- Node.js 20.19+ (if running the frontend outside of Docker)
 - Python 3.12+ (if running the backend outside of Docker)
 
 ### Quick Start (Docker)
@@ -51,4 +51,5 @@ We welcome contributions from the community! Whether you are fixing a bug, addin
 5. Open a Pull Request
 
 ## License
-MIT License
+Apache License 2.0
+

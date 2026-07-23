@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 
@@ -454,7 +453,10 @@ async def send_message(
         selected_agent_ids = [agent_id.strip() for agent_id in selected_agent_ids]
 
     if candidate_scope_mode is not None:
-        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode.strip():
+        if (
+            not isinstance(candidate_scope_mode, str)
+            or not candidate_scope_mode.strip()
+        ):
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,

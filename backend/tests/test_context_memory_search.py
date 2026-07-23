@@ -402,11 +402,14 @@ async def test_delete_room_index():
 
 @pytest.mark.asyncio
 async def test_delete_room_index_unavailable_returns_false():
-    assert await search.delete_room_index(
-        room_id="r1",
-        vector=DeleteUnavailableVector(),
-        config=config(),
-    ) is False
+    assert (
+        await search.delete_room_index(
+            room_id="r1",
+            vector=DeleteUnavailableVector(),
+            config=config(),
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

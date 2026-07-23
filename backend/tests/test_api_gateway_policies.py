@@ -28,9 +28,7 @@ def test_route_policy_matrix_matches_fixture():
 def test_open_cors_groups_are_explicitly_limited():
     from api_gateway.policies import open_cors_groups
 
-    assert open_cors_groups() == frozenset(
-        {"discovery", "platform_gateway", "relay"}
-    )
+    assert open_cors_groups() == frozenset({"discovery", "platform_gateway", "relay"})
 
 
 def test_every_public_route_group_has_policy():

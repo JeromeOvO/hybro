@@ -39,6 +39,7 @@ from models.supervisor import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
@@ -352,7 +353,9 @@ def _make_delegate_entry(
         action=SupervisorAction(
             action=ActionType.DELEGATE,
             reasoning=f"Debate: {agent_name}",
-            targets=[DelegateTarget(agent_id=agent_id, agent_name=agent_name, task="task")],
+            targets=[
+                DelegateTarget(agent_id=agent_id, agent_name=agent_name, task="task")
+            ],
         ),
         started_at=utcnow(),
         completed_at=utcnow(),
@@ -483,7 +486,9 @@ class TestGetRemainingDebateAgentIds:
     def test_failed_dispatch_counted_as_handled(self):
         """Debate = each agent gets one turn. A completed-but-failed dispatch
         still counts as handled — the agent had its turn."""
-        failed_entry = _make_delegate_entry(2, "a2", "Beta", response_text="", success=False)
+        failed_entry = _make_delegate_entry(
+            2, "a2", "Beta", response_text="", success=False
+        )
         trajectory = SupervisorTrajectory(
             entries=[
                 _make_delegate_entry(1, "a1", "Alpha"),
@@ -657,7 +662,9 @@ class TestSequentialDebateDispatch:
         return _make_supervisor_executor()
 
     def _debate_config(self) -> RoomConfig:
-        return RoomConfig(is_debate_mode=True, room_agent_set={"a1": "Alpha", "a2": "Beta"})
+        return RoomConfig(
+            is_debate_mode=True, room_agent_set={"a1": "Alpha", "a2": "Beta"}
+        )
 
     def _debate_config_three(self) -> RoomConfig:
         return RoomConfig(
@@ -676,16 +683,18 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_calls.append([t.agent_id for t in targets])
-            return [StepResult(
-                step_number=kwargs.get("step_number", 1),
-                agent_id=targets[0].agent_id,
-                agent_name=targets[0].agent_name,
-                task=targets[0].task,
-                response_text=f"response from {targets[0].agent_name}",
-                success=True,
-                status=StepStatus.SUCCESS,
-                agent_message_id=f"agent-msg-{targets[0].agent_id}",
-            )]
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text=f"response from {targets[0].agent_name}",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id=f"agent-msg-{targets[0].agent_id}",
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
@@ -718,7 +727,9 @@ class TestSequentialDebateDispatch:
         assert [event.was_successful for event in committed_events] == [True, True]
 
     @pytest.mark.asyncio
-    async def test_debate_mode_limits_multi_target_planner_to_next_participant(self, se):
+    async def test_debate_mode_limits_multi_target_planner_to_next_participant(
+        self, se
+    ):
         """Debate room policy should narrow an over-selected planner action."""
         se.orchestration_planner = MultiTargetDebatePlanner()
         agents = [
@@ -937,15 +948,17 @@ class TestSequentialDebateDispatch:
         agents = [_make_agent_profile("a1", "Alpha")]
 
         async def fake_dispatch(targets, **kwargs):
-            return [StepResult(
-                step_number=1,
-                agent_id="a1",
-                agent_name="Alpha",
-                task=targets[0].task,
-                response_text="done",
-                success=True,
-                status=StepStatus.SUCCESS,
-            )]
+            return [
+                StepResult(
+                    step_number=1,
+                    agent_id="a1",
+                    agent_name="Alpha",
+                    task=targets[0].task,
+                    response_text="done",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
@@ -973,15 +986,17 @@ class TestSequentialDebateDispatch:
         async def fake_dispatch(targets, **kwargs):
             nonlocal dispatch_count
             dispatch_count += 1
-            return [StepResult(
-                step_number=dispatch_count,
-                agent_id=targets[0].agent_id,
-                agent_name=targets[0].agent_name,
-                task=targets[0].task,
-                response_text="resp",
-                success=True,
-                status=StepStatus.SUCCESS,
-            )]
+            return [
+                StepResult(
+                    step_number=dispatch_count,
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text="resp",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
@@ -1015,15 +1030,17 @@ class TestSequentialDebateDispatch:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [StepResult(
-                step_number=kwargs.get("step_number", 1),
-                agent_id=targets[0].agent_id,
-                agent_name=targets[0].agent_name,
-                task=targets[0].task,
-                response_text="resp",
-                success=True,
-                status=StepStatus.SUCCESS,
-            )]
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text="resp",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
@@ -1092,22 +1109,29 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [StepResult(
-                step_number=kwargs.get("step_number", 1),
-                agent_id=targets[0].agent_id,
-                agent_name=targets[0].agent_name,
-                task=targets[0].task,
-                response_text="resp",
-                success=True,
-                status=StepStatus.SUCCESS,
-            )]
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text="resp",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
-        config = RoomConfig(is_debate_mode=True, room_agent_set={
-            "a1": "Alpha", "a2": "Beta", "a3": "Gamma",
-        })
+        config = RoomConfig(
+            is_debate_mode=True,
+            room_agent_set={
+                "a1": "Alpha",
+                "a2": "Beta",
+                "a3": "Gamma",
+            },
+        )
 
         result = await se.run(
             room_id="room-1",
@@ -1140,9 +1164,13 @@ class TestDebateResume:
         se._dispatch_targets = AsyncMock()
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
-        config = RoomConfig(is_debate_mode=True, room_agent_set={
-            "a1": "Alpha", "a2": "Beta",
-        })
+        config = RoomConfig(
+            is_debate_mode=True,
+            room_agent_set={
+                "a1": "Alpha",
+                "a2": "Beta",
+            },
+        )
 
         result = await se.run(
             room_id="room-1",
@@ -1190,22 +1218,28 @@ class TestDebateResume:
 
         async def fake_dispatch(targets, **kwargs):
             dispatch_ids.append(targets[0].agent_id)
-            return [StepResult(
-                step_number=kwargs.get("step_number", 1),
-                agent_id=targets[0].agent_id,
-                agent_name=targets[0].agent_name,
-                task=targets[0].task,
-                response_text="resp",
-                success=True,
-                status=StepStatus.SUCCESS,
-            )]
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 1),
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text="resp",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                )
+            ]
 
         se._dispatch_targets = fake_dispatch
         se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
 
-        config = RoomConfig(is_debate_mode=True, room_agent_set={
-            "a1": "Alpha", "a2": "Beta",
-        })
+        config = RoomConfig(
+            is_debate_mode=True,
+            room_agent_set={
+                "a1": "Alpha",
+                "a2": "Beta",
+            },
+        )
 
         result = await se.run(
             room_id="room-1",
@@ -1274,9 +1308,24 @@ class TestResumePreservesDebateParticipants:
         # Serialized continuation has the original registry
         continuation = {
             "agent_registry": [
-                {"agent_id": "a1", "agent_name": "Alpha", "description": "", "is_healthy": True},
-                {"agent_id": "a2", "agent_name": "Beta", "description": "", "is_healthy": True},
-                {"agent_id": "a3", "agent_name": "Gamma", "description": "", "is_healthy": True},
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alpha",
+                    "description": "",
+                    "is_healthy": True,
+                },
+                {
+                    "agent_id": "a2",
+                    "agent_name": "Beta",
+                    "description": "",
+                    "is_healthy": True,
+                },
+                {
+                    "agent_id": "a3",
+                    "agent_name": "Gamma",
+                    "description": "",
+                    "is_healthy": True,
+                },
             ],
         }
 
@@ -1286,13 +1335,13 @@ class TestResumePreservesDebateParticipants:
         if trajectory.debate_agent_ids and is_debate_mode:
             current_ids = {a.agent_id for a in current_registry}
             missing_ids = [
-                aid for aid in trajectory.debate_agent_ids
-                if aid not in current_ids
+                aid for aid in trajectory.debate_agent_ids if aid not in current_ids
             ]
             if missing_ids:
                 serialized_registry = continuation.get("agent_registry", [])
                 serialized_map = {
-                    p["agent_id"]: p for p in serialized_registry
+                    p["agent_id"]: p
+                    for p in serialized_registry
                     if isinstance(p, dict) and "agent_id" in p
                 }
                 for mid in missing_ids:

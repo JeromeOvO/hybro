@@ -289,7 +289,9 @@ async def test_emit_does_not_dispatch_internal_handlers():
     runner = RecordingTaskRunner()
     publisher = make_publisher(task_runner=runner)
     called = []
-    publisher.register_internal_handler("processing_status", lambda event: called.append(event))
+    publisher.register_internal_handler(
+        "processing_status", lambda event: called.append(event)
+    )
 
     await publisher.emit(
         ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
@@ -326,7 +328,9 @@ async def test_multiple_internal_handlers_and_handler_exception_dead_letter():
     await asyncio.gather(*runner.tasks, return_exceptions=True)
 
     assert received == ["run_state_changed"]
-    assert any(letter["failure_stage"] == "internal_handler" for letter in bus.dead_letters)
+    assert any(
+        letter["failure_stage"] == "internal_handler" for letter in bus.dead_letters
+    )
 
 
 @pytest.mark.asyncio
@@ -388,7 +392,9 @@ async def test_trace_context_is_added_to_typed_frames():
 
     with trace_id_context("trace-123"):
         await publisher.emit(
-            ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+            ProcessingStatusEvent(
+                room_id="room-1", message_id="msg-1", status="processing"
+            )
         )
 
     assert transport.frames[0][1]["data"]["trace_id"] == "trace-123"
@@ -452,7 +458,9 @@ async def test_all_internal_event_union_members_schedule_local_handlers(event):
     publisher = make_publisher(task_runner=runner)
     received = []
 
-    publisher.register_internal_handler(event.event_type, lambda item: received.append(item))
+    publisher.register_internal_handler(
+        event.event_type, lambda item: received.append(item)
+    )
 
     await publisher.emit_internal(event)
     await asyncio.gather(*runner.tasks)

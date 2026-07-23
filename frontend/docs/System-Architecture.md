@@ -52,7 +52,7 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 |---|---|
 | `package.json` | npm scripts and dependency manifest |
 | `package-lock.json` | locked dependency graph |
-| `.nvmrc` | recommended Node version (`20.9`) |
+| `.nvmrc` | recommended Node version (`20.19`) |
 | `next.config.ts` | Next.js configuration |
 | `tsconfig.json` | TypeScript compiler configuration |
 | `eslint.config.mjs` | ESLint 9 configuration |

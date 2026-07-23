@@ -55,7 +55,9 @@ class BoundAssemblyFacade:
     def __init__(self, service: ContextAssemblyService):
         self.service = service
 
-    def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+    def assemble_supervisor_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
         return context_memory_assembly.assemble_supervisor_context_from_memory(
             room_memory_doc,
             current_task,
@@ -63,7 +65,9 @@ class BoundAssemblyFacade:
             **kwargs,
         )
 
-    def assemble_agent_execution_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+    def assemble_agent_execution_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
         return context_memory_assembly.assemble_agent_execution_context_from_memory(
             room_memory_doc,
             current_task,
@@ -106,7 +110,9 @@ class TestTokenBudget:
                 + budget.conversation_history_pct
                 + budget.current_task_pct
             )
-            assert total_pct == 1.0, f"Dynamic allocations should sum to 100%, got {total_pct * 100}%"
+            assert total_pct == 1.0, (
+                f"Dynamic allocations should sum to 100%, got {total_pct * 100}%"
+            )
 
     def test_conversation_history_tokens(self):
         """Test conversation history token allocation."""
@@ -191,11 +197,17 @@ class TestContextAssemblyService:
         assert 0 <= result.occupancy_pct <= 100
         assert result.turns_included <= 3
 
-    def test_build_supervisor_context_includes_agent_registry(self, service, sample_room_memory):
+    def test_build_supervisor_context_includes_agent_registry(
+        self, service, sample_room_memory
+    ):
         """Test that agent registry is included in supervisor context."""
         agent_registry = [
             {"agent_id": "a1", "agent_name": "CodeAgent", "description": "Writes code"},
-            {"agent_id": "a2", "agent_name": "TestAgent", "description": "Writes tests"},
+            {
+                "agent_id": "a2",
+                "agent_name": "TestAgent",
+                "description": "Writes tests",
+            },
         ]
 
         result = service.build_supervisor_context(
@@ -208,7 +220,9 @@ class TestContextAssemblyService:
         assert "TestAgent" in result.context
         assert "[Available Agents]" in result.context
 
-    def test_build_agent_execution_context_returns_result(self, service, sample_room_memory):
+    def test_build_agent_execution_context_returns_result(
+        self, service, sample_room_memory
+    ):
         """Test that build_agent_execution_context returns a valid result."""
         result = service.build_agent_execution_context(
             room_memory=sample_room_memory,
@@ -221,7 +235,9 @@ class TestContextAssemblyService:
         assert result.total_tokens > 0
         assert "TestAgent" in result.context
 
-    def test_build_agent_execution_context_includes_quoted_text(self, service, sample_room_memory):
+    def test_build_agent_execution_context_includes_quoted_text(
+        self, service, sample_room_memory
+    ):
         """Test that quoted text is included in agent context."""
         result = service.build_agent_execution_context(
             room_memory=sample_room_memory,
@@ -281,7 +297,10 @@ class TestContextAssemblyService:
 
         assert result.stable_prefix_tokens > 0
         assert result.dynamic_suffix_tokens > 0
-        assert result.total_tokens == result.stable_prefix_tokens + result.dynamic_suffix_tokens
+        assert (
+            result.total_tokens
+            == result.stable_prefix_tokens + result.dynamic_suffix_tokens
+        )
 
     def test_truncation_count_increments(self, service, sample_room_memory):
         """Test that truncation is tracked when turns exceed budget."""
@@ -550,7 +569,9 @@ class TestHardCapEnforcement:
         assert result.total_tokens <= available or result.turns_included == 1
         assert result.was_truncated is True
 
-    def test_agent_context_logs_critical_when_still_over_budget(self, service, large_room_memory):
+    def test_agent_context_logs_critical_when_still_over_budget(
+        self, service, large_room_memory
+    ):
         """Test that critical error is logged when context can't fit."""
         # Create a room with huge stable prefix that can't be truncated
         large_room_memory.room_summary = RoomSummary(
@@ -583,7 +604,8 @@ class TestHardCapEnforcement:
                 # Not a duplicate from the explicit logger.warning
                 warning_calls = mock_logger.warning.call_args_list
                 truncation_warnings = [
-                    c for c in warning_calls
+                    c
+                    for c in warning_calls
                     if "truncated" in str(c).lower() or "TRUNCATED" in str(c)
                 ]
                 # Should be exactly 1 warning about truncation

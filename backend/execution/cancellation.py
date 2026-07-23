@@ -59,10 +59,8 @@ class AgentTaskCleanupAdapter:
         room_id: str,
         message_id: str,
     ) -> None:
-        agent_msgs = (
-            await self._message_task_store.get_room_agent_messages_by_related_message_id(
-                message_id
-            )
+        agent_msgs = await self._message_task_store.get_room_agent_messages_by_related_message_id(
+            message_id
         )
         for agent_msg in agent_msgs:
             if not getattr(agent_msg, "has_task_tracking", False):
@@ -90,9 +88,15 @@ class AgentTaskCleanupAdapter:
                 room_id=agent_msg.room_id,
                 user_id=agent_msg.user_id or "",
             )
-            if getattr(agent_msg, "agent_url", None) and task and getattr(task, "id", None):
+            if (
+                getattr(agent_msg, "agent_url", None)
+                and task
+                and getattr(task, "id", None)
+            ):
                 try:
-                    agent_card = await self._get_agent_card_from_url(agent_msg.agent_url)
+                    agent_card = await self._get_agent_card_from_url(
+                        agent_msg.agent_url
+                    )
                     await self._cancel_remote_task(agent_card, task.id)
                 except Exception:
                     logger.debug("remote cancellation failed", exc_info=True)

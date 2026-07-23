@@ -20,7 +20,9 @@ class InMemoryHubTaskOwnershipStore:
         self, aliases: dict, owner_id: str, lease_token: str | None = None
     ) -> dict:
         clean_aliases = {
-            key: value for key, value in aliases.items() if isinstance(value, str) and value
+            key: value
+            for key, value in aliases.items()
+            if isinstance(value, str) and value
         }
         existing_ids = {
             self._alias_index[value]
@@ -100,7 +102,9 @@ class MongoHubTaskOwnershipStore:
         self, aliases: dict, owner_id: str, lease_token: str | None = None
     ) -> dict:
         clean_aliases = {
-            key: value for key, value in aliases.items() if isinstance(value, str) and value
+            key: value
+            for key, value in aliases.items()
+            if isinstance(value, str) and value
         }
         existing = await self._find_by_aliases(clean_aliases)
         if len({record.get("ownership_id") for record in existing}) > 1:
@@ -189,10 +193,7 @@ class MongoHubTaskOwnershipStore:
         seen: set[str] = set()
         for value in aliases.values():
             record = await _maybe_await(self._collection.find_one(_alias_query(value)))
-            if (
-                isinstance(record, dict)
-                and record.get("ownership_id") not in seen
-            ):
+            if isinstance(record, dict) and record.get("ownership_id") not in seen:
                 seen.add(record.get("ownership_id"))
                 found.append(dict(record))
         return found
@@ -238,7 +239,9 @@ async def _claim_with_duplicate_retry(
             if isinstance(value, str):
                 existing = await _maybe_await(collection.find_one(_alias_query(value)))
                 if existing:
-                    raise ValueError("ownership lease is held by another worker") from exc
+                    raise ValueError(
+                        "ownership lease is held by another worker"
+                    ) from exc
         raise
 
 

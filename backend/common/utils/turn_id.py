@@ -30,7 +30,9 @@ async def resolve_turn_id(msg: TurnMessage, message_reader) -> str:
         if user_msg:
             return current_id
 
-        agent_msg = await message_reader.get_room_agent_message_by_message_id(current_id)
+        agent_msg = await message_reader.get_room_agent_message_by_message_id(
+            current_id
+        )
         if not agent_msg or not agent_msg.related_message_id:
             return current_id
         current_id = agent_msg.related_message_id

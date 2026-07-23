@@ -262,9 +262,7 @@ class ContextMemoryRoomMemoryAdapter:
                     extend_info=request.extend_info,
                 ).model_dump(mode="json")
             created = await facade.legacy_create_room_memory(memory_doc)
-            memory = (
-                None if created is None else _room_memory_from_doc(created)
-            )
+            memory = None if created is None else _room_memory_from_doc(created)
             return RoomCenterMemoryResponse(
                 room_id=_response_room_id(request, memory),
                 memory_id=_response_memory_id(request, memory),
@@ -429,8 +427,7 @@ class ContextMemoryRoomMemoryAdapter:
                 message_id=request.message_id,
             )
             duplicate_turn = bool(
-                isinstance(doc, dict)
-                and doc.get("_context_memory_duplicate_turn")
+                isinstance(doc, dict) and doc.get("_context_memory_duplicate_turn")
             )
             memory = (
                 _room_memory_from_doc(_strip_internal_memory_flags(doc))

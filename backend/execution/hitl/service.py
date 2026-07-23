@@ -497,9 +497,11 @@ class HITLService:
                 supervisor_answer_cleared = False
                 supervisor_request_id_projected = False
                 try:
-                    update_state = await self.persistence.update_agent_message_task_state(
-                        display_projection_message_id,
-                        "input-required",
+                    update_state = (
+                        await self.persistence.update_agent_message_task_state(
+                            display_projection_message_id,
+                            "input-required",
+                        )
                     )
                     supervisor_task_state_projected = bool(update_state)
                     update_answer = await self.persistence.persist_hitl_user_answer(
@@ -1355,33 +1357,31 @@ class HITLService:
                     "failed to create follow-up HITL request; "
                     "the original HITL request remains pending for retry"
                 )
-            return (
-                {
-                    "blocking": True,
-                    "task_state": task_state,
-                    "response_text": response_text,
-                    "resume_execution": False,
-                    "followup_hitl_request_id": new_request.request_id,
-                    "followup_prompt": new_request.prompt,
-                    "followup_prompt_type": getattr(
-                        new_request.prompt_type,
-                        "value",
-                        new_request.prompt_type,
-                    ),
-                    "agent_id": new_request.agent_id,
-                    "agent_name": new_request.agent_name,
-                    "display_message_id": new_request.display_message_id,
-                    "continuation_message_id": new_request.continuation_message_id,
-                    "a2a_task_id": new_request.a2a_task_id,
-                    "a2a_context_id": new_request.a2a_context_id,
-                    "requires_auth": task_state == "auth-required",
-                    "requires_policy": (
-                        task_state == "policy-required"
-                        or bool(reply_result.get("requires_policy"))
-                        or bool(reply_result.get("policy_required"))
-                    ),
-                }
-            )
+            return {
+                "blocking": True,
+                "task_state": task_state,
+                "response_text": response_text,
+                "resume_execution": False,
+                "followup_hitl_request_id": new_request.request_id,
+                "followup_prompt": new_request.prompt,
+                "followup_prompt_type": getattr(
+                    new_request.prompt_type,
+                    "value",
+                    new_request.prompt_type,
+                ),
+                "agent_id": new_request.agent_id,
+                "agent_name": new_request.agent_name,
+                "display_message_id": new_request.display_message_id,
+                "continuation_message_id": new_request.continuation_message_id,
+                "a2a_task_id": new_request.a2a_task_id,
+                "a2a_context_id": new_request.a2a_context_id,
+                "requires_auth": task_state == "auth-required",
+                "requires_policy": (
+                    task_state == "policy-required"
+                    or bool(reply_result.get("requires_policy"))
+                    or bool(reply_result.get("policy_required"))
+                ),
+            }
 
         # Use the response text from the synchronous reply (authoritative,
         # no stale-DB risk).

@@ -9,10 +9,16 @@ class HubAgentSyncService:
         self._writer = writer
         self._streams = streams
 
-    async def sync_agents(self, hub_id: str, owner_id: str, agents: list, *, prune_missing: bool = True) -> list[dict]:
+    async def sync_agents(
+        self, hub_id: str, owner_id: str, agents: list, *, prune_missing: bool = True
+    ) -> list[dict]:
         if self._streams:
             await self._streams.record_heartbeat(hub_id)
-        valid = [agent for agent in agents if is_valid_agent_card(getattr(agent, "agent_card", {}) or {})]
+        valid = [
+            agent
+            for agent in agents
+            if is_valid_agent_card(getattr(agent, "agent_card", {}) or {})
+        ]
         if agents and not valid:
             return []
         descriptors = [

@@ -84,9 +84,7 @@ class TestSystemTaskStateFromRuntimeStatus:
             ("completed", CommonTaskState.completed),
         ],
     )
-    def test_maps_runtime_status_to_a2a_task_state(
-        self, runtime_status, task_state
-    ):
+    def test_maps_runtime_status_to_a2a_task_state(self, runtime_status, task_state):
         assert system_task_state_from_runtime_status(runtime_status) == task_state
 
 

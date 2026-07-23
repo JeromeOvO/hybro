@@ -56,7 +56,9 @@ class TestEmitUnifiedSummary:
     async def test_supervisor_synthesis_used_directly(self, rmc):
         """When synthesis_text is provided with 2+ trajectory responses, it's used as-is."""
         rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -121,7 +123,9 @@ class TestEmitUnifiedSummary:
         from a2a.types import TaskState
 
         rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
 
         seen_agent_responses = []
 
@@ -143,10 +147,14 @@ class TestEmitUnifiedSummary:
         )
 
         rmc.delivery.send_artifact_update.assert_not_awaited()
-        assert all(isinstance(item, RoomMessageSummary) for item in seen_agent_responses)
+        assert all(
+            isinstance(item, RoomMessageSummary) for item in seen_agent_responses
+        )
         assert seen_agent_responses[0].agent_name == "A"
         saved_msg = rmc.message_writer.upsert_room_agent_message.call_args[0][0]
-        assert saved_msg.message_content.message_task.status.state == TaskState.completed
+        assert (
+            saved_msg.message_content.message_task.status.state == TaskState.completed
+        )
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
         assert saved_msg.extend_info["summary_type"] == "debate"
         rmc.delivery.send_agent_response.assert_awaited_once()
@@ -200,9 +208,7 @@ class TestEmitUnifiedSummary:
         """When DB returns only 1 agent message, no summary bubble appears."""
         single_msg = _make_agent_message("agent-1", "Hello from agent")
         rmc._load_agent_messages_for_user_message = AsyncMock(return_value=[single_msg])
-        rmc.room_reader.get_agent_name_by_agent_id = AsyncMock(
-            return_value="Agent One"
-        )
+        rmc.room_reader.get_agent_name_by_agent_id = AsyncMock(return_value="Agent One")
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -244,6 +250,7 @@ class TestEmitUnifiedSummary:
         rmc.room_reader.get_agent_name_by_agent_id = AsyncMock(
             side_effect=["Agent A", "Agent B"]
         )
+
         async def mock_stream(agent_responses, mode="non_debate", user_question=None):
             yield "Combined "
             yield "summary."
@@ -266,7 +273,9 @@ class TestEmitUnifiedSummary:
         rmc.message_writer.upsert_room_agent_message.assert_awaited_once()
         # Final SSE emitted
         rmc.delivery.send_agent_response.assert_awaited_once()
-        assert rmc.delivery.send_agent_response.await_args.args[3] == "Combined summary."
+        assert (
+            rmc.delivery.send_agent_response.await_args.args[3] == "Combined summary."
+        )
 
     @pytest.mark.asyncio
     async def test_openai_returns_empty_emits_failed(self, rmc):
@@ -275,6 +284,7 @@ class TestEmitUnifiedSummary:
         rmc._stream_summary_content = AsyncMock(return_value="")
         # Prevent the mocked summary_service from returning an unawaited coroutine
         from unittest.mock import Mock
+
         rmc.summary_service.summarize_agent_responses_stream = Mock()
 
         await rmc._emit_unified_summary(
@@ -296,7 +306,9 @@ class TestEmitUnifiedSummary:
     async def test_deterministic_message_id(self, rmc):
         """message_id is always summary-{user_message_id}."""
         rmc.message_writer.upsert_room_agent_message = AsyncMock(return_value=True)
-        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
 
         await rmc._emit_unified_summary(
             room_id="room-1",
@@ -318,7 +330,9 @@ class TestEmitUnifiedSummary:
         rmc.message_writer.upsert_room_agent_message = AsyncMock(
             side_effect=Exception("DB down")
         )
-        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+        rmc.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
 
         await rmc._emit_unified_summary(
             room_id="room-1",

@@ -84,7 +84,9 @@ class StoredContent(BaseModel):
     room_id: str
     turn_id: str
     content: str  # Full text content
-    content_type: str  # "text", "tool_result", "agent_response" (uses memory.ContentType values)
+    content_type: (
+        str  # "text", "tool_result", "agent_response" (uses memory.ContentType values)
+    )
     content_hash: str  # SHA-256 for integrity/deduplication
     stored_at: datetime = Field(default_factory=utcnow)
 

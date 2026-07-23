@@ -41,7 +41,9 @@ class AgentCardResolverImpl:
 
         snapshot, last_error = await self._resolve_card_from_url(normalized_url)
         if snapshot is None and last_error is not None:
-            fallback_url = docker_host_fallback_url_for_error(normalized_url, last_error)
+            fallback_url = docker_host_fallback_url_for_error(
+                normalized_url, last_error
+            )
             if fallback_url is not None:
                 snapshot, last_error = await self._resolve_card_from_url(fallback_url)
 
@@ -71,7 +73,10 @@ class AgentCardResolverImpl:
                 return a2a_card_to_snapshot(card, normalized_url), None
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                if exc.response.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
+                if (
+                    exc.response.status_code == 404
+                    and path == AGENT_CARD_WELL_KNOWN_PATH
+                ):
                     continue
                 break
             except Exception as exc:

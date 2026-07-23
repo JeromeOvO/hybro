@@ -53,7 +53,9 @@ def a2a_task_to_result(task_data: dict[str, Any], agent_id: str) -> AgentTaskRes
     task_source = _jsonrpc_result(task_data) or task_data
     status_data = _read(task_source, "status")
     status = _normalize_status(status_data)
-    error = _extract_error_text(_read(task_source, "error") or _read(task_data, "error"))
+    error = _extract_error_text(
+        _read(task_source, "error") or _read(task_data, "error")
+    )
     if error is None and status in {"failed", "canceled", "cancelled"}:
         error = _stringify_message(_read(status_data, "message"))
 
@@ -218,6 +220,7 @@ def facade_result_to_model(response: dict[str, Any]) -> Message | Task:
     if kind == "task":
         return Task.model_validate(result)
     raise ValueError(str(response.get("error") or "Unknown A2A response"))
+
 
 def _normalize_status(status_data: Any) -> str:
     state = _read(status_data, "state")

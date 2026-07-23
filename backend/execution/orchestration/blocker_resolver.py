@@ -222,8 +222,7 @@ def _required_obligations_for_blocker(
         obligations = [
             obligation
             for obligation in outcome.remaining_required_obligations
-            if not blocked_outputs
-            or obligation.split(":", 1)[0] in blocked_outputs
+            if not blocked_outputs or obligation.split(":", 1)[0] in blocked_outputs
         ]
         if obligations:
             return sorted(dict.fromkeys(obligations))
@@ -305,9 +304,7 @@ def _answer_segments(answer_text: str) -> list[str]:
     ]
 
 
-def _answer_has_field_value(
-    answer_tokens: set[str], field_tokens: set[str]
-) -> bool:
+def _answer_has_field_value(answer_tokens: set[str], field_tokens: set[str]) -> bool:
     value_tokens = (
         answer_tokens
         - field_tokens
@@ -318,7 +315,9 @@ def _answer_has_field_value(
     if not value_tokens:
         return False
     if field_tokens & _AMOUNT_LIKE_FIELD_TOKENS:
-        return any(any(character.isdigit() for character in token) for token in value_tokens)
+        return any(
+            any(character.isdigit() for character in token) for token in value_tokens
+        )
     return True
 
 

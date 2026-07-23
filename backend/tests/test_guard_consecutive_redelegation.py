@@ -102,9 +102,11 @@ class TestGuardNoOffenders:
             reasoning="go",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result is action
 
@@ -120,11 +122,13 @@ class TestGuardPartialFiltering:
             reasoning="need both",
             targets=[_target("A", "Alpha"), _target("C", "Charlie")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
         assert result.action == ActionType.DELEGATE
@@ -138,13 +142,19 @@ class TestGuardPartialFiltering:
         action = SupervisorAction(
             action=ActionType.DELEGATE,
             reasoning="all three",
-            targets=[_target("A", "Alpha"), _target("B", "Bravo"), _target("C", "Charlie")],
+            targets=[
+                _target("A", "Alpha"),
+                _target("B", "Bravo"),
+                _target("C", "Charlie"),
+            ],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A", "B"]),
-            _entry_with_successes(["A", "B"]),
-            _entry_with_successes(["A", "B"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A", "B"]),
+                _entry_with_successes(["A", "B"]),
+                _entry_with_successes(["A", "B"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
         assert result.action == ActionType.DELEGATE
@@ -162,11 +172,13 @@ class TestGuardAllOffenders:
             reasoning="again",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
         assert result.action == ActionType.DONE
@@ -179,11 +191,13 @@ class TestGuardAllOffenders:
             reasoning="again",
             targets=[_target("A", "Alpha"), _target("B", "Bravo")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A", "B"]),
-            _entry_with_successes(["A", "B"]),
-            _entry_with_successes(["A", "B"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A", "B"]),
+                _entry_with_successes(["A", "B"]),
+                _entry_with_successes(["A", "B"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
         assert result.action == ActionType.DONE
@@ -199,11 +213,15 @@ class TestGuardCustomThreshold:
             reasoning="retry",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-        ])
-        result = svc._guard_consecutive_redelegation(action, trajectory, max_consecutive=3)
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+            ]
+        )
+        result = svc._guard_consecutive_redelegation(
+            action, trajectory, max_consecutive=3
+        )
         assert result is action
 
     def test_at_custom_threshold_returns_done(self):
@@ -213,12 +231,16 @@ class TestGuardCustomThreshold:
             reasoning="retry",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-        ])
-        result = svc._guard_consecutive_redelegation(action, trajectory, max_consecutive=3)
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+            ]
+        )
+        result = svc._guard_consecutive_redelegation(
+            action, trajectory, max_consecutive=3
+        )
         assert result.action == ActionType.DONE
 
 
@@ -241,12 +263,14 @@ class TestGuardTrajectoryBreaks:
             started_at=now,
             completed_at=now,
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_successes(["A"]),
-            _entry_with_successes(["A"]),
-            done_entry,
-            _entry_with_successes(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_successes(["A"]),
+                _entry_with_successes(["A"]),
+                done_entry,
+                _entry_with_successes(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result is action
 
@@ -266,10 +290,12 @@ class TestFailureGuardSingleAgent:
             reasoning="retry",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_failures(["A"]),
-            _entry_with_failures(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_failures(["A"]),
+                _entry_with_failures(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result.action == ActionType.DONE
         assert "Alpha" in result.reasoning
@@ -281,9 +307,11 @@ class TestFailureGuardSingleAgent:
             reasoning="retry",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_failures(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_failures(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result is action
 
@@ -298,10 +326,12 @@ class TestFailureGuardPartialFiltering:
             reasoning="need both",
             targets=[_target("A", "Alpha"), _target("C", "Charlie")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_failures(["A"]),
-            _entry_with_failures(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_failures(["A"]),
+                _entry_with_failures(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result.action == ActionType.DELEGATE
         assert len(result.targets) == 1
@@ -316,12 +346,16 @@ class TestFailureGuardCustomThreshold:
             reasoning="retry",
             targets=[_target("A", "Alpha")],
         )
-        trajectory = SupervisorTrajectory(entries=[
-            _entry_with_failures(["A"]),
-            _entry_with_failures(["A"]),
-        ])
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _entry_with_failures(["A"]),
+                _entry_with_failures(["A"]),
+            ]
+        )
         result = svc._guard_consecutive_redelegation(
-            action, trajectory, max_consecutive_failures=3,
+            action,
+            trajectory,
+            max_consecutive_failures=3,
         )
         assert result is action
 
@@ -353,15 +387,24 @@ class TestFailureAndSuccessGuardsCombined:
             ),
             results=[
                 StepResult(
-                    step_number=1, agent_id="A", agent_name="Alpha",
-                    task="test", response_text="err", success=False,
+                    step_number=1,
+                    agent_id="A",
+                    agent_name="Alpha",
+                    task="test",
+                    response_text="err",
+                    success=False,
                 ),
                 StepResult(
-                    step_number=1, agent_id="B", agent_name="Bravo",
-                    task="test", response_text="ok", success=True,
+                    step_number=1,
+                    agent_id="B",
+                    agent_name="Bravo",
+                    task="test",
+                    response_text="ok",
+                    success=True,
                 ),
             ],
-            started_at=now, completed_at=now,
+            started_at=now,
+            completed_at=now,
         )
         trajectory = SupervisorTrajectory(entries=[mixed_entry, mixed_entry])
         result = svc._guard_consecutive_redelegation(action, trajectory)

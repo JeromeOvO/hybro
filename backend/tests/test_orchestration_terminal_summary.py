@@ -44,7 +44,10 @@ def test_terminal_summary_names_blockers_and_last_progress():
     )
 
     assert summary["code"] == "orchestration_failed"
-    assert summary["reason"] == "delegate action violates outcome policy: delegate_no_progress_repeat"
+    assert (
+        summary["reason"]
+        == "delegate action violates outcome policy: delegate_no_progress_repeat"
+    )
     assert summary["last_outcome_status"] == "blocked"
     assert summary["validated_blocker_keys"] == ["blocker-1"]
     assert summary["recommended_next_action"] == "ask_user"

@@ -65,7 +65,9 @@ def _response_aliases(event: Any) -> list[str]:
         payload.get("task_id") if isinstance(payload, dict) else None,
         payload.get("message_id") if isinstance(payload, dict) else None,
     ]
-    return list(dict.fromkeys(alias for alias in aliases if isinstance(alias, str) and alias))
+    return list(
+        dict.fromkeys(alias for alias in aliases if isinstance(alias, str) and alias)
+    )
 
 
 __all__ = ["HubInternalResponseRouter"]

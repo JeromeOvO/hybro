@@ -3,11 +3,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-def test_phase8_multi_worker_safety_placeholder_documents_relay_stream_health_gate() -> None:
+def test_phase8_multi_worker_safety_placeholder_documents_relay_stream_health_gate() -> (
+    None
+):
     assert "relay_streams_available"
 
 
-def test_container_degraded_redis_skips_room_lock_and_unconnected_relay_streams() -> None:
+def test_container_degraded_redis_skips_room_lock_and_unconnected_relay_streams() -> (
+    None
+):
     from container import bind_redis_runtime_to_relay, bind_redis_runtime_to_room
 
     room_bindings = []

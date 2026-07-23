@@ -113,8 +113,7 @@ def _required_obligations_for_blocker(
         candidates = [
             obligation
             for obligation in outcome.remaining_required_obligations
-            if not blocked_outputs
-            or obligation.partition(":")[0] in blocked_outputs
+            if not blocked_outputs or obligation.partition(":")[0] in blocked_outputs
         ]
         if not candidates:
             continue

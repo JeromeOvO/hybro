@@ -148,10 +148,9 @@ class AgentMongoRepository:
         try:
             doc = await self._agents.find_one_and_update(query, update, **kwargs)
         except Exception as exc:
-            if (
-                update.get("$set", {}).get("normalized_url") is None
-                or not _is_duplicate_key_error(exc)
-            ):
+            if update.get("$set", {}).get(
+                "normalized_url"
+            ) is None or not _is_duplicate_key_error(exc):
                 raise
             retry_update = {
                 **update,

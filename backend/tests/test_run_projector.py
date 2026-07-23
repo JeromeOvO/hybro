@@ -39,6 +39,12 @@ def test_mirror_earliest_created_wins():
 
 def test_mirror_skips_missing_trigger():
     out = compute_processing_message_id_mirror(
-        [{"run_id": "x", "trigger_message_id": None, "created_at": "2025-01-01T00:00:00+00:00"}]
+        [
+            {
+                "run_id": "x",
+                "trigger_message_id": None,
+                "created_at": "2025-01-01T00:00:00+00:00",
+            }
+        ]
     )
     assert out is None

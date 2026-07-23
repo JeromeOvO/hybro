@@ -170,9 +170,7 @@ async def cancel_message(
             if isinstance(extend_info, dict)
             else None
         )
-        terminal_status = _PUBLIC_TERMINAL_ORCHESTRATION_STATUS.get(
-            persisted_status
-        )
+        terminal_status = _PUBLIC_TERMINAL_ORCHESTRATION_STATUS.get(persisted_status)
         if terminal_status is not None:
             return {
                 "success": True,

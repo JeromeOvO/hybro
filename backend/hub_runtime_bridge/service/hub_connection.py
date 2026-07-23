@@ -19,7 +19,10 @@ class HubConnectionService:
         return await self._to_info(data) if data else None
 
     async def list_hubs(self, owner_id: str) -> list[HubInfo]:
-        return [await self._to_info(item) for item in await self._repository.get_by_owner(owner_id)]
+        return [
+            await self._to_info(item)
+            for item in await self._repository.get_by_owner(owner_id)
+        ]
 
     async def _to_info(self, data: dict) -> HubInfo:
         hub_id = data["hub_id"]

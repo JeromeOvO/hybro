@@ -101,7 +101,9 @@ class AgentSuggestionResult:
     metadata: dict[str, JsonValue] = field(default_factory=dict)
 
 
-def serialize_agent_suggestion_result(result: AgentSuggestionResult) -> dict[str, JsonValue]:
+def serialize_agent_suggestion_result(
+    result: AgentSuggestionResult,
+) -> dict[str, JsonValue]:
     payload: dict[str, JsonValue] = {
         "suggested_agents": [
             {

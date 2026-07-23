@@ -66,8 +66,7 @@ def candidate_scope_from_legacy_envelope(
 
     raw_envelope = envelope or {}
     source = (
-        _optional_str(raw_envelope.get("candidate_scope_mode"))
-        or "explicit_selection"
+        _optional_str(raw_envelope.get("candidate_scope_mode")) or "explicit_selection"
     )
     group_id = _optional_str(raw_envelope.get("candidate_scope_group_id"))
     snapshot_id = _optional_str(raw_envelope.get("candidate_scope_snapshot_id"))
@@ -183,9 +182,7 @@ def _raw_candidate_items_from_mapping(
 ) -> list[Any]:
     scope_items = _candidate_items_from_agents_and_ids(
         _first_mapping_value(selected_agent_set, "agents", "candidate_agents"),
-        _first_mapping_value(
-            selected_agent_set, "agent_ids", "candidate_agent_ids"
-        ),
+        _first_mapping_value(selected_agent_set, "agent_ids", "candidate_agent_ids"),
     )
     if scope_items is not None:
         return scope_items
@@ -211,9 +208,7 @@ def _raw_candidate_items_from_scope_object(selected_agent_set: Any) -> list[Any]
     return (
         _candidate_items_from_agents_and_ids(
             _first_attr_value(selected_agent_set, "agents", "candidate_agents"),
-            _first_attr_value(
-                selected_agent_set, "agent_ids", "candidate_agent_ids"
-            ),
+            _first_attr_value(selected_agent_set, "agent_ids", "candidate_agent_ids"),
         )
         or []
     )
@@ -282,7 +277,9 @@ def _candidate_agent_snapshot(  # noqa: C901
         role = _optional_str(_first_mapping_value(raw_item, "role"))
         capability_summary = _capability_summary_from_mapping(raw_item)
         if agent_card is not None:
-            name = name or _optional_str(_first_card_value(agent_card, "name", "agent_name"))
+            name = name or _optional_str(
+                _first_card_value(agent_card, "name", "agent_name")
+            )
             role = role or _optional_str(_first_card_value(agent_card, "role"))
             if not capability_summary:
                 card_capabilities = _skill_list(_first_card_value(agent_card, "skills"))
@@ -358,7 +355,9 @@ def _candidate_agent_snapshot(  # noqa: C901
     role = _optional_str(_first_attr_value(raw_item, "role"))
     capability_summary = _capability_summary_from_object(raw_item)
     if agent_card is not None:
-        name = name or _optional_str(_first_card_value(agent_card, "name", "agent_name"))
+        name = name or _optional_str(
+            _first_card_value(agent_card, "name", "agent_name")
+        )
         role = role or _optional_str(_first_card_value(agent_card, "role"))
         if not capability_summary:
             card_capabilities = _skill_list(_first_card_value(agent_card, "skills"))
@@ -404,9 +403,7 @@ def _candidate_agent_snapshot(  # noqa: C901
     )
     if direct_supports_file_upload is not None:
         supports_file_upload = bool(direct_supports_file_upload)
-    capabilities = _string_list(
-        _first_attr_value(raw_item, "capabilities", "skills")
-    )
+    capabilities = _string_list(_first_attr_value(raw_item, "capabilities", "skills"))
     if not capabilities and agent_card is not None:
         capabilities = _skill_list(_first_card_value(agent_card, "skills"))
 
@@ -515,9 +512,7 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return []
     return [
-        item
-        for item in (_optional_str(item) for item in value)
-        if item is not None
+        item for item in (_optional_str(item) for item in value) if item is not None
     ]
 
 

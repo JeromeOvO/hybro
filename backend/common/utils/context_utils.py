@@ -71,7 +71,9 @@ def bind_context_turn_factory(factory: ContextTurnFactory) -> None:
 
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
-MAX_CONTEXT_CHARS = 500_000  # Safety net for char-level truncation; token budget is the real limiter
+MAX_CONTEXT_CHARS = (
+    500_000  # Safety net for char-level truncation; token budget is the real limiter
+)
 MAX_SUMMARY_CHARS = 4000  # Cap for MemoryContent.summary to prevent unbounded growth
 SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
 
@@ -139,19 +141,122 @@ def extract_turn_notes(content: str | None) -> dict | None:
 
     # Extract potential keywords (longer words, excluding common stop words)
     stop_words = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "must", "shall", "can", "need", "dare",
-        "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
-        "from", "as", "into", "through", "during", "before", "after", "above",
-        "below", "between", "under", "again", "further", "then", "once", "here",
-        "there", "when", "where", "why", "how", "all", "each", "few", "more",
-        "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-        "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
-        "because", "until", "while", "this", "that", "these", "those", "i",
-        "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
-        "them", "my", "your", "his", "its", "our", "their", "what", "which",
-        "who", "whom", "please", "thanks", "thank", "yes", "okay", "ok",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "until",
+        "while",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "you",
+        "he",
+        "she",
+        "it",
+        "we",
+        "they",
+        "me",
+        "him",
+        "her",
+        "us",
+        "them",
+        "my",
+        "your",
+        "his",
+        "its",
+        "our",
+        "their",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "please",
+        "thanks",
+        "thank",
+        "yes",
+        "okay",
+        "ok",
     }
 
     # Extract keywords (words > 4 chars, not stop words, alphanumeric)
@@ -418,9 +523,12 @@ def add_turn_to_history(
         # is trimmed first since those turns are already compacted and
         # searchable via Pinecone.
         if len(memory_content.summary) > MAX_SUMMARY_CHARS:
-            memory_content.summary = "..." + memory_content.summary[
-                len(memory_content.summary) - MAX_SUMMARY_CHARS + 3 :
-            ]
+            memory_content.summary = (
+                "..."
+                + memory_content.summary[
+                    len(memory_content.summary) - MAX_SUMMARY_CHARS + 3 :
+                ]
+            )
 
         logger.debug(
             f"Moved {excess_count} turns to summary, history now has "

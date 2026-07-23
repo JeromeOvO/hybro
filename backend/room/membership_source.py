@@ -47,8 +47,7 @@ class RepositoryRoomMembershipSeedSource:
                 )
                 if response.success and response.agents is not None:
                     return [
-                        self.agent_info_from_record(agent)
-                        for agent in response.agents
+                        self.agent_info_from_record(agent) for agent in response.agents
                     ]
             except Exception as exc:
                 logger.debug(

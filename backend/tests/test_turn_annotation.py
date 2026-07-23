@@ -15,11 +15,16 @@ class TestHumanSize:
     def test_zero(self):
         assert _human_size(0) == "0B"
 
+
 def _make_attachment(name="photo.png", mime="image/png", size=245760):
     return UserAttachment(
-        file_id="f1", s3_key="uploads/r/f1/photo.png",
-        mime_type=mime, file_name=name, size_bytes=size,
+        file_id="f1",
+        s3_key="uploads/r/f1/photo.png",
+        mime_type=mime,
+        file_name=name,
+        size_bytes=size,
     )
+
 
 class TestBuildTurnContent:
     def test_text_only(self):

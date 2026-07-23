@@ -370,7 +370,11 @@ def test_context_builder_exposes_run_state_extensions():
         ),
         system_agent_message_id="sys-msg-1",
         active_dispatches=[
-            {"agent_message_id": "agent-msg-1", "agent_id": "agent-1", "status": "running"}
+            {
+                "agent_message_id": "agent-msg-1",
+                "agent_id": "agent-1",
+                "status": "running",
+            }
         ],
         last_planner_action=PlannerActionRecord(
             action="delegate", reasoning="need quote"

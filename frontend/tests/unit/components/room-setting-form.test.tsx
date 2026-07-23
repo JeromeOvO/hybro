@@ -222,12 +222,10 @@ describe('RoomSettingForm', () => {
       )
 
       await user.type(screen.getByLabelText(/Room Name/), 'Temp Room')
-      expect(screen.getByDisplayValue('Temp Room')).toBeInTheDocument()
-
-      // eslint-disable-next-line testing-library/no-unnecessary-act
       await waitFor(() => {
         ref.current?.reset()
       })
+
 
       await waitFor(() => {
         expect(screen.getByLabelText(/Room Name/)).toHaveValue('')

@@ -31,7 +31,9 @@ def test_hybro_markdown_response_format_requires_section_headers() -> None:
 
 def test_supervisor_synthesis_prompt_includes_shared_markdown_format() -> None:
     assert "{user_goal}" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
-    assert "Answer the original user goal directly" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    assert (
+        "Answer the original user goal directly" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    )
     assert '"Requesting ..."' in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
     assert "starts numbering over at `1.`" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
     assert "{trajectory_summary}" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
@@ -48,7 +50,10 @@ def test_supervisor_synthesis_prompt_is_grounded_in_original_user_goal() -> None
 
     assert "Return the final approved launch date." in system_prompt
     assert "Use the available evidence." in system_prompt
-    assert user_prompt == "Write the final answer that best fulfills the original user goal."
+    assert (
+        user_prompt
+        == "Write the final answer that best fulfills the original user goal."
+    )
 
 
 @pytest.mark.asyncio

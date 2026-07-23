@@ -29,17 +29,25 @@ class FakeMongo:
 @pytest.mark.asyncio
 async def test_capability_issue_repository_records_issue():
     mongo = FakeMongo()
-    repo = __import__("agent.repository.capability_issue_mongo", fromlist=["AgentCapabilityIssueMongoRepository"]).AgentCapabilityIssueMongoRepository(mongo)
+    repo = __import__(
+        "agent.repository.capability_issue_mongo",
+        fromlist=["AgentCapabilityIssueMongoRepository"],
+    ).AgentCapabilityIssueMongoRepository(mongo)
 
     await repo.insert({"issue_id": "issue-1", "agent_id": "agent-1"})
 
-    assert mongo.collection_obj.inserted == [{"issue_id": "issue-1", "agent_id": "agent-1"}]
+    assert mongo.collection_obj.inserted == [
+        {"issue_id": "issue-1", "agent_id": "agent-1"}
+    ]
 
 
 @pytest.mark.asyncio
 async def test_capability_issue_repository_lists_excluded_agent_ids():
     mongo = FakeMongo()
-    repo = __import__("agent.repository.capability_issue_mongo", fromlist=["AgentCapabilityIssueMongoRepository"]).AgentCapabilityIssueMongoRepository(mongo)
+    repo = __import__(
+        "agent.repository.capability_issue_mongo",
+        fromlist=["AgentCapabilityIssueMongoRepository"],
+    ).AgentCapabilityIssueMongoRepository(mongo)
 
     result = await repo.list_excluded_agent_ids(threshold=2)
 

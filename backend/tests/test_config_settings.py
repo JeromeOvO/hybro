@@ -178,7 +178,9 @@ def test_feature_run_watchdog_parses_legacy_values(raw: str, expected: bool) -> 
     assert settings.feature_run_watchdog is expected
 
 
-def test_runtime_config_unification_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_config_unification_env_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("SUPERVISOR_MAX_STEPS", "13")
     monkeypatch.setenv("RUN_WATCHDOG_STALE_MINUTES", "31")
     monkeypatch.setenv("MATCH_VECTOR_WEIGHT", "0.91")

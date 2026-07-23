@@ -71,7 +71,9 @@ async def resolve_room_attachments(
     if attachments:
         mime_types = [attachment.mime_type for attachment in attachments]
         content_summary = {
-            "has_images": any(mime_type.startswith("image/") for mime_type in mime_types),
+            "has_images": any(
+                mime_type.startswith("image/") for mime_type in mime_types
+            ),
             "has_files": any(
                 not mime_type.startswith("image/") for mime_type in mime_types
             ),

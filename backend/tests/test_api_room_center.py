@@ -314,7 +314,7 @@ async def test_legacy_runtime_artifact_update_sanitizes_completed_artifacts():
                         ),
                         metadata={"private": private_sentinel},
                     )
-                )
+                ),
             ],
             metadata={"private": private_sentinel},
         ),
@@ -1234,16 +1234,14 @@ class TestInquiryRoomMessages:
                 "room_config": {"explicit_mentions": [private_sentinel]},
                 "dispatch_strategy": private_sentinel,
                 "dispatch_payload_refs": {"payload": private_sentinel},
-                "resolved_dispatch_resource_payloads": [
-                    {"resource": private_sentinel}
-                ],
+                "resolved_dispatch_resource_payloads": [{"resource": private_sentinel}],
                 "orchestration_recovery": {"prompt": private_sentinel},
                 "prompt": private_sentinel,
             },
         )
-        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
-            sample_room
-        )
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[user_message])
         facade.get_agent_messages_for_room = AsyncMock(return_value=[])
@@ -1279,9 +1277,9 @@ class TestInquiryRoomMessages:
         private_sentinel = "PRIVATE_SENTINEL_actual_room_runtime_boundary"
         public_label = "Requesting Insurer"
         client_request_id = "cr-insurer-001"
-        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
-            sample_room
-        )
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
         final_artifact = Artifact(
             artifact_id="artifact-final",
             name="response",

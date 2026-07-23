@@ -6,6 +6,7 @@ from models.room import MessageContent
 class TestTurnIdOnRoomAgentMessage:
     def test_create_agent_message_includes_turn_id(self):
         from room.compat.runtime import RoomServices
+
         svc = RoomServices.__new__(RoomServices)
         svc._generate_agent_message_content = MagicMock(
             return_value=MessageContent(message_text="task")
@@ -21,6 +22,7 @@ class TestTurnIdOnRoomAgentMessage:
 
     def test_create_agent_message_without_turn_id_is_none(self):
         from room.compat.runtime import RoomServices
+
         svc = RoomServices.__new__(RoomServices)
         svc._generate_agent_message_content = MagicMock(
             return_value=MessageContent(message_text="task")
@@ -37,6 +39,7 @@ class TestTurnIdOnRoomAgentMessage:
 class TestAgentEventTurnId:
     def test_agent_event_has_turn_id(self):
         from execution.dispatch.agent_event import AgentEvent
+
         event = AgentEvent(
             kind="response",
             message_id="msg_1",

@@ -21,7 +21,9 @@ from models.agent import (
 class AgentHealthRepositoryPort(Protocol):
     async def get_by_id(self, agent_id: str) -> dict | None: ...
 
-    async def list_visible(self, *, query: dict | None = None, **kwargs) -> list[dict]: ...
+    async def list_visible(
+        self, *, query: dict | None = None, **kwargs
+    ) -> list[dict]: ...
 
     async def update(self, agent_id: str, updates: dict) -> dict | None: ...
 
@@ -188,9 +190,7 @@ class AgentHealthService:
                 f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
             )
         except Exception as e:
-            logger.warning(
-                f"Failed to update agent card for {agent.agent_id}: {e}"
-            )
+            logger.warning(f"Failed to update agent card for {agent.agent_id}: {e}")
 
     async def update_agent_status(self, agent_id: str, new_status: AgentStatus) -> bool:
         """
@@ -206,9 +206,7 @@ class AgentHealthService:
         repo = self._require_repository()
         try:
             await repo.update(agent_id, {"agent_status": new_status.value})
-            logger.info(
-                f"Agent {agent_id} status updated to {new_status.value}"
-            )
+            logger.info(f"Agent {agent_id} status updated to {new_status.value}")
             return True
         except Exception as e:
             logger.error(f"Failed to update agent {agent_id} status: {e}")

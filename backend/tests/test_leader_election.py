@@ -17,16 +17,12 @@ def _make_client(*, set_return=True, eval_return=1) -> MagicMock:
 @pytest.mark.asyncio
 class TestLeaderAcquire:
     async def test_acquire_succeeds_first_time(self):
-        leader = LeaderElectorImpl(
-            _make_client(set_return=True), instance_id="inst-A"
-        )
+        leader = LeaderElectorImpl(_make_client(set_return=True), instance_id="inst-A")
 
         assert await leader.try_acquire("job1", ttl_seconds=60) is True
 
     async def test_acquire_fails_when_held(self):
-        leader = LeaderElectorImpl(
-            _make_client(set_return=False), instance_id="inst-B"
-        )
+        leader = LeaderElectorImpl(_make_client(set_return=False), instance_id="inst-B")
 
         assert await leader.try_acquire("job1", ttl_seconds=60) is False
 
@@ -46,9 +42,7 @@ class TestLeaderAcquire:
 
         await leader.try_acquire("job1", ttl=30)
 
-        client.set.assert_awaited_once_with(
-            "leader:job1", "inst-A", nx=True, ex=30
-        )
+        client.set.assert_awaited_once_with("leader:job1", "inst-A", nx=True, ex=30)
 
 
 @pytest.mark.asyncio

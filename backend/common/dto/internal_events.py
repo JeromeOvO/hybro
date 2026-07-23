@@ -43,9 +43,7 @@ class RunStateChanged(InternalDomainEvent):
 
 
 class HubAgentResponseInternal(InternalDomainEvent):
-    event_type: Literal["hub_agent_response_internal"] = (
-        "hub_agent_response_internal"
-    )
+    event_type: Literal["hub_agent_response_internal"] = "hub_agent_response_internal"
     hub_id: str
     agent_id: str
     task_id: str

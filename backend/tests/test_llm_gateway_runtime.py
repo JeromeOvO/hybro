@@ -270,9 +270,7 @@ async def test_generate_stream_yields_chunks_in_order():
 
     chunks = [
         chunk
-        async for chunk in gateway.generate_stream(
-            [{"role": "user", "content": "hi"}]
-        )
+        async for chunk in gateway.generate_stream([{"role": "user", "content": "hi"}])
     ]
 
     assert chunks == ["a", "b", "c"]
@@ -285,9 +283,7 @@ async def test_stream_failure_before_first_chunk_is_retried():
 
     chunks = [
         chunk
-        async for chunk in gateway.generate_stream(
-            [{"role": "user", "content": "hi"}]
-        )
+        async for chunk in gateway.generate_stream([{"role": "user", "content": "hi"}])
     ]
 
     assert chunks == ["ok"]
@@ -301,9 +297,7 @@ async def test_stream_failure_after_first_chunk_is_not_retried():
     chunks = []
 
     with pytest.raises(RuntimeError, match="after"):
-        async for chunk in gateway.generate_stream(
-            [{"role": "user", "content": "hi"}]
-        ):
+        async for chunk in gateway.generate_stream([{"role": "user", "content": "hi"}]):
             chunks.append(chunk)
 
     assert chunks == ["first"]

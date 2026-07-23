@@ -103,9 +103,7 @@ class AgentLivenessService:
             logger.info("Liveness: cloud agent %s marked inactive", agent.agent_id)
 
         elif is_healthy and agent.agent_status == AgentStatus.inactive:
-            await health_service.update_agent_status(
-                agent.agent_id, AgentStatus.active
-            )
+            await health_service.update_agent_status(agent.agent_id, AgentStatus.active)
             agent.agent_status = AgentStatus.active
             logger.info(
                 "Liveness: cloud agent %s recovered — marked active", agent.agent_id

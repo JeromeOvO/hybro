@@ -44,7 +44,9 @@ def test_dal_implementations_satisfy_runtime_protocols():
         ObjectStorageDAL,
     )
     assert isinstance(DistributedLockImpl(client=MagicMock()), DistributedLock)
-    assert isinstance(LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector)
+    assert isinstance(
+        LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
+    )
     assert isinstance(IndexRegistryImpl(mongo=MagicMock()), IndexRegistry)
 
 

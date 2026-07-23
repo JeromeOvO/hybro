@@ -317,14 +317,10 @@ class TestRepositoryStoreHITL:
     async def test_persists_and_clears_hitl_request_id_on_display_message(self):
         with_request = {
             "message_content": {
-                "message_task": {
-                    "metadata": {"hitl_request_id": "hitl-supervisor-1"}
-                }
+                "message_task": {"metadata": {"hitl_request_id": "hitl-supervisor-1"}}
             }
         }
-        without_request = {
-            "message_content": {"message_task": {"metadata": {}}}
-        }
+        without_request = {"message_content": {"message_task": {"metadata": {}}}}
         messages = RecordingCollection(
             [_result(1), with_request, _result(1), without_request]
         )
@@ -333,9 +329,7 @@ class TestRepositoryStoreHITL:
         assert await store.persist_hitl_request_id_on_message(
             "display-msg-1", "hitl-supervisor-1"
         )
-        assert await store.persist_hitl_request_id_on_message(
-            "display-msg-1", None
-        )
+        assert await store.persist_hitl_request_id_on_message("display-msg-1", None)
 
         assert messages.find_one_and_update_calls[0][0] == {
             "message_id": "display-msg-1"
@@ -348,9 +342,7 @@ class TestRepositoryStoreHITL:
             }
         }
         assert messages.find_one_and_update_calls[1][1] == {
-            "$unset": {
-                "message_content.message_task.metadata.hitl_request_id": ""
-            }
+            "$unset": {"message_content.message_task.metadata.hitl_request_id": ""}
         }
 
     @pytest.mark.asyncio

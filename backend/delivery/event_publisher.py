@@ -193,7 +193,9 @@ class EventPublisherImpl:
             return payload.model_dump(mode="json")
         return payload
 
-    def _inject_typed_trace_id(self, frame: dict[str, Any], trace_id: str | None) -> None:
+    def _inject_typed_trace_id(
+        self, frame: dict[str, Any], trace_id: str | None
+    ) -> None:
         if not trace_id:
             return
         data = frame.get("data")

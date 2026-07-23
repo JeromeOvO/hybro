@@ -47,11 +47,7 @@ class TestTerminalContentHelpers:
         canonical = "canonical body"
         synced = sync_artifact_dicts_to_canonical_text(artifacts, canonical)
         assert extract_text_from_artifact_dicts(synced) == canonical
-        text_parts = [
-            part
-            for part in synced[0]["parts"]
-            if _part_dict_is_text(part)
-        ]
+        text_parts = [part for part in synced[0]["parts"] if _part_dict_is_text(part)]
         assert len(text_parts) == 1
         assert text_parts[0]["text"] == canonical
 
@@ -63,7 +59,9 @@ class TestTerminalContentHelpers:
         filtered = filter_non_text_parts(parts)
         assert filtered == [{"kind": "file", "uri": "s3://bucket/file.png"}]
 
-    def test_resolve_terminal_sse_content_prefers_message_text_on_completed(self) -> None:
+    def test_resolve_terminal_sse_content_prefers_message_text_on_completed(
+        self,
+    ) -> None:
         from a2a.types import TaskState
 
         stored = "1. First\n2. Second"

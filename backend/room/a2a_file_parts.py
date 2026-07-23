@@ -256,8 +256,7 @@ async def build_attachment_file_parts(
     context: AttachmentDispatchContext | None = None,
 ) -> AttachmentFilePartsResult:
     files = [
-        _outbound_file_from_attachment(attachment)
-        for attachment in (attachments or [])
+        _outbound_file_from_attachment(attachment) for attachment in (attachments or [])
     ]
     if not files:
         return AttachmentFilePartsResult(parts=[])
@@ -267,9 +266,7 @@ async def build_attachment_file_parts(
         file for file in files if not mime_type_is_accepted(file.mime_type, modes)
     ]
     if unsupported:
-        details = ", ".join(
-            f"{file.name} ({file.mime_type})" for file in unsupported
-        )
+        details = ", ".join(f"{file.name} ({file.mime_type})" for file in unsupported)
         return _failure(
             "agent_does_not_accept_file_type",
             f"Agent does not accept the uploaded file type for: {details}.",
@@ -285,9 +282,7 @@ async def build_attachment_file_parts(
             file_names=tuple(file.name for file in oversize_files),
         )
 
-    aggregate_encoded_size = sum(
-        encoded_base64_size(file.size_bytes) for file in files
-    )
+    aggregate_encoded_size = sum(encoded_base64_size(file.size_bytes) for file in files)
     if aggregate_encoded_size > max_encoded_bytes:
         return _failure(
             "message_too_large",

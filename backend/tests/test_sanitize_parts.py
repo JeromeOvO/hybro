@@ -5,7 +5,6 @@ the defensive layer that strips malformed A2A Part dicts before Pydantic
 validation so a single bad part doesn't poison the entire RoomAgentMessage.
 """
 
-
 from common.utils.a2a_helpers import (
     sanitize_artifact_parts as _sanitize_parts,
 )
@@ -118,7 +117,10 @@ class TestSanitizeTaskDict:
     def test_sanitizes_artifact_parts(self):
         task = {
             "artifacts": [
-                {"artifactId": "a1", "parts": [{"kind": "text"}, {"kind": "text", "text": "ok"}]}
+                {
+                    "artifactId": "a1",
+                    "parts": [{"kind": "text"}, {"kind": "text", "text": "ok"}],
+                }
             ]
         }
         result = _sanitize_task_dict(task)
@@ -126,22 +128,12 @@ class TestSanitizeTaskDict:
         assert result["artifacts"][0]["parts"][0]["text"] == "ok"
 
     def test_sanitizes_history_parts(self):
-        task = {
-            "history": [
-                {"role": "agent", "parts": [{"kind": "data"}]}
-            ]
-        }
+        task = {"history": [{"role": "agent", "parts": [{"kind": "data"}]}]}
         result = _sanitize_task_dict(task)
         assert result["history"][0]["parts"] == []
 
     def test_sanitizes_status_message_parts(self):
-        task = {
-            "status": {
-                "message": {
-                    "parts": [{"kind": "file"}]
-                }
-            }
-        }
+        task = {"status": {"message": {"parts": [{"kind": "file"}]}}}
         _sanitize_task_dict(task)
         assert task["status"]["message"]["parts"] == []
 

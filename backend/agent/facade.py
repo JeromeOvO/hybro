@@ -42,13 +42,15 @@ from common.utils.a2a_file_modes import agent_accepts_required_input_modes
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_UPDATE_KEYS = frozenset({
-    "agent_status",
-    "is_public",
-    "rate_limit_per_user_per_hour",
-    "rate_limit_system_per_hour",
-    "agent_card",
-})
+_ALLOWED_UPDATE_KEYS = frozenset(
+    {
+        "agent_status",
+        "is_public",
+        "rate_limit_per_user_per_hour",
+        "rate_limit_system_per_hour",
+        "agent_card",
+    }
+)
 
 
 class AgentFacade:
@@ -313,7 +315,9 @@ class AgentFacade:
                     provider_id=owner_user_id,
                 )
 
-            agent_id = existing["agent_id"] if existing is not None else self._id_factory()
+            agent_id = (
+                existing["agent_id"] if existing is not None else self._id_factory()
+            )
 
             doc = hub_descriptor_to_doc(
                 hub_id=hub_id,
@@ -406,9 +410,7 @@ class AgentFacade:
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         await self._repository.increment_agent_call_count(agent_id, success=success)
 
-    async def resolve_agent_card_from_url(
-        self, url: str
-    ) -> AgentCardSnapshot | None:
+    async def resolve_agent_card_from_url(self, url: str) -> AgentCardSnapshot | None:
         return await self._card_resolver.resolve_card(url)
 
     async def list_visible_agents(
@@ -690,7 +692,9 @@ def _descriptor_card(descriptor: HubAgentDescriptor) -> dict[str, Any]:
     return card
 
 
-def _merge_existing_hub_doc(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+def _merge_existing_hub_doc(
+    existing: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(incoming)
     if "is_public" in existing:
         merged["is_public"] = existing["is_public"]

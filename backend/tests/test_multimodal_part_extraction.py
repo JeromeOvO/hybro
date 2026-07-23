@@ -14,17 +14,23 @@ def _make_text_part(text):
     part.root.text = text
     return part
 
+
 def _make_file_part(uri="https://s3/file.png", mime="image/png"):
     part = MagicMock()
     part.root.kind = "file"
-    part.root.model_dump.return_value = {"kind": "file", "file": {"uri": uri, "mime_type": mime}}
+    part.root.model_dump.return_value = {
+        "kind": "file",
+        "file": {"uri": uri, "mime_type": mime},
+    }
     return part
+
 
 def _make_data_part(data=None):
     part = MagicMock()
     part.root.kind = "data"
     part.root.model_dump.return_value = {"kind": "data", "data": data or {"key": "val"}}
     return part
+
 
 class TestExtractParts:
     def test_text_only(self):
@@ -73,6 +79,7 @@ class TestExtractParts:
         result = extract_parts([part])
         assert result.text == ""
 
+
 class TestExtractPartsFromArtifacts:
     def test_single_artifact_text(self):
         artifact = MagicMock()
@@ -94,6 +101,7 @@ class TestExtractPartsFromArtifacts:
         artifact.parts = None
         result = extract_parts_from_artifacts([artifact])
         assert result.text == ""
+
 
 class TestBackwardCompat:
     def test_get_text_from_message_none(self):

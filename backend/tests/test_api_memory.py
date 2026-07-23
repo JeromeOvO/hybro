@@ -24,11 +24,13 @@ class TestAddChatContext:
     @pytest.mark.asyncio
     async def test_delegates_to_memory_center(self):
         request = MagicMock()
-        request.json = AsyncMock(return_value={
-            "user_name": "alice",
-            "session_id": "sess-1",
-            "user_input": "Hello",
-        })
+        request.json = AsyncMock(
+            return_value={
+                "user_name": "alice",
+                "session_id": "sess-1",
+                "user_input": "Hello",
+            }
+        )
         expected = {"success": True}
 
         mock_mc = MagicMock()
@@ -47,10 +49,12 @@ class TestGetChatContextBySessionId:
     @pytest.mark.asyncio
     async def test_delegates_to_memory_center(self):
         request = MagicMock()
-        request.json = AsyncMock(return_value={
-            "user_name": "alice",
-            "session_id": "sess-1",
-        })
+        request.json = AsyncMock(
+            return_value={
+                "user_name": "alice",
+                "session_id": "sess-1",
+            }
+        )
         expected = {"context": [{"role": "user", "content": "Hello"}]}
 
         mock_mc = MagicMock()
@@ -72,13 +76,15 @@ class TestUpdateChatContextBySessionId:
             session_id="sess-1",
         )
         request = MagicMock()
-        request.json = AsyncMock(return_value={
-            "user_name": "alice",
-            "session_id": "sess-1",
-            "user_input": "What's the weather?",
-            "agent_response": "It's sunny.",
-            "chat_context": chat_ctx.model_dump(),
-        })
+        request.json = AsyncMock(
+            return_value={
+                "user_name": "alice",
+                "session_id": "sess-1",
+                "user_input": "What's the weather?",
+                "agent_response": "It's sunny.",
+                "chat_context": chat_ctx.model_dump(),
+            }
+        )
         expected = {"success": True}
 
         mock_mc = MagicMock()
@@ -94,10 +100,12 @@ class TestDeleteChatContextBySessionId:
     @pytest.mark.asyncio
     async def test_delegates_to_memory_center(self):
         request = MagicMock()
-        request.json = AsyncMock(return_value={
-            "user_name": "alice",
-            "session_id": "sess-1",
-        })
+        request.json = AsyncMock(
+            return_value={
+                "user_name": "alice",
+                "session_id": "sess-1",
+            }
+        )
         expected = {"success": True}
 
         mock_mc = MagicMock()

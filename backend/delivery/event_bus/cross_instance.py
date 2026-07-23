@@ -46,7 +46,10 @@ class CrossInstanceEventBus:
     def is_connected(self) -> bool:
         if self.redis_pubsub is None:
             return False
-        desired_globals = {self.config.redis_cancel_channel, self.config.redis_internal_channel}
+        desired_globals = {
+            self.config.redis_cancel_channel,
+            self.config.redis_internal_channel,
+        }
         desired = set(self._room_tasks) | desired_globals
         return self._redis_reachable and desired.issubset(self._active_channels)
 
@@ -65,7 +68,9 @@ class CrossInstanceEventBus:
             return
         self._stopped = False
         await self.refresh_health()
-        self._ensure_global_subscription(self.config.redis_cancel_channel, "cancellation")
+        self._ensure_global_subscription(
+            self.config.redis_cancel_channel, "cancellation"
+        )
         self._ensure_global_subscription(self.config.redis_internal_channel, "internal")
 
     async def stop(self) -> None:
@@ -154,7 +159,10 @@ class CrossInstanceEventBus:
         channel = self._room_channel(room_id)
         if channel in self._room_tasks:
             return
-        if len(self._room_tasks) >= self.config.redis_room_subscription_production_limit:
+        if (
+            len(self._room_tasks)
+            >= self.config.redis_room_subscription_production_limit
+        ):
             raise RoomSubscriptionLimitExceeded(
                 "active room subscription limit exceeded"
             )

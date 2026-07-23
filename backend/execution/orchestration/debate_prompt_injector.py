@@ -34,8 +34,10 @@ class DebatePromptInjector:
     async def inject_short_debate_for_agent_message(
         self, agent_message: RoomAgentMessage
     ) -> RoomAgentMessage | None:
-        related_message = await self._message_store.get_room_agent_message_by_message_id(
-            agent_message.related_message_id
+        related_message = (
+            await self._message_store.get_room_agent_message_by_message_id(
+                agent_message.related_message_id
+            )
         )
         if related_message is None:
             return agent_message

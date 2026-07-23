@@ -35,7 +35,9 @@ class FakeCollection:
         limit = kwargs.get("limit")
         return matches[:limit] if limit else matches
 
-    async def find_one_and_update(self, query: dict, update: dict, **kwargs) -> dict | None:
+    async def find_one_and_update(
+        self, query: dict, update: dict, **kwargs
+    ) -> dict | None:
         self.find_one_and_update_calls.append(
             (deepcopy(query), deepcopy(update), deepcopy(kwargs))
         )
@@ -58,7 +60,9 @@ class FakeCollection:
         return None
 
     async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
-        self.update_one_calls.append((deepcopy(query), deepcopy(update), deepcopy(kwargs)))
+        self.update_one_calls.append(
+            (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+        )
         for doc in self.docs:
             if _matches(doc, query):
                 updated = deepcopy(doc)
@@ -101,7 +105,9 @@ class FakeCollection:
         return sum(1 for doc in self.docs if _matches(doc, query))
 
 
-def _repo(docs: list[dict] | None = None) -> tuple[AgentMongoRepository, FakeCollection]:
+def _repo(
+    docs: list[dict] | None = None,
+) -> tuple[AgentMongoRepository, FakeCollection]:
     collection = FakeCollection(docs)
     mongo = MagicMock()
     mongo.collection.return_value = collection
@@ -118,10 +124,12 @@ async def test_get_by_id_queries_agent_id():
 
 @pytest.mark.asyncio
 async def test_get_by_ids_and_provider_keep_dict_outputs():
-    repo, collection = _repo([
-        {"agent_id": "a1", "provider_id": "u1"},
-        {"agent_id": "a2", "provider_id": "u2"},
-    ])
+    repo, collection = _repo(
+        [
+            {"agent_id": "a1", "provider_id": "u1"},
+            {"agent_id": "a2", "provider_id": "u2"},
+        ]
+    )
 
     assert await repo.get_by_ids(["a2", "a1"]) == [
         {"agent_id": "a1", "provider_id": "u1"},
@@ -134,11 +142,13 @@ async def test_get_by_ids_and_provider_keep_dict_outputs():
 
 @pytest.mark.asyncio
 async def test_get_public_includes_missing_is_public_with_limit():
-    repo, collection = _repo([
-        {"agent_id": "public", "is_public": True},
-        {"agent_id": "legacy"},
-        {"agent_id": "private", "is_public": False},
-    ])
+    repo, collection = _repo(
+        [
+            {"agent_id": "public", "is_public": True},
+            {"agent_id": "legacy"},
+            {"agent_id": "private", "is_public": False},
+        ]
+    )
 
     assert await repo.get_public(limit=1) == [{"agent_id": "public", "is_public": True}]
     assert collection.find_calls[-1] == (
@@ -149,13 +159,25 @@ async def test_get_public_includes_missing_is_public_with_limit():
 
 @pytest.mark.asyncio
 async def test_list_visible_filters_public_owned_and_active_agents():
-    repo, _ = _repo([
-        {"agent_id": "public-active", "is_public": True, "agent_status": "active"},
-        {"agent_id": "legacy-active", "agent_status": "active"},
-        {"agent_id": "owned-private", "is_public": False, "provider_id": "u1", "agent_status": "active"},
-        {"agent_id": "other-private", "is_public": False, "provider_id": "u2", "agent_status": "active"},
-        {"agent_id": "inactive", "is_public": True, "agent_status": "inactive"},
-    ])
+    repo, _ = _repo(
+        [
+            {"agent_id": "public-active", "is_public": True, "agent_status": "active"},
+            {"agent_id": "legacy-active", "agent_status": "active"},
+            {
+                "agent_id": "owned-private",
+                "is_public": False,
+                "provider_id": "u1",
+                "agent_status": "active",
+            },
+            {
+                "agent_id": "other-private",
+                "is_public": False,
+                "provider_id": "u2",
+                "agent_status": "active",
+            },
+            {"agent_id": "inactive", "is_public": True, "agent_status": "inactive"},
+        ]
+    )
 
     unauthenticated = await repo.list_visible(active_only=True)
     authenticated = await repo.list_visible(user_id="u1", active_only=True)
@@ -173,11 +195,13 @@ async def test_list_visible_filters_public_owned_and_active_agents():
 
 @pytest.mark.asyncio
 async def test_list_visible_combines_query_with_visibility_filters():
-    repo, collection = _repo([
-        {"agent_id": "matching", "is_public": True, "agent_status": "active"},
-        {"agent_id": "hidden", "is_public": True, "agent_status": "inactive"},
-        {"agent_id": "private", "is_public": False, "agent_status": "active"},
-    ])
+    repo, collection = _repo(
+        [
+            {"agent_id": "matching", "is_public": True, "agent_status": "active"},
+            {"agent_id": "hidden", "is_public": True, "agent_status": "inactive"},
+            {"agent_id": "private", "is_public": False, "agent_status": "active"},
+        ]
+    )
 
     result = await repo.list_visible(query={"agent_status": "active"})
 
@@ -195,14 +219,20 @@ async def test_list_visible_combines_query_with_visibility_filters():
 
 @pytest.mark.asyncio
 async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
-    repo, collection = _repo([
-        {
-            "agent_id": "legacy",
-            "provider_id": "u1",
-            "agent_card": {"url": "HTTP://127.0.0.1:80/.well-known/agent.json"},
-        },
-        {"agent_id": "exact", "provider_id": "u2", "normalized_url": "https://example.com"},
-    ])
+    repo, collection = _repo(
+        [
+            {
+                "agent_id": "legacy",
+                "provider_id": "u1",
+                "agent_card": {"url": "HTTP://127.0.0.1:80/.well-known/agent.json"},
+            },
+            {
+                "agent_id": "exact",
+                "provider_id": "u2",
+                "normalized_url": "https://example.com",
+            },
+        ]
+    )
 
     exact = await repo.find_by_normalized_url("https://example.com")
     legacy = await repo.find_by_normalized_url("http://localhost", provider_id="u1")
@@ -218,7 +248,9 @@ async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
 
 @pytest.mark.asyncio
 async def test_public_url_exists_update_delete_and_health():
-    repo, collection = _repo([{"agent_id": "a1", "public_url": "https://story.hybro.ai"}])
+    repo, collection = _repo(
+        [{"agent_id": "a1", "public_url": "https://story.hybro.ai"}]
+    )
 
     assert await repo.public_url_exists("story", "hybro.ai") is True
     assert await repo.public_url_exists("free", "hybro.ai") is False
@@ -248,22 +280,29 @@ async def test_public_url_exists_update_delete_and_health():
 
 @pytest.mark.asyncio
 async def test_hub_agent_upsert_prune_activate_and_index_hash():
-    repo, _ = _repo([
-        {
-            "agent_id": "existing",
-            "hub_id": "hub-1",
-            "local_agent_id": "local-1",
-            "description_hash": "old",
-        },
-        {"agent_id": "missing", "hub_id": "hub-1", "source": "hub", "agent_status": "active"},
-        {
-            "agent_id": "enriched",
-            "hub_id": "hub-1",
-            "local_agent_id": "local-enriched",
-            "source": "cloud",
-            "agent_status": "active",
-        },
-    ])
+    repo, _ = _repo(
+        [
+            {
+                "agent_id": "existing",
+                "hub_id": "hub-1",
+                "local_agent_id": "local-1",
+                "description_hash": "old",
+            },
+            {
+                "agent_id": "missing",
+                "hub_id": "hub-1",
+                "source": "hub",
+                "agent_status": "active",
+            },
+            {
+                "agent_id": "enriched",
+                "hub_id": "hub-1",
+                "local_agent_id": "local-enriched",
+                "source": "cloud",
+                "agent_status": "active",
+            },
+        ]
+    )
 
     stable_id = await repo.upsert_hub_agent(
         "hub-1",
@@ -293,15 +332,19 @@ async def test_hub_agent_upsert_prune_activate_and_index_hash():
 
 @pytest.mark.asyncio
 async def test_find_by_normalized_url_limits_legacy_fallback_scan():
-    repo, collection = _repo([
-        {
-            "agent_id": "legacy",
-            "provider_id": "u1",
-            "agent_card": {"url": "https://legacy.example/.well-known/agent.json"},
-        }
-    ])
+    repo, collection = _repo(
+        [
+            {
+                "agent_id": "legacy",
+                "provider_id": "u1",
+                "agent_card": {"url": "https://legacy.example/.well-known/agent.json"},
+            }
+        ]
+    )
 
-    found = await repo.find_by_normalized_url("https://legacy.example", provider_id="u1")
+    found = await repo.find_by_normalized_url(
+        "https://legacy.example", provider_id="u1"
+    )
 
     assert found["agent_id"] == "legacy"
     assert collection.find_calls[-1] == (
@@ -362,15 +405,17 @@ async def test_upsert_hub_agent_uses_atomic_set_on_insert_for_agent_identity():
 
 @pytest.mark.asyncio
 async def test_upsert_hub_agent_preserves_existing_is_public_on_resync():
-    repo, collection = _repo([
-        {
-            "agent_id": "existing",
-            "hub_id": "hub-1",
-            "local_agent_id": "local-1",
-            "is_public": True,
-            "agent_card": {"name": "Local Agent", "url": "http://localhost:9000"},
-        }
-    ])
+    repo, collection = _repo(
+        [
+            {
+                "agent_id": "existing",
+                "hub_id": "hub-1",
+                "local_agent_id": "local-1",
+                "is_public": True,
+                "agent_card": {"name": "Local Agent", "url": "http://localhost:9000"},
+            }
+        ]
+    )
 
     stored_id = await repo.upsert_hub_agent(
         "hub-1",
@@ -394,10 +439,12 @@ async def test_upsert_hub_agent_preserves_existing_is_public_on_resync():
 
 @pytest.mark.asyncio
 async def test_mark_hub_agents_offline_marks_active_hub_agents():
-    repo, _ = _repo([
-        {"agent_id": "a1", "hub_id": "hub-1", "agent_status": "active"},
-        {"agent_id": "a2", "hub_id": "hub-1", "agent_status": "inactive"},
-    ])
+    repo, _ = _repo(
+        [
+            {"agent_id": "a1", "hub_id": "hub-1", "agent_status": "active"},
+            {"agent_id": "a2", "hub_id": "hub-1", "agent_status": "inactive"},
+        ]
+    )
 
     assert await repo.mark_hub_agents_offline("hub-1") == 1
     assert (await repo.get_by_id("a1"))["agent_status"] == "inactive"
@@ -442,7 +489,9 @@ def _matches_field(doc: dict, key: str, expected: Any) -> bool:
                 return False
             if op == "$exists" and exists is not bool(value):
                 return False
-            if op == "$regex" and value.replace("\\.", ".").strip(".*") not in str(actual or ""):
+            if op == "$regex" and value.replace("\\.", ".").strip(".*") not in str(
+                actual or ""
+            ):
                 return False
         return True
     return actual == expected

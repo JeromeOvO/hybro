@@ -61,7 +61,9 @@ class RunLifecycleAdapter:
         try:
             docs = await self._run_repository.get_diverged(limit=limit)
         except Exception:
-            logger.warning("startup heal: failed to query non-terminal runs", exc_info=True)
+            logger.warning(
+                "startup heal: failed to query non-terminal runs", exc_info=True
+            )
             return 0
 
         healed = 0
@@ -73,7 +75,9 @@ class RunLifecycleAdapter:
                 if await self._command_handler.heal_head_from_events(run_id):
                     healed += 1
             except Exception:
-                logger.warning("startup heal: error healing run %s", run_id, exc_info=True)
+                logger.warning(
+                    "startup heal: error healing run %s", run_id, exc_info=True
+                )
         return healed
 
     async def append_run_timeout_failure(

@@ -191,7 +191,9 @@ def test_membership_source_warns_for_missing_critical_agent_fields():
 
 
 def test_membership_source_default_constructor_does_not_import_database_service():
-    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+    with patch(
+        "importlib.import_module", side_effect=AssertionError("legacy import attempted")
+    ):
         source = RepositoryRoomMembershipSeedSource()
 
     assert source._store is not None
@@ -217,7 +219,11 @@ def test_message_graph_sort_thread_and_status_payload_helpers():
     thread_rows = [
         {"message_id": "a1", "related_message_id": "u1"},
         {"message_id": "a2", "parent_message_id": "a1"},
-        {"message_id": "cycle", "related_message_id": "a2", "parent_message_id": "cycle"},
+        {
+            "message_id": "cycle",
+            "related_message_id": "a2",
+            "parent_message_id": "cycle",
+        },
     ]
     assert [row["message_id"] for row in select_thread(thread_rows, "u1")] == [
         "a1",

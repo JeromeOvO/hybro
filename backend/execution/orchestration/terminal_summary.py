@@ -10,7 +10,9 @@ def build_terminal_summary(
     *,
     reason: str,
 ) -> dict[str, Any]:
-    latest_outcome = state.delegation_outcomes[-1] if state.delegation_outcomes else None
+    latest_outcome = (
+        state.delegation_outcomes[-1] if state.delegation_outcomes else None
+    )
     validated_blockers = [
         blocker
         for blocker in state.blockers
@@ -19,9 +21,7 @@ def build_terminal_summary(
         and blocker.validated_user_only
     ]
     open_failures = [
-        failure
-        for failure in state.open_failures
-        if failure.status == "open"
+        failure for failure in state.open_failures if failure.status == "open"
     ]
     if validated_blockers:
         recommended_next_action = "ask_user"

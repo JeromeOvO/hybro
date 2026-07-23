@@ -63,9 +63,7 @@ class SupervisorLLMService:
         )
 
 
-def _supervisor_messages(
-    system_prompt: str, user_prompt: str
-) -> list[dict[str, str]]:
+def _supervisor_messages(system_prompt: str, user_prompt: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},

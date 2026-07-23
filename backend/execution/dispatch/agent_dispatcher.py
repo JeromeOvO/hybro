@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     class DispatchAgentGroupReader(Protocol):
         async def get_agent_group_by_id(self, group_id: str): ...
 
+
 logger = get_logger(__name__)
 
 
@@ -64,9 +65,7 @@ class AgentDispatcher:
     # Public API
     # ------------------------------------------------------------------
 
-    async def assign_agent(
-        self, current_message: RoomAgentMessage
-    ) -> AssignResult:
+    async def assign_agent(self, current_message: RoomAgentMessage) -> AssignResult:
         """Assign an agent to the message by inferring from content.
 
         Uses the ``AgentResolverService`` to find the best accessible agent

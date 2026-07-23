@@ -33,7 +33,9 @@ def test_illegal_processing_to_queued():
 
 
 def test_next_state_for_terminal_event():
-    assert next_state_for_terminal_event(RunEventType.RUN_COMPLETED) == RunState.COMPLETED
+    assert (
+        next_state_for_terminal_event(RunEventType.RUN_COMPLETED) == RunState.COMPLETED
+    )
     assert next_state_for_terminal_event(RunEventType.RUN_FAILED) == RunState.FAILED
     assert next_state_for_terminal_event(RunEventType.RUN_CANCELED) == RunState.CANCELED
     with pytest.raises(RunTransitionError):

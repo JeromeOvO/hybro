@@ -343,7 +343,9 @@ def _normalize_part_root(root: dict) -> dict | None:
             file_info["bytes"] = root["raw"]
         if "url" in root:
             file_info["uri"] = root["url"]
-        media_type = root.get("mime_type") or root.get("mimeType") or root.get("mediaType")
+        media_type = (
+            root.get("mime_type") or root.get("mimeType") or root.get("mediaType")
+        )
         if media_type:
             file_info["mimeType"] = media_type
         filename = root.get("filename") or root.get("name")
@@ -636,7 +638,9 @@ def sync_artifact_dicts_to_canonical_text(
     if canonical_written:
         return out
 
-    first = out[0] if out else {"artifactId": "response", "name": "response", "parts": []}
+    first = (
+        out[0] if out else {"artifactId": "response", "name": "response", "parts": []}
+    )
     if not out:
         out = [first]
     first.setdefault("parts", []).insert(0, {"kind": "text", "text": canonical_text})

@@ -40,9 +40,7 @@ class RoomRouteAdapter:
     bind_room_services = bind_room_runtime
 
     def _require_room_services(self):
-        if self.room_runtime is None or not getattr(
-            self.room_runtime, "_bound", False
-        ):
+        if self.room_runtime is None or not getattr(self.room_runtime, "_bound", False):
             raise RuntimeError(
                 "RoomRouteAdapter.bind_facade() not called - startup incomplete"
             )
@@ -71,7 +69,9 @@ class RoomRouteAdapter:
     async def inquiry_rooms_by_room_owner_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().inquiry_rooms_by_room_owner_id(request)
+        return await self._require_room_services().inquiry_rooms_by_room_owner_id(
+            request
+        )
 
     async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest

@@ -33,7 +33,11 @@ class DiscoveryConfig:
     @property
     def discovery_url(self) -> str:
         base = self.api_url.rstrip("/")
-        prefix = self.api_prefix if self.api_prefix.startswith("/") else f"/{self.api_prefix}"
+        prefix = (
+            self.api_prefix
+            if self.api_prefix.startswith("/")
+            else f"/{self.api_prefix}"
+        )
         prefix = prefix.rstrip("/")
         return f"{base}{prefix}/discovery/agents"
 
@@ -71,7 +75,7 @@ def get_config() -> DiscoveryConfig:
         api_url=api_url,
         api_prefix=api_prefix,
         timeout_seconds=timeout_seconds,
-    )    
+    )
 
 
 def normalize_error(payload: Any) -> dict[str, str]:
@@ -112,17 +116,25 @@ async def call_discovery_api(query: str, limit: int | None) -> dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
-            response = await client.post(config.discovery_url, json=payload, headers=headers)
+            response = await client.post(
+                config.discovery_url, json=payload, headers=headers
+            )
     except httpx.TimeoutException as exc:
-        raise RuntimeError("service_unavailable: Discovery API request timed out") from exc
+        raise RuntimeError(
+            "service_unavailable: Discovery API request timed out"
+        ) from exc
     except httpx.RequestError as exc:
-        raise RuntimeError(f"service_unavailable: Failed to reach Discovery API ({exc})") from exc
+        raise RuntimeError(
+            f"service_unavailable: Failed to reach Discovery API ({exc})"
+        ) from exc
 
     if response.status_code == 200:
         try:
             return response.json()
         except ValueError as exc:
-            raise RuntimeError("invalid_response: Backend returned invalid JSON") from exc
+            raise RuntimeError(
+                "invalid_response: Backend returned invalid JSON"
+            ) from exc
 
     try:
         body = response.json()
@@ -138,7 +150,9 @@ async def call_discovery_api(query: str, limit: int | None) -> dict[str, Any]:
         raise RuntimeError(f"no_agent_found: {error['message']}")
     if response.status_code == 429:
         retry_hint = f" Retry after {retry_after}s." if retry_after else ""
-        raise RuntimeError(f"rate_limit_exceeded: {error['message']}.{retry_hint}".strip())
+        raise RuntimeError(
+            f"rate_limit_exceeded: {error['message']}.{retry_hint}".strip()
+        )
     if response.status_code >= 500:
         raise RuntimeError(f"internal_error: {error['message']}")
 

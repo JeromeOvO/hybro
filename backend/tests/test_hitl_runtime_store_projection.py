@@ -595,9 +595,7 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         projected["message_content"]["message_task"]["status"]["state"]
         == "input-required"
     )
-    assert (
-        projected["message_content"]["message_task"]["metadata"] == expected_metadata
-    )
+    assert projected["message_content"]["message_task"]["metadata"] == expected_metadata
     assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
 
 

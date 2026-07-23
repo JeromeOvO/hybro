@@ -20,7 +20,9 @@ async def handle_a2a_webhook(
     request: Request,
     message_id: str,
     authorization: str = Header(default=""),
-    x_a2a_notification_token: str = Header(default="", alias="X-A2A-Notification-Token"),
+    x_a2a_notification_token: str = Header(
+        default="", alias="X-A2A-Notification-Token"
+    ),
     transport: WebhookReceiver = Depends(get_webhook_receiver),
 ) -> JsonMap:
     """Receive task updates from A2A agents.
@@ -38,7 +40,9 @@ async def handle_a2a_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {e}") from e
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Invalid payload: expected JSON object")
+        raise HTTPException(
+            status_code=400, detail="Invalid payload: expected JSON object"
+        )
     assert isinstance(transport, WebhookReceiver)
     return await transport.handle_webhook(message_id, payload, token)
 

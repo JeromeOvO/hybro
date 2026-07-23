@@ -120,9 +120,7 @@ class HubPublishService:
                 }
                 if stable:
                     journal_event["stable_idempotency_key"] = stable
-                journal = await self._journal.create_or_get(
-                    journal_event
-                )
+                journal = await self._journal.create_or_get(journal_event)
                 idempotency_key = journal["idempotency_key"]
                 if journal.get("processed"):
                     continue
@@ -210,9 +208,7 @@ def normalize_hub_publish_payload(
         payload["related_message_id"] = getattr(lineage, "related_message_id", None)
         payload["turn_id"] = getattr(lineage, "turn_id", None)
         payload["run_id"] = getattr(lineage, "run_id", None)
-        payload["lifecycle_message_id"] = getattr(
-            lineage, "lifecycle_message_id", None
-        )
+        payload["lifecycle_message_id"] = getattr(lineage, "lifecycle_message_id", None)
         payload["lifecycle_message_id_verified"] = bool(
             getattr(lineage, "lifecycle_message_id", None)
         )
@@ -226,7 +222,9 @@ def normalize_hub_publish_payload(
         if isinstance(payload.get("parts"), list):
             payload["parts"] = _normalize_hub_parts(payload.get("parts"))
     elif event_type == "agent_error":
-        error_text = payload.get("error_text") or payload.get("error") or "Unknown agent error"
+        error_text = (
+            payload.get("error_text") or payload.get("error") or "Unknown agent error"
+        )
         payload["error_text"] = str(error_text)
         payload.setdefault("error", payload["error_text"])
         payload.setdefault("text", str(error_text))
@@ -276,7 +274,10 @@ def _normalize_artifact_update_payload(payload: dict) -> None:
     artifact = raw.get("artifact") or payload.get("artifact")
     if artifact:
         if isinstance(artifact, dict) and artifact.get("parts"):
-            artifact = {**artifact, "parts": _normalize_hub_parts(artifact.get("parts"))}
+            artifact = {
+                **artifact,
+                "parts": _normalize_hub_parts(artifact.get("parts")),
+            }
         payload["artifacts"] = [artifact]
 
 

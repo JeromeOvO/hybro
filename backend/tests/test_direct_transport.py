@@ -42,15 +42,11 @@ from models.room import MessageContent, RoomAgentMessage
 
 class TestResolveTaskResponseStatus:
     def test_requires_auth_without_status(self):
-        status = DirectTransport._resolve_task_response_status(
-            {"requires_auth": True}
-        )
+        status = DirectTransport._resolve_task_response_status({"requires_auth": True})
         assert status == CommonTaskState.AUTH_REQUIRED
 
     def test_requires_input_without_status(self):
-        status = DirectTransport._resolve_task_response_status(
-            {"requires_input": True}
-        )
+        status = DirectTransport._resolve_task_response_status({"requires_input": True})
         assert status == CommonTaskState.INPUT_REQUIRED
 
     def test_requires_auth_overrides_working_status(self):
@@ -148,7 +144,9 @@ class TestParseSyncFallbackResponse:
         }
         assert private_sentinel not in json.dumps(result)
 
-    def test_terminal_completed_task_with_inline_file_bytes_drops_unaddressable_part(self):
+    def test_terminal_completed_task_with_inline_file_bytes_drops_unaddressable_part(
+        self,
+    ):
         private_sentinel = "PRIVATE_SENTINEL_sync_terminal_file_bytes"
         response = {
             "kind": "task",
@@ -459,9 +457,10 @@ async def test_streaming_exception_uses_generic_public_failure_everywhere():
     assert result.response_text == "Agent processing failed"
     assert result.status_message == "agent_execution_failed"
     capability_issues.record_issue.assert_awaited_once()
-    assert private_sentinel in capability_issues.record_issue.await_args.kwargs[
-        "error_message"
-    ]
+    assert (
+        private_sentinel
+        in capability_issues.record_issue.await_args.kwargs["error_message"]
+    )
     public_payload = json.dumps(
         {
             "transition": transition.kwargs,
@@ -728,7 +727,9 @@ class TestHandleSyncResponseWithPolling:
                 "status": TaskState.working,
             }
         )
-        proc.a2a_transport.has_push_notification_capability = MagicMock(return_value=False)
+        proc.a2a_transport.has_push_notification_capability = MagicMock(
+            return_value=False
+        )
         proc.tsm.transition_task = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
         proc.tsm.notify_task = AsyncMock()
@@ -816,9 +817,7 @@ class TestHandleStreamingCancellation:
         streaming_state.full_response_text = "partial text"
         proc.response_handler.handle = AsyncMock()
 
-        status, text = await proc._handle_streaming_cancellation(
-            ctx, streaming_state
-        )
+        status, text = await proc._handle_streaming_cancellation(ctx, streaming_state)
 
         assert status == ProcessingStatus.CANCELED
         assert text == "partial text"
@@ -922,8 +921,7 @@ class TestFinalizeStreamingWritesArtifacts:
         assert persisted_task.artifacts is not None
         assert persisted_task.artifacts[0].name == "response"
         assert (
-            persisted_task.artifacts[0].parts[0].root.text
-            == "Final answer from agent."
+            persisted_task.artifacts[0].parts[0].root.text == "Final answer from agent."
         )
 
     @pytest.mark.asyncio
@@ -967,7 +965,9 @@ class TestFinalizeStreamingWritesArtifacts:
 
 class TestDispatchTerminalNotificationFailure:
     @pytest.mark.asyncio
-    async def test_streaming_terminal_notification_failure_does_not_mark_task_failed(self):
+    async def test_streaming_terminal_notification_failure_does_not_mark_task_failed(
+        self,
+    ):
         proc = _make_processor()
         message = _make_room_agent_message()
         proc.a2a_transport.has_streaming_capability = MagicMock(return_value=True)
@@ -975,7 +975,9 @@ class TestDispatchTerminalNotificationFailure:
         proc.tsm.transition_task = AsyncMock()
 
         handler_store = MagicMock()
-        handler_store.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        handler_store.update_task_state_on_message = AsyncMock(
+            return_value=(True, None)
+        )
         handler_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
         handler_store.get_pending_continuation_on_message = AsyncMock(return_value=None)
         delivery = MagicMock()
@@ -1002,7 +1004,9 @@ class TestDispatchTerminalNotificationFailure:
             return_value=message
         )
 
-        async def successful_streaming_with_terminal_notification_failure(*_args, **_kwargs):
+        async def successful_streaming_with_terminal_notification_failure(
+            *_args, **_kwargs
+        ):
             message.message_content.message_text = "Final answer from agent."
             await proc.tsm.transition_task(
                 message,
@@ -1042,7 +1046,9 @@ class TestDispatchTerminalNotificationFailure:
 
         assert result.status == ProcessingStatus.SUCCESS
         assert result.response_text == "Final answer from agent."
-        transition_states = [call.args[1] for call in proc.tsm.transition_task.await_args_list]
+        transition_states = [
+            call.args[1] for call in proc.tsm.transition_task.await_args_list
+        ]
         assert CommonTaskState.COMPLETED in transition_states
         assert CommonTaskState.FAILED not in transition_states
         proc._emit_terminal.assert_not_awaited()
@@ -1057,7 +1063,9 @@ class TestMessageChunkEmitsArtifactUpdate:
     """_handle_stream_message_chunk keeps nonterminal content in memory only."""
 
     @pytest.mark.asyncio
-    async def test_message_chunk_keeps_text_in_memory_without_public_sse(self, monkeypatch):
+    async def test_message_chunk_keeps_text_in_memory_without_public_sse(
+        self, monkeypatch
+    ):
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.delivery.send_artifact_update = AsyncMock()
@@ -1088,7 +1096,9 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
-            lambda parts: MagicMock(text="Hello", has_non_text=False, file_parts=[], data_parts=[]),
+            lambda parts: MagicMock(
+                text="Hello", has_non_text=False, file_parts=[], data_parts=[]
+            ),
         )
 
         await proc._handle_stream_message_chunk(result, ctx, streaming_state)
@@ -1130,7 +1140,9 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
-            lambda parts: MagicMock(text="", has_non_text=False, file_parts=[], data_parts=[]),
+            lambda parts: MagicMock(
+                text="", has_non_text=False, file_parts=[], data_parts=[]
+            ),
         )
 
         await proc._handle_stream_message_chunk(result, ctx, streaming_state)
@@ -1245,7 +1257,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         artifact = MagicMock()
         artifact.artifact_id = "art-1"
         artifact.parts = []
-        artifact.model_dump = MagicMock(return_value={"artifact_id": "art-1", "parts": []})
+        artifact.model_dump = MagicMock(
+            return_value={"artifact_id": "art-1", "parts": []}
+        )
 
         result = MagicMock()
         result.artifact = artifact
@@ -1353,7 +1367,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(
+            return_value=True
+        )
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
         agent_card.name = "test-agent"
@@ -1399,7 +1415,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         assert private_bytes in json.dumps(streaming_state.non_text_parts)
 
     @pytest.mark.asyncio
-    async def test_later_empty_artifact_chunk_does_not_erase_accumulated_final_parts(self):
+    async def test_later_empty_artifact_chunk_does_not_erase_accumulated_final_parts(
+        self,
+    ):
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         current_message = _make_room_agent_message()
@@ -1454,7 +1472,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(
+            return_value=True
+        )
 
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
@@ -1475,7 +1495,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         artifact = MagicMock()
         artifact.artifact_id = "art-1"
         artifact.parts = []
-        artifact.model_dump = MagicMock(return_value={"artifact_id": "art-1", "parts": []})
+        artifact.model_dump = MagicMock(
+            return_value={"artifact_id": "art-1", "parts": []}
+        )
 
         result = MagicMock()
         result.artifact = artifact
@@ -1498,7 +1520,9 @@ class TestArtifactUpdateRoutedThroughHandler:
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        proc._artifact_store.accumulate_artifact_on_message = AsyncMock(
+            return_value=True
+        )
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
         agent_card.name = "test-agent"
@@ -1739,7 +1763,7 @@ class TestProcessSyncResponseRespectsStatus:
             "persisted": True,
         }
 
-        success, text, _, agent_task_id= await proc._process_sync_response(
+        success, text, _, agent_task_id = await proc._process_sync_response(
             response=response,
             current_message=current_message,
             agent_card=agent_card,
@@ -1799,6 +1823,7 @@ class TestProcessSyncResponseRespectsStatus:
         call_args = proc.tsm.transition_task.call_args
         assert call_args[0][1] == TaskState.completed
         assert success is True
+
 
 class TestHandleSyncResponseInteractive:
     """handle_sync_response returns agent_task_id for input_required responses."""
@@ -2370,7 +2395,9 @@ class TestDispatchInteractive:
         assert task.status.state == CommonTaskState.AUTH_REQUIRED
 
     @pytest.mark.asyncio
-    async def test_dispatch_non_push_polled_interactive_keeps_raw_prompt_internal_only(self):
+    async def test_dispatch_non_push_polled_interactive_keeps_raw_prompt_internal_only(
+        self,
+    ):
         private_prompt = "PRIVATE_SENTINEL_polled_interactive_prompt"
         proc = _make_processor()
         message = _make_room_agent_message()
@@ -2560,9 +2587,7 @@ class TestFinalizePolledTaskPrivacy:
             ctx=self._make_ctx(current_message, agent_card),
         )
 
-        persisted_task = (
-            proc._task_updater.update_task_on_message.await_args.args[1]
-        )
+        persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         assert private_text not in persisted_json
         assert persisted_task["history"] is None
@@ -2572,7 +2597,9 @@ class TestFinalizePolledTaskPrivacy:
         assert private_text not in json.dumps(emitted_event.__dict__)
 
     @pytest.mark.asyncio
-    async def test_interactive_polled_task_keeps_in_memory_and_persisted_history_public(self):
+    async def test_interactive_polled_task_keeps_in_memory_and_persisted_history_public(
+        self,
+    ):
         private_text = "PRIVATE_SENTINEL_polled_interactive_history"
         proc = _make_processor()
         proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
@@ -2590,9 +2617,7 @@ class TestFinalizePolledTaskPrivacy:
             ctx=self._make_ctx(current_message, agent_card),
         )
 
-        persisted_task = (
-            proc._task_updater.update_task_on_message.await_args.args[1]
-        )
+        persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         in_memory_json = current_message.message_content.message_task.model_dump_json()
         assert private_text not in persisted_json
@@ -2601,7 +2626,9 @@ class TestFinalizePolledTaskPrivacy:
         assert "Visible prompt" not in in_memory_json
 
     @pytest.mark.asyncio
-    async def test_failed_polled_task_degraded_output_and_memory_use_public_projection(self):
+    async def test_failed_polled_task_degraded_output_and_memory_use_public_projection(
+        self,
+    ):
         private_text = "PRIVATE_SENTINEL_polled_failed_terminal"
         proc = _make_processor()
         proc.delivery.send_task_update = AsyncMock()
@@ -2646,7 +2673,9 @@ class TestFinalizePolledTaskPrivacy:
 
         assert result is True
         persisted_message = proc.tsm.persist_message.await_args.args[0]
-        persisted_json = persisted_message.message_content.message_task.model_dump_json()
+        persisted_json = (
+            persisted_message.message_content.message_task.model_dump_json()
+        )
         assert private_text not in persisted_json
         assert "Visible agent answer" not in persisted_json
         assert "Visible artifact answer" in persisted_json
@@ -2675,7 +2704,9 @@ class TestFinalizePolledTaskPrivacy:
         assert private_text not in persisted_task.model_dump_json()
 
     @pytest.mark.asyncio
-    async def test_completed_room_message_response_materializes_sanitized_artifact(self):
+    async def test_completed_room_message_response_materializes_sanitized_artifact(
+        self,
+    ):
         message_metadata_sentinel = "PRIVATE_SENTINEL_agent_message_metadata"
         part_metadata_sentinel = "PRIVATE_SENTINEL_agent_part_metadata"
         public_text = "Visible agent answer"

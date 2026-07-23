@@ -33,8 +33,9 @@ from room.compat.runtime import RoomServices
 # ---- Test Helpers ----
 
 
-def _make_agent(agent_id: str, name: str, description: str,
-                skills=None, input_modes=None) -> Agent:
+def _make_agent(
+    agent_id: str, name: str, description: str, skills=None, input_modes=None
+) -> Agent:
     """Create a test Agent with optional skills and input modes."""
     card = AgentCard(
         name=name,
@@ -66,15 +67,21 @@ async def test_all_agents_uses_agent_matcher():
     # Mock MatchResult
     mock_match_result = MatchResult(
         agents=[
-            MatchedAgent(agent=agent1, vector_score=0.8, capability_score=1.0, final_score=0.83),
-            MatchedAgent(agent=agent2, vector_score=0.6, capability_score=1.0, final_score=0.66),
+            MatchedAgent(
+                agent=agent1, vector_score=0.8, capability_score=1.0, final_score=0.83
+            ),
+            MatchedAgent(
+                agent=agent2, vector_score=0.6, capability_score=1.0, final_score=0.66
+            ),
         ],
         total_candidates=5,
         filtered_count=2,
     )
 
     # Patch AgentMatcher.match at the correct module level
-    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch(
+        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
+    ) as mock_match:
         mock_match.return_value = mock_match_result
 
         # Create service and call select_agents_for_message
@@ -118,12 +125,14 @@ async def test_room_team_bypasses_matcher():
 
     # Mock database service to return agents
     mock_db = MagicMock()
-    mock_db.get_agent_by_agent_id = AsyncMock(side_effect=lambda aid:
-        _make_agent(aid, f"Agent {aid}", f"Test agent {aid}")
+    mock_db.get_agent_by_agent_id = AsyncMock(
+        side_effect=lambda aid: _make_agent(aid, f"Agent {aid}", f"Test agent {aid}")
     )
 
     # Mock agent_selection_service to track if it's called
-    with patch("agent.selection_service.AgentSelectionService.select_agents_for_message") as mock_select:
+    with patch(
+        "agent.selection_service.AgentSelectionService.select_agents_for_message"
+    ) as mock_select:
         mock_select.return_value = None  # Should not be called
 
         # Create RoomServices and call _resolve_explicit_target_scope
@@ -182,19 +191,27 @@ async def test_debate_dispatcher_shared_by_both_paths():
 def test_dispatch_strategy_resolution_all_cases():
     """Test resolve_strategy() with all 4 dispatch strategy cases."""
     # Case 1: SUPERVISOR (supervisor=True)
-    strategy = resolve_strategy(use_supervisor=True, is_debate_mode=False, agent_count=3)
+    strategy = resolve_strategy(
+        use_supervisor=True, is_debate_mode=False, agent_count=3
+    )
     assert strategy == DispatchStrategy.SUPERVISOR
 
     # Case 2: SEQUENTIAL_DEBATE (debate=True, multi-agent)
-    strategy = resolve_strategy(use_supervisor=False, is_debate_mode=True, agent_count=3)
+    strategy = resolve_strategy(
+        use_supervisor=False, is_debate_mode=True, agent_count=3
+    )
     assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
 
     # Case 3: SEQUENTIAL (multi-agent, no debate, no supervisor)
-    strategy = resolve_strategy(use_supervisor=False, is_debate_mode=False, agent_count=3)
+    strategy = resolve_strategy(
+        use_supervisor=False, is_debate_mode=False, agent_count=3
+    )
     assert strategy == DispatchStrategy.SEQUENTIAL
 
     # Case 4: SINGLE (single agent)
-    strategy = resolve_strategy(use_supervisor=False, is_debate_mode=False, agent_count=1)
+    strategy = resolve_strategy(
+        use_supervisor=False, is_debate_mode=False, agent_count=1
+    )
     assert strategy == DispatchStrategy.SINGLE
 
     # Edge case: supervisor=True + debate=True → supervisor wins
@@ -202,7 +219,9 @@ def test_dispatch_strategy_resolution_all_cases():
     assert strategy == DispatchStrategy.SUPERVISOR
 
     # Edge case: debate with 1 agent → still SEQUENTIAL_DEBATE
-    strategy = resolve_strategy(use_supervisor=False, is_debate_mode=True, agent_count=1)
+    strategy = resolve_strategy(
+        use_supervisor=False, is_debate_mode=True, agent_count=1
+    )
     assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
 
 
@@ -245,8 +264,12 @@ async def test_derive_required_input_modes_flows_to_matcher():
     assert required_modes == ["application/pdf", "image/jpeg"]
 
     # Mock AgentMatcher.match to verify it receives required_input_modes
-    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
-        mock_match.return_value = MatchResult(agents=[], total_candidates=0, filtered_count=0)
+    with patch(
+        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
+    ) as mock_match:
+        mock_match.return_value = MatchResult(
+            agents=[], total_candidates=0, filtered_count=0
+        )
 
         service = AgentSelectionService()
         await service.select_agents_for_message(
@@ -265,8 +288,12 @@ async def test_derive_required_input_modes_flows_to_matcher():
 async def test_no_matching_agents_graceful_fallback():
     """Verify empty MatchResult produces meaningful fallback response."""
     # Mock AgentMatcher.match to return empty result
-    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
-        mock_match.return_value = MatchResult(agents=[], total_candidates=0, filtered_count=0)
+    with patch(
+        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
+    ) as mock_match:
+        mock_match.return_value = MatchResult(
+            agents=[], total_candidates=0, filtered_count=0
+        )
 
         service = AgentSelectionService()
         result = await service.select_agents_for_message(
@@ -284,7 +311,9 @@ async def test_no_matching_agents_graceful_fallback():
 @pytest.mark.asyncio
 async def test_matcher_error_propagates_to_caller():
     """Verify matcher exceptions propagate so callers can return proper 500s."""
-    with patch("agent.matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
+    with patch(
+        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
+    ) as mock_match:
         mock_match.side_effect = RuntimeError("Database connection failed")
 
         service = AgentSelectionService()
@@ -303,10 +332,18 @@ def test_vector_score_dominates_ranking():
     agent_low = _make_agent("agent2", "LowVector", "Poor semantic match")
 
     matched_agents = [
-        MatchedAgent(agent=agent_high, vector_score=0.9, capability_score=1.0,
-                     final_score=0.85 * 0.9 + 0.15 * 1.0),
-        MatchedAgent(agent=agent_low, vector_score=0.4, capability_score=1.0,
-                     final_score=0.85 * 0.4 + 0.15 * 1.0),
+        MatchedAgent(
+            agent=agent_high,
+            vector_score=0.9,
+            capability_score=1.0,
+            final_score=0.85 * 0.9 + 0.15 * 1.0,
+        ),
+        MatchedAgent(
+            agent=agent_low,
+            vector_score=0.4,
+            capability_score=1.0,
+            final_score=0.85 * 0.4 + 0.15 * 1.0,
+        ),
     ]
 
     matched_agents.sort(key=lambda m: m.final_score, reverse=True)
@@ -318,21 +355,35 @@ def test_vector_score_dominates_ranking():
 
 def test_file_penalty_demotes_incompatible_agents():
     """Verify file-incapable agents rank lower when message has attachments."""
-    agent_file = _make_agent("agent1", "FileAgent", "Handles files", input_modes=["text", "file"])
+    agent_file = _make_agent(
+        "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
+    )
     agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
 
-    score_file = compute_capability_score(agent_file, required_input_modes=["application/pdf"])
-    score_text = compute_capability_score(agent_text, required_input_modes=["application/pdf"])
+    score_file = compute_capability_score(
+        agent_file, required_input_modes=["application/pdf"]
+    )
+    score_text = compute_capability_score(
+        agent_text, required_input_modes=["application/pdf"]
+    )
 
     assert score_file == 1.0
     assert score_text == 0.0
 
     # With same vector score, file agent should rank higher
     matched = [
-        MatchedAgent(agent=agent_file, vector_score=0.7, capability_score=score_file,
-                     final_score=0.85 * 0.7 + 0.15 * score_file),
-        MatchedAgent(agent=agent_text, vector_score=0.7, capability_score=score_text,
-                     final_score=0.85 * 0.7 + 0.15 * score_text),
+        MatchedAgent(
+            agent=agent_file,
+            vector_score=0.7,
+            capability_score=score_file,
+            final_score=0.85 * 0.7 + 0.15 * score_file,
+        ),
+        MatchedAgent(
+            agent=agent_text,
+            vector_score=0.7,
+            capability_score=score_text,
+            final_score=0.85 * 0.7 + 0.15 * score_text,
+        ),
     ]
     matched.sort(key=lambda m: m.final_score, reverse=True)
     assert matched[0].agent.agent_id == "agent1"
@@ -340,7 +391,9 @@ def test_file_penalty_demotes_incompatible_agents():
 
 def test_no_file_penalty_without_attachments():
     """Without attachments, text-only and file-capable agents score equally."""
-    agent_file = _make_agent("agent1", "FileAgent", "Handles files", input_modes=["text", "file"])
+    agent_file = _make_agent(
+        "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
+    )
     agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
 
     score_file = compute_capability_score(agent_file, required_input_modes=None)
@@ -407,11 +460,13 @@ async def test_debate_service_uses_shared_dispatcher():
                 id="task_prior",
                 contextId="context1",
                 status=TaskStatus(state=TaskState.completed),
-                history=[Message(
-                    messageId="msg1",
-                    role=Role.user,
-                    parts=[TextPart(text="Original task")],
-                )],
+                history=[
+                    Message(
+                        messageId="msg1",
+                        role=Role.user,
+                        parts=[TextPart(text="Original task")],
+                    )
+                ],
             ),
         ),
     )
@@ -428,11 +483,13 @@ async def test_debate_service_uses_shared_dispatcher():
                 id="task_current",
                 contextId="context2",
                 status=TaskStatus(state=TaskState.working),
-                history=[Message(
-                    messageId="msg2",
-                    role=Role.user,
-                    parts=[TextPart(text="Original task")],
-                )],
+                history=[
+                    Message(
+                        messageId="msg2",
+                        role=Role.user,
+                        parts=[TextPart(text="Original task")],
+                    )
+                ],
             ),
         ),
     )
@@ -440,10 +497,23 @@ async def test_debate_service_uses_shared_dispatcher():
     injector = DebatePromptInjector()
 
     # Mock database calls
-    with patch.object(injector._message_store, "get_room_agent_message_by_message_id", new_callable=AsyncMock) as mock_get_msg, \
-         patch.object(injector._message_store, "get_agent_name_by_agent_id", new_callable=AsyncMock) as mock_get_name, \
-         patch.object(injector._message_store, "update_room_agent_message_with_new_message_content_by_message_id", new_callable=AsyncMock) as mock_update:
-
+    with (
+        patch.object(
+            injector._message_store,
+            "get_room_agent_message_by_message_id",
+            new_callable=AsyncMock,
+        ) as mock_get_msg,
+        patch.object(
+            injector._message_store,
+            "get_agent_name_by_agent_id",
+            new_callable=AsyncMock,
+        ) as mock_get_name,
+        patch.object(
+            injector._message_store,
+            "update_room_agent_message_with_new_message_content_by_message_id",
+            new_callable=AsyncMock,
+        ) as mock_update,
+    ):
         mock_get_msg.side_effect = [prior_message, current_message]
         mock_get_name.return_value = "PriorAgent"
         mock_update.return_value = True
@@ -455,10 +525,12 @@ async def test_debate_service_uses_shared_dispatcher():
 def test_select_top_agents_debate_mode_diversity():
     """Verify debate mode returns 3-5 agents for diversity."""
     agents = [
-        MatchedAgent(_make_agent(f"agent{i}", f"Agent{i}", f"Desc{i}"),
-                    vector_score=0.8 - i*0.05,
-                    capability_score=1.0,
-                    final_score=0.85 * (0.8 - i*0.05) + 0.15)
+        MatchedAgent(
+            _make_agent(f"agent{i}", f"Agent{i}", f"Desc{i}"),
+            vector_score=0.8 - i * 0.05,
+            capability_score=1.0,
+            final_score=0.85 * (0.8 - i * 0.05) + 0.15,
+        )
         for i in range(6)
     ]
 
@@ -474,12 +546,24 @@ def test_select_top_agents_debate_mode_diversity():
 def test_select_top_agents_clear_winner():
     """Verify non-debate mode returns only top agent when there's a clear winner."""
     agents = [
-        MatchedAgent(_make_agent("agent1", "Winner", "Top agent"),
-                    vector_score=0.9, capability_score=1.0, final_score=0.92),
-        MatchedAgent(_make_agent("agent2", "Runner-up", "Second agent"),
-                    vector_score=0.5, capability_score=1.0, final_score=0.58),
-        MatchedAgent(_make_agent("agent3", "Third", "Third agent"),
-                    vector_score=0.4, capability_score=1.0, final_score=0.49),
+        MatchedAgent(
+            _make_agent("agent1", "Winner", "Top agent"),
+            vector_score=0.9,
+            capability_score=1.0,
+            final_score=0.92,
+        ),
+        MatchedAgent(
+            _make_agent("agent2", "Runner-up", "Second agent"),
+            vector_score=0.5,
+            capability_score=1.0,
+            final_score=0.58,
+        ),
+        MatchedAgent(
+            _make_agent("agent3", "Third", "Third agent"),
+            vector_score=0.4,
+            capability_score=1.0,
+            final_score=0.49,
+        ),
     ]
 
     selected = select_top_agents(agents, is_debate_mode=False)

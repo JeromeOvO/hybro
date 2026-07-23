@@ -221,9 +221,7 @@ class TestMergeResults:
             assert result.keyword_score == 0.0
 
     def test_merge_both_empty(self):
-        merged = search.merge_results(
-            [], [], vector_weight=0.7, keyword_weight=0.3
-        )
+        merged = search.merge_results([], [], vector_weight=0.7, keyword_weight=0.3)
         assert merged == []
 
     def test_merge_sorted_by_combined_score(
@@ -243,9 +241,7 @@ class TestMergeResults:
             record("a", room_id="r", vector_score=100.0),
             record("b", room_id="r", vector_score=50.0),
         ]
-        merged = search.merge_results(
-            vec, [], vector_weight=1.0, keyword_weight=0.0
-        )
+        merged = search.merge_results(vec, [], vector_weight=1.0, keyword_weight=0.0)
         a = next(r for r in merged if r.turn_id == "a")
         b = next(r for r in merged if r.turn_id == "b")
         assert a.vector_score == pytest.approx(1.0)

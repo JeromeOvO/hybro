@@ -37,8 +37,12 @@ def _text_message(text: str, *, message_id: str) -> Message:
 
 
 @pytest.mark.asyncio
-async def test_room_message_projection_backfills_legacy_terminal_text_as_artifact() -> None:
-    final_text = "Hello! I'm your cyber insurance broker agent. How can I assist you today?"
+async def test_room_message_projection_backfills_legacy_terminal_text_as_artifact() -> (
+    None
+):
+    final_text = (
+        "Hello! I'm your cyber insurance broker agent. How can I assist you today?"
+    )
     progress_text = "Preparing cyber broker submission..."
     task = Task(
         id="task-1",
@@ -88,7 +92,10 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
     projected = response.message_list[0]
     assert projected.message_content.message_text == final_text
     assert projected.message_content.message_task.history is None
-    assert projected.message_content.message_task.artifacts[0].parts[0].root.text == final_text
+    assert (
+        projected.message_content.message_task.artifacts[0].parts[0].root.text
+        == final_text
+    )
 
 
 @pytest.mark.asyncio

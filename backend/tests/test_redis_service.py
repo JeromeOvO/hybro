@@ -27,9 +27,7 @@ class TestRedisKVImpl:
 
         assert await kv.setnx("test_key", "test_value", ttl=60) is True
 
-        client.set.assert_awaited_once_with(
-            "test_key", "test_value", nx=True, ex=60
-        )
+        client.set.assert_awaited_once_with("test_key", "test_value", nx=True, ex=60)
 
     async def test_basic_key_value_operations_use_direct_client(self):
         from dal.redis.kv import RedisKVImpl

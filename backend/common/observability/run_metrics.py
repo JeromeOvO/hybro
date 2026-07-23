@@ -34,4 +34,3 @@ def snapshot_counters() -> dict[str, int]:
             else:
                 out[name] = count
     return out
-

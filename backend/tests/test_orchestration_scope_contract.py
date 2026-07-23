@@ -189,7 +189,9 @@ def _execution_facade_for_scope_test(room_center):
         event_publisher=SimpleNamespace(emit=AsyncMock()),
         run_event_enabled=lambda: False,
         client_request_id_resolver=SimpleNamespace(
-            resolve_client_request_id=AsyncMock(side_effect=lambda _, provided: provided),
+            resolve_client_request_id=AsyncMock(
+                side_effect=lambda _, provided: provided
+            ),
         ),
     )
 
@@ -270,7 +272,9 @@ async def test_supervisor_preflight_stores_lightweight_candidate_scope_snapshot(
         "agent-1": _agent("agent-1", "Agent One"),
         "agent-2": _agent("agent-2", "Agent Two"),
     }
-    svc._store.get_agent_by_agent_id = AsyncMock(side_effect=lambda aid: agents.get(aid))
+    svc._store.get_agent_by_agent_id = AsyncMock(
+        side_effect=lambda aid: agents.get(aid)
+    )
     svc._store.get_room_memory_by_room_id = AsyncMock(
         side_effect=AssertionError("v2 scope envelope should not assemble room memory")
     )
@@ -510,7 +514,9 @@ async def test_saved_group_rejects_selected_agents_outside_group(
         "agent-1": _agent("agent-1", "Agent One"),
         "agent-3": _agent("agent-3", "Agent Three"),
     }
-    svc._store.get_agent_by_agent_id = AsyncMock(side_effect=lambda aid: agents.get(aid))
+    svc._store.get_agent_by_agent_id = AsyncMock(
+        side_effect=lambda aid: agents.get(aid)
+    )
     svc._store.get_agent_group_by_id = AsyncMock(
         return_value=AgentGroup(
             group_id="group-1",
@@ -764,15 +770,11 @@ def _v2_preflight_context(*, pending_clarification: bool = False):
 
 @pytest.mark.asyncio
 async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
-    monkeypatch.setattr(
-        settings, "execution_orchestration_v2", False
-    )
+    monkeypatch.setattr(settings, "execution_orchestration_v2", False)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_memory_by_room_id = AsyncMock(return_value=None)
-    svc._prepare_for_supervisor = AsyncMock(
-        return_value=ParseResult(success=True)
-    )
+    svc._prepare_for_supervisor = AsyncMock(return_value=ParseResult(success=True))
     svc._prepare_orchestration_envelope = AsyncMock(
         return_value=ParseResult(success=True)
     )
@@ -790,16 +792,12 @@ async def test_v2_runtime_gate_defaults_to_legacy_context_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_v2_pending_clarification_resumes_before_new_envelope(monkeypatch):
-    monkeypatch.setattr(
-        settings, "execution_orchestration_v2", True
-    )
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
     svc = object.__new__(RoomServices)
     svc._store = MagicMock()
     svc._store.get_room_memory_by_room_id = AsyncMock(return_value=None)
     svc._prepare_clarify_resume = AsyncMock(return_value=True)
-    svc._prepare_for_supervisor = AsyncMock(
-        return_value=ParseResult(success=True)
-    )
+    svc._prepare_for_supervisor = AsyncMock(return_value=ParseResult(success=True))
     svc._prepare_orchestration_envelope = AsyncMock(
         return_value=ParseResult(success=True)
     )

@@ -8,11 +8,7 @@ def normalize_match_text(value: str) -> str:
 
 
 def match_tokens(value: str) -> set[str]:
-    return {
-        token
-        for token in normalize_match_text(value).split("_")
-        if token
-    }
+    return {token for token in normalize_match_text(value).split("_") if token}
 
 
 def agent_blocker_field_key(blocker_key: str) -> str | None:

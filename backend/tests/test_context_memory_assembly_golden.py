@@ -89,7 +89,7 @@ def test_agent_quoted_context_fixed_golden():
     assert suffix == (
         "[Quoted context]\n"
         "The user is referencing the following specific content:\n"
-        "\"quoted content\"\n"
+        '"quoted content"\n'
         "\n"
         "[Current request]\n"
         "User: Answer this\n"
@@ -199,7 +199,7 @@ def test_agent_assembly_fixed_golden_with_blocks_and_counts():
         "\n"
         "[Quoted context]\n"
         "The user is referencing the following specific content:\n"
-        "\"quoted line\"\n"
+        '"quoted line"\n'
         "\n"
         "Room requires compatibility.\n"
         "\n"
@@ -280,9 +280,7 @@ def test_supervisor_large_truncation_fixed_golden():
     )
 
     assert result.metadata["context"] == (
-        "[Current request]\n"
-        f"User: {'current task ' * 30}curre\n"
-        "... [context truncated]"
+        f"[Current request]\nUser: {'current task ' * 30}curre\n... [context truncated]"
     )
     assert result.total_tokens == 110
     assert result.metadata["stable_prefix_tokens"] == 0

@@ -49,9 +49,7 @@ async def test_send_processing_status_emits_typed_event_and_skips_recording(
     )
 
     record.assert_not_awaited()
-    assert [frame_type for frame_type, _data in compat.frames] == [
-        "processing_status"
-    ]
+    assert [frame_type for frame_type, _data in compat.frames] == ["processing_status"]
     assert len(fake_publisher.events) == 1
     event = fake_publisher.events[0]
     assert event.event_type == "processing_status"

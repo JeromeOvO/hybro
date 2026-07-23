@@ -40,21 +40,29 @@ class StateMemoryRepository:
         if not self.doc:
             return False, False
         self.pushed.append(turn)
-        self.doc.setdefault("memory_content", {}).setdefault("conversation_history", []).append(turn)
+        self.doc.setdefault("memory_content", {}).setdefault(
+            "conversation_history", []
+        ).append(turn)
         self.doc.setdefault("conversation_history", []).append(turn)
         return True, True
 
-    async def push_and_trim_conversation_turn_if_absent(self, room_id: str, turn: dict, **kwargs):
+    async def push_and_trim_conversation_turn_if_absent(
+        self, room_id: str, turn: dict, **kwargs
+    ):
         if self.duplicate:
             return False, True, True
         if not self.doc:
             return False, False, False
         self.pushed.append(turn)
-        self.doc.setdefault("memory_content", {}).setdefault("conversation_history", []).append(turn)
+        self.doc.setdefault("memory_content", {}).setdefault(
+            "conversation_history", []
+        ).append(turn)
         self.doc.setdefault("conversation_history", []).append(turn)
         return True, True, False
 
-    async def update_turn_notes(self, room_id: str, turn_id: str, turn_notes: dict) -> bool:
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
         self.updated_notes.append((room_id, turn_id, turn_notes))
         return True
 
@@ -64,7 +72,9 @@ class FakeHistoryReader:
         self.messages = messages
 
     async def get_messages_by_ids(self, message_ids: list[str]):
-        return [message for message in self.messages if message.message_id in message_ids]
+        return [
+            message for message in self.messages if message.message_id in message_ids
+        ]
 
 
 class FakeLLM:
@@ -85,7 +95,9 @@ class RaisingLLM:
 
 
 class FailingNotesMemoryRepository(StateMemoryRepository):
-    async def update_turn_notes(self, room_id: str, turn_id: str, turn_notes: dict) -> bool:
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
         raise RuntimeError("notes write failed")
 
 
@@ -195,7 +207,11 @@ async def test_project_message_from_history_duplicate():
         duplicate=True,
     )
     reader = FakeHistoryReader(
-        [SimpleNamespace(message_id="msg-1", room_id="r1", message_type="user", content="hello")]
+        [
+            SimpleNamespace(
+                message_id="msg-1", room_id="r1", message_type="user", content="hello"
+            )
+        ]
     )
 
     result = await projection.project_message_from_history(
@@ -251,8 +267,7 @@ async def test_project_message_from_history_user_cleans_mentions_before_attachme
     turn = repo.pushed[0]
     assert turn["turn_id"] == "message:user-msg-1"
     assert (
-        turn["content"]
-        == "Please ask @Canonical Agent for help\n"
+        turn["content"] == "Please ask @Canonical Agent for help\n"
         "[Attachments: spec.pdf (application/pdf, 2KB)]"
     )
 
@@ -556,7 +571,9 @@ def test_enrich_synthesis_with_trajectory():
         entries=[
             SimpleNamespace(
                 results=[
-                    SimpleNamespace(success=True, agent_name="Builder", task="implement tests"),
+                    SimpleNamespace(
+                        success=True, agent_name="Builder", task="implement tests"
+                    ),
                     SimpleNamespace(success=False, agent_name="Skip", task="ignore"),
                 ]
             )

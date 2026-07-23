@@ -70,10 +70,10 @@ const mockUser = {
   passwordEnabled: false,
   deleteSelfEnabled: false,
   delete: async () => console.log("Mock delete user"),
-  setProfileImage: async (args: any) => console.log("Mock set profile image"),
+  setProfileImage: async (_args: unknown) => console.log("Mock set profile image"),
   reload: async () => console.log("Mock reload user"),
-  update: async (args: any) => console.log("Mock update user"),
-  updatePassword: async (args: any) => console.log("Mock update password"),
+  update: async (_args: unknown) => console.log("Mock update user"),
+  updatePassword: async (_args: unknown) => console.log("Mock update password"),
   getSessions: async () => [{
     id: "sess_local_dev",
     status: "active",
@@ -105,7 +105,7 @@ export function useAuth() {
 
 export function useClerk() {
   return {
-    signOut: (opts?: any) => {
+    signOut: (_opts?: unknown) => {
       console.log("Mock sign out");
       window.location.href = "/";
     },
@@ -120,15 +120,15 @@ export function ClerkProvider({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export function SignIn(props: any) {
+export function SignIn(_props: Record<string, unknown>) {
   return <div>Sign in disabled in Local Developer Mode</div>;
 }
 
-export function SignUp(props: any) {
+export function SignUp(_props: Record<string, unknown>) {
   return <div>Sign up disabled in Local Developer Mode</div>;
 }
 
-export function Waitlist(props: any) {
+export function Waitlist(_props: Record<string, unknown>) {
   return <div>Waitlist disabled in Local Developer Mode</div>;
 }
 

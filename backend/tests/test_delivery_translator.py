@@ -205,13 +205,13 @@ def test_hitl_request_translation_preserves_full_payload():
         choices=["a", "b"],
         agent_id="agent-1",
         agent_name="Agent",
-            source_step_id="step-1",
-            group_id="group-1",
-            group_total=2,
-            group_index=1,
-            related_message_id="umsg-1",
-            client_request_id="cr-1",
-        )
+        source_step_id="step-1",
+        group_id="group-1",
+        group_total=2,
+        group_index=1,
+        related_message_id="umsg-1",
+        client_request_id="cr-1",
+    )
 
     frame = to_sse_frame(event, timestamp=NOW)
 

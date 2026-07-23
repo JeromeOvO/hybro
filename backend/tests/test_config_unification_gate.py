@@ -111,9 +111,7 @@ def _scan_file(path: Path) -> list[EnvVarViolation]:
             and node.func.value.value.id in os_names
         ):
             violations.append(
-                EnvVarViolation(
-                    rel, node.lineno, node.col_offset, "os.environ.get()"
-                )
+                EnvVarViolation(rel, node.lineno, node.col_offset, "os.environ.get()")
             )
 
         if (
@@ -135,9 +133,7 @@ def _scan_file(path: Path) -> list[EnvVarViolation]:
             and node.value.value.id in os_names
         ):
             violations.append(
-                EnvVarViolation(
-                    rel, node.lineno, node.col_offset, "os.environ[...]"
-                )
+                EnvVarViolation(rel, node.lineno, node.col_offset, "os.environ[...]")
             )
 
         if (
@@ -209,8 +205,7 @@ def test_manifest_allowed_paths_exist():
     [
         ("import os\nvalue = os.getenv('FOO')\n", "os.getenv()"),
         (
-            "import os as operating_system\n"
-            "value = operating_system.getenv('FOO')\n",
+            "import os as operating_system\nvalue = operating_system.getenv('FOO')\n",
             "os.getenv()",
         ),
         ("from os import getenv\nvalue = getenv('FOO')\n", "getenv()"),

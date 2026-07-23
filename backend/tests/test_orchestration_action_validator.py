@@ -423,7 +423,9 @@ def test_initial_clarification_rejects_duplicate_question_in_same_action():
         ],
     )
 
-    assert _validation_code(action, _guardrail_state()) == "duplicate_question_in_action"
+    assert (
+        _validation_code(action, _guardrail_state()) == "duplicate_question_in_action"
+    )
 
 
 def test_post_dispatch_question_requires_blocker_keys():
@@ -706,6 +708,8 @@ def test_post_dispatch_question_accepts_two_validated_blockers_in_one_request():
         )
         is action
     )
+
+
 @pytest.mark.asyncio
 async def test_planner_adapter_accepts_artifact_refs_without_run_state():
     action = PlannerAction(
@@ -787,7 +791,9 @@ async def test_planner_adapter_preserves_raw_delegate_target_refs_and_policy():
         candidate_scope=["agent-1"],
         message_text="Use selected refs",
     )
-    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
+    adapter = RoomSupervisorPlannerAdapter(
+        raw_action_provider=lambda _context: raw_action
+    )
 
     result = await adapter.plan(context)
 
@@ -949,9 +955,7 @@ def test_completion_disposition_schema_accepts_nullable_replacement_fingerprint(
     ]["anyOf"][0]["properties"]["requested_goal_family_dispositions"]["items"]
 
     assert set(completion_schema["required"]) == set(completion_schema["properties"])
-    assert set(disposition_schema["required"]) == set(
-        disposition_schema["properties"]
-    )
+    assert set(disposition_schema["required"]) == set(disposition_schema["properties"])
     validate(
         {
             "event_id": "dispose-1",
@@ -1015,10 +1019,13 @@ def test_completion_validator_does_not_treat_dispositions_as_terminal_authority(
         )
     )
 
-    assert PlannerActionValidator.validate(
-        action,
-        run_state=_complete_run_state(),
-    ) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(),
+        )
+        is action
+    )
 
 
 def test_completion_validator_ignores_unknown_disposition_revision_metadata():
@@ -1105,7 +1112,9 @@ async def test_planner_adapter_defaults_missing_attachment_policy_to_explicit_re
         candidate_scope=["agent-1"],
         message_text="Use selected refs",
     )
-    adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: raw_action)
+    adapter = RoomSupervisorPlannerAdapter(
+        raw_action_provider=lambda _context: raw_action
+    )
 
     result = await adapter.plan(context)
 
@@ -1497,19 +1506,25 @@ def test_completion_accepts_abandoned_failure():
 def test_complete_does_not_require_structured_evidence():
     action = PlannerAction(action=PlannerActionType.COMPLETE, reasoning="done")
 
-    assert PlannerActionValidator.validate(
-        action,
-        run_state=_complete_run_state(),
-    ) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(),
+        )
+        is action
+    )
 
 
 def test_complete_ignores_unknown_fact_reference_metadata():
     action = _complete_action(referenced_fact_ids=["missing-fact"])
 
-    assert PlannerActionValidator.validate(
-        action,
-        run_state=_complete_run_state(),
-    ) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(),
+        )
+        is action
+    )
 
 
 def test_complete_rejects_pending_hitl_and_active_dispatches():
@@ -1521,7 +1536,9 @@ def test_complete_rejects_pending_hitl_and_active_dispatches():
             run_state=_complete_run_state(pending_hitl_request_ids=["hitl-1"]),
         )
 
-    with pytest.raises(PlannerActionValidationError, match="active dispatch") as exc_info:
+    with pytest.raises(
+        PlannerActionValidationError, match="active dispatch"
+    ) as exc_info:
         PlannerActionValidator.validate(
             action,
             run_state=_complete_run_state(
@@ -1714,9 +1731,7 @@ def test_complete_rejects_every_open_question(open_question):
     with pytest.raises(PlannerActionValidationError, match="unresolved questions"):
         PlannerActionValidator.validate(
             action,
-            run_state=_complete_run_state(
-                open_questions=[open_question]
-            ),
+            run_state=_complete_run_state(open_questions=[open_question]),
         )
 
 
@@ -1744,16 +1759,22 @@ def test_complete_accepts_resolved_question_history():
 def test_complete_ignores_blank_satisfied_criteria_metadata():
     action = _complete_action(satisfied_criteria=["  "])
 
-    assert PlannerActionValidator.validate(
-        action,
-        run_state=_complete_run_state(),
-    ) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_complete_run_state(),
+        )
+        is action
+    )
 
 
 def test_complete_accepts_valid_evidence():
     action = _complete_action()
 
-    assert PlannerActionValidator.validate(action, run_state=_complete_run_state()) is action
+    assert (
+        PlannerActionValidator.validate(action, run_state=_complete_run_state())
+        is action
+    )
 
 
 def test_complete_accepts_valid_evidence_with_facts_only():
@@ -2082,11 +2103,14 @@ def test_fulfilled_revision_repeat_is_allowed_when_guardrails_are_disabled():
     )
     action = _guardrail_action([_guardrail_target()])
 
-    assert PlannerActionValidator.validate(
-        action,
-        run_state=_guardrail_state(outcomes=[outcome]),
-        resource_fingerprints={},
-    ) is action
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=_guardrail_state(outcomes=[outcome]),
+            resource_fingerprints={},
+        )
+        is action
+    )
 
 
 def test_exhausted_failed_retry_is_rejected_without_repair_lineage():
@@ -2128,9 +2152,7 @@ def test_exhausted_failed_retry_is_rejected_without_repair_lineage():
         retry_count=2,
         max_retries=2,
     )
-    state = _guardrail_state(
-        outcomes=[outcome], intents=[intent], failures=[failure]
-    )
+    state = _guardrail_state(outcomes=[outcome], intents=[intent], failures=[failure])
     assert _validation_code(_guardrail_action([_guardrail_target()]), state) == (
         "recovery_retry_exhausted"
     )
@@ -2175,9 +2197,7 @@ def test_failed_retry_with_remaining_budget_is_allowed_without_repair_lineage():
         retry_count=0,
         max_retries=2,
     )
-    state = _guardrail_state(
-        outcomes=[outcome], intents=[intent], failures=[failure]
-    )
+    state = _guardrail_state(outcomes=[outcome], intents=[intent], failures=[failure])
     action = _guardrail_action([_guardrail_target()])
 
     assert (
@@ -2218,9 +2238,10 @@ def test_no_progress_repeat_is_rejected_for_same_attempt_chain():
     )
     state = _guardrail_state(outcomes=[outcome], intents=[intent])
 
-    assert _validation_code(
-        _guardrail_action([_guardrail_target(repair_of="i1")]), state
-    ) == "delegate_no_progress_repeat"
+    assert (
+        _validation_code(_guardrail_action([_guardrail_target(repair_of="i1")]), state)
+        == "delegate_no_progress_repeat"
+    )
 
 
 def test_unresolved_revision_allows_an_alternate_agent_attempt_chain():

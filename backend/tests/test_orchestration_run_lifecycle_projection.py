@@ -114,7 +114,9 @@ async def test_project_run_state_is_idempotent_by_causation_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_project_run_state_reuses_existing_event_for_same_causation_id(monkeypatch):
+async def test_project_run_state_reuses_existing_event_for_same_causation_id(
+    monkeypatch,
+):
     from common.config import settings
     from execution.run_command_handler import RunCommandHandler
 

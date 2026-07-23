@@ -277,7 +277,6 @@ def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
 
 def test_message_factory_builds_sdk_message_from_parts():
     from a2a_adapter.message_factory import build_message_from_parts
-    
 
     message = build_message_from_parts(
         role=MessageRole.AGENT,
@@ -919,7 +918,9 @@ async def test_transport_stream_message_yields_one_event_per_sse_frame(monkeypat
 
     events = [
         event
-        async for event in transport.stream_message("https://agent.example/a2a", message)
+        async for event in transport.stream_message(
+            "https://agent.example/a2a", message
+        )
     ]
 
     assert [event.event_type for event in events] == ["delta", "status"]
@@ -958,7 +959,9 @@ async def test_transport_stream_message_unwraps_jsonrpc_sse_results(monkeypatch)
 
     events = [
         event
-        async for event in transport.stream_message("https://agent.example/a2a", message)
+        async for event in transport.stream_message(
+            "https://agent.example/a2a", message
+        )
     ]
 
     assert len(events) == 1
@@ -1078,7 +1081,9 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     ]
     assert len(registry.list_models()) == 8
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
-    assert registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
+    assert (
+        registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
+    )
     assert registry.supports_capability(
         "context_memory_legacy_json_model", "json_schema"
     )
@@ -1275,7 +1280,9 @@ async def test_gemini_provider_prefers_async_sdk_generation_when_available():
             )
         )
     )
-    client = SimpleNamespace(models=sync_models, aio=SimpleNamespace(models=async_models))
+    client = SimpleNamespace(
+        models=sync_models, aio=SimpleNamespace(models=async_models)
+    )
     provider = GeminiProvider(client=client)
 
     response = await provider.generate(
@@ -1303,7 +1310,9 @@ async def test_gemini_provider_prefers_async_sdk_embeddings_when_available():
             )
         )
     )
-    client = SimpleNamespace(models=sync_models, aio=SimpleNamespace(models=async_models))
+    client = SimpleNamespace(
+        models=sync_models, aio=SimpleNamespace(models=async_models)
+    )
     provider = GeminiProvider(client=client)
 
     embedding = await provider.embed("hello", "gemini-embed")

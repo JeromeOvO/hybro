@@ -139,7 +139,11 @@ def test_select_turns_within_budget_all_fit():
 
 def test_select_turns_within_budget_truncates():
     selected, truncated = assembly.select_turns_within_budget(
-        [turn("t1", "one", tokens=10), turn("t2", "two", tokens=10), turn("t3", "three", tokens=10)],
+        [
+            turn("t1", "one", tokens=10),
+            turn("t2", "two", tokens=10),
+            turn("t3", "three", tokens=10),
+        ],
         budget_tokens=15,
     )
 
@@ -208,7 +212,10 @@ def test_char_limit_truncation(monkeypatch):
     )
 
     assert result.metadata["was_truncated"] is True
-    assert result.metadata["truncation_reason"] == TruncationReason.CHAR_LIMIT_EXCEEDED.value
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.CHAR_LIMIT_EXCEEDED.value
+    )
     assert "current task" in result.metadata["context"]
     assert len(result.metadata["context"]) <= 80
 
@@ -227,7 +234,9 @@ def test_char_limit_truncates_returned_blocks(monkeypatch):
 
     stable_block = result.blocks[0].content
     dynamic_block = result.blocks[1].content
-    block_context = f"{stable_block}\n\n{dynamic_block}" if stable_block else dynamic_block
+    block_context = (
+        f"{stable_block}\n\n{dynamic_block}" if stable_block else dynamic_block
+    )
     assert result.metadata["was_truncated"] is True
     assert block_context == result.metadata["context"]
     assert stable_block == ""
@@ -240,7 +249,9 @@ def test_char_limit_inside_stable_prefix_preserves_current_request(monkeypatch):
 
     result = assembly.assemble_supervisor_context_from_memory(
         room_doc(
-            turns=[turn("t1", "this dynamic turn is fully removed by stable truncation")],
+            turns=[
+                turn("t1", "this dynamic turn is fully removed by stable truncation")
+            ],
             room_summary={"current_goal": "stable " * 80},
         ),
         "current task",
@@ -279,7 +290,10 @@ def test_char_limit_preserves_token_budget_reason(monkeypatch):
     assert result.metadata["turns_truncated"] >= 1
     assert result.metadata["was_truncated"] is True
     assert "current task" in result.metadata["context"]
-    assert result.metadata["truncation_reason"] == TruncationReason.TOKEN_BUDGET_EXCEEDED.value
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TOKEN_BUDGET_EXCEEDED.value
+    )
 
 
 def test_token_budget_truncation_removes_oldest_turns():
@@ -314,7 +328,10 @@ def test_token_budget_hard_cap_truncates_oversized_current_task():
 
     assert result.total_tokens <= budget.available_for_content
     assert result.metadata["was_truncated"] is True
-    assert result.metadata["truncation_reason"] == TruncationReason.TOKEN_BUDGET_EXCEEDED.value
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TOKEN_BUDGET_EXCEEDED.value
+    )
     assert result.metadata["context"].endswith("... [context truncated]")
 
 

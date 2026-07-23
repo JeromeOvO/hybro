@@ -112,7 +112,9 @@ class TestCompactionSweep:
         mock_compaction_svc.compact_if_needed.assert_awaited_once_with("room_1")
 
     @pytest.mark.asyncio
-    async def test_sweep_skips_rooms_with_active_processing(self, mock_compaction_config):
+    async def test_sweep_skips_rooms_with_active_processing(
+        self, mock_compaction_config
+    ):
         """Rooms with non-terminal runs should be skipped."""
         from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
 
@@ -268,7 +270,9 @@ class TestMemorySearchHydration:
         )
 
     @pytest.mark.asyncio
-    async def test_skips_results_that_already_have_content(self, mock_compaction_config):
+    async def test_skips_results_that_already_have_content(
+        self, mock_compaction_config
+    ):
         results = [
             SearchRankingRecord(
                 turn_id="turn_1",
@@ -346,7 +350,9 @@ class TestWasSuccessfulPropagation:
 class TestLegacyTokenFallback:
     """Tests that estimated_tokens_full=0 falls back to estimate_tokens()."""
 
-    def test_select_turns_within_budget_handles_zero_tokens(self, mock_compaction_config):
+    def test_select_turns_within_budget_handles_zero_tokens(
+        self, mock_compaction_config
+    ):
         from context_memory.legacy_assembly import select_legacy_turns_within_budget
 
         mock_compaction_config.context_model_window = 32000
@@ -397,7 +403,9 @@ class TestSearchToContextIntegration:
         mock_compaction_config.context_task_pct = 0.25
 
         class Facade:
-            def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+            def assemble_supervisor_context_from_memory(
+                self, room_memory_doc, current_task, **kwargs
+            ):
                 from context_memory.assembly import (
                     assemble_supervisor_context_from_memory,
                 )

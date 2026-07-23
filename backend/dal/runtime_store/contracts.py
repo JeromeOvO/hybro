@@ -54,7 +54,9 @@ def runtime_to_room(room: RuntimeRoomRecord) -> Room:
     return Room.model_validate(_dump_runtime(room))
 
 
-def message_content_to_runtime(message_content: MessageContent) -> RuntimeMessageContent:
+def message_content_to_runtime(
+    message_content: MessageContent,
+) -> RuntimeMessageContent:
     return RuntimeMessageContent.model_validate(_dump_model(message_content))
 
 

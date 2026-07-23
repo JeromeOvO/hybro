@@ -143,9 +143,11 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       }
     })
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedAgents(agentMapping)
     setStaleAgentRefs(staleRefs)
   }, [initialData, availableAgents, catalogReady, form])
+
 
   const handleAddAgent = (agent: Agent) => {
     setSelectedAgents(prev => ({
