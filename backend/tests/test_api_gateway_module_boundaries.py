@@ -96,7 +96,6 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
         "discovery_default_limit",
         "discovery_rate_limit_service",
         "discovery_service",
-        "embedding_provider",
         "execution_engine",
         "file_storage",
         "gateway_rate_limit_service",
@@ -113,7 +112,6 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
         "sse_manager",
         "sse_store",
         "task_store",
-        "vector_index",
         "webhook_receiver",
     }
     paths = [

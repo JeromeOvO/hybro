@@ -1633,7 +1633,7 @@
           "discovery"
         ],
         "summary": "Discover Agents",
-        "description": "Search for agents based on a text query using semantic search.\n\nReturns a list of A2A-compliant AgentCards for agents that match the query\nwith a similarity score above the confidence threshold.\n\n**Authentication:** Requires `X-API-Key` header with a valid API key.\n\n**Example Request:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"limit\": 5\n}\n```\n\n**Example Response:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"agents\": [\n        {\n            \"agent_card\": { ... },\n            \"match_score\": 0.92\n        }\n    ],\n    \"count\": 1\n}\n```",
+        "description": "Search for agents based on a text query using lexical matching.\n\nReturns a list of A2A-compliant AgentCards for agents that match the query,\nranked by lexical relevance.\n\n**Authentication:** Requires `X-API-Key` header with a valid API key.\n\n**Example Request:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"limit\": 5\n}\n```\n\n**Example Response:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"agents\": [\n        {\n            \"agent_card\": { ... },\n            \"match_score\": 0.92\n        }\n    ],\n    \"count\": 1\n}\n```",
         "operationId": "discover_agents_api_v1_discovery_agents_post",
         "requestBody": {
           "content": {

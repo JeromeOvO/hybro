@@ -53,7 +53,7 @@ flowchart TD
     RoomServices --> ContextMemory[context_memory facade]
     Platform --> Mongo
     Platform --> S3[(S3)]
-    ContextMemory --> Pinecone[(Pinecone)]
+    ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
 
@@ -72,7 +72,7 @@ Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - `container.py` builds `MongoDAL`, `VectorDAL`, Redis, object-storage
+   - `container.py` builds `MongoDAL`, Redis, object-storage
      adapters, facades, repositories, route dependencies, and owner-module
      runtime adapters.
 
@@ -238,7 +238,9 @@ without importing domain models:
 - `SupervisorLLMService`: supervisor JSON/text/stream calls through the
   `supervisor_model` logical route, or Bedrock through the configured Bedrock
   supervisor route.
-- `EmbeddingLLMService`: agent and memory embeddings through `embedding_model`.
+- `EmbeddingLLMService`: an independent, optional embedding gateway capability
+  through `embedding_model`. Agent matching and Context Memory have no runtime
+  embedding consumers; future features must opt in explicitly.
 - `DiscoveryLLMService`: discovery query expansion.
 - `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
 - `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
@@ -256,8 +258,8 @@ compatibility facades.
 
 - Resolve and register A2A agent cards.
 - Store agent metadata in MongoDB.
-- Index agent descriptions in Pinecone.
-- Match agents by semantic search and capability scoring.
+- Maintain the weighted Mongo text index for searchable agent fields.
+- Match agents with Mongo text search plus multilingual application fallback.
 - Respect visibility rules for public/private agents.
 - Merge hub liveness into agent status when hub agents are involved.
 
@@ -465,7 +467,11 @@ search, and compaction:
 - `project_message_for_event`: updates room memory from persisted message
   history.
 - `assemble_context`: builds supervisor or agent context within token budgets.
-- `search_memory`: performs memory search using vector and keyword signals.
+- `search_memory`: performs Mongo keyword search with temporal decay. It keeps
+  raw keyword scores stable across widening result windows, hydrates content in
+  a second phase, and re-queries from the first window so TTL deletion cannot
+  shift an offset past surviving candidates. Results expose explicit
+  `keyword_score`, `relevance_score`, and `temporal_decay_factor` fields.
 - `run_compaction`: compacts older turns using pointer-based full-content
   storage.
 - `content_repository`: stores full content references for compacted turns.
@@ -473,8 +479,8 @@ search, and compaction:
 The facade uses:
 
 - MongoDB for room memory and stored content documents.
-- Pinecone for memory search vectors.
-- `LLMGatewayImpl` and focused gateway services for embeddings, summary,
+- MongoDB text search for relevant compacted turns.
+- `LLMGatewayImpl` and focused gateway services for summary,
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
@@ -660,12 +666,11 @@ failing on direct A2A SDK imports and SDK-shaped adapter helper usage outside
 
 ### `dal` and `database`
 
-`dal` owns production database, vector, object-storage, and Redis adapter access.
-Business modules use module-scoped repositories built from `MongoDAL`,
-`VectorDAL`, and `ObjectStorageDAL`. Adapters:
+`dal` owns production database, object-storage, and Redis adapter access.
+Business modules use module-scoped repositories built from `MongoDAL` and
+`ObjectStorageDAL`. Adapters:
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
-- `dal.pinecone`: vector adapter.
 - `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
   distributed locking support.
 - `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
@@ -696,10 +701,10 @@ still written so remote agent completion is not lost due to object-storage
 transient failures.
 
 The legacy runtime database files `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, the retired
+the former vector database module, `database/repository.py`, the retired
 `database/migration/` scripts, and the former application-shell database service
 have been removed. Production startup wiring in `container.py` uses `MongoDAL`,
-`VectorDAL`, DAL-backed repositories, and narrow owner adapters directly.
+DAL-backed repositories, and narrow owner adapters directly.
 
 Important Mongo collections include:
 
@@ -725,8 +730,8 @@ Important Mongo collections include:
 - `gateway_api_requests`
 - `agent_capability_issues`
 
-Pinecone is used for agent matching and context memory search. S3 is used for
-file uploads and converted binary artifacts.
+Mongo text indexes support Agent lexical matching and Context Memory keyword
+retrieval. S3 is used for file uploads and converted binary artifacts.
 
 ### Application Shell
 
@@ -1133,8 +1138,8 @@ Room memory is updated and used across turns.
    duplicate/missing/empty/mismatched messages skip compaction.
 6. Before agent execution, context assembly builds a token-budgeted context for
    the supervisor or the target agent.
-7. Memory search can retrieve relevant historical turns with vector and keyword
-   scoring.
+7. Memory search can retrieve relevant historical turns with keyword scoring
+   and temporal decay.
 8. The compaction sweep still handles periodic compaction for eligible rooms.
 
 The design keeps current task context, recent conversation context, room summary,
@@ -1142,11 +1147,13 @@ memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
 Memory search is provided by `ContextMemoryFacade` through the injected
-context-memory runtime protocol. Legacy search response consumers use
-`context_memory.search_adapter.ContextMemorySearchAdapter` over the same facade,
-not an application-shell service. Vector retrieval goes through `VectorDAL`, and
-keyword search/hydration goes through the context-memory content repository
-rather than private legacy database runtime backends.
+context-memory runtime protocol. Legacy search response consumers call
+`ContextMemoryFacade.legacy_search` directly. Keyword search and two-stage
+content hydration go through the context-memory content repository.
+
+An optional provider-neutral `extensions.vector_store.VectorStore` protocol is
+available for future features. It has no factory, default implementation,
+container binding, application state, or current runtime consumer.
 
 ## Background Jobs
 

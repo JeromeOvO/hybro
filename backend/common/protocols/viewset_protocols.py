@@ -8,11 +8,10 @@ from typing import Protocol, TypeAlias, runtime_checkable
 
 from pydantic import BaseModel
 
-from common.protocols.json_types import JsonMap, JsonValue
+from common.protocols.json_types import JsonMap, JsonValue  # noqa: F401
 
 RoutePayload: TypeAlias = BaseModel | JsonMap  # noqa: UP040
 ViewSetResult: TypeAlias = BaseModel | JsonMap | None  # noqa: UP040
-VectorIndexResult: TypeAlias = JsonMap | None  # noqa: UP040
 ViewSetOperation: TypeAlias = Callable[[], Awaitable[ViewSetResult]]  # noqa: UP040
 
 
@@ -60,11 +59,6 @@ class ViewSetDatabase(Protocol):
 
 
 @runtime_checkable
-class AgentVectorIndexWriter(Protocol):
-    def upsert(self, vectors: list[dict[str, JsonValue]]) -> VectorIndexResult: ...
-    def delete(self, ids: list[str]) -> VectorIndexResult: ...
-
-
 @runtime_checkable
 class ViewSetRepository(Protocol):
     async def create(self, data: RoutePayload) -> ViewSetResult: ...
@@ -91,7 +85,6 @@ class ViewSetRepositoryFactory(Protocol):
         *,
         collection_name: str,
         db: ViewSetDatabase,
-        pinecone: AgentVectorIndexWriter | None,
         pk_field: str = "_id",
     ) -> ViewSetRepository: ...
 
@@ -107,9 +100,7 @@ class ViewSetRepositoryProvider(Protocol):
 
 
 __all__ = [
-    "AgentVectorIndexWriter",
     "RoutePayload",
-    "VectorIndexResult",
     "ViewSetDatabase",
     "ViewSetDatabaseClient",
     "ViewSetDatabaseProvider",

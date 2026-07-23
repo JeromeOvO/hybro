@@ -1,3 +1,5 @@
+import json
+
 from common.dto import AgentRoutingCandidate
 from common.protocols import LLMTextGateway
 from llm_gateway.errors import LLMModelRoutingError
@@ -51,6 +53,49 @@ class AgentSelectionLLMService:
         except Exception:
             pass
         return agents[0].agent_id
+
+    async def rank_agents_for_task(
+        self,
+        meta_task_description: str,
+        agents: list[AgentRoutingCandidate],
+    ) -> list[str]:
+        """Return a safe candidate-ID permutation, or lexical order on failure."""
+        if not agents:
+            return []
+        lexical_order = [agent.agent_id for agent in agents]
+        system_prompt = (
+            "Rank the candidate agents for the task. Return only a JSON array "
+            "containing candidate IDs, best first. Do not invent IDs."
+        )
+        agents_text = "\n\n".join(
+            _format_candidate(index, agent)
+            for index, agent in enumerate(agents, start=1)
+        )
+        prompt = (
+            f"Task Description: {meta_task_description}\n\n"
+            f"Available Agents:\n{agents_text}\n\n"
+            "Return the ranked candidate ID array."
+        )
+        try:
+            response = await self._llm_provider.generate(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                model=self._default_model,
+            )
+            parsed = json.loads(response.content.strip())
+            if not isinstance(parsed, list):
+                return lexical_order
+            allowed = set(lexical_order)
+            ranked: list[str] = []
+            for value in parsed:
+                candidate_id = str(value)
+                if candidate_id in allowed and candidate_id not in ranked:
+                    ranked.append(candidate_id)
+            return [*ranked, *(item for item in lexical_order if item not in ranked)]
+        except Exception:
+            return lexical_order
 
 
 def _format_candidate(index: int, agent: AgentRoutingCandidate) -> str:

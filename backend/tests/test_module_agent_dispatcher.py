@@ -6,12 +6,15 @@ Tests cover:
 - _resolve_allowed_agent_ids: group normalization and merging
 """
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agent.resolver import AgentResolverService
 from execution.dispatch.agent_dispatcher import AgentDispatcher
-from models.room import RoomAgentMessage
+from execution.ports import AgentResolverPort
+from models.room import MessageContent, RoomAgentMessage, UserAttachment
 
 
 def _make_dispatcher():
@@ -173,3 +176,112 @@ class TestResolveAllowedAgentIds:
         }
         result = await d._resolve_allowed_agent_ids(msg)
         assert result == ["a1"]
+
+
+@pytest.mark.asyncio
+async def test_assign_agent_preserves_explicit_empty_allowed_scope(monkeypatch):
+    dispatcher = _make_dispatcher()
+    dispatcher.agent_resolver = AsyncMock()
+    dispatcher.agent_resolver.resolve.return_value = MagicMock(
+        agent=None,
+        failure_reason="No match",
+    )
+    monkeypatch.setattr(
+        AgentDispatcher,
+        "_extract_user_input",
+        staticmethod(lambda _message: "find an agent"),
+    )
+    message = MagicMock(spec=RoomAgentMessage)
+    message.message_id = "m1"
+    message.user_id = "u1"
+    message.extend_info = {"allowed_agent_ids": []}
+
+    await dispatcher.assign_agent(message)
+
+    dispatcher.agent_resolver.resolve.assert_awaited_once_with(
+        "find an agent",
+        allowed_agent_ids=[],
+        use_llm_selection=True,
+        user_id="u1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_assign_agent_passes_attachment_input_modes_to_resolver(monkeypatch):
+    dispatcher = _make_dispatcher()
+    dispatcher.agent_resolver = AsyncMock()
+    dispatcher.agent_resolver.resolve.return_value = MagicMock(
+        agent=None,
+        failure_reason="No match",
+    )
+    monkeypatch.setattr(
+        AgentDispatcher,
+        "_extract_user_input",
+        staticmethod(lambda _message: "inspect the attachment"),
+    )
+    message = MagicMock(spec=RoomAgentMessage)
+    message.message_id = "m1"
+    message.user_id = "u1"
+    message.extend_info = {"allowed_agent_ids": ["vision-agent"]}
+    message.message_content = MessageContent(
+        attachments=[
+            UserAttachment(
+                file_id="file-1",
+                s3_key="uploads/file-1",
+                mime_type="image/png",
+                file_name="diagram.png",
+                size_bytes=128,
+            )
+        ]
+    )
+
+    await dispatcher.assign_agent(message)
+
+    dispatcher.agent_resolver.resolve.assert_awaited_once_with(
+        "inspect the attachment",
+        allowed_agent_ids=["vision-agent"],
+        required_input_modes=["image/png"],
+        use_llm_selection=True,
+        user_id="u1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_assign_agent_uses_persisted_modes_for_generated_workflow_step(
+    monkeypatch,
+):
+    dispatcher = _make_dispatcher()
+    dispatcher.agent_resolver = AsyncMock()
+    dispatcher.agent_resolver.resolve.return_value = MagicMock(
+        agent=None,
+        failure_reason="No match",
+    )
+    monkeypatch.setattr(
+        AgentDispatcher,
+        "_extract_user_input",
+        staticmethod(lambda _message: "inspect the attachment"),
+    )
+    message = MagicMock(spec=RoomAgentMessage)
+    message.message_id = "m1"
+    message.user_id = "u1"
+    message.extend_info = {
+        "allowed_agent_ids": ["vision-agent"],
+        "required_input_modes": ["image/png"],
+    }
+    message.message_content = MessageContent()
+
+    await dispatcher.assign_agent(message)
+
+    assert (
+        dispatcher.agent_resolver.resolve.await_args.kwargs["required_input_modes"]
+        == ["image/png"]
+    )
+def test_agent_resolver_protocol_and_service_share_llm_default():
+    protocol_default = inspect.signature(AgentResolverPort.resolve).parameters[
+        "use_llm_selection"
+    ].default
+    service_default = inspect.signature(AgentResolverService.resolve).parameters[
+        "use_llm_selection"
+    ].default
+    assert protocol_default is True
+    assert service_default is True

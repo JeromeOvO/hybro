@@ -10,6 +10,7 @@ from enum import StrEnum
 
 from agent.matcher import AgentMatcher
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
+from common.dto import AgentRoutingCandidate
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,8 +52,9 @@ class AgentSelectionService:
     AgentSelectionResult format.
     """
 
-    def __init__(self, matcher=None):
+    def __init__(self, matcher=None, llm_reranker=None):
         self._matcher = matcher or AgentMatcher()
+        self._llm_reranker = llm_reranker
 
     def bind_facade(self, facade) -> None:
         self._matcher.bind_facade(facade)
@@ -64,6 +66,7 @@ class AgentSelectionService:
         user_id: str | None = None,
         required_input_modes: list[str] | None = None,
         is_debate_mode: bool = False,
+        use_llm_rerank: bool = True,
     ) -> AgentSelectionResult:
         """
         Select agents for a message using deterministic matching.
@@ -103,15 +106,23 @@ class AgentSelectionService:
                 needs_debate=False,
             )
 
+        ranked_agents = match_result.agents
+        if use_llm_rerank and len(ranked_agents) > 1:
+            rerank_head = ranked_agents[:5]
+            ranked_agents = [
+                *(await self._rerank(message_text, rerank_head)),
+                *ranked_agents[5:],
+            ]
+
         # Map MatchedAgent to AgentSelection, respecting top_k cap
         agent_selections = [
             AgentSelection(
                 agent_id=matched.agent.agent_id,
                 agent_name=matched.agent.agent_card.name,
-                reason=f"Match score: {matched.final_score:.2f} (vector: {matched.vector_score:.2f}, capability: {matched.capability_score:.2f})",
+                reason=f"Lexical match score: {matched.lexical_score:.2f}",
                 score=matched.final_score,
             )
-            for matched in match_result.agents[:top_k]
+            for matched in ranked_agents[:top_k]
         ]
 
         # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1
@@ -150,7 +161,11 @@ class AgentSelectionService:
         Returns:
             AgentSuggestionResult with routing metadata and suggested agents
         """
-        result = await self.select_agents_for_message(message_text, top_k)
+        result = await self.select_agents_for_message(
+            message_text,
+            top_k,
+            use_llm_rerank=False,
+        )
 
         return AgentSuggestionResult(
             analysis=result.reasoning,
@@ -169,3 +184,54 @@ class AgentSelectionService:
                 for agent in result.agents
             ],
         )
+
+    async def _rerank(self, query: str, candidates):
+        if self._llm_reranker is None:
+            return candidates
+        try:
+            routing_candidates = [
+                _routing_candidate(item.agent) for item in candidates
+            ]
+            if hasattr(self._llm_reranker, "rank_agents_for_task"):
+                ranked_ids = await self._llm_reranker.rank_agents_for_task(
+                    query,
+                    routing_candidates,
+                )
+            else:
+                best_id = await self._llm_reranker.select_best_agent_for_task(
+                    query,
+                    routing_candidates,
+                )
+                ranked_ids = [best_id]
+        except Exception:
+            logger.warning("Agent LLM rerank failed; using lexical order", exc_info=True)
+            return candidates
+        by_id = {item.agent.agent_id: item for item in candidates}
+        ranked = []
+        seen: set[str] = set()
+        for candidate_id in ranked_ids if isinstance(ranked_ids, list) else []:
+            candidate_id = str(candidate_id)
+            if candidate_id in by_id and candidate_id not in seen:
+                ranked.append(by_id[candidate_id])
+                seen.add(candidate_id)
+        return [*ranked, *(item for item in candidates if item.agent.agent_id not in seen)]
+
+
+def _routing_candidate(agent) -> AgentRoutingCandidate:
+    card = agent.agent_card
+    skills = [
+        str(
+            (skill.get("name") or skill.get("id") or "Unknown")
+            if isinstance(skill, dict)
+            else getattr(skill, "name", None) or skill
+        )
+        for skill in (card.skills or [])
+    ]
+    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
+    return AgentRoutingCandidate(
+        agent_id=str(agent.agent_id),
+        name=str(card.name),
+        description=str(card.description or ""),
+        capabilities=capabilities,
+        skills=skills,
+    )

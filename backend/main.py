@@ -98,6 +98,9 @@ def compute_health_status(
     relay_streams_available: bool = False,
     redis_url: str,
     change_stream_connected: bool,
+    agent_search_index_ready: bool = True,
+    memory_search_index_ready: bool = True,
+    search_indexes_ready: bool = True,
 ) -> dict:
     redis_expected = bool(redis_url)
     redis_degraded = redis_expected and not (
@@ -106,7 +109,11 @@ def compute_health_status(
         and redis_runtime_connected
         and relay_streams_available
     )
-    degraded = redis_degraded or not change_stream_connected
+    degraded = (
+        redis_degraded
+        or not change_stream_connected
+        or not search_indexes_ready
+    )
     return {
         "body": {
             "status": "degraded" if degraded else "ok",
@@ -120,6 +127,9 @@ def compute_health_status(
             "broker_expected": redis_expected,
             "redis_service_connected": redis_runtime_connected,
             "legacy_redis_service_connected": redis_runtime_connected,
+            "agent_search_index_ready": agent_search_index_ready,
+            "memory_search_index_ready": memory_search_index_ready,
+            "search_indexes_ready": search_indexes_ready,
         },
         "status_code": 503 if degraded else 200,
     }

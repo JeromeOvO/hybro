@@ -1,19 +1,10 @@
 from fastapi import Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from api_gateway.dependencies import (
-    get_agent_viewset_embedding_provider,
-    get_agent_viewset_vector_index,
-)
 from api_gateway.viewsets import base as viewset
 from api_gateway.viewsets.base import REPO_ACTIONS_MAP
 from common.auth import ClerkUser, get_current_user, get_optional_user
-from common.protocols import (
-    AgentVectorIndexWriter,
-    EmbeddingServiceProtocol,
-    ViewSetFilterParams,
-    ViewSetPaginationParams,
-)
+from common.protocols import ViewSetFilterParams, ViewSetPaginationParams
 from models.request import (
     AgentCreate,
     AgentPatch,
@@ -25,7 +16,7 @@ from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 class AgentViewSet(viewset.ViewSet):
     """
     CRUD router for managing agents.
-    Override update, create, delete methods to update pinecone index as needed.
+    CRUD router for agent documents.
     """
 
     def __init__(self):
@@ -152,12 +143,6 @@ class AgentViewSet(viewset.ViewSet):
             provider: viewset.ViewSetRepositoryProvider = Depends(
                 viewset.get_viewset_repository_provider
             ),
-            embedding_provider: EmbeddingServiceProtocol = Depends(
-                get_agent_viewset_embedding_provider
-            ),
-            vector_index: AgentVectorIndexWriter = Depends(
-                get_agent_viewset_vector_index
-            ),
             user: ClerkUser = Depends(get_current_user),
         ):
             del user
@@ -165,8 +150,6 @@ class AgentViewSet(viewset.ViewSet):
                 repo,
                 item,
                 repository_provider=provider,
-                embedding_provider=embedding_provider,
-                vector_index=vector_index,
             )
 
         self.router.add_api_route(
@@ -188,12 +171,6 @@ class AgentViewSet(viewset.ViewSet):
             provider: viewset.ViewSetRepositoryProvider = Depends(
                 viewset.get_viewset_repository_provider
             ),
-            embedding_provider: EmbeddingServiceProtocol = Depends(
-                get_agent_viewset_embedding_provider
-            ),
-            vector_index: AgentVectorIndexWriter = Depends(
-                get_agent_viewset_vector_index
-            ),
             user: ClerkUser = Depends(get_current_user),
         ):
             return await self._update(
@@ -201,8 +178,6 @@ class AgentViewSet(viewset.ViewSet):
                 item_id,
                 item,
                 repository_provider=provider,
-                embedding_provider=embedding_provider,
-                vector_index=vector_index,
                 user=user,
             )
 
@@ -224,12 +199,6 @@ class AgentViewSet(viewset.ViewSet):
             provider: viewset.ViewSetRepositoryProvider = Depends(
                 viewset.get_viewset_repository_provider
             ),
-            embedding_provider: EmbeddingServiceProtocol = Depends(
-                get_agent_viewset_embedding_provider
-            ),
-            vector_index: AgentVectorIndexWriter = Depends(
-                get_agent_viewset_vector_index
-            ),
             user: ClerkUser = Depends(get_current_user),
         ):
             return await self._patch(
@@ -237,8 +206,6 @@ class AgentViewSet(viewset.ViewSet):
                 item_id,
                 item,
                 repository_provider=provider,
-                embedding_provider=embedding_provider,
-                vector_index=vector_index,
                 user=user,
             )
 
@@ -256,16 +223,12 @@ class AgentViewSet(viewset.ViewSet):
             provider: viewset.ViewSetRepositoryProvider = Depends(
                 viewset.get_viewset_repository_provider
             ),
-            vector_index: AgentVectorIndexWriter = Depends(
-                get_agent_viewset_vector_index
-            ),
             user: ClerkUser = Depends(get_current_user),
         ):
             return await self._delete(
                 repo,
                 item_id,
                 repository_provider=provider,
-                vector_index=vector_index,
                 user=user,
             )
 
@@ -276,69 +239,10 @@ class AgentViewSet(viewset.ViewSet):
             status_code=status.HTTP_204_NO_CONTENT,
         )
 
-    async def update_pinecone_index(
-        self,
-        agent_id: str,
-        description: str,
-        *,
-        embedding_provider: EmbeddingServiceProtocol,
-        vector_index: AgentVectorIndexWriter,
-    ):
-        """Update Pinecone index when an agent is created or updated."""
-        # get embedding of agent description
-        embedding_data = await embedding_provider.get_embedding(description)
-        vector_data = {
-            "id": str(agent_id),
-            "values": embedding_data,
-            "metadata": {"type": "a2a_agent", "agent_id": str(agent_id)},
-        }
-        vector_index.upsert([vector_data])
-
-    async def _upsert_agent_vector(
-        self,
-        agent_id: str,
-        description: str,
-        *,
-        embedding_provider: EmbeddingServiceProtocol | None,
-        vector_index: AgentVectorIndexWriter | None,
-    ) -> None:
-        if embedding_provider is None or vector_index is None:
-            raise RuntimeError("Agent viewset mutation dependencies are required")
-        await self.update_pinecone_index(
-            agent_id,
-            description,
-            embedding_provider=embedding_provider,
-            vector_index=vector_index,
-        )
-
-    def _delete_agent_vector(
-        self,
-        agent_id: str | None,
-        *,
-        vector_index: AgentVectorIndexWriter | None,
-    ) -> None:
-        if vector_index is None:
-            raise RuntimeError("Agent viewset vector dependency is required")
-        vector_index.delete([str(agent_id)])
-
-    async def _update_db_and_pinecone(
-        self,
-        repo,
-        action,
-        *args,
-        user=None,
-        embedding_provider: EmbeddingServiceProtocol | None = None,
-        vector_index: AgentVectorIndexWriter | None = None,
-    ):
+    async def _update_db(self, repo, action, *args, user=None):
         repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action), None)
-        schema: BaseModel | None = None
-        existing_description: str | None = None
-        new_description: str | None = None
-        primary_key: str | None = None
-        # We only want to update Pinecone index on create, update, patch, delete
         if action in [viewset.UPDATE, viewset.PATCH, viewset.DELETE]:
-            primary_key = args[0]
-            existing_agent = await repo.get(primary_key)
+            existing_agent = await repo.get(args[0])
             if existing_agent:
                 if (
                     user is not None
@@ -348,38 +252,9 @@ class AgentViewSet(viewset.ViewSet):
                         status_code=403,
                         detail="You do not have permission to modify this agent",
                     )
-                existing_description = (
-                    existing_agent.get("agent_card", {}).get("description", "")
-                    if existing_agent
-                    else ""
-                )
             else:
                 raise HTTPException(status_code=404, detail="Agent not found")
-        if action in [viewset.CREATE, viewset.UPDATE, viewset.PATCH]:
-            schema = args[0] if action == viewset.CREATE else args[1]
-            # agent_card field is optional and may be None in schema
-            new_description = (
-                schema.agent_card.description if schema.agent_card else None
-            )
-        if action == viewset.PATCH and new_description is None:
-            # For patch, if description not provided, keep existing one
-            new_description = existing_description
-        # Update DB
-        result = await repo_method(*args)
-        # Update Pinecone index if description changed
-        if result and existing_description != new_description:
-            if new_description:
-                await self._upsert_agent_vector(
-                    result[repo.pk_field],
-                    new_description,
-                    embedding_provider=embedding_provider,
-                    vector_index=vector_index,
-                )
-            elif existing_description:
-                # No new description but had existing one,
-                # this will also cover delete case
-                self._delete_agent_vector(primary_key, vector_index=vector_index)
-        return result
+        return await repo_method(*args)
 
     async def _handle_operation(
         self,
@@ -387,31 +262,15 @@ class AgentViewSet(viewset.ViewSet):
         repo: viewset.ViewSetRepository,
         *args,
         user=None,
-        embedding_provider: EmbeddingServiceProtocol | None = None,
-        vector_index: AgentVectorIndexWriter | None = None,
         repository_provider: viewset.ViewSetRepositoryProvider | None = None,
     ):
         """Generic handler for CRUD operations."""
         repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
         if action in [viewset.LIST, viewset.RETRIEVE]:
-            # No update to Pinecone index for read operations
             return await repo_method(*args)
-        if action in [viewset.CREATE, viewset.UPDATE, viewset.PATCH]:
-            if embedding_provider is None or vector_index is None:
-                raise RuntimeError("Agent viewset mutation dependencies are required")
-        elif action == viewset.DELETE:
-            if vector_index is None:
-                raise RuntimeError("Agent viewset vector dependency is required")
 
         async def operation():
-            return await self._update_db_and_pinecone(
-                repo,
-                action,
-                *args,
-                user=user,
-                embedding_provider=embedding_provider,
-                vector_index=vector_index,
-            )
+            return await self._update_db(repo, action, *args, user=user)
 
         if self.use_transactions:
             if repository_provider is None:
@@ -425,17 +284,12 @@ class AgentViewSet(viewset.ViewSet):
         self,
         repo: viewset.ViewSetRepository,
         item,
-        *,
-        embedding_provider: EmbeddingServiceProtocol,
-        vector_index: AgentVectorIndexWriter,
         **operation_deps,
     ):
         result = await self._handle_operation(
             viewset.CREATE,
             repo,
             item,
-            embedding_provider=embedding_provider,
-            vector_index=vector_index,
             **operation_deps,
         )
         if not result:
@@ -449,9 +303,6 @@ class AgentViewSet(viewset.ViewSet):
         repo: viewset.ViewSetRepository,
         item_id,
         item,
-        *,
-        embedding_provider: EmbeddingServiceProtocol,
-        vector_index: AgentVectorIndexWriter,
         **operation_deps,
     ):
         result = await self._handle_operation(
@@ -459,8 +310,6 @@ class AgentViewSet(viewset.ViewSet):
             repo,
             item_id,
             item,
-            embedding_provider=embedding_provider,
-            vector_index=vector_index,
             **operation_deps,
         )
         if not result:
@@ -474,9 +323,6 @@ class AgentViewSet(viewset.ViewSet):
         repo: viewset.ViewSetRepository,
         item_id,
         item,
-        *,
-        embedding_provider: EmbeddingServiceProtocol,
-        vector_index: AgentVectorIndexWriter,
         **operation_deps,
     ):
         result = await self._handle_operation(
@@ -484,8 +330,6 @@ class AgentViewSet(viewset.ViewSet):
             repo,
             item_id,
             item,
-            embedding_provider=embedding_provider,
-            vector_index=vector_index,
             **operation_deps,
         )
         if not result:
@@ -498,15 +342,12 @@ class AgentViewSet(viewset.ViewSet):
         self,
         repo: viewset.ViewSetRepository,
         item_id,
-        *,
-        vector_index: AgentVectorIndexWriter,
         **operation_deps,
     ):
         return await self._handle_operation(
             viewset.DELETE,
             repo,
             item_id,
-            vector_index=vector_index,
             **operation_deps,
         )
 

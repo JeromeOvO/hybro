@@ -732,7 +732,6 @@ def test_container_delivery_factories_and_config_mapping():
 def test_main_does_not_import_or_instantiate_concrete_dal():
     forbidden_names = {
         "MongoDALImpl",
-        "VectorDALImpl",
         "RedisKVImpl",
         "RedisPubSubImpl",
     }

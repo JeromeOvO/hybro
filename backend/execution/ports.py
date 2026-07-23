@@ -312,8 +312,9 @@ class AgentResolverPort(Protocol):
         *,
         allowed_agent_ids: list[str] | None = None,
         count: int = 5,
-        use_llm_selection: bool = False,
+        use_llm_selection: bool = True,
         user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> Any: ...
 
 

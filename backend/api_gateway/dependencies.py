@@ -19,10 +19,8 @@ from common.protocols import (
     A2ATaskStatusReader,
     AgentAvatarManager,
     AgentRegistry,
-    AgentVectorIndexWriter,
     APIKeyRateLimiter,
     APIKeyStore,
-    EmbeddingServiceProtocol,
     ExecutionEngine,
     FileStorage,
     GatewayDiscoveryProvider,
@@ -71,8 +69,6 @@ class APIGatewayDeps:
     sse_transport: SSERouteTransport
     webhook_receiver: WebhookReceiver
     repository_provider: ViewSetRepositoryProvider
-    embedding_provider: EmbeddingServiceProtocol
-    vector_index: AgentVectorIndexWriter
 
 
 def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
@@ -283,15 +279,3 @@ def get_viewset_repository_provider(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> ViewSetRepositoryProvider:
     return deps.repository_provider
-
-
-def get_agent_viewset_embedding_provider(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> EmbeddingServiceProtocol:
-    return deps.embedding_provider
-
-
-def get_agent_viewset_vector_index(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentVectorIndexWriter:
-    return deps.vector_index

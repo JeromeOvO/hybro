@@ -125,11 +125,20 @@ class FakeContentRepository:
         return {"room_id": room_id}
 
     async def text_search(
-        self, room_id: str, query: str, limit: int = 50
+        self,
+        room_id: str,
+        query: str,
+        limit: int = 50,
+        skip: int = 0,
     ) -> list[dict]:
         return []
 
-    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
+    async def scan_text_search(self, room_id: str, query: str) -> list[dict]:
+        return []
+
+    async def hydrate_turn_content(
+        self, room_id: str, turn_ids: list[str]
+    ) -> list[dict]:
         return []
 
 
@@ -142,23 +151,6 @@ class FakeRoomHistoryReader:
 
     async def get_message_thread(self, parent_message_id: str):
         return []
-
-
-class FakeVector:
-    async def search(self, index, vector, top_k, filter=None):
-        return []
-
-    async def upsert(self, index, records):
-        return None
-
-    async def delete(self, index, ids):
-        return None
-
-    async def delete_by_filter(self, index, filter):
-        return None
-
-    async def ping(self):
-        return True
 
 
 class FakeLLM:
@@ -184,7 +176,6 @@ def _facade():
         memory_repository=FakeMemoryRepository(),
         content_repository=FakeContentRepository(),
         room_history_reader=FakeRoomHistoryReader(),
-        vector=FakeVector(),
         llm_provider=FakeLLM(),
         id_factory=lambda: "id-1",
         now=lambda: datetime.now(UTC),
@@ -255,7 +246,8 @@ def test_context_memory_protocol_method_sets():
         "delete_content_by_room_id",
         "get_content_stats_for_room",
         "text_search",
-        "hydrate_turn_notes",
+        "scan_text_search",
+        "hydrate_turn_content",
     }
 
 
@@ -267,7 +259,6 @@ def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch)
 
     facade = create_context_memory_facade(
         mongo=FakeMongo(),
-        vector=FakeVector(),
         llm_provider=FakeLLM(),
         room_history_reader=FakeRoomHistoryReader(),
     )
@@ -297,9 +288,6 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     monkeypatch.setattr(settings, "compaction_content_ttl_days", 9)
     monkeypatch.setattr(settings, "compaction_concurrency", 4)
     monkeypatch.setattr(settings, "memory_search_enabled", False)
-    monkeypatch.setattr(settings, "memory_search_vector_weight", 0.4)
-    monkeypatch.setattr(settings, "memory_search_keyword_weight", 0.6)
-    monkeypatch.setattr(settings, "memory_search_index_name", "settings-index")
 
     token_budget = TokenBudgetConfig()
     compaction = CompactionConfig()
@@ -319,9 +307,6 @@ def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     assert compaction.content_ttl_days == 9
     assert compaction.concurrency == 4
     assert search.enabled is False
-    assert search.vector_weight == 0.4
-    assert search.keyword_weight == 0.6
-    assert search.index_name == "settings-index"
 
 
 def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):
@@ -408,7 +393,6 @@ def test_context_memory_import_boundary():
         "models",
         "modules",
         "openai",
-        "pinecone",
         "pymongo",
         "room",
         "services",
@@ -472,11 +456,6 @@ def test_non_protocol_helper_call_boundary():
             "add_synthesis_to_history",
             "update_room_summary",
         },
-        "context_memory/search_adapter.py": {
-            "legacy_search",
-            "index_turn_for_search",
-            "delete_room_index",
-        },
         f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
@@ -489,11 +468,6 @@ def test_non_protocol_helper_call_boundary():
             "add_agent_response_to_memory",
             "add_synthesis_to_history",
             "update_room_summary",
-        },
-        f"{REMOVED_RUNTIME_PACKAGE}/memory_search_service.py": {
-            "legacy_search",
-            "index_turn_for_search",
-            "delete_room_index",
         },
         f"{REMOVED_RUNTIME_PACKAGE}/compaction_service.py": {
             "should_compact",

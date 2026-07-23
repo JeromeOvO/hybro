@@ -19,8 +19,6 @@ from common.dto.dal import (
     PaginationParams,
     QueryFilter,
     SortOrder,
-    VectorRecord,
-    VectorSearchResult,
 )
 from common.dto.delivery import (
     AgentMessageFinal,
@@ -237,7 +235,5 @@ __all__ = [
     "TaskUpdateEvent",
     "UserMemory",
     "UserMessageInput",
-    "VectorRecord",
-    "VectorSearchResult",
     "WorkflowState",
 ]

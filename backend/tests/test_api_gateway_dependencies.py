@@ -40,8 +40,6 @@ def _deps(**overrides):
         "sse_transport": MagicMock(),
         "webhook_receiver": MagicMock(),
         "repository_provider": MagicMock(),
-        "embedding_provider": MagicMock(),
-        "vector_index": MagicMock(),
     }
     values.update(overrides)
     return APIGatewayDeps(**values)
@@ -87,8 +85,6 @@ PROVIDER_FIELD_NAMES = [
     ("get_sse_transport", "sse_transport"),
     ("get_webhook_receiver", "webhook_receiver"),
     ("get_viewset_repository_provider", "repository_provider"),
-    ("get_agent_viewset_embedding_provider", "embedding_provider"),
-    ("get_agent_viewset_vector_index", "vector_index"),
 ]
 
 

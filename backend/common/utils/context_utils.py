@@ -519,9 +519,8 @@ def add_turn_to_history(
         else:
             memory_content.summary = summary_addition
 
-        # Cap summary to prevent unbounded growth — oldest content (front)
-        # is trimmed first since those turns are already compacted and
-        # searchable via Pinecone.
+        # Cap summary to prevent unbounded growth; oldest content is trimmed
+        # first because compacted turns remain searchable in MongoDB.
         if len(memory_content.summary) > MAX_SUMMARY_CHARS:
             memory_content.summary = (
                 "..."

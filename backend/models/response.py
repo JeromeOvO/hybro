@@ -273,7 +273,7 @@ class DiscoveryAgentResult(BaseModel):
     """A single agent result from the Discovery API."""
 
     agent_card: dict  # A2A Protocol AgentCard as dictionary
-    match_score: float  # Similarity score (0.0 to 1.0)
+    match_score: float  # Lexical relevance score (0.0 to 1.0)
 
 
 class DiscoveryResponse(BaseModel):

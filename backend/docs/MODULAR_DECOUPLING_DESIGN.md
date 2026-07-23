@@ -1,6 +1,6 @@
 # Modular Decoupling Design Document
 
-> **Status**: Final / Accepted after Goal 8.6 application-shell package removal
+> **Status**: Updated after removal of the runtime vector database
 > **Date**: 2026-06-26
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
@@ -15,7 +15,7 @@ This document records the accepted restructuring of the codebase into **well-def
 
 ### Design Principles
 
-1. **Pure Decoupling, No Stack Swap** — Keep MongoDB + Redis + Pinecone + FastAPI, only restructure
+1. **Minimal Local Runtime** — Keep MongoDB + Redis + FastAPI and require no vector database
 2. **Protocol Boundaries** — Modules communicate only through Protocols defined in Common
 3. **Unified DAL** — Unified data access encapsulation; modules build Repositories on top of DAL
 4. **Anti-Corruption Layer** — A2A protocol and LLM Providers each have independent adapter layers; business modules never directly import external SDKs
@@ -100,7 +100,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
                                  ▼
      ┌────────────────────────────────────────────────────────────────────────┐
      │                      Data Access Layer (DAL)                            │
-     │   MongoDAL / RedisKV / RedisPubSub / RedisStreams / VectorDAL / S3DAL │
+     │      MongoDAL / RedisKV / RedisPubSub / RedisStreams / S3DAL         │
      └───────────────────────────┬────────────────────────────────────────────┘
                                  │
                                  ▼
@@ -413,7 +413,8 @@ class ContentStorageRepository(Protocol):
     async def delete_content_by_room_id(self, room_id: str) -> int: ...
     async def get_content_stats_for_room(self, room_id: str) -> dict: ...
     async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]: ...
-    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]: ...
+    async def scan_text_search(self, room_id: str, query: str) -> list[dict]: ...
+    async def hydrate_turn_content(self, room_id: str, turn_ids: list[str]) -> list[dict]: ...
 
 
 @runtime_checkable
@@ -1246,7 +1247,8 @@ class ContentStorageRepository(Protocol):
     async def delete_content_by_room_id(self, room_id: str) -> int: ...
     async def get_content_stats_for_room(self, room_id: str) -> dict: ...
     async def text_search(self, room_id: str, query: str, limit: int = 50) -> list[dict]: ...
-    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]: ...
+    async def scan_text_search(self, room_id: str, query: str) -> list[dict]: ...
+    async def hydrate_turn_content(self, room_id: str, turn_ids: list[str]) -> list[dict]: ...
 
 
 @runtime_checkable
@@ -1311,20 +1313,6 @@ class RedisStreams(Protocol):
 
 
 @runtime_checkable
-class VectorDAL(Protocol):
-    """Vector search — used by Agent, Context & Memory."""
-
-    async def search(
-        self, index: str, vector: list[float], top_k: int, filter: dict | None = None
-    ) -> list[VectorSearchResult]: ...
-
-    async def upsert(self, index: str, records: list[VectorRecord]) -> None: ...
-    async def delete(self, index: str, ids: list[str]) -> None: ...
-    async def delete_by_filter(self, index: str, filter: dict) -> None: ...
-    async def ping(self) -> bool: ...
-
-
-@runtime_checkable
 class ObjectStorageDAL(Protocol):
     """S3-compatible object storage."""
 
@@ -1383,7 +1371,7 @@ Redis DAL failure contract after Phase 6:
 - Configured-driver failures from `RedisStreams.xadd()` and `xread()` raise `TransientError`.
 - `ping()` remains a health boolean and `close()` remains best-effort cleanup.
 
-`MongoCollection.find_one_by_stable_or_native_id(stable_id_field, id_value)` is the DAL-owned fallback for legacy compacted content pointers. BSON/ObjectId conversion stays inside `dal/mongo/client.py`; Common protocols and business modules do not construct provider-native `_id` queries. Vector index missing/unavailable states are reported through `common.errors.VectorIndexUnavailableError` so Context & Memory does not depend on Pinecone exception types.
+`MongoCollection.find_one_by_stable_or_native_id(stable_id_field, id_value)` is the DAL-owned fallback for legacy compacted content pointers. BSON/ObjectId conversion stays inside `dal/mongo/client.py`; Common protocols and business modules do not construct provider-native `_id` queries. Agent and Context Memory search-index readiness is reported independently through application health state.
 
 ---
 
@@ -1647,7 +1635,7 @@ async def lifespan(app: FastAPI):
     app.state.container = container
 
     # === Phase 1: Infrastructure connections ===
-    # (handled inside create_container: mongo.connect, redis.connect, pinecone.connect)
+    # (handled inside create_container: mongo.connect, redis.connect)
 
     # === Phase 1.5: Indexes (per-module, parallel-safe) ===
     await container.dal.index_registry.ensure_all()
@@ -1721,7 +1709,7 @@ async def lifespan(app: FastAPI):
 
 Phase 6 implementation detail: the current repository does not yet have a single
 `DALContainer`; `container.py` exposes focused helpers instead:
-`create_mongo_dal()`, `create_vector_dal()`, `create_delivery_config()`,
+`create_mongo_dal()`, `create_delivery_config()`,
 `create_delivery_redis_clients()`, `create_delivery_cancellation_collection()`,
 `create_delivery_facade()`, and `create_delivery_deps()`. `container._runtime_lifespan()`
 and `startup_runtime()` construct Delivery through these container helpers and do not import
@@ -1745,7 +1733,6 @@ class DALContainer:
     redis_kv: RedisKV | None          # None in single-worker no-redis mode
     redis_pubsub: RedisPubSub | None  # Separate pool (B4 fix)
     redis_streams: RedisStreams | None # Separate pool for blocking XREAD (B4 fix)
-    vector: VectorDAL
     object_storage: ObjectStorageDAL
     distributed_lock: DistributedLock  # Short-lived critical sections
     leader_elector: LeaderElector      # Long-lived job leader (B5 fix)
@@ -1963,7 +1950,6 @@ class Settings(BaseSettings):
     mongodb_url: str
     openai_api_key: str
     clerk_secret_key: str
-    pinecone_api_key: str
 
     # --- Optional with safe defaults ---
     app_env: str = "development"
@@ -1986,8 +1972,6 @@ class Settings(BaseSettings):
     feature_a2a_long_running: bool = False  # auto-set True if webhook_signing_key present
 
     # --- Tuning (all values from current os.getenv defaults) ---
-    match_vector_weight: float = 0.7
-    match_gap_threshold: float = 0.15
     supervisor_max_steps: int = 8
     compaction_concurrency: int = 3
     run_watchdog_stale_minutes: int = 30
@@ -2129,7 +2113,6 @@ Rules:
 
 - `dal/mongo/` wrapping existing Motor client → `MongoDAL` + `MongoCollection`
 - `dal/redis/` split into `RedisKV` + `RedisPubSub` + `RedisStreams` (three pools)
-- `dal/pinecone/` → `VectorDAL`
 - `dal/s3/` → `ObjectStorageDAL`
 - `dal/redis/lock.py` → `DistributedLock` (short-lived) + `LeaderElector` (long-lived)
 - `IndexRegistry` implementation
@@ -2143,7 +2126,7 @@ DAL adapters directly from the composition root. Agent, Room, Execution,
 ContextMemory, Platform, HubRuntimeBridge, and Jobs use module-owned repositories
 or protocols rather than deleted database service singletons.
 The final legacy runtime deletion removed `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, and
+the former vector database module, `database/repository.py`, and
 the former application-shell database service; production code must not
 reintroduce them.
 
@@ -2153,7 +2136,7 @@ with the final legacy runtime deletion, and the retired `database/migration/`
 package has also been removed after its remaining migrations were applied. New
 migration scripts must be standalone Motor/DAL scripts or live under a current
 owner package; they must not restore `database/mongodb.py`,
-`database/pinecone_db.py`, `database/repository.py`, `database/migration/`, or
+the former vector database module, `database/repository.py`, `database/migration/`, or
 the former application-shell database service for compatibility.
 
 #### Phase 2: Adapter Layer (2.5 weeks)
@@ -2333,7 +2316,7 @@ class AgentService:
 | **Agent lifecycle** | | | |
 | Agent registration | `agent/service.py`, `agent/route_adapter.py` | Agent | `service/agent_crud.py` |
 | Agent health checking | `agent/health.py` | Agent + Jobs | `service/agent_health.py` |
-| Agent matching (vector) | `agent/selection_service.py` | Agent | `service/agent_matching.py` |
+| Agent matching (lexical + LLM rerank) | `agent/selection_service.py` | Agent | `agent/matching.py` |
 | Agent groups | `api/agent_group.py` | Agent | `repository/agent_group_repo.py` |
 | Agent card fetching | `a2a_adapter.runtime_service`, `a2a_adapter/card_resolver.py` | A2A Adapter | `card_resolver.py` / `client_facade.py` |
 | Agent inspection | `agent/inspection.py`, `agent/route_adapter.py` | Agent | `service/agent_crud.py` |
@@ -2350,7 +2333,7 @@ class AgentService:
 | **Context & Memory** | | | |
 | Context assembly and legacy selection/metrics | `context_memory/compat/context_assembly.py` | Context & Memory | `context_memory/facade.py`, `context_memory/assembly.py`, `context_memory/legacy_assembly.py` |
 | Memory compaction | `context_memory/compaction.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compaction.py`, `context_memory/protocols.py` |
-| Memory search | `context_memory/search.py` and `context_memory/search_adapter.py` | Context & Memory | `context_memory/search.py`, `context_memory/search_adapter.py` |
+| Memory search | `context_memory/search.py` | Context & Memory | `context_memory/search.py` |
 | Room/chat memories | `context_memory/compat/runtime.py` and `ContextMemoryFacade` | Context & Memory | `context_memory/compat/runtime.py`, `context_memory/facade.py` |
 | **Execution** | | | |
 | Message dispatch | `execution/orchestration/room_message_center.py` | Execution | `orchestration/` + `dispatch/` |
@@ -2394,7 +2377,7 @@ class AgentService:
 | OpenAI SDK calls | deleted provider facade | LLM Gateway | `providers/openai_provider.py` |
 | Gemini SDK calls | deleted provider facade | LLM Gateway | `providers/gemini_provider.py` |
 | Bedrock SDK calls | deleted provider facade | LLM Gateway | `providers/bedrock_provider.py` |
-| Embedding generation | agent, memory, and viewset adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
+| Embedding generation | optional future feature adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
 | Supervisor, summary, parsing, memory prompts | focused service consumers | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
 | A2A message send/stream | `a2a_adapter.runtime_service` | A2A Adapter | `a2a_adapter/client_facade.py` |
@@ -2407,7 +2390,6 @@ class AgentService:
 | Redis KV | `dal/redis/kv.py` | DAL | `redis/kv.py` |
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
 | Redis Streams | `dal/redis/streams.py` | DAL | `redis/streams.py` |
-| Pinecone | `database/pinecone_db.py` | DAL | `pinecone/client.py` |
 | S3 SDK calls | `PlatformObjectStorage` compatibility adapter | DAL | `s3/client.py` |
 | Leader election | `dal/redis/lock.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
@@ -2679,7 +2661,8 @@ async def health_check(container: AppContainer) -> dict:
             "redis_kv": container.dal.redis_kv is not None and await container.dal.redis_kv.ping(),
             "redis_pubsub": container.dal.redis_pubsub is not None and await container.dal.redis_pubsub.ping(),
             "redis_streams": container.dal.redis_streams is not None and await container.dal.redis_streams.ping(),
-            "vector": await container.dal.vector.ping(),
+            "agent_search_index_ready": app.state.agent_search_index_ready,
+            "memory_search_index_ready": app.state.memory_search_index_ready,
         },
     }
 ```
@@ -3115,7 +3098,7 @@ Current `_enrich_hub_fields` joins `agents × hubs` to set `hub_owner_id` and `i
 | 2026-05-05 | EventPublisher.emit() catches handler exceptions (dead-letter) | Invariant 5 compliance; never propagate to caller (fix 2.2) |
 | 2026-05-05 | cancel_inflight_tasks() added to ExecutionEngine Protocol | Shutdown invariant requires Protocol method (fix 2.3) |
 | 2026-05-05 | emit_internal + register_internal_handler added to EventPublisher Protocol | Internal events need Protocol-visible methods (fix 2.4) |
-| 2026-05-05 | ping() added to all Redis + Vector Protocols | Health check requires real connectivity validation (fix 2.5/2.6) |
+| 2026-05-05 | ping() added to Redis protocols | Health check requires real connectivity validation (fix 2.5/2.6) |
 | 2026-05-05 | Repository Protocols return dict (intentional) | Type safety at facade boundary; avoids double-validation cost (fix 2.7) |
 | 2026-05-05 | No-op import-linter os.getenv contract removed | Contract was always-pass; only AST scan enforces (fix 2.8) |
 | 2026-05-05 | traced_create_task() mandatory helper | Centralized background task context propagation without requiring new Phase 7b dependencies (fix 2.9) |

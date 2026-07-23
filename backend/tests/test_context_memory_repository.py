@@ -1129,6 +1129,12 @@ async def test_content_text_search_projection_excludes_full_content(
     assert projection["turn_id"] == 1
     assert projection["turn_notes"] == 1
     assert projection["stored_at"] == 1
+    assert kwargs["sort"] == [
+        ("score", {"$meta": "textScore"}),
+        ("turn_timestamp", -1),
+        ("stored_at", -1),
+        ("turn_id", 1),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1147,7 +1153,19 @@ async def test_content_text_search_filters_expired_documents(content_repo, mongo
 
 
 @pytest.mark.asyncio
-async def test_content_hydrate_turn_notes_filters_expired_documents(
+async def test_content_scan_text_search_uses_one_unbounded_cursor_without_nin(
+    content_repo, mongo
+):
+    await content_repo.scan_text_search("r1", "query")
+
+    query, kwargs = mongo.collections["conversation_content"].find_calls[-1]
+    assert "turn_id" not in query
+    assert kwargs["exhaust"] is True
+    assert "content" not in kwargs["projection"]
+
+
+@pytest.mark.asyncio
+async def test_content_hydrate_turn_content_filters_expired_documents(
     content_repo, mongo
 ):
     coll = mongo.collections["conversation_content"]
@@ -1168,9 +1186,11 @@ async def test_content_hydrate_turn_notes_filters_expired_documents(
         }
     )
 
-    docs = await content_repo.hydrate_turn_notes("r1", ["expired", "active"])
+    docs = await content_repo.hydrate_turn_content("r1", ["expired", "active"])
 
     assert [doc["turn_id"] for doc in docs] == ["active"]
+    _query, kwargs = coll.find_calls[-1]
+    assert kwargs["projection"]["content"] == 1
 
 
 def _matches(doc: dict, query: dict) -> bool:

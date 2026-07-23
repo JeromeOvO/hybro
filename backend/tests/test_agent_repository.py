@@ -279,14 +279,13 @@ async def test_public_url_exists_update_delete_and_health():
 
 
 @pytest.mark.asyncio
-async def test_hub_agent_upsert_prune_activate_and_index_hash():
+async def test_hub_agent_upsert_prune_and_activate():
     repo, _ = _repo(
         [
             {
                 "agent_id": "existing",
                 "hub_id": "hub-1",
                 "local_agent_id": "local-1",
-                "description_hash": "old",
             },
             {
                 "agent_id": "missing",
@@ -325,9 +324,6 @@ async def test_hub_agent_upsert_prune_activate_and_index_hash():
     assert enriched["agent_status"] == "inactive"
     assert "hub_id" not in enriched
     assert "local_agent_id" not in enriched
-    assert await repo.get_indexed_description_hash("existing") == "old"
-    await repo.set_indexed_description_hash("existing", "new-hash")
-    assert await repo.get_indexed_description_hash("existing") == "new-hash"
 
 
 @pytest.mark.asyncio

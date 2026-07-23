@@ -76,6 +76,24 @@ class AgentMongoRepository:
         kwargs = {"limit": limit} if limit else {}
         return await self._agents.find(final_query, **kwargs)
 
+    async def text_search(
+        self, agent_ids: list[str], query: str, limit: int
+    ) -> list[dict]:
+        if not agent_ids:
+            return []
+        return await self._agents.find(
+            {
+                "agent_id": {"$in": agent_ids},
+                "$text": {"$search": query},
+            },
+            projection={
+                "agent_id": 1,
+                "score": {"$meta": "textScore"},
+            },
+            sort=[("score", {"$meta": "textScore"})],
+            limit=limit,
+        )
+
     async def upsert(self, agent_id: str, data: dict) -> None:
         await self._agents.update_one(
             {"agent_id": agent_id},
@@ -196,24 +214,6 @@ class AgentMongoRepository:
             {"agent_id": {"$in": agent_ids}},
             {"$set": {"agent_status": "active"}},
         )
-
-    async def get_indexed_description_hash(self, agent_id: str) -> str | None:
-        doc = await self.get_by_id(agent_id)
-        if doc is None:
-            return None
-        return doc.get("indexed_description_hash") or doc.get("description_hash")
-
-    async def set_indexed_description_hash(self, agent_id: str, desc_hash: str) -> None:
-        await self._agents.update_one(
-            {"agent_id": agent_id},
-            {
-                "$set": {
-                    "indexed_description_hash": desc_hash,
-                    "description_hash": desc_hash,
-                }
-            },
-        )
-
 
 def _hub_agent_upsert_update(data: dict) -> dict:
     set_data = dict(data)

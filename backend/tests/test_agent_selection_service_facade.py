@@ -1,6 +1,6 @@
 """Tests for AgentSelectionService facade over AgentMatcher."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.types import AgentCapabilities, AgentCard
@@ -43,8 +43,7 @@ def mock_matched_agents():
         )
         matched = MatchedAgent(
             agent=agent,
-            vector_score=0.9 - (i * 0.1),
-            capability_score=0.8 - (i * 0.1),
+            lexical_score=0.9 - (i * 0.1),
             final_score=0.85 - (i * 0.1),
         )
         agents.append(matched)
@@ -84,7 +83,7 @@ async def test_facade_delegates_to_matcher(mock_matched_agents):
         assert len(result.agents) == 3
         assert result.agents[0].agent_id == "agent-0"
         assert result.agents[0].agent_name == "Agent 0"
-        assert "Match score:" in result.agents[0].reason
+        assert "Lexical match score:" in result.agents[0].reason
         assert result.reasoning == "Matched 3 agent(s) from 10 candidates"
 
 
@@ -159,6 +158,53 @@ async def test_facade_empty_result():
         assert result.needs_debate is False
         assert len(result.agents) == 0
         assert "No matching agents" in result.reasoning
+
+
+@pytest.mark.asyncio
+async def test_llm_reranks_only_head_and_preserves_lexical_tail():
+    matched_agents = []
+    for index in range(7):
+        agent = Agent(
+            agent_id=f"agent-{index}",
+            agent_card=_create_test_agent_card(f"Agent {index}", "Test"),
+            agent_status=AgentStatus.active,
+        )
+        matched_agents.append(
+            MatchedAgent(
+                agent=agent,
+                lexical_score=1 - index / 10,
+                final_score=1 - index / 10,
+            )
+        )
+    matcher = AsyncMock()
+    matcher.match.return_value = MatchResult(
+        agents=matched_agents,
+        total_candidates=7,
+        filtered_count=7,
+    )
+    reranker = AsyncMock()
+    reranker.rank_agents_for_task.return_value = [
+        "agent-4",
+        "agent-0",
+        "agent-1",
+        "agent-2",
+        "agent-3",
+    ]
+
+    result = await AgentSelectionService(
+        matcher=matcher,
+        llm_reranker=reranker,
+    ).select_agents_for_message("test", top_k=7)
+
+    assert [agent.agent_id for agent in result.agents] == [
+        "agent-4",
+        "agent-0",
+        "agent-1",
+        "agent-2",
+        "agent-3",
+        "agent-5",
+        "agent-6",
+    ]
 
 
 @pytest.mark.asyncio
@@ -310,11 +356,11 @@ async def test_facade_propagates_matcher_error():
     """Test that matcher exceptions propagate to callers for proper error handling."""
     with patch("agent.selection_service.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
-        mock_matcher_instance.match.side_effect = RuntimeError("Pinecone unreachable")
+        mock_matcher_instance.match.side_effect = RuntimeError("Mongo unavailable")
         MockMatcher.return_value = mock_matcher_instance
 
         service = AgentSelectionService()
-        with pytest.raises(RuntimeError, match="Pinecone unreachable"):
+        with pytest.raises(RuntimeError, match="Mongo unavailable"):
             await service.select_agents_for_message(
                 message_text="test message",
             )
@@ -343,6 +389,60 @@ async def test_facade_respects_top_k(mock_matched_agents):
         assert len(result.agents) == 1
         assert result.agents[0].agent_id == "agent-0"
         assert result.strategy == RoutingStrategy.SINGLE
+
+
+@pytest.mark.asyncio
+async def test_llm_rerank_sanitizes_unknown_duplicate_and_missing_ids(
+    mock_matched_agents,
+):
+    matcher = MagicMock()
+    matcher.match = AsyncMock(
+        return_value=MatchResult(
+            agents=mock_matched_agents,
+            total_candidates=3,
+            filtered_count=3,
+        )
+    )
+    reranker = MagicMock()
+    reranker.rank_agents_for_task = AsyncMock(
+        return_value=["unknown", "agent-2", "agent-2"]
+    )
+
+    result = await AgentSelectionService(
+        matcher=matcher,
+        llm_reranker=reranker,
+    ).select_agents_for_message("test")
+
+    assert [item.agent_id for item in result.agents] == [
+        "agent-2",
+        "agent-0",
+        "agent-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_rerank_failure_preserves_lexical_order(mock_matched_agents):
+    matcher = MagicMock()
+    matcher.match = AsyncMock(
+        return_value=MatchResult(
+            agents=mock_matched_agents,
+            total_candidates=3,
+            filtered_count=3,
+        )
+    )
+    reranker = MagicMock()
+    reranker.rank_agents_for_task = AsyncMock(side_effect=TimeoutError)
+
+    result = await AgentSelectionService(
+        matcher=matcher,
+        llm_reranker=reranker,
+    ).select_agents_for_message("test")
+
+    assert [item.agent_id for item in result.agents] == [
+        "agent-0",
+        "agent-1",
+        "agent-2",
+    ]
 
 
 def test_resolve_strategy_supervisor_overrides_debate():

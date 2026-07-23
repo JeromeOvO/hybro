@@ -119,14 +119,6 @@ class MemorySearchConfig:
         return settings.memory_search_enabled
 
     @property
-    def vector_weight(self) -> float:
-        return settings.memory_search_vector_weight
-
-    @property
-    def keyword_weight(self) -> float:
-        return settings.memory_search_keyword_weight
-
-    @property
     def temporal_decay_enabled(self) -> bool:
         return settings.memory_search_temporal_decay_enabled
 
@@ -135,21 +127,12 @@ class MemorySearchConfig:
         return settings.memory_search_half_life_days
 
     @property
-    def mmr_lambda(self) -> float:
-        return settings.memory_search_mmr_lambda
-
-    @property
     def max_results(self) -> int:
         return settings.memory_search_max_results
 
     @property
     def max_snippet_chars(self) -> int:
         return settings.memory_search_max_snippet_chars
-
-    @property
-    def index_name(self) -> str:
-        return settings.memory_search_index_name
-
 
 # Singleton instances
 token_budget = TokenBudget()

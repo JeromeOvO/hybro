@@ -9,7 +9,6 @@ from common.errors.base import (
     TransientError,
     UpstreamError,
     ValidationError,
-    VectorIndexUnavailableError,
 )
 from common.errors.platform import (
     FileStoragePlatformError,
@@ -31,5 +30,4 @@ __all__ = [
     "TransientError",
     "UpstreamError",
     "ValidationError",
-    "VectorIndexUnavailableError",
 ]

@@ -418,17 +418,12 @@ async def test_agent_viewset_mutations_reject_non_owner(mock_user_2, sample_agen
     repo.pk_field = "agent_id"
     repo.get = AsyncMock(return_value=sample_agent.model_dump(mode="json"))
     repo.update = AsyncMock()
-    embedding_provider = MagicMock()
-    vector_index = MagicMock()
-
     with pytest.raises(HTTPException) as exc_info:
         await AgentViewSet()._handle_operation(
             viewset.UPDATE,
             repo,
             sample_agent.agent_id,
             sample_agent,
-            embedding_provider=embedding_provider,
-            vector_index=vector_index,
             user=mock_user_2,
         )
 
@@ -629,45 +624,25 @@ def test_api_key_management_routes_are_owned_by_store_protocol():
     )
 
 
-def test_agent_viewset_mutations_record_vector_side_effect_protocols():
+def test_agent_viewset_mutations_have_no_external_index_side_effects():
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
-    expected_by_method = {
-        "POST": {
-            "common.protocols.EmbeddingServiceProtocol",
-            "common.protocols.AgentVectorIndexWriter",
-        },
-        "PUT": {
-            "common.protocols.EmbeddingServiceProtocol",
-            "common.protocols.AgentVectorIndexWriter",
-        },
-        "PATCH": {
-            "common.protocols.EmbeddingServiceProtocol",
-            "common.protocols.AgentVectorIndexWriter",
-        },
-        "DELETE": {
-            "common.protocols.AgentVectorIndexWriter",
-        },
-    }
     violations: list[str] = []
 
     for route in routes:
         if route["path"] not in {"/api/v1/agents", "/api/v1/agents/{item_id}"}:
             continue
-        mutation_methods = set(route["methods"]) & set(expected_by_method)
+        mutation_methods = set(route["methods"]) & {"POST", "PUT", "PATCH", "DELETE"}
         if not mutation_methods:
             continue
-        expected = set().union(
-            *(expected_by_method[method] for method in mutation_methods)
-        )
         supporting = set(route.get("supporting_protocols") or [])
-        if supporting != expected:
+        if supporting:
             violations.append(
                 f"{route['path']} {','.join(route['methods'])}: "
-                f"supporting={sorted(supporting)} expected={sorted(expected)}"
+                f"unexpected supporting protocols={sorted(supporting)}"
             )
 
     assert not violations, (
-        "Agent mutation route inventory omits side-effect protocols:\n"
+        "Agent mutation routes still declare external index side effects:\n"
         + "\n".join(violations)
     )
 

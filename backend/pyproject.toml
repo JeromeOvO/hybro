@@ -18,7 +18,6 @@ dependencies = [
     # Database
     "motor>=3.7.1",
     "pymongo",
-    "pinecone>=7.0.2",
     "redis>=5.2.0",
     # AI / LLM
     "google-genai>=1.20.0",
@@ -192,7 +191,7 @@ packages = [
     "context_memory.repository",
     "dal",
     "dal.mongo",
-    "dal.pinecone",
+    "extensions",
     "dal.redis",
     "dal.runtime_store",
     "dal.runtime_store.parts",

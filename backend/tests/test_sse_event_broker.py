@@ -117,3 +117,40 @@ class TestHealthStatus:
             result["body"]["legacy_redis_service_connected"]
             is (result["body"]["redis_runtime_connected"])
         )
+
+    def test_health_status_degraded_when_either_search_index_is_unready(self):
+        from main import compute_health_status
+
+        result = compute_health_status(
+            delivery_pubsub_connected=False,
+            delivery_kv_connected=False,
+            redis_runtime_connected=False,
+            redis_url="",
+            change_stream_connected=True,
+            agent_search_index_ready=False,
+            memory_search_index_ready=True,
+            search_indexes_ready=False,
+        )
+
+        assert result["status_code"] == 503
+        assert result["body"]["status"] == "degraded"
+        assert result["body"]["agent_search_index_ready"] is False
+        assert result["body"]["memory_search_index_ready"] is True
+
+    def test_disabled_memory_search_can_keep_aggregate_readiness_healthy(self):
+        from main import compute_health_status
+
+        result = compute_health_status(
+            delivery_pubsub_connected=False,
+            delivery_kv_connected=False,
+            redis_runtime_connected=False,
+            redis_url="",
+            change_stream_connected=True,
+            agent_search_index_ready=True,
+            memory_search_index_ready=False,
+            search_indexes_ready=True,
+        )
+
+        assert result["status_code"] == 200
+        assert result["body"]["memory_search_index_ready"] is False
+        assert result["body"]["search_indexes_ready"] is True

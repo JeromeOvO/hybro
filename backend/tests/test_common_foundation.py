@@ -394,7 +394,13 @@ def test_common_foundation_dtos_can_be_instantiated():
     AgentEvent(room_id="r1", agent_id="a1", message_id="m1", event_type="partial")
     ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
     CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
-    MemorySearchResult(room_id="r1", content="memory", score=0.5)
+    MemorySearchResult(
+        room_id="r1",
+        content="memory",
+        keyword_score=0.5,
+        relevance_score=0.5,
+        temporal_decay_factor=1.0,
+    )
     DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
     SSEEvent(event="message", data={})
     ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
@@ -996,7 +1002,6 @@ def test_protocol_methods_match_design_doc():
             "generate",
             "generate_structured",
         },
-        protocols.AgentVectorIndexWriter: {"upsert", "delete"},
         protocols.ViewSetTransaction: {"start_transaction"},
         protocols.ViewSetSessionContext: {"__aenter__", "__aexit__"},
         protocols.ViewSetDatabaseClient: {"start_session"},
@@ -1212,6 +1217,8 @@ def test_protocol_methods_match_design_doc():
             "aggregate",
             "create_index",
             "create_indexes",
+            "index_information",
+            "drop_index",
             "bulk_write",
             "distinct",
             "find_one_by_stable_or_native_id",
@@ -1229,7 +1236,6 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
-        protocols.VectorDAL: {"search", "upsert", "delete", "delete_by_filter", "ping"},
         protocols.ObjectStorageDAL: {
             "put",
             "put_file",
@@ -1262,8 +1268,7 @@ def test_protocol_methods_match_design_doc():
             "upsert_hub_agent",
             "prune_missing_hub_agents",
             "activate_agents",
-            "get_indexed_description_hash",
-            "set_indexed_description_hash",
+            "text_search",
         },
         protocols.RoomRepository: {
             "get_by_id",
@@ -1349,7 +1354,8 @@ def test_protocol_methods_match_design_doc():
             "delete_content_by_room_id",
             "get_content_stats_for_room",
             "text_search",
-            "hydrate_turn_notes",
+            "scan_text_search",
+            "hydrate_turn_content",
         },
         protocols.HubRepository: {
             "get_by_id",
@@ -1451,8 +1457,6 @@ def test_protocol_methods_match_design_doc():
         protocols.WebhookReceiver.handle_webhook,
         ["self", "message_id", "payload", "token"],
     )
-    _assert_params(protocols.AgentVectorIndexWriter.upsert, ["self", "vectors"])
-    _assert_params(protocols.AgentVectorIndexWriter.delete, ["self", "ids"])
     _assert_params(protocols.ViewSetTransaction.start_transaction, ["self"])
     _assert_params(protocols.ViewSetSessionContext.__aenter__, ["self"])
     _assert_params(
@@ -1463,7 +1467,7 @@ def test_protocol_methods_match_design_doc():
     _assert_params(protocols.ViewSetDatabaseProvider.__call__, ["self"])
     _assert_params(
         protocols.ViewSetRepositoryFactory.__call__,
-        ["self", "collection_name", "db", "pinecone", "pk_field"],
+        ["self", "collection_name", "db", "pk_field"],
     )
     _assert_params(
         protocols.ViewSetRepositoryProvider.get_repository,

@@ -19,7 +19,7 @@ from a2a.types import AgentCapabilities, AgentCard
 from agent.matcher import (
     MatchedAgent,
     MatchResult,
-    compute_capability_score,
+    accepts_input_modes,
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
@@ -68,10 +68,10 @@ async def test_all_agents_uses_agent_matcher():
     mock_match_result = MatchResult(
         agents=[
             MatchedAgent(
-                agent=agent1, vector_score=0.8, capability_score=1.0, final_score=0.83
+                agent=agent1, lexical_score=0.8, final_score=0.8
             ),
             MatchedAgent(
-                agent=agent2, vector_score=0.6, capability_score=1.0, final_score=0.66
+                agent=agent2, lexical_score=0.6, final_score=0.6
             ),
         ],
         total_candidates=5,
@@ -104,8 +104,8 @@ async def test_all_agents_uses_agent_matcher():
         assert len(result.agents) == 2
         assert result.agents[0].agent_id == "agent1"
         assert result.agents[0].agent_name == "TestAgent1"
-        assert result.agents[0].score == 0.83
-        assert "Match score: 0.83" in result.agents[0].reason
+        assert result.agents[0].score == 0.8
+        assert "Lexical match score: 0.80" in result.agents[0].reason
         assert "Matched 2 agent(s) from 5 candidates" in result.reasoning
 
 
@@ -324,25 +324,21 @@ async def test_matcher_error_propagates_to_caller():
             )
 
 
-def test_vector_score_dominates_ranking():
-    """Verify ranking is driven by vector similarity (Pinecone embeddings)."""
-    # Without attachments, all agents get capability_score=1.0
-    # So final_score is determined entirely by vector_score
-    agent_high = _make_agent("agent1", "HighVector", "Best semantic match")
-    agent_low = _make_agent("agent2", "LowVector", "Poor semantic match")
+def test_lexical_score_determines_ranking():
+    """Verify ranking follows deterministic lexical relevance."""
+    agent_high = _make_agent("agent1", "HighLexical", "Best lexical match")
+    agent_low = _make_agent("agent2", "LowLexical", "Poor lexical match")
 
     matched_agents = [
         MatchedAgent(
             agent=agent_high,
-            vector_score=0.9,
-            capability_score=1.0,
-            final_score=0.85 * 0.9 + 0.15 * 1.0,
+            lexical_score=0.9,
+            final_score=0.9,
         ),
         MatchedAgent(
             agent=agent_low,
-            vector_score=0.4,
-            capability_score=1.0,
-            final_score=0.85 * 0.4 + 0.15 * 1.0,
+            lexical_score=0.4,
+            final_score=0.4,
         ),
     ]
 
@@ -353,40 +349,15 @@ def test_vector_score_dominates_ranking():
     assert matched_agents[0].final_score > matched_agents[1].final_score + 0.3
 
 
-def test_file_penalty_demotes_incompatible_agents():
-    """Verify file-incapable agents rank lower when message has attachments."""
+def test_input_modes_are_a_hard_filter():
+    """Verify incompatible agents are excluded before lexical scoring."""
     agent_file = _make_agent(
         "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
     )
     agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
 
-    score_file = compute_capability_score(
-        agent_file, required_input_modes=["application/pdf"]
-    )
-    score_text = compute_capability_score(
-        agent_text, required_input_modes=["application/pdf"]
-    )
-
-    assert score_file == 1.0
-    assert score_text == 0.0
-
-    # With same vector score, file agent should rank higher
-    matched = [
-        MatchedAgent(
-            agent=agent_file,
-            vector_score=0.7,
-            capability_score=score_file,
-            final_score=0.85 * 0.7 + 0.15 * score_file,
-        ),
-        MatchedAgent(
-            agent=agent_text,
-            vector_score=0.7,
-            capability_score=score_text,
-            final_score=0.85 * 0.7 + 0.15 * score_text,
-        ),
-    ]
-    matched.sort(key=lambda m: m.final_score, reverse=True)
-    assert matched[0].agent.agent_id == "agent1"
+    assert accepts_input_modes(agent_file, ["application/pdf"]) is True
+    assert accepts_input_modes(agent_text, ["application/pdf"]) is False
 
 
 def test_no_file_penalty_without_attachments():
@@ -396,10 +367,8 @@ def test_no_file_penalty_without_attachments():
     )
     agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
 
-    score_file = compute_capability_score(agent_file, required_input_modes=None)
-    score_text = compute_capability_score(agent_text, required_input_modes=None)
-
-    assert score_file == score_text == 1.0
+    assert accepts_input_modes(agent_file, None) is True
+    assert accepts_input_modes(agent_text, None) is True
 
 
 def test_debate_prompt_truncation_consistent():
@@ -527,47 +496,45 @@ def test_select_top_agents_debate_mode_diversity():
     agents = [
         MatchedAgent(
             _make_agent(f"agent{i}", f"Agent{i}", f"Desc{i}"),
-            vector_score=0.8 - i * 0.05,
-            capability_score=1.0,
-            final_score=0.85 * (0.8 - i * 0.05) + 0.15,
+            lexical_score=0.8 - i * 0.05,
+            final_score=0.8 - i * 0.05,
         )
         for i in range(6)
     ]
 
-    # Debate mode: should return 3-5 agents
+    # Debate mode: returns at most five actual lexical hits.
     selected = select_top_agents(agents, is_debate_mode=True)
-    assert 3 <= len(selected) <= 5
+    assert len(selected) == 5
 
-    # Non-debate mode: should be more selective (1-3 agents)
+    # Non-debate mode also preserves lexical order without score-gap heuristics.
     selected_non_debate = select_top_agents(agents, is_debate_mode=False)
-    assert 1 <= len(selected_non_debate) <= 3
+    assert len(selected_non_debate) == 5
 
 
-def test_select_top_agents_clear_winner():
-    """Verify non-debate mode returns only top agent when there's a clear winner."""
+def test_select_top_agents_preserves_valid_lexical_candidates():
+    """Non-debate selection does not apply legacy score-gap thresholds."""
     agents = [
         MatchedAgent(
             _make_agent("agent1", "Winner", "Top agent"),
-            vector_score=0.9,
-            capability_score=1.0,
+            lexical_score=0.9,
             final_score=0.92,
         ),
         MatchedAgent(
             _make_agent("agent2", "Runner-up", "Second agent"),
-            vector_score=0.5,
-            capability_score=1.0,
+            lexical_score=0.5,
             final_score=0.58,
         ),
         MatchedAgent(
             _make_agent("agent3", "Third", "Third agent"),
-            vector_score=0.4,
-            capability_score=1.0,
+            lexical_score=0.4,
             final_score=0.49,
         ),
     ]
 
     selected = select_top_agents(agents, is_debate_mode=False)
 
-    # Gap is 0.92 - 0.58 = 0.34, which exceeds GAP_THRESHOLD (0.15)
-    assert len(selected) == 1
-    assert selected[0].agent.agent_id == "agent1"
+    assert [item.agent.agent_id for item in selected] == [
+        "agent1",
+        "agent2",
+        "agent3",
+    ]

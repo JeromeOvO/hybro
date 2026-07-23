@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from common.protocols import ContentStorageRepository, MemoryRepository
@@ -18,8 +17,6 @@ from context_memory.translators import (
     normalize_room_memory,
     turn_from_dict,
 )
-
-IndexTurnCallback = Callable[[str, dict], Awaitable[bool]]
 
 
 def safe_tokens_full(turn) -> int:
@@ -56,7 +53,6 @@ async def compact_if_needed(
     room_id: str,
     config: CompactionConfig,
     now,
-    index_turn: IndexTurnCallback | None = None,
 ):
     doc = await repository.get_room_memory(room_id)
     if not _doc_should_compact(doc, config):
@@ -68,7 +64,6 @@ async def compact_if_needed(
         room_memory_doc=doc,
         config=config,
         now=now,
-        index_turn=index_turn,
         threshold_gate=False,
     )
 
@@ -80,7 +75,6 @@ async def run_compaction(
     room_id: str,
     config: CompactionConfig,
     now,
-    index_turn: IndexTurnCallback | None = None,
 ):
     doc = await repository.get_room_memory(room_id)
     if not _doc_should_compact(doc, config):
@@ -97,7 +91,6 @@ async def run_compaction(
         room_memory_doc=doc,
         config=config,
         now=now,
-        index_turn=index_turn,
         threshold_gate=False,
     )
 
@@ -110,7 +103,6 @@ async def compact_room_memory(
     room_memory_doc: dict | None,
     config: CompactionConfig,
     now,
-    index_turn: IndexTurnCallback | None = None,
     threshold_gate: bool = False,
 ):
     if not config.enabled:
@@ -169,16 +161,10 @@ async def compact_room_memory(
                     content=turn.content,
                     content_type=turn.content_type,
                     turn_notes=turn.turn_notes,
+                    turn_timestamp=turn.timestamp,
                     now=now(),
                     config=config,
                 )
-                if index_turn is not None:
-                    try:
-                        indexed = await index_turn(room_id, turn.to_dict())
-                        if indexed is False:
-                            errors.append(f"Failed to index turn {turn.turn_id}")
-                    except Exception as exc:
-                        errors.append(f"Failed to index turn {turn.turn_id}: {exc}")
                 content_ref = {
                     "storage_type": "mongodb",
                     "collection": "conversation_content",

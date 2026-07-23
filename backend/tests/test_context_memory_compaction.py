@@ -193,28 +193,6 @@ async def test_compact_room_memory_stores_content():
 
 
 @pytest.mark.asyncio
-async def test_compact_room_memory_proceeds_when_index_returns_false():
-    repo = StateMemoryRepository(room_doc([full_turn("t1", "one")]))
-
-    async def fail_index(_room_id, _turn):
-        return False
-
-    result = await compaction.compact_room_memory(
-        repository=repo,
-        content_repository=StateContentRepository(),
-        room_id="r1",
-        room_memory_doc=None,
-        config=config(preserve_recent_turns=0),
-        now=now,
-        index_turn=fail_index,
-    )
-
-    assert result.compacted_count == 1
-    assert repo.compacted_entries[0]["turn_id"] == "t1"
-    assert "Failed to index turn t1" in result.metadata["errors"][0]
-
-
-@pytest.mark.asyncio
 async def test_compact_room_memory_stale_snapshot_already_compact_is_clean_noop():
     stale_snapshot = room_doc([full_turn("t1", "one")])
     live_doc = room_doc([compact_turn("t1", "doc-existing")])

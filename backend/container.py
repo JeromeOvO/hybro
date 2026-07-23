@@ -20,7 +20,6 @@ from api_gateway.dependencies import (
 from api_gateway.file_storage import ObjectStorageFileStorage
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
-from common.dto import VectorRecord
 from common.health_check import RuntimeHealthCheck
 from common.observability import MetricsCollector, traced_create_task
 from common.protocols import (
@@ -46,7 +45,6 @@ from common.protocols import (
     HubLivenessReader,
     HubManagement,
     LeaderElector,
-    LLMEmbeddingGateway,
     LLMGateway,
     MemoryManager,
     MemoryProjector,
@@ -65,7 +63,6 @@ from common.protocols import (
     RoomOwnershipReader,
     RoomRegistry,
     SSETransport,
-    VectorDAL,
 )
 from common.utils.time import utcnow
 from context_memory import (
@@ -306,7 +303,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from llm_gateway.services import (
                 AgentSelectionLLMService,
                 DiscoveryLLMService,
-                EmbeddingLLMService,
                 MessageParserLLMService,
                 RoomMemoryLLMService,
                 SummaryLLMService,
@@ -333,17 +329,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 max_file_size_mb=runtime.settings.max_file_size_mb,
             )
             bind_a2a_artifact_storage(a2a_artifact_storage)
-            await ensure_runtime_indexes(mongo=mongo_dal)
+            index_readiness = await ensure_runtime_indexes(mongo=mongo_dal)
+            app.state.agent_search_index_ready = index_readiness[
+                "agent_search_index_ready"
+            ]
+            app.state.memory_search_index_ready = index_readiness[
+                "memory_search_index_ready"
+            ]
+            app.state.search_indexes_ready = (
+                app.state.agent_search_index_ready
+                and (
+                    not runtime.settings.memory_search_enabled
+                    or app.state.memory_search_index_ready
+                )
+            )
 
-            vector_dal = create_vector_dal()
             route_room_center = RoomRouteAdapter()
             debate_prompt_injector = DebatePromptInjector()
             synthesis_coordinator = SynthesisCoordinator()
             remote_task_reader = RemoteTaskReader()
-            route_agent_vector_index = create_agent_viewset_vector_index(
-                vector=vector_dal,
-                index_name=runtime.settings.pinecone_index_name,
-            )
             _delivery_config = create_delivery_config(runtime.settings)
             delivery_startup_policy = create_delivery_startup_policy(
                 redis_url=runtime.settings.redis_url,
@@ -463,7 +467,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_provider=llm_provider,
                 default_model=llm_gateway_config.default_supervisor_model,
             )
-            embedding_llm_service = EmbeddingLLMService(llm_provider=llm_provider)
             discovery_llm_service = DiscoveryLLMService(  # noqa: F841
                 llm_provider=llm_provider,
                 max_expansion_words=runtime.settings.discovery_query_expansion_threshold,
@@ -479,25 +482,28 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
+            room_runtime.bind_capability_issue_reader(
+                agent_capability_issue_service
+            )
             synthesis_coordinator.bind_summary_service(summary_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
-                vector=vector_dal,
-                llm_provider=llm_provider,
                 card_resolver=agent_card_resolver,
                 hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(
                     agent_capability_issue_service
                 ),
                 gateway_base_url=runtime.settings.gateway_base_url,
-                agent_index=runtime.settings.pinecone_index_name,
             )
             _agent_facade = _agent_deps.agent_registry
             agent_compat_service = AgentService(facade=_agent_facade)
             route_agent_center = AgentRouteAdapter(service=agent_compat_service)
             agent_matcher = AgentMatcher(facade=_agent_facade)
-            agent_selection_service = AgentSelectionService(matcher=agent_matcher)
+            agent_selection_service = AgentSelectionService(
+                matcher=agent_matcher,
+                llm_reranker=agent_selection_llm_service,
+            )
             agent_resolver_service = AgentResolverService(
                 repository=AgentResolverFacadeRepository(_agent_facade),
                 capability_issue_reader=agent_capability_issue_service,
@@ -959,9 +965,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             route_room_center.bind_facade(_room_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
-                vector=vector_dal,
                 llm_provider=llm_provider,
                 room_history_reader=_room_deps.room_history_reader,
+                search_config=MemorySearchConfig(
+                    enabled=(
+                        runtime.settings.memory_search_enabled
+                        and app.state.memory_search_index_ready
+                    ),
+                    temporal_decay_enabled=(
+                        runtime.settings.memory_search_temporal_decay_enabled
+                    ),
+                    half_life_days=runtime.settings.memory_search_half_life_days,
+                    max_results=runtime.settings.memory_search_max_results,
+                    max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
+                ),
                 llm_config=ContextMemoryLLMConfig(
                     turn_notes_model="context_memory_legacy_json_model",
                     summary_model="context_memory_legacy_json_model",
@@ -1425,8 +1442,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 sse_transport=_delivery_facade,
                 webhook_receiver=create_webhook_transport(),
                 repository_provider=DALViewSetRepositoryProvider(mongo=mongo_dal),
-                embedding_provider=embedding_llm_service,
-                vector_index=route_agent_vector_index,
             ),
         )
 
@@ -1664,40 +1679,48 @@ def create_mongo_dal() -> MongoDAL:
     return MongoDALImpl()
 
 
-def create_vector_dal() -> VectorDAL:
-    from dal.pinecone import VectorDALImpl
-
-    return VectorDALImpl()
-
-
-async def ensure_runtime_indexes(*, mongo: MongoDAL) -> None:
-    await _ensure_agent_indexes(mongo)
-    await _ensure_context_memory_indexes(mongo)
+async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
+    agent_search_index_ready = await _ensure_agent_indexes(mongo)
+    memory_search_index_ready = await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
+    return {
+        "agent_search_index_ready": agent_search_index_ready,
+        "memory_search_index_ready": memory_search_index_ready,
+    }
 
 
-async def _ensure_agent_indexes(mongo: MongoDAL) -> None:
+async def _ensure_agent_indexes(mongo: MongoDAL) -> bool:
     agents = mongo.collection("agents")
     existing = await agents.index_information()
     index = existing.get("unique_normalized_url")
     needs_recreate = index is None or index.get("partialFilterExpression") != {
         "normalized_url": {"$type": "string"}
     }
-    if not needs_recreate:
-        return
-    try:
-        await agents.drop_index("unique_normalized_url")
-    except Exception:
-        pass
-    await agents.create_index(
-        [("normalized_url", 1)],
-        unique=True,
-        name="unique_normalized_url",
-        partialFilterExpression={"normalized_url": {"$type": "string"}},
+    if needs_recreate:
+        try:
+            await agents.drop_index("unique_normalized_url")
+        except Exception:
+            pass
+        await agents.create_index(
+            [("normalized_url", 1)],
+            unique=True,
+            name="unique_normalized_url",
+            partialFilterExpression={"normalized_url": {"$type": "string"}},
+        )
+    return await _ensure_text_index(
+        agents,
+        name="agent_lexical_text",
+        weights={
+            "agent_card.name": 10,
+            "agent_card.skills.name": 8,
+            "agent_card.skills.tags": 6,
+            "agent_card.description": 3,
+            "agent_card.skills.description": 3,
+        },
     )
 
 
@@ -1710,10 +1733,11 @@ async def _create_index(
     unique: bool = False,
     critical: bool = False,
     **kwargs,
-) -> None:
+) -> bool:
     collection = mongo.collection(collection_name)
     try:
         await collection.create_index(keys, unique=unique, name=name, **kwargs)
+        return True
     except Exception as exc:
         logger = logging.getLogger(__name__)
         if unique and critical:
@@ -1732,9 +1756,10 @@ async def _create_index(
             name,
             exc_info=True,
         )
+        return False
 
 
-async def _ensure_context_memory_indexes(mongo: MongoDAL) -> None:
+async def _ensure_context_memory_indexes(mongo: MongoDAL) -> bool:
     await _create_index(
         mongo,
         "conversation_content",
@@ -1757,16 +1782,16 @@ async def _ensure_context_memory_indexes(mongo: MongoDAL) -> None:
         [("room_id", 1), ("stored_at", -1)],
         name="room_stored_at",
     )
-    await _create_index(
-        mongo,
-        "conversation_content",
-        [
-            ("content", "text"),
-            ("turn_notes.keywords", "text"),
-            ("turn_notes.entities", "text"),
-            ("turn_notes.one_liner", "text"),
-        ],
+    memory_search_ready = await _ensure_text_index(
+        mongo.collection("conversation_content"),
         name="turn_notes_text",
+        weights={
+            "content": 1,
+            "turn_notes.keywords": 1,
+            "turn_notes.entities": 1,
+            "turn_notes.tags": 1,
+            "turn_notes.one_liner": 1,
+        },
     )
     await _create_index(
         mongo,
@@ -1800,8 +1825,49 @@ async def _ensure_context_memory_indexes(mongo: MongoDAL) -> None:
         unique=True,
         critical=True,
     )
+    return memory_search_ready
 
 
+async def _ensure_text_index(
+    collection: MongoCollection,
+    *,
+    name: str,
+    weights: dict[str, int],
+) -> bool:
+    log = logging.getLogger(__name__)
+    try:
+        existing = await collection.index_information()
+        desired_weights = dict(sorted(weights.items()))
+        matching = existing.get(name)
+        matching_keys = tuple(
+            (key, direction)
+            for key, direction in ((matching or {}).get("key") or [])
+        )
+        valid_text_keys = {
+            (("_fts", "text"), ("_ftsx", 1)),
+            tuple((field, "text") for field in weights),
+        }
+        if (
+            matching
+            and dict(sorted((matching.get("weights") or {}).items()))
+            == desired_weights
+            and matching_keys in valid_text_keys
+        ):
+            return True
+        for index_name, spec in existing.items():
+            keys = spec.get("key") or []
+            if spec.get("weights") or any(key == "_fts" for key, _ in keys):
+                await collection.drop_index(index_name)
+        await collection.create_index(
+            [(field, "text") for field in weights],
+            name=name,
+            unique=False,
+            weights=weights,
+        )
+        return True
+    except Exception:
+        log.warning("Search index creation failed for %s", name, exc_info=True)
+        return False
 async def _ensure_capability_issue_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
@@ -1992,57 +2058,6 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
         name="room_task_created_sparse",
         sparse=True,
     )
-
-
-class AgentViewsetVectorIndexAdapter:
-    def __init__(
-        self,
-        *,
-        vector_dal: VectorDAL,
-        index: str,
-    ) -> None:
-        self._vector_dal = vector_dal
-        self._index = index
-
-    def upsert(self, vectors: list[dict]) -> None:
-        records = [
-            VectorRecord(
-                id=item["id"],
-                vector=item.get("values", []),
-                metadata=item.get("metadata", {}),
-            )
-            for item in vectors
-        ]
-        self._dispatch(self._vector_dal.upsert(self._index, records))
-
-    def delete(self, ids: list[str]) -> None:
-        self._dispatch(self._vector_dal.delete(self._index, ids))
-
-    def _dispatch(self, operation: Awaitable[None]) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(operation)
-        else:
-            loop.create_task(operation).add_done_callback(self._handle_task_error)
-
-    @staticmethod
-    def _handle_task_error(task: asyncio.Task[None]) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is None:
-            return
-        logging.getLogger(__name__).error(
-            "Vector index update failed",
-            exc_info=(exc.__class__, exc, exc.__traceback__),
-        )
-
-
-def create_agent_viewset_vector_index(
-    *, vector: VectorDAL, index_name: str
-) -> AgentViewsetVectorIndexAdapter:
-    return AgentViewsetVectorIndexAdapter(vector_dal=vector, index=index_name)
 
 
 def create_agent_capability_issue_repository(mongo: MongoDAL) -> Any:
@@ -2252,10 +2267,7 @@ def create_hub_deps(facade: Any) -> HubDeps:
 def create_agent_deps(
     *,
     mongo: MongoDAL,
-    vector: VectorDAL,
-    llm_provider: LLMEmbeddingGateway,
     card_resolver: AgentCardResolver,
-    agent_index: str,
     hub_liveness: HubLivenessReader | None = None,
     exclusion_reader: AgentExclusionReader | None = None,
     gateway_base_url: str | None = None,
@@ -2263,10 +2275,7 @@ def create_agent_deps(
     repository = AgentMongoRepository(mongo=mongo)
     facade = AgentFacade(
         repository=repository,
-        vector=vector,
-        llm_provider=llm_provider,
         card_resolver=card_resolver,
-        agent_index=agent_index,
         hub_liveness=hub_liveness,
         exclusion_reader=exclusion_reader,
         gateway_base_url=gateway_base_url,
@@ -2318,7 +2327,6 @@ def create_room_deps(
 def create_context_memory_facade(
     *,
     mongo: MongoDAL,
-    vector: VectorDAL,
     llm_provider: LLMGateway,
     room_history_reader: RoomHistoryReader,
     memory_repository: MemoryRepository | None = None,
@@ -2354,20 +2362,15 @@ def create_context_memory_facade(
     )
     search_config = search_config or MemorySearchConfig(
         enabled=settings.memory_search_enabled,
-        vector_weight=settings.memory_search_vector_weight,
-        keyword_weight=settings.memory_search_keyword_weight,
         temporal_decay_enabled=settings.memory_search_temporal_decay_enabled,
         half_life_days=settings.memory_search_half_life_days,
-        mmr_lambda=settings.memory_search_mmr_lambda,
         max_results=settings.memory_search_max_results,
         max_snippet_chars=settings.memory_search_max_snippet_chars,
-        index_name=settings.memory_search_index_name,
     )
     return ContextMemoryFacade(
         memory_repository=memory_repository,
         content_repository=content_repository,
         room_history_reader=room_history_reader,
-        vector=vector,
         llm_provider=llm_provider,
         id_factory=lambda: str(uuid4()),
         now=utcnow,

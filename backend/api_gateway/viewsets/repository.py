@@ -33,7 +33,6 @@ class TransactionalViewSetRepositoryProvider:
         return self._create_repository(
             collection_name=collection_name,
             db=self._db_provider(),
-            pinecone=None,
             pk_field=pk_field,
         )
 

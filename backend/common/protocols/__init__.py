@@ -36,7 +36,6 @@ from common.protocols.dal_protocols import (
     RedisKV,
     RedisPubSub,
     RedisStreams,
-    VectorDAL,
 )
 from common.protocols.delivery_protocols import (
     EventPublisher,
@@ -126,9 +125,7 @@ from common.protocols.runtime_store_protocols import (
     RuntimeTaskLifecycleStore,
 )
 from common.protocols.viewset_protocols import (
-    AgentVectorIndexWriter,
     RoutePayload,
-    VectorIndexResult,
     ViewSetDatabase,
     ViewSetDatabaseClient,
     ViewSetDatabaseProvider,
@@ -145,7 +142,6 @@ from common.protocols.viewset_protocols import (
 
 __all__ = [
     "AgentCallCounter",
-    "AgentVectorIndexWriter",
     "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
@@ -249,8 +245,6 @@ __all__ = [
     "SSEUserMessageRecord",
     "SSERouteTransport",
     "SSETransport",
-    "VectorDAL",
-    "VectorIndexResult",
     "ViewSetDatabase",
     "ViewSetDatabaseClient",
     "ViewSetDatabaseProvider",

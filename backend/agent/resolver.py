@@ -2,7 +2,7 @@
 Agent Resolver Service
 
 Encapsulates the common logic for finding an accessible agent:
-1. Query candidates via vector similarity (active-only)
+1. Query candidates via lexical matching (active-only)
 2. Optionally reorder by LLM selection
 3. Real-time health probe with fallback to next candidate
 4. In-memory TTL cache to avoid redundant probes
@@ -19,11 +19,13 @@ from time import monotonic
 from typing import Any, Protocol
 
 from a2a_adapter.agent_card_health import probe_agent_card_for_health
+from agent.routing_safety import is_routing_agent_eligible
 from agent.service import _agent_info_to_legacy_agent
 from common.config.settings import settings
 from common.dto import AgentRoutingCandidate
+from common.utils.a2a_file_modes import agent_accepts_required_input_modes
 from common.utils.logger import get_logger
-from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
+from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import Agent, AgentStatus
 
 logger = get_logger(__name__)
@@ -45,6 +47,7 @@ class AgentResolutionRepository(Protocol):
         excluded_agent_ids: frozenset[str] | set[str],
         active_only: bool,
         user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> list[Agent]: ...
 
     async def get_agents_with_conditions_visible(
@@ -104,7 +107,7 @@ class ResolveResult:
 class AgentResolverService:
     """Resolves the best accessible agent for a given task description.
 
-    Combines vector similarity search, optional LLM-based ranking, and
+    Combines lexical search, optional LLM-based ranking, and
     real-time health probing into a single ``resolve()`` call that both
     RoomMessageCenter and WorkflowCenter can share.
     """
@@ -147,25 +150,27 @@ class AgentResolverService:
         *,
         allowed_agent_ids: list[str] | None = None,
         count: int = 5,
-        use_llm_selection: bool = False,
+        use_llm_selection: bool = True,
         user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> ResolveResult:
         """Find the best accessible agent for *query_text*.
 
         Args:
-            query_text: Task description or user input for similarity search.
+            query_text: Task description or user input for lexical matching.
             allowed_agent_ids: Optional whitelist of agent IDs (room scoping).
-            count: Max candidates to fetch from vector search.
+            count: Max lexical candidates to fetch.
             use_llm_selection: If ``True``, use LLM to pick the best agent
                 from candidates (workflow-style).  If ``False``, use the top
-                vector-similarity match (room-style).
+                lexical match.
             user_id: Optional user ID for visibility filtering.
+            required_input_modes: Attachment MIME types every candidate must accept.
 
         Returns:
             A :class:`ResolveResult` containing the chosen agent or a
             human-readable ``failure_reason`` when no agent is available.
         """
-        # Server-side enforcement: sanitize allowed IDs before Pinecone query.
+        # Server-side enforcement: sanitize allowed IDs before lexical search.
         # Ensures only active + visible (public or owned by user) agents are
         # included, regardless of what the caller passes.
         allowed_agent_ids = await self._sanitize_allowed_ids(allowed_agent_ids, user_id)
@@ -187,7 +192,7 @@ class AgentResolverService:
         else:
             excluded = frozenset()
 
-        # Step 1 – vector similarity search (already filters active_only)
+        # Step 1 – lexical search (already filters active_only)
         candidates = await self._require_repository().query_similar_agents(
             query_text,
             count=count,
@@ -195,7 +200,42 @@ class AgentResolverService:
             excluded_agent_ids=excluded,
             active_only=True,
             user_id=user_id,
+            required_input_modes=required_input_modes,
         )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if is_routing_agent_eligible(
+                candidate,
+                user_id=user_id,
+                excluded_agent_ids=frozenset(excluded),
+                required_input_modes=required_input_modes,
+            )
+        ]
+
+        if not candidates and allowed_agent_ids is not None and len(allowed_agent_ids) == 1:
+            fallback_id = allowed_agent_ids[0]
+            if fallback_id not in excluded:
+                scoped = (
+                    await self._require_repository().get_agents_with_conditions_visible(
+                        user_id=user_id,
+                        query={
+                            "$and": [
+                                {"agent_id": fallback_id},
+                                {"agent_status": AgentStatus.active.value},
+                            ]
+                        },
+                        limit=1,
+                    )
+                )
+                candidates = [
+                    agent
+                    for agent in scoped
+                    if agent_accepts_required_input_modes(
+                        agent.agent_card,
+                        required_input_modes,
+                    )
+                ][:1]
 
         if not candidates:
             return ResolveResult(
@@ -206,7 +246,9 @@ class AgentResolverService:
 
         # Step 2 – optionally reorder by LLM preference
         if use_llm_selection and len(candidates) > 1:
-            candidates = await self._reorder_by_llm(query_text, candidates)
+            lexical_tail = candidates[5:]
+            reranked_head = await self._reorder_by_llm(query_text, candidates[:5])
+            candidates = [*reranked_head, *lexical_tail]
 
         # Step 3 – health probe with fallback (if enabled)
         if settings.agent_health_check_enabled:
@@ -288,23 +330,38 @@ class AgentResolverService:
         try:
             if self.agent_selection_service is None:
                 raise LLMServiceNotBoundError("AgentSelectionLLMService is not bound")
-            best_agent_id = (
-                await self.agent_selection_service.select_best_agent_for_task(
+            routing_candidates = [
+                _agent_to_routing_candidate(agent) for agent in candidates
+            ]
+            if hasattr(self.agent_selection_service, "rank_agents_for_task"):
+                ranked_ids = await self.agent_selection_service.rank_agents_for_task(
                     query_text,
-                    [_agent_to_routing_candidate(agent) for agent in candidates],
+                    routing_candidates,
                 )
-            )
-            best = next((a for a in candidates if a.agent_id == best_agent_id), None)
-            if best is not None and best.agent_status == AgentStatus.active:
-                others = [a for a in candidates if a.agent_id != best_agent_id]
-                return [best, *others]
-        except LLMServiceNotBoundError:
-            raise
-        except LLMModelRoutingError:
-            raise
+            else:
+                ranked_ids = [
+                    await self.agent_selection_service.select_best_agent_for_task(
+                        query_text,
+                        routing_candidates,
+                    )
+                ]
+            by_id = {agent.agent_id: agent for agent in candidates}
+            ranked: list[Agent] = []
+            seen: set[str] = set()
+            for agent_id in ranked_ids if isinstance(ranked_ids, list) else []:
+                agent_id = str(agent_id)
+                agent = by_id.get(agent_id)
+                if (
+                    agent is not None
+                    and agent.agent_status == AgentStatus.active
+                    and agent_id not in seen
+                ):
+                    ranked.append(agent)
+                    seen.add(agent_id)
+            return [*ranked, *(a for a in candidates if a.agent_id not in seen)]
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "AgentResolver: LLM selection failed, using vector order: %s",
+                "AgentResolver: LLM selection failed, using lexical order: %s",
                 exc,
             )
         return candidates
@@ -432,19 +489,20 @@ class AgentResolverFacadeRepository:
         excluded_agent_ids: frozenset[str] | set[str],
         active_only: bool,
         user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> list[Agent]:
         del active_only  # Facade matching already returns callable active agents.
-        matches = await self._facade.match_agents(
+        matches = await self._facade.match_for_message(
             query_text,
             limit=count,
             filter_ids=allowed_agent_ids,
-            respect_visibility=True,
             requesting_user_id=user_id,
+            required_input_modes=required_input_modes,
         )
         agents = [
-            _agent_info_to_legacy_agent(match.agent)
+            _agent_info_to_legacy_agent(match.get("agent"))
             for match in matches
-            if match.agent is not None
+            if match.get("agent") is not None
         ]
         if excluded_agent_ids:
             agents = [

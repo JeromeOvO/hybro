@@ -166,6 +166,91 @@ class TestResolveExplicitTargetScope:
         assert len(result) == 3
 
     @pytest.mark.asyncio
+    async def test_room_team_filters_agents_that_cannot_accept_attachment(
+        self, room_center
+    ):
+        room = _make_room(agent_set={"text": "Text", "image": "Image"})
+        text_agent = _make_agent("text", "Text")
+        text_agent.agent_card.default_input_modes = ["text"]
+        image_agent = _make_agent("image", "Image")
+        image_agent.agent_card.default_input_modes = ["image/*"]
+        room_center.database_service.get_agent_by_agent_id.side_effect = {
+            "text": text_agent,
+            "image": image_agent,
+        }.get
+
+        selected, _, agents = await room_center._resolve_explicit_target_scope(
+            room,
+            "inspect this",
+            "room_team",
+            False,
+            sender_user_id="user-1",
+            required_input_modes=["image/png"],
+        )
+
+        assert selected == {"image": "Image"}
+        assert agents == [image_agent]
+
+    @pytest.mark.asyncio
+    async def test_room_team_filters_open_capability_issues_before_llm_exposure(
+        self, room_center
+    ):
+        room = _make_room(agent_set={"safe": "Safe", "broken": "Broken"})
+        safe_agent = _make_agent("safe", "Safe")
+        broken_agent = _make_agent("broken", "Broken")
+        room_center.database_service.get_agent_by_agent_id.side_effect = {
+            "safe": safe_agent,
+            "broken": broken_agent,
+        }.get
+        room_center._capability_issue_reader = AsyncMock()
+        room_center._capability_issue_reader.get_excluded_agent_ids.return_value = {
+            "broken"
+        }
+
+        selected, _, agents = await room_center._resolve_explicit_target_scope(
+            room,
+            "hello",
+            "room_team",
+            False,
+            sender_user_id="user-1",
+        )
+
+        assert selected == {"safe": "Safe"}
+        assert agents == [safe_agent]
+
+    @pytest.mark.asyncio
+    async def test_saved_group_filters_agents_that_cannot_accept_attachment(
+        self, room_center
+    ):
+        room = _make_room()
+        group = MagicMock()
+        group.type = "custom"
+        group.owner_id = "user-1"
+        group.name = "Media"
+        group.agents = ["text", "pdf"]
+        room_center.database_service.get_agent_group_by_id.return_value = group
+        text_agent = _make_agent("text", "Text")
+        text_agent.agent_card.default_input_modes = ["text"]
+        pdf_agent = _make_agent("pdf", "PDF")
+        pdf_agent.agent_card.default_input_modes = ["application/pdf"]
+        room_center.database_service.get_agent_by_agent_id.side_effect = {
+            "text": text_agent,
+            "pdf": pdf_agent,
+        }.get
+
+        selected, _, agents = await room_center._resolve_explicit_target_scope(
+            room,
+            "summarize this",
+            "group-1",
+            False,
+            sender_user_id="user-1",
+            required_input_modes=["application/pdf"],
+        )
+
+        assert selected == {"pdf": "PDF"}
+        assert agents == [pdf_agent]
+
+    @pytest.mark.asyncio
     async def test_room_team_empty_returns_scope_error(self, room_center):
         room = _make_room(agent_set={})
 
@@ -236,6 +321,45 @@ class TestResolveExplicitTargetScope:
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
         assert result.scope_resolution_error.code == "empty_scope"
+
+
+@pytest.mark.asyncio
+async def test_workflow_candidate_scope_rejects_unsupported_attachment_agent(
+    room_center,
+):
+    text_agent = _make_agent("text", "Text")
+    text_agent.agent_card.default_input_modes = ["text"]
+    room_center.database_service.get_agent_by_agent_id.return_value = text_agent
+
+    result = await room_center._resolve_selected_candidate_scope(
+        ["text"],
+        sender_user_id="user-1",
+        required_input_modes=["application/pdf"],
+    )
+
+    assert isinstance(result, RoomCenterUserMessageResponse)
+    assert result.success is False
+    assert result.scope_resolution_error.code == "unauthorized_candidate_scope"
+
+
+@pytest.mark.asyncio
+async def test_workflow_candidate_scope_rejects_agent_with_capability_issue(
+    room_center,
+):
+    agent = _make_agent("broken", "Broken")
+    room_center.database_service.get_agent_by_agent_id.return_value = agent
+    room_center._capability_issue_reader = AsyncMock()
+    room_center._capability_issue_reader.get_excluded_agent_ids.return_value = {
+        "broken"
+    }
+
+    result = await room_center._resolve_selected_candidate_scope(
+        ["broken"],
+        sender_user_id="user-1",
+    )
+
+    assert isinstance(result, RoomCenterUserMessageResponse)
+    assert result.scope_resolution_error.code == "unauthorized_candidate_scope"
 
 
 # =============================================================================
@@ -804,4 +928,30 @@ class TestClientRequestIdPropagation:
                 "is_direct_chat": True,
             },
             client_request_id="cr-parse-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_parse_user_message_persists_modes_for_generated_steps(
+        self, room_center
+    ):
+        room_center._generate_agent_messages_based_on_parsed_result = AsyncMock(
+            return_value=[MagicMock()]
+        )
+
+        result = await room_center.parse_user_message(
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="inspect this",
+            selected_agent_set={"image": "Image"},
+            user_id="user-1",
+            target_group="room_team",
+            required_input_modes=["image/png"],
+        )
+
+        assert result.success is True
+        assert (
+            room_center._generate_agent_messages_based_on_parsed_result.await_args.kwargs[
+                "extend_info"
+            ]["required_input_modes"]
+            == ["image/png"]
         )

@@ -176,9 +176,9 @@ class SearchRankingRecord:
     turn_id: str
     room_id: str
     content: str = ""
-    vector_score: float = 0.0
     keyword_score: float = 0.0
-    combined_score: float = 0.0
+    raw_keyword_score: float | None = None
+    relevance_score: float = 0.0
     temporal_decay_factor: float = 1.0
     timestamp: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

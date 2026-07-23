@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from uuid import uuid4
 
+from agent.routing_safety import sanitize_routing_agent_ids
 from common.config.settings import settings
 from common.dto import (
     AgentRoutingCandidate,
@@ -32,7 +33,10 @@ from common.types import (
 from common.types import (
     MessageRole as Role,
 )
-from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
+from common.utils.a2a_file_modes import (
+    agent_input_modes,
+    mime_type_is_accepted,
+)
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
@@ -231,6 +235,7 @@ class RoomServices:
         self._a2a_inline_message_max_encoded_bytes = 6_990_508
         self._attachment_cleanup = None
         self._quote_writer = None
+        self._capability_issue_reader = None
 
     def bind_object_storage(self, service) -> None:
         """Inject object-storage service (avoids lazy singleton import)."""
@@ -314,6 +319,32 @@ class RoomServices:
 
     def bind_quote_writer(self, writer) -> None:
         self._quote_writer = writer
+
+    def bind_capability_issue_reader(self, reader) -> None:
+        self._capability_issue_reader = reader
+
+    async def _routing_excluded_agent_ids(self) -> frozenset[str]:
+        reader = getattr(self, "_capability_issue_reader", None)
+        if reader is None:
+            return frozenset()
+        return frozenset(
+            await reader.get_excluded_agent_ids()
+        )
+
+    async def _sanitize_routing_scope(
+        self,
+        agent_ids,
+        *,
+        sender_user_id: str | None,
+        required_input_modes: list[str] | None = None,
+    ):
+        return await sanitize_routing_agent_ids(
+            agent_ids,
+            lookup=self._store.get_agent_by_agent_id,
+            user_id=sender_user_id,
+            excluded_agent_ids=await self._routing_excluded_agent_ids(),
+            required_input_modes=required_input_modes,
+        )
 
     def _require_facade(self):
         if not getattr(self, "_bound", False) or getattr(self, "_facade", None) is None:
@@ -1792,26 +1823,16 @@ class RoomServices:
         self,
         selected_agent_ids: list[str],
         sender_user_id: str | None,
+        required_input_modes: list[str] | None = None,
     ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
-        selected_agent_set: dict[str, str] = {}
-        agents: list = []
-        invalid_ids: list[str] = []
-
-        for agent_id in selected_agent_ids:
-            if agent_id in selected_agent_set:
-                continue
-            agent = await self._store.get_agent_by_agent_id(agent_id)
-            if not agent or agent.agent_status != AgentStatus.active:
-                invalid_ids.append(agent_id)
-                continue
-            if (
-                not agent.is_public
-                and getattr(agent, "provider_id", None) != sender_user_id
-            ):
-                invalid_ids.append(agent_id)
-                continue
-            selected_agent_set[agent_id] = agent.agent_card.name
-            agents.append(agent)
+        agents, invalid_ids = await self._sanitize_routing_scope(
+            selected_agent_ids,
+            sender_user_id=sender_user_id,
+            required_input_modes=required_input_modes,
+        )
+        selected_agent_set = {
+            agent.agent_id: agent.agent_card.name for agent in agents
+        }
 
         if invalid_ids:
             error_msg = (
@@ -2257,6 +2278,7 @@ class RoomServices:
         token: CancellationToken | None = None,
         client_request_id: str | None = None,
         explicit_mentions: list[dict] | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> ParseResult:
         """
         Parse user message
@@ -2339,6 +2361,8 @@ class RoomServices:
             "target_group": target_group,
             "is_direct_chat": direct_chat,
         }
+        if required_input_modes is not None:
+            extend_info["required_input_modes"] = required_input_modes
 
         agent_messages = await self._generate_agent_messages_based_on_parsed_result(
             parsed_result,
@@ -2427,6 +2451,7 @@ class RoomServices:
         pre_resolved_mentions: list[dict] | None = None
         pre_resolved_scope: tuple[dict, bool, list] | None = None
         pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
+        required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
         orchestration_requested = self._is_orchestration_request(request)
         orchestration_info = self._orchestration_request_info(request)
@@ -2508,6 +2533,7 @@ class RoomServices:
             scope_result = await self._resolve_selected_candidate_scope(
                 selected_agent_ids,
                 sender_user_id=request.user_id,
+                required_input_modes=required_input_modes,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
                 return scope_result, None
@@ -2516,6 +2542,7 @@ class RoomServices:
                 mention_result = await self._validate_canonical_mentions(
                     mentioned_agent_ids,
                     sender_user_id=request.user_id,
+                    required_input_modes=required_input_modes,
                 )
                 if isinstance(mention_result, RoomCenterUserMessageResponse):
                     return mention_result, None
@@ -2549,6 +2576,7 @@ class RoomServices:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids,
                 sender_user_id=request.user_id,
+                required_input_modes=required_input_modes,
             )
             if isinstance(mention_result, RoomCenterUserMessageResponse):
                 return mention_result, None
@@ -2560,6 +2588,7 @@ class RoomServices:
                 target_group,
                 is_debate_mode,
                 sender_user_id=request.user_id,
+                required_input_modes=required_input_modes,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
                 return scope_result, None
@@ -2716,6 +2745,22 @@ class RoomServices:
 
             mentions = self.parse_agent_mentions(message_text, effective_agent_set)
 
+            if mentions:
+                mention_agents, _rejected = await self._sanitize_routing_scope(
+                    [mention["agent_id"] for mention in mentions],
+                    sender_user_id=request.user_id,
+                    required_input_modes=self._derive_required_input_modes(
+                        user_message
+                    ),
+                )
+                eligible_mention_ids = {
+                    agent.agent_id for agent in mention_agents
+                }
+                mentions = [
+                    mention
+                    for mention in mentions
+                    if mention["agent_id"] in eligible_mention_ids
+                ]
             if mentions:
                 if use_supervisor:
                     pre_resolved_mentions = mentions
@@ -2879,6 +2924,7 @@ class RoomServices:
                 token=token,
                 client_request_id=client_request_id,
                 explicit_mentions=pre_resolved_mentions,
+                required_input_modes=self._derive_required_input_modes(user_message),
             )
 
         if not parse_result.success:
@@ -3034,32 +3080,30 @@ class RoomServices:
         self,
         mentioned_agent_ids: list[str],
         sender_user_id: str | None,
+        required_input_modes: list[str] | None = None,
     ) -> list[dict] | RoomCenterUserMessageResponse:
         """Validate and resolve mentioned_agent_ids into canonical mention dicts.
 
         Returns the mention list on success, or an error response on failure.
         Called once before persistence; the result is reused downstream.
         """
-        canonical_mentions: list[dict] = []
-        invalid_ids: list[str] = []
-        for aid in mentioned_agent_ids:
-            agent = await self._store.get_agent_by_agent_id(aid)
-            if not agent or agent.agent_status != AgentStatus.active:
-                invalid_ids.append(aid)
-                continue
-            if (
-                not agent.is_public
-                and getattr(agent, "provider_id", None) != sender_user_id
-            ):
-                invalid_ids.append(aid)
-                continue
-            canonical_mentions.append(
+        agents, invalid_ids = await self._sanitize_routing_scope(
+            mentioned_agent_ids,
+            sender_user_id=sender_user_id,
+            required_input_modes=required_input_modes,
+        )
+        canonical_mentions = [
+            (
                 {
-                    "agent_id": aid,
+                    "agent_id": agent.agent_id,
                     "agent_name": agent.agent_card.name,
-                    "mention_text": f"<@{aid}|{agent.agent_card.name}>",
+                    "mention_text": (
+                        f"<@{agent.agent_id}|{agent.agent_card.name}>"
+                    ),
                 }
             )
+            for agent in agents
+        ]
 
         if invalid_ids:
             error_msg = (
@@ -3115,21 +3159,22 @@ class RoomServices:
                 )
 
                 if selection_result.agents:
+                    selected_ids = [
+                        agent.agent_id for agent in selection_result.agents
+                    ]
+                    full_agents, _rejected = await self._sanitize_routing_scope(
+                        selected_ids,
+                        sender_user_id=sender_user_id,
+                        required_input_modes=required_input_modes,
+                    )
                     selected = {
-                        agent.agent_id: agent.agent_name
-                        for agent in selection_result.agents
+                        agent.agent_id: agent.agent_card.name
+                        for agent in full_agents
                     }
-                    full_agents = []
-                    for agent_info in selection_result.agents:
-                        full_agent = await self._store.get_agent_by_agent_id(
-                            agent_info.agent_id
-                        )
-                        if full_agent:
-                            full_agents.append(full_agent)
 
                     logger.info(
                         "All Agents mode: Selected %s agents with strategy=%s",
-                        len(selection_result.agents),
+                        len(full_agents),
                         selection_result.strategy.value,
                     )
 
@@ -3165,8 +3210,19 @@ class RoomServices:
                     "Room Default mode: Using %s room agents as candidate scope",
                     len(room.room_agent_set),
                 )
-                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
-                return room.room_agent_set, True, room_agents
+                room_agents, _rejected = await self._sanitize_routing_scope(
+                    room.room_agent_set,
+                    sender_user_id=sender_user_id,
+                    required_input_modes=required_input_modes,
+                )
+                selected_agent_set = {
+                    agent.agent_id: (
+                        room.room_agent_set.get(agent.agent_id)
+                        or agent.agent_card.name
+                    )
+                    for agent in room_agents
+                }
+                return selected_agent_set, True, room_agents
 
             error_msg = "This room has no agents. Add agents before sending a message."
             logger.warning(
@@ -3220,11 +3276,11 @@ class RoomServices:
             )
 
         if group.agents:
-            agents = []
-            for agent_id in group.agents:
-                agent = await self._store.get_agent_by_agent_id(agent_id)
-                if agent:
-                    agents.append(agent)
+            agents, _rejected = await self._sanitize_routing_scope(
+                group.agents,
+                sender_user_id=sender_user_id,
+                required_input_modes=required_input_modes,
+            )
 
             selected_agent_set = {
                 agent.agent_id: agent.agent_card.name for agent in agents
