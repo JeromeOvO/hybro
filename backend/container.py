@@ -972,6 +972,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                     half_life_days=runtime.settings.memory_search_half_life_days,
                     max_results=runtime.settings.memory_search_max_results,
+                    max_candidates=runtime.settings.memory_search_max_candidates,
                     max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
                 ),
                 llm_config=ContextMemoryLLMConfig(
@@ -2360,6 +2361,7 @@ def create_context_memory_facade(
         temporal_decay_enabled=settings.memory_search_temporal_decay_enabled,
         half_life_days=settings.memory_search_half_life_days,
         max_results=settings.memory_search_max_results,
+        max_candidates=settings.memory_search_max_candidates,
         max_snippet_chars=settings.memory_search_max_snippet_chars,
     )
     return ContextMemoryFacade(

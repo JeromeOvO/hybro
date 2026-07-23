@@ -395,12 +395,13 @@ class ContentStorageMongoRepository:
             skip=skip,
         )
 
-    async def scan_text_search(self, room_id: str, query: str) -> list[dict]:
-        """Exhaust one ordered Mongo cursor of lightweight keyword candidates.
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]:
+        """Read a bounded set of lightweight keyword candidates.
 
-        A single cursor avoids both offset drift during TTL deletion and an
-        ever-growing ``$nin`` query. Full content remains excluded and is
-        hydrated separately in bounded batches by the search service.
+        Full content remains excluded and is hydrated separately in bounded
+        batches by the search service.
         """
         return await self._content.find(
             {
@@ -423,7 +424,7 @@ class ContentStorageMongoRepository:
                 ("stored_at", -1),
                 ("turn_id", 1),
             ],
-            exhaust=True,
+            limit=max(1, int(limit)),
         )
 
     async def hydrate_turn_content(

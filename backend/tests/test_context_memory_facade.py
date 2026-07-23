@@ -189,8 +189,10 @@ class StateContentRepository:
             }
         ]
 
-    async def scan_text_search(self, room_id: str, query: str) -> list[dict]:
-        return await self.text_search(room_id, query)
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]:
+        return await self.text_search(room_id, query, limit=limit)
 
     async def hydrate_turn_content(
         self, room_id: str, turn_ids: list[str]

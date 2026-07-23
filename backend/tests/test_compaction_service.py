@@ -148,7 +148,9 @@ class ContentRepositorySpy:
     ):
         return []
 
-    async def scan_text_search(self, _room_id: str, _query: str) -> list[dict]:
+    async def scan_text_search(
+        self, _room_id: str, _query: str, _limit: int
+    ) -> list[dict]:
         return []
 
 

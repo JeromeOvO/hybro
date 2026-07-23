@@ -468,11 +468,11 @@ search, and compaction:
 - `project_message_for_event`: updates room memory from persisted message
   history.
 - `assemble_context`: builds supervisor or agent context within token budgets.
-- `search_memory`: performs Mongo keyword search with temporal decay. It keeps
-  raw keyword scores stable across widening result windows, hydrates content in
-  a second phase, and re-queries from the first window so TTL deletion cannot
-  shift an offset past surviving candidates. Results expose explicit
-  `keyword_score`, `relevance_score`, and `temporal_decay_factor` fields.
+- `search_memory`: performs Mongo keyword search with temporal decay. It ranks
+  at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight records, then hydrates
+  ranked content in bounded batches until the requested number of surviving
+  snippets is available. Results expose explicit `keyword_score`,
+  `relevance_score`, and `temporal_decay_factor` fields.
 - `run_compaction`: compacts older turns using pointer-based full-content
   storage.
 - `content_repository`: stores full content references for compacted turns.

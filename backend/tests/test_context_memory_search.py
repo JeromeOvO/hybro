@@ -15,10 +15,10 @@ class ContentRepository:
         self.search_exclusions: list[set[str]] = []
         self.hydration_calls: list[list[str]] = []
 
-    async def scan_text_search(self, room_id, query):
+    async def scan_text_search(self, room_id, query, limit):
         del room_id, query
-        self.search_calls.append((0, 0))
-        return list(self.rows)
+        self.search_calls.append((0, limit))
+        return list(self.rows[:limit])
 
     async def text_search(
         self,
@@ -82,6 +82,29 @@ async def test_keyword_search_hydrates_content_and_prefers_one_liner():
 
 
 @pytest.mark.asyncio
+async def test_keyword_search_caps_candidates_and_stops_hydration_after_limit():
+    now = datetime.now(UTC)
+    rows = [_row(f"t{index}", 100 - index, now) for index in range(10)]
+    repository = ContentRepository(
+        rows,
+        {row["turn_id"]: _content(row["turn_id"], row["turn_id"]) for row in rows},
+    )
+
+    results, response = await search_memory(
+        room_id="r1",
+        query="content",
+        limit=1,
+        content_repository=repository,
+        config=MemorySearchConfig(max_candidates=5),
+    )
+
+    assert [result.metadata["turn_id"] for result in results] == ["t0"]
+    assert response["total_matches"] == 5
+    assert repository.search_calls == [(0, 5)]
+    assert repository.hydration_calls == [["t0", "t1", "t2"]]
+
+
+@pytest.mark.asyncio
 async def test_missing_hydration_is_dropped_and_later_pages_backfill():
     now = datetime.now(UTC)
     rows = [_row(f"missing-{index}", 100 - index, now) for index in range(50)]
@@ -98,7 +121,7 @@ async def test_missing_hydration_is_dropped_and_later_pages_backfill():
         config=MemorySearchConfig(),
     )
     assert [result.metadata["turn_id"] for result in results] == ["valid"]
-    assert repository.search_calls == [(0, 0)]
+    assert repository.search_calls == [(0, 1000)]
     hydrated_ids = [
         turn_id
         for hydration_call in repository.hydration_calls
@@ -165,7 +188,7 @@ async def test_ttl_deletion_during_hydration_does_not_shift_away_backfill():
     )
 
     assert [result.metadata["turn_id"] for result in results] == ["valid"]
-    assert repository.search_calls == [(0, 0)]
+    assert repository.search_calls == [(0, 1000)]
 
 
 @pytest.mark.asyncio
@@ -191,7 +214,7 @@ async def test_temporal_ranking_scans_all_keyword_candidates_before_top_k():
     )
 
     assert [result.metadata["turn_id"] for result in results] == ["recent"]
-    assert repository.search_calls == [(0, 0)]
+    assert repository.search_calls == [(0, 1000)]
 
 
 @pytest.mark.asyncio
@@ -262,12 +285,13 @@ def test_memory_search_config_defaults_to_300_character_snippets():
     from common.config.settings import Settings
 
     assert Settings.model_fields["memory_search_max_snippet_chars"].default == 300
+    assert Settings.model_fields["memory_search_max_candidates"].default == 1000
 
 
 @pytest.mark.asyncio
 async def test_keyword_failure_returns_empty_relevant_memory():
     class BrokenRepository(ContentRepository):
-        async def scan_text_search(self, room_id, query):
+        async def scan_text_search(self, room_id, query, limit):
             raise RuntimeError("text index missing")
 
     results, response = await search_memory(

@@ -81,9 +81,7 @@ class TokenBudgetConfig:
 
 @dataclass(frozen=True)
 class CompactionConfig:
-    enabled: bool = field(
-        default_factory=lambda: _setting("compaction_enabled", True)
-    )
+    enabled: bool = field(default_factory=lambda: _setting("compaction_enabled", True))
     max_full_turns: int = field(
         default_factory=lambda: _setting("compaction_max_full_turns", 20)
     )
@@ -119,6 +117,9 @@ class MemorySearchConfig:
     )
     max_results: int = field(
         default_factory=lambda: _setting("memory_search_max_results", 10)
+    )
+    max_candidates: int = field(
+        default_factory=lambda: _setting("memory_search_max_candidates", 1000)
     )
     max_snippet_chars: int = field(
         default_factory=lambda: _setting("memory_search_max_snippet_chars", 300)

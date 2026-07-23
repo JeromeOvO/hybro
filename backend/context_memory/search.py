@@ -39,13 +39,16 @@ async def search_memory(  # noqa: C901
     if not config.enabled or not query.strip() or effective_limit == 0:
         return [], empty_response
 
-    hydration_batch_size = max(50, effective_limit * 3)
+    hydration_batch_size = max(1, min(50, effective_limit * 3))
     attempted_hydration_ids: set[str] = set()
-    hydrated: dict[str, dict] = {}
     keyword_used = False
 
     try:
-        docs = await content_repository.scan_text_search(room_id, query)
+        docs = await content_repository.scan_text_search(
+            room_id,
+            query,
+            max(1, config.max_candidates),
+        )
         keyword_used = True
     except Exception:
         logger.warning(
@@ -61,13 +64,12 @@ async def search_memory(  # noqa: C901
         temporal_decay_enabled=config.temporal_decay_enabled,
         half_life_days=config.half_life_days,
     )
-    # Hydrate every ranked candidate at most once, in bounded ``$in`` batches.
-    # We cannot stop merely after finding ``limit`` snippets: a lower raw text
-    # score later in the cursor may outrank an old record after temporal decay.
+    final: list[SearchRankingRecord] = []
     for start_index in range(0, len(ranked), hydration_batch_size):
+        batch = ranked[start_index : start_index + hydration_batch_size]
         pending_ids = [
             record.turn_id
-            for record in ranked[start_index : start_index + hydration_batch_size]
+            for record in batch
             if record.turn_id and record.turn_id not in attempted_hydration_ids
         ]
         if not pending_ids:
@@ -85,25 +87,27 @@ async def search_memory(  # noqa: C901
                 exc_info=True,
             )
             hydrated_docs = []
-        for doc in hydrated_docs:
-            turn_id = str(doc.get("turn_id") or "")
-            if turn_id and not is_content_expired(doc):
-                hydrated[turn_id] = doc
-    final: list[SearchRankingRecord] = []
-    for record in ranked:
-        doc = hydrated.get(record.turn_id)
-        if doc is None:
-            continue
-        record.content = _snippet_from_document(doc)[: config.max_snippet_chars]
-        if not record.content:
-            continue
-        record.metadata.update(
-            {
-                "content_preview": record.content,
-                "content_type": doc.get("content_type") or "text",
-            }
-        )
-        final.append(record)
+        hydrated = {
+            str(doc.get("turn_id") or ""): doc
+            for doc in hydrated_docs
+            if doc.get("turn_id") and not is_content_expired(doc)
+        }
+        for record in batch:
+            doc = hydrated.get(record.turn_id)
+            if doc is None:
+                continue
+            record.content = _snippet_from_document(doc)[: config.max_snippet_chars]
+            if not record.content:
+                continue
+            record.metadata.update(
+                {
+                    "content_preview": record.content,
+                    "content_type": doc.get("content_type") or "text",
+                }
+            )
+            final.append(record)
+            if len(final) >= effective_limit:
+                break
         if len(final) >= effective_limit:
             break
 

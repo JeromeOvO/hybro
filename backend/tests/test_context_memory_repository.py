@@ -1153,14 +1153,15 @@ async def test_content_text_search_filters_expired_documents(content_repo, mongo
 
 
 @pytest.mark.asyncio
-async def test_content_scan_text_search_uses_one_unbounded_cursor_without_nin(
+async def test_content_scan_text_search_caps_lightweight_candidates_without_nin(
     content_repo, mongo
 ):
-    await content_repo.scan_text_search("r1", "query")
+    await content_repo.scan_text_search("r1", "query", 250)
 
     query, kwargs = mongo.collections["conversation_content"].find_calls[-1]
     assert "turn_id" not in query
-    assert kwargs["exhaust"] is True
+    assert kwargs["limit"] == 250
+    assert "exhaust" not in kwargs
     assert "content" not in kwargs["projection"]
 
 

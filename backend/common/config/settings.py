@@ -204,6 +204,7 @@ class Settings(BaseSettings):
     memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
     memory_search_half_life_days: int = 30  # Half-life for temporal decay
     memory_search_max_results: int = 10  # Max results to return
+    memory_search_max_candidates: int = 1000  # Max keyword candidates to rank
     memory_search_max_snippet_chars: int = 300  # Max chars per snippet
 
     # AWS S3 (file uploads and binary content storage)

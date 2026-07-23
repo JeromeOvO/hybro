@@ -131,6 +131,10 @@ class MemorySearchConfig:
         return settings.memory_search_max_results
 
     @property
+    def max_candidates(self) -> int:
+        return settings.memory_search_max_candidates
+
+    @property
     def max_snippet_chars(self) -> int:
         return settings.memory_search_max_snippet_chars
 

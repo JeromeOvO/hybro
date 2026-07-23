@@ -133,7 +133,9 @@ class FakeContentRepository:
     ) -> list[dict]:
         return []
 
-    async def scan_text_search(self, room_id: str, query: str) -> list[dict]:
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]:
         return []
 
     async def hydrate_turn_content(
