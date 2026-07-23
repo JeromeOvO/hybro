@@ -104,7 +104,7 @@ async def test_safe_candidates_are_filtered_before_mongo_text_search():
 
 
 @pytest.mark.asyncio
-async def test_mongo_failure_uses_multilingual_application_fallback():
+async def test_mongo_failure_uses_latin_and_cjk_application_fallback():
     class BrokenRepository(Repository):
         async def text_search(self, agent_ids, query, limit):
             raise RuntimeError("text index unavailable")

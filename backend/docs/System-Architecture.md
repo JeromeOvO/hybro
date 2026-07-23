@@ -259,7 +259,8 @@ compatibility facades.
 - Resolve and register A2A agent cards.
 - Store agent metadata in MongoDB.
 - Maintain the weighted Mongo text index for searchable agent fields.
-- Match agents with Mongo text search plus multilingual application fallback.
+- Match agents with Mongo text search plus an application fallback for Latin
+  words and CJK ideographs.
 - Respect visibility rules for public/private agents.
 - Merge hub liveness into agent status when hub agents are involved.
 

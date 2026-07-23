@@ -92,6 +92,11 @@ def test_unicode_latin_queries_are_searchable_and_tokenized_as_words():
     assert lexical_fallback_score("øresund", agent) == 1.0
 
 
+@pytest.mark.parametrize("query", ["かな", "안녕", "привет", "مرحبا"])
+def test_lexical_fallback_documents_unsupported_scripts(query):
+    assert is_searchable_query(query) is False
+
+
 def test_rank_combines_mongo_and_fallback_and_breaks_ties_by_agent_id():
     docs = [
         _doc("b", name="Writer"),
