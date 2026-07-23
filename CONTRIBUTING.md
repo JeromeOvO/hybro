@@ -43,7 +43,7 @@ Enhancement suggestions are tracked as GitHub issues. When suggesting a feature:
 ## Local Development Setup
 
 ### Prerequisites
-- **Node.js**: 20.9+
+- **Node.js**: 20.19+
 - **Python**: 3.12+
 - **`uv`**: Installed (`pip install uv` or via `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - **Docker & Docker Compose**: For local Redis & MongoDB
@@ -98,4 +98,4 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## License
 
-By contributing to Hybro AI, you agree that your contributions will be licensed under the project's [Apache License 2.0](LICENSE).
+By contributing to Hybro AI, you agree that your contributions will be licensed under the project's [MIT License](LICENSE).

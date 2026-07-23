@@ -176,6 +176,35 @@ function isConversationMarkdownClass(className?: string): boolean {
 /** Tracks `<ol>` nesting depth so section counters apply only to top-level lists. */
 const OlDepthContext = React.createContext(0)
 
+function MarkdownOrderedList({
+  children,
+  start,
+  className,
+  conversationTypography,
+  ...olProps
+}: React.OlHTMLAttributes<HTMLOListElement> & {
+  children?: React.ReactNode
+  conversationTypography: boolean
+}) {
+  const depth = React.useContext(OlDepthContext)
+  const isTopLevel = depth === 0
+  return (
+    <OlDepthContext.Provider value={depth + 1}>
+      <ol
+        className={className}
+        style={
+          conversationTypography && isTopLevel
+            ? { counterReset: `conv-section-ol ${(start ?? 1) - 1}` }
+            : undefined
+        }
+        {...olProps}
+      >
+        {children}
+      </ol>
+    </OlDepthContext.Provider>
+  )
+}
+
 /** Shared custom component overrides used by all Streamdown instances. */
 function makeComponents(
   isStreaming: boolean,
@@ -253,25 +282,13 @@ function makeComponents(
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className={listSpacing ?? (conversationTypography ? 'list-disc' : undefined)}>{children}</ul>
   ),
-  ol: ({ children, start, ...olProps }: React.OlHTMLAttributes<HTMLOListElement> & { children?: React.ReactNode }) => {
-    const depth = React.useContext(OlDepthContext)
-    const isTopLevel = depth === 0
-    return (
-      <OlDepthContext.Provider value={depth + 1}>
-        <ol
-          className={orderedListSpacing ?? (conversationTypography ? undefined : 'list-decimal')}
-          style={
-            conversationTypography && isTopLevel
-              ? { counterReset: `conv-section-ol ${(start ?? 1) - 1}` }
-              : undefined
-          }
-          {...olProps}
-        >
-          {children}
-        </ol>
-      </OlDepthContext.Provider>
-    )
-  },
+  ol: (props: React.OlHTMLAttributes<HTMLOListElement> & { children?: React.ReactNode }) => (
+    <MarkdownOrderedList
+      className={orderedListSpacing ?? (conversationTypography ? undefined : 'list-decimal')}
+      conversationTypography={conversationTypography}
+      {...props}
+    />
+  ),
   li: ({ children }: { children?: React.ReactNode }) => {
     const hashNumbered = conversationTypography
       && isHashNumberedListItemText(extractText(children))

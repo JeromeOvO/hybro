@@ -6,7 +6,7 @@ This is a Next.js 16 TypeScript app. Routes live in `src/app`, including groups 
 
 ## Build, Test, and Development Commands
 
-Use Node `20.9` from `.nvmrc`; install with `npm install`.
+Use Node `20.19` from `.nvmrc`; install with `npm install`.
 
 - `npm run dev`: start Next.js with Turbopack.
 - `npm run build`: create a production build.

@@ -6,9 +6,11 @@ import { selectComposerState } from '@/lib/selectors'
 import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
 import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
-import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { AgentGroup, MessageDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
+import type { ChatMode } from '@/lib/types/chat-mode'
+import type { Agent } from '@/lib/types/agent'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
@@ -31,30 +33,30 @@ export interface ComposerShellAdapter {
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
-  onChatModeChange?: (mode: any) => void
+  onChatModeChange?: (mode: ChatMode) => void
   isSending: boolean
   isProcessing: boolean
   isCancelling: boolean
-  agents: any[]
+  agents: Agent[]
   roomAgentIds: string[]
   groupManagement: {
-    groups: any[]
+    groups: AgentGroup[]
     loadingGroups: boolean
     selectedGroup: string
     isOverride: boolean
     handleGroupChange: (groupId: string) => void
     handleClearOverride: () => void
     handleCreateGroup: () => void
-    handleEditGroup: (group: any) => void
-    handleDeleteGroup: (group: any) => void
+    handleEditGroup: (group: AgentGroup) => void
+    handleDeleteGroup: (group: AgentGroup) => void
     onEditRoomAgents: () => void
   }
   quoteState: {
-    quote: any
-    setQuote: (data: any) => void
+    quote: QuoteData | null
+    setQuote: (data: QuoteData | null) => void
     clearQuote: () => void
   }
-  chatMode: any
+  chatMode: ChatMode
   externalValue?: string
   onExternalValueConsumed?: () => void
 }

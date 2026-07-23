@@ -23,7 +23,7 @@ Run a single e2e test:
 npx playwright test tests/e2e/some-test.spec.ts
 ```
 
-Node version: 20.9 (`.nvmrc`). Install: `npm install`.
+Node version: 20.19 (`.nvmrc`). Install: `npm install`.
 
 ## Architecture
 

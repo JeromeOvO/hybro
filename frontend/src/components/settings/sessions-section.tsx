@@ -3,7 +3,17 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Loader2, Monitor, Smartphone, Globe, Shield } from "lucide-react"
 import type { ClerkUser as UserResource } from "@/lib/auth"
-type SessionWithActivitiesResource = any;
+type SessionWithActivitiesResource = {
+  id: string
+  status?: string
+  latestActivity?: {
+    browserName?: string
+    deviceType?: string
+    ipAddress?: string
+  }
+  lastActiveAt?: Date
+  revoke?: () => Promise<unknown>
+}
 import { useSession } from "@/lib/auth"
 import { toast } from "sonner"
 

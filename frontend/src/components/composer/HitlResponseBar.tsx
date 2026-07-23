@@ -29,9 +29,9 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
   const [submitting, setSubmitting] = useState(false)
 
   const current = hitls[currentIndex] ?? hitls[0]
-  if (!current) return null
 
   const handleSubmit = useCallback(async (answer: string) => {
+    if (!current) return
     setSubmitting(true)
     try {
       await onSubmit(current.hitlId, answer)
@@ -42,7 +42,9 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
     } finally {
       setSubmitting(false)
     }
-  }, [current.hitlId, currentIndex, hitls.length, onSubmit])
+  }, [current, currentIndex, hitls.length, onSubmit])
+
+  if (!current) return null
 
   const sourceLabel = current.source === 'agent'
     ? (current.agentName ?? 'Agent')
