@@ -64,8 +64,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Next.js Linter
+      - name: Run ESLint
         run: npm run lint
 
       - name: Run Unit Tests with Vitest
         run: npm run test
+
+
+
