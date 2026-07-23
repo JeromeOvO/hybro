@@ -213,7 +213,11 @@ class AgentResolverService:
             )
         ]
 
-        if not candidates and allowed_agent_ids is not None and len(allowed_agent_ids) == 1:
+        if (
+            not candidates
+            and allowed_agent_ids is not None
+            and len(allowed_agent_ids) == 1
+        ):
             fallback_id = allowed_agent_ids[0]
             if fallback_id not in excluded:
                 scoped = (

@@ -272,16 +272,21 @@ async def test_assign_agent_uses_persisted_modes_for_generated_workflow_step(
 
     await dispatcher.assign_agent(message)
 
-    assert (
-        dispatcher.agent_resolver.resolve.await_args.kwargs["required_input_modes"]
-        == ["image/png"]
-    )
+    assert dispatcher.agent_resolver.resolve.await_args.kwargs[
+        "required_input_modes"
+    ] == ["image/png"]
+
+
 def test_agent_resolver_protocol_and_service_share_llm_default():
-    protocol_default = inspect.signature(AgentResolverPort.resolve).parameters[
-        "use_llm_selection"
-    ].default
-    service_default = inspect.signature(AgentResolverService.resolve).parameters[
-        "use_llm_selection"
-    ].default
+    protocol_default = (
+        inspect.signature(AgentResolverPort.resolve)
+        .parameters["use_llm_selection"]
+        .default
+    )
+    service_default = (
+        inspect.signature(AgentResolverService.resolve)
+        .parameters["use_llm_selection"]
+        .default
+    )
     assert protocol_default is True
     assert service_default is True

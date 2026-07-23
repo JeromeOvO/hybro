@@ -67,12 +67,8 @@ async def test_all_agents_uses_agent_matcher():
     # Mock MatchResult
     mock_match_result = MatchResult(
         agents=[
-            MatchedAgent(
-                agent=agent1, lexical_score=0.8, final_score=0.8
-            ),
-            MatchedAgent(
-                agent=agent2, lexical_score=0.6, final_score=0.6
-            ),
+            MatchedAgent(agent=agent1, lexical_score=0.8, final_score=0.8),
+            MatchedAgent(agent=agent2, lexical_score=0.6, final_score=0.6),
         ],
         total_candidates=5,
         filtered_count=2,

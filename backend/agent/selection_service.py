@@ -189,9 +189,7 @@ class AgentSelectionService:
         if self._llm_reranker is None:
             return candidates
         try:
-            routing_candidates = [
-                _routing_candidate(item.agent) for item in candidates
-            ]
+            routing_candidates = [_routing_candidate(item.agent) for item in candidates]
             if hasattr(self._llm_reranker, "rank_agents_for_task"):
                 ranked_ids = await self._llm_reranker.rank_agents_for_task(
                     query,
@@ -204,7 +202,9 @@ class AgentSelectionService:
                 )
                 ranked_ids = [best_id]
         except Exception:
-            logger.warning("Agent LLM rerank failed; using lexical order", exc_info=True)
+            logger.warning(
+                "Agent LLM rerank failed; using lexical order", exc_info=True
+            )
             return candidates
         by_id = {item.agent.agent_id: item for item in candidates}
         ranked = []
@@ -214,7 +214,10 @@ class AgentSelectionService:
             if candidate_id in by_id and candidate_id not in seen:
                 ranked.append(by_id[candidate_id])
                 seen.add(candidate_id)
-        return [*ranked, *(item for item in candidates if item.agent.agent_id not in seen)]
+        return [
+            *ranked,
+            *(item for item in candidates if item.agent.agent_id not in seen),
+        ]
 
 
 def _routing_candidate(agent) -> AgentRoutingCandidate:

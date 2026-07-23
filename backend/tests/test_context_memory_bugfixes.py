@@ -246,9 +246,7 @@ class TestMemorySearchHydration:
         assert ranked[0].relevance_score == 1.0
         assert ranked[0].temporal_decay_factor == 1.0
 
-    def test_keyword_ranking_preserves_existing_content(
-        self, mock_compaction_config
-    ):
+    def test_keyword_ranking_preserves_existing_content(self, mock_compaction_config):
         results = [
             SearchRankingRecord(
                 turn_id="turn_1",

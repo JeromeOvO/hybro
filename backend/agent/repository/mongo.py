@@ -215,6 +215,7 @@ class AgentMongoRepository:
             {"$set": {"agent_status": "active"}},
         )
 
+
 def _hub_agent_upsert_update(data: dict) -> dict:
     set_data = dict(data)
     agent_id = set_data.pop("agent_id")

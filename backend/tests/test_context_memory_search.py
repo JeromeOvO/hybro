@@ -34,7 +34,9 @@ class ContentRepository:
     async def hydrate_turn_content(self, room_id, turn_ids):
         del room_id
         self.hydration_calls.append(list(turn_ids))
-        return [self.hydrated[turn_id] for turn_id in turn_ids if turn_id in self.hydrated]
+        return [
+            self.hydrated[turn_id] for turn_id in turn_ids if turn_id in self.hydrated
+        ]
 
 
 def _row(turn_id: str, score: float, timestamp: datetime) -> dict:
@@ -98,7 +100,9 @@ async def test_missing_hydration_is_dropped_and_later_pages_backfill():
     assert [result.metadata["turn_id"] for result in results] == ["valid"]
     assert repository.search_calls == [(0, 0)]
     hydrated_ids = [
-        turn_id for hydration_call in repository.hydration_calls for turn_id in hydration_call
+        turn_id
+        for hydration_call in repository.hydration_calls
+        for turn_id in hydration_call
     ]
     assert len(hydrated_ids) == len(set(hydrated_ids))
 
@@ -111,10 +115,7 @@ async def test_empty_hydrated_content_does_not_prevent_later_backfill():
     repository = ContentRepository(
         rows,
         {
-            **{
-                f"empty-{index}": _content(f"empty-{index}", "")
-                for index in range(50)
-            },
+            **{f"empty-{index}": _content(f"empty-{index}", "") for index in range(50)},
             "valid": _content("valid", "backfilled content"),
         },
     )
@@ -176,10 +177,7 @@ async def test_temporal_ranking_scans_all_keyword_candidates_before_top_k():
     repository = ContentRepository(
         rows,
         {
-            **{
-                f"old-{index}": _content(f"old-{index}", "old")
-                for index in range(50)
-            },
+            **{f"old-{index}": _content(f"old-{index}", "old") for index in range(50)},
             "recent": _content("recent", "recent"),
         },
     )
@@ -217,9 +215,15 @@ async def test_content_prefix_is_used_without_placeholder_text():
 def test_temporal_decay_clamps_future_timestamps_and_uses_stable_ties():
     now = datetime.now(UTC)
     records = [
-        SearchRankingRecord("b", "r1", keyword_score=1, timestamp=now + timedelta(days=2)),
-        SearchRankingRecord("a", "r1", keyword_score=1, timestamp=now + timedelta(days=2)),
-        SearchRankingRecord("old", "r1", keyword_score=1, timestamp=now - timedelta(days=30)),
+        SearchRankingRecord(
+            "b", "r1", keyword_score=1, timestamp=now + timedelta(days=2)
+        ),
+        SearchRankingRecord(
+            "a", "r1", keyword_score=1, timestamp=now + timedelta(days=2)
+        ),
+        SearchRankingRecord(
+            "old", "r1", keyword_score=1, timestamp=now - timedelta(days=30)
+        ),
     ]
     ranked = rank_keyword_results(
         records,
@@ -241,9 +245,7 @@ def test_repeated_ranking_preserves_raw_keyword_scores():
         temporal_decay_enabled=False,
         half_life_days=30,
     )
-    records.append(
-        SearchRankingRecord("second", "r1", keyword_score=5, timestamp=now)
-    )
+    records.append(SearchRankingRecord("second", "r1", keyword_score=5, timestamp=now))
 
     ranked = rank_keyword_results(
         records,

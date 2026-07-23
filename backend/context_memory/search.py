@@ -129,9 +129,7 @@ async def search_memory(  # noqa: C901
         "search_time_ms": round((time.monotonic() - start) * 1000, 2),
         "searched_at": utcnow(),
         "keyword_search_used": keyword_used,
-        "temporal_decay_applied": bool(
-            config.temporal_decay_enabled and raw_records
-        ),
+        "temporal_decay_applied": bool(config.temporal_decay_enabled and raw_records),
     }
     return dto_results, response
 
@@ -151,9 +149,7 @@ def rank_keyword_results(
     )
     now = utcnow()
     for record in results:
-        normalized = (
-            (record.raw_keyword_score or 0.0) / maximum if maximum > 0 else 0.0
-        )
+        normalized = (record.raw_keyword_score or 0.0) / maximum if maximum > 0 else 0.0
         decay = (
             _temporal_decay(record.timestamp, now, half_life_days)
             if temporal_decay_enabled

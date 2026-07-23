@@ -219,9 +219,7 @@ class AgentDispatcher:
             return True
         target_group = extend_info.get("target_group")
         groups = (
-            target_group
-            if isinstance(target_group, list | tuple)
-            else [target_group]
+            target_group if isinstance(target_group, list | tuple) else [target_group]
         )
         return any(
             isinstance(group, str)

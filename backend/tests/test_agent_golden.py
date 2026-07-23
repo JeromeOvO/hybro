@@ -34,15 +34,11 @@ class GoldenRepository(Repository):
         self.docs[agent_id] = doc
 
     async def get_public(self, limit=50):
-        return [
-            doc for doc in self.docs.values() if doc.get("is_public", True)
-        ][:limit]
+        return [doc for doc in self.docs.values() if doc.get("is_public", True)][:limit]
 
     async def get_by_provider(self, provider_id):
         return [
-            doc
-            for doc in self.docs.values()
-            if doc.get("provider_id") == provider_id
+            doc for doc in self.docs.values() if doc.get("provider_id") == provider_id
         ]
 
 

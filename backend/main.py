@@ -109,11 +109,7 @@ def compute_health_status(
         and redis_runtime_connected
         and relay_streams_available
     )
-    degraded = (
-        redis_degraded
-        or not change_stream_connected
-        or not search_indexes_ready
-    )
+    degraded = redis_degraded or not change_stream_connected or not search_indexes_ready
     return {
         "body": {
             "status": "degraded" if degraded else "ok",

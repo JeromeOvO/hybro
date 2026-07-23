@@ -336,12 +336,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.memory_search_index_ready = index_readiness[
                 "memory_search_index_ready"
             ]
-            app.state.search_indexes_ready = (
-                app.state.agent_search_index_ready
-                and (
-                    not runtime.settings.memory_search_enabled
-                    or app.state.memory_search_index_ready
-                )
+            app.state.search_indexes_ready = app.state.agent_search_index_ready and (
+                not runtime.settings.memory_search_enabled
+                or app.state.memory_search_index_ready
             )
 
             route_room_center = RoomRouteAdapter()
@@ -482,9 +479,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
-            room_runtime.bind_capability_issue_reader(
-                agent_capability_issue_service
-            )
+            room_runtime.bind_capability_issue_reader(agent_capability_issue_service)
             synthesis_coordinator.bind_summary_service(summary_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
@@ -1840,8 +1835,7 @@ async def _ensure_text_index(
         desired_weights = dict(sorted(weights.items()))
         matching = existing.get(name)
         matching_keys = tuple(
-            (key, direction)
-            for key, direction in ((matching or {}).get("key") or [])
+            (key, direction) for key, direction in ((matching or {}).get("key") or [])
         )
         valid_text_keys = {
             (("_fts", "text"), ("_ftsx", 1)),
@@ -1849,8 +1843,7 @@ async def _ensure_text_index(
         }
         if (
             matching
-            and dict(sorted((matching.get("weights") or {}).items()))
-            == desired_weights
+            and dict(sorted((matching.get("weights") or {}).items())) == desired_weights
             and matching_keys in valid_text_keys
         ):
             return True
@@ -1868,6 +1861,8 @@ async def _ensure_text_index(
     except Exception:
         log.warning("Search index creation failed for %s", name, exc_info=True)
         return False
+
+
 async def _ensure_capability_issue_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,

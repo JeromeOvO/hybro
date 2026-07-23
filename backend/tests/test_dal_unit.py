@@ -264,9 +264,7 @@ async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current(
     collection.index_information = AsyncMock(
         return_value={
             "unique_normalized_url": {
-                "partialFilterExpression": {
-                    "normalized_url": {"$type": "string"}
-                }
+                "partialFilterExpression": {"normalized_url": {"$type": "string"}}
             }
         }
     )

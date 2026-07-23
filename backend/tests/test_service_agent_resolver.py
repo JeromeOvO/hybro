@@ -371,12 +371,9 @@ class TestResolve:
             )
 
         assert result.agent is image_agent
-        assert (
-            resolver._resolution_repository.query_similar_agents.await_args.kwargs[
-                "required_input_modes"
-            ]
-            == ["image/png"]
-        )
+        assert resolver._resolution_repository.query_similar_agents.await_args.kwargs[
+            "required_input_modes"
+        ] == ["image/png"]
 
     @pytest.mark.asyncio
     async def test_singleton_fallback_rejects_unsupported_input_modes(self, resolver):
@@ -403,7 +400,9 @@ class TestResolve:
     async def test_llm_reranks_only_first_five_and_preserves_lexical_tail(
         self, resolver
     ):
-        candidates = [_make_agent(f"a{index}", f"Agent {index}") for index in range(1, 8)]
+        candidates = [
+            _make_agent(f"a{index}", f"Agent {index}") for index in range(1, 8)
+        ]
         for candidate in candidates:
             candidate.agent_status = AgentStatus.active
             candidate.agent_card.description = ""

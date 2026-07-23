@@ -23,9 +23,7 @@ class FakeVectorStore:
                     id=record.id,
                     score=sum(
                         left * right
-                        for left, right in zip(
-                            record.vector, query_vector, strict=True
-                        )
+                        for left, right in zip(record.vector, query_vector, strict=True)
                     ),
                     metadata=record.metadata,
                 )
@@ -100,7 +98,10 @@ def test_vector_store_extension_has_no_runtime_consumer_or_container_binding():
     for path in runtime_paths:
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "extensions.vector_store":
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "extensions.vector_store"
+            ):
                 violations.append(str(path))
             if isinstance(node, ast.Import):
                 if any(alias.name == "extensions.vector_store" for alias in node.names):

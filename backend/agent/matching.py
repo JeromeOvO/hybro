@@ -61,7 +61,8 @@ def lexical_fallback_score(query: str, agent: dict[str, Any]) -> float:
         )
     return max(
         (
-            multiplier * _field_match_score(normalized_query, normalize_search_text(text))
+            multiplier
+            * _field_match_score(normalized_query, normalize_search_text(text))
             for multiplier, text in fields
             if text
         ),

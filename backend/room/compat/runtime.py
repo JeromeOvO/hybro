@@ -327,9 +327,7 @@ class RoomServices:
         reader = getattr(self, "_capability_issue_reader", None)
         if reader is None:
             return frozenset()
-        return frozenset(
-            await reader.get_excluded_agent_ids()
-        )
+        return frozenset(await reader.get_excluded_agent_ids())
 
     async def _sanitize_routing_scope(
         self,
@@ -1830,9 +1828,7 @@ class RoomServices:
             sender_user_id=sender_user_id,
             required_input_modes=required_input_modes,
         )
-        selected_agent_set = {
-            agent.agent_id: agent.agent_card.name for agent in agents
-        }
+        selected_agent_set = {agent.agent_id: agent.agent_card.name for agent in agents}
 
         if invalid_ids:
             error_msg = (
@@ -2753,9 +2749,7 @@ class RoomServices:
                         user_message
                     ),
                 )
-                eligible_mention_ids = {
-                    agent.agent_id for agent in mention_agents
-                }
+                eligible_mention_ids = {agent.agent_id for agent in mention_agents}
                 mentions = [
                     mention
                     for mention in mentions
@@ -3097,9 +3091,7 @@ class RoomServices:
                 {
                     "agent_id": agent.agent_id,
                     "agent_name": agent.agent_card.name,
-                    "mention_text": (
-                        f"<@{agent.agent_id}|{agent.agent_card.name}>"
-                    ),
+                    "mention_text": (f"<@{agent.agent_id}|{agent.agent_card.name}>"),
                 }
             )
             for agent in agents
@@ -3159,17 +3151,14 @@ class RoomServices:
                 )
 
                 if selection_result.agents:
-                    selected_ids = [
-                        agent.agent_id for agent in selection_result.agents
-                    ]
+                    selected_ids = [agent.agent_id for agent in selection_result.agents]
                     full_agents, _rejected = await self._sanitize_routing_scope(
                         selected_ids,
                         sender_user_id=sender_user_id,
                         required_input_modes=required_input_modes,
                     )
                     selected = {
-                        agent.agent_id: agent.agent_card.name
-                        for agent in full_agents
+                        agent.agent_id: agent.agent_card.name for agent in full_agents
                     }
 
                     logger.info(
@@ -3217,8 +3206,7 @@ class RoomServices:
                 )
                 selected_agent_set = {
                     agent.agent_id: (
-                        room.room_agent_set.get(agent.agent_id)
-                        or agent.agent_card.name
+                        room.room_agent_set.get(agent.agent_id) or agent.agent_card.name
                     )
                     for agent in room_agents
                 }

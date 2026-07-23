@@ -134,6 +134,7 @@ class MemorySearchConfig:
     def max_snippet_chars(self) -> int:
         return settings.memory_search_max_snippet_chars
 
+
 # Singleton instances
 token_budget = TokenBudget()
 compaction_config = CompactionConfig()
