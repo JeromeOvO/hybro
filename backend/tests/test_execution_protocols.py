@@ -539,8 +539,12 @@ def test_container_wires_execution_with_focused_port_names():
     assert "QuotedSnippet.model_validate" in source
     assert "execution_inquiry_agent_messages_by_related_message_id" in source
     assert (
-        "RoomCenterAgentMessageRequest(related_message_id=related_message_id)" in source
+        "RoomCenterAgentMessageRequest(\n                    related_message_id=related_message_id\n                )"
+        in source
+        or "RoomCenterAgentMessageRequest(related_message_id=related_message_id)"
+        in source
     )
+
     assert (
         "from " + "app_" + "shell" + "."
     ) + "compaction_service import compaction_service" not in source
