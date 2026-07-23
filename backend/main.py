@@ -98,9 +98,9 @@ def compute_health_status(
     relay_streams_available: bool = False,
     redis_url: str,
     change_stream_connected: bool,
-    agent_search_index_ready: bool = True,
-    memory_search_index_ready: bool = True,
-    search_indexes_ready: bool = True,
+    agent_search_index_ready: bool = False,
+    memory_search_index_ready: bool = False,
+    search_indexes_ready: bool = False,
 ) -> dict:
     redis_expected = bool(redis_url)
     redis_degraded = redis_expected and not (

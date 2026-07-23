@@ -45,6 +45,9 @@ class TestHealthStatus:
             relay_streams_available=False,
             redis_url="",
             change_stream_connected=True,
+            agent_search_index_ready=True,
+            memory_search_index_ready=True,
+            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "ok"
@@ -67,6 +70,9 @@ class TestHealthStatus:
             relay_streams_available=True,
             redis_url="redis://localhost:6379/0",
             change_stream_connected=True,
+            agent_search_index_ready=True,
+            memory_search_index_ready=True,
+            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "degraded"
@@ -89,6 +95,9 @@ class TestHealthStatus:
             relay_streams_available=True,
             redis_url="redis://localhost:6379/0",
             change_stream_connected=True,
+            agent_search_index_ready=True,
+            memory_search_index_ready=True,
+            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "ok"
@@ -108,6 +117,9 @@ class TestHealthStatus:
             relay_streams_available=True,
             redis_url="redis://localhost:6379/0",
             change_stream_connected=False,
+            agent_search_index_ready=True,
+            memory_search_index_ready=True,
+            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "degraded"

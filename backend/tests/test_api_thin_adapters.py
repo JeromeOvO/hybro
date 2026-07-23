@@ -4,6 +4,7 @@ import inspect
 import json
 from dataclasses import fields, is_dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1422,6 +1423,28 @@ def test_health_check_service_uses_request_state_not_main_closures():
     assert "relay_streams_available=" not in main_source
     assert "request.app.state" in health_source
     assert "_relay_streams_available" not in health_source
+
+
+@pytest.mark.asyncio
+async def test_health_check_service_fails_closed_when_index_state_is_missing():
+    from common.health_check import RuntimeHealthCheck
+
+    compute_health_status = MagicMock(
+        return_value={"body": {"status": "degraded"}, "status_code": 503}
+    )
+    service = RuntimeHealthCheck(
+        redis_url=None,
+        compute_health_status=compute_health_status,
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+    response = await service.check(request)
+
+    assert response.status_code == 503
+    kwargs = compute_health_status.call_args.kwargs
+    assert kwargs["agent_search_index_ready"] is False
+    assert kwargs["memory_search_index_ready"] is False
+    assert kwargs["search_indexes_ready"] is False
 
 
 def test_route_protocol_surfaces_are_specific():
