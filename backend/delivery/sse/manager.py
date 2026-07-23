@@ -66,7 +66,9 @@ class SSETransportImpl:
         if unsubscribed_room is not None:
             await self.event_bus.unsubscribe_room(unsubscribed_room)
 
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict[str, Any]) -> None:
+    async def broadcast_frame_to_room(
+        self, room_id: str, frame: dict[str, Any]
+    ) -> None:
         async with self._lock:
             snapshot = list(self.room_connections.get(room_id, {}).items())
 
@@ -147,7 +149,9 @@ class SSETransportImpl:
         connection_id: str,
     ) -> SSEConnection:
         if self._draining:
-            raise ConnectionRefusedError("Server is draining - rejecting new SSE connections")
+            raise ConnectionRefusedError(
+                "Server is draining - rejecting new SSE connections"
+            )
 
         admission_lock = await self._get_admission_lock(room_id)
         async with admission_lock:

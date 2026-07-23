@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, Request
 
 from api_gateway.dependencies import get_memory_center

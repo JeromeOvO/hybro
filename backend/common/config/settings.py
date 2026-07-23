@@ -270,7 +270,6 @@ class Settings(BaseSettings):
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
 
-
     @field_validator("terminal_processing_statuses", mode="before")
     @classmethod
     def parse_terminal_processing_statuses(cls, v):
@@ -366,8 +365,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def apply_a2a_inline_encoded_default(self):
         if self.a2a_inline_message_max_encoded_bytes <= 0:
-            self.a2a_inline_message_max_encoded_bytes = (
-                4 * math.ceil(self.a2a_inline_file_max_raw_bytes / 3)
+            self.a2a_inline_message_max_encoded_bytes = 4 * math.ceil(
+                self.a2a_inline_file_max_raw_bytes / 3
             )
         return self
 

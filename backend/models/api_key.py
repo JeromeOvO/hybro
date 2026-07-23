@@ -36,4 +36,3 @@ class APIKey(BaseModel):
 
     # Usage tracking
     usage_count: int = 0
-

@@ -106,11 +106,13 @@ class TestDispatchChain:
     @pytest.mark.asyncio
     async def test_pre_dispatch_runs_forward(self):
         log: list[str] = []
-        chain = DispatchChain([
-            _TrackingMiddleware("A", log),
-            _TrackingMiddleware("B", log),
-            _TrackingMiddleware("C", log),
-        ])
+        chain = DispatchChain(
+            [
+                _TrackingMiddleware("A", log),
+                _TrackingMiddleware("B", log),
+                _TrackingMiddleware("C", log),
+            ]
+        )
         ctx = _make_ctx()
         await chain.run_pre_dispatch(ctx)
         assert log == ["pre:A", "pre:B", "pre:C"]
@@ -118,11 +120,13 @@ class TestDispatchChain:
     @pytest.mark.asyncio
     async def test_post_dispatch_runs_reverse(self):
         log: list[str] = []
-        chain = DispatchChain([
-            _TrackingMiddleware("A", log),
-            _TrackingMiddleware("B", log),
-            _TrackingMiddleware("C", log),
-        ])
+        chain = DispatchChain(
+            [
+                _TrackingMiddleware("A", log),
+                _TrackingMiddleware("B", log),
+                _TrackingMiddleware("C", log),
+            ]
+        )
         ctx = _make_ctx()
         result = ProcessingResult(ProcessingStatus.SUCCESS)
         await chain.run_post_dispatch(ctx, result)
@@ -131,11 +135,13 @@ class TestDispatchChain:
     @pytest.mark.asyncio
     async def test_denied_short_circuits(self):
         log: list[str] = []
-        chain = DispatchChain([
-            _TrackingMiddleware("A", log),
-            _DenyMiddleware(),
-            _TrackingMiddleware("C", log),
-        ])
+        chain = DispatchChain(
+            [
+                _TrackingMiddleware("A", log),
+                _DenyMiddleware(),
+                _TrackingMiddleware("C", log),
+            ]
+        )
         ctx = _make_ctx()
         ctx = await chain.run_pre_dispatch(ctx)
 
@@ -173,9 +179,7 @@ class TestHubTransportMiddleware:
         relay = MagicMock()
         relay.is_hub_alive = AsyncMock(return_value=True)
         mw = HubTransportMiddleware(relay)
-        ctx = _make_ctx(
-            agent=_make_agent(source="hub", hub_id="hub-001")
-        )
+        ctx = _make_ctx(agent=_make_agent(source="hub", hub_id="hub-001"))
 
         ctx = await mw.pre_dispatch(ctx)
         assert ctx.transport == "relay"
@@ -207,9 +211,7 @@ class TestHubTransportMiddleware:
         relay.is_hub_alive = AsyncMock(return_value=False)
         relay.mark_hub_agents_offline = AsyncMock()
         mw = HubTransportMiddleware(relay)
-        ctx = _make_ctx(
-            agent=_make_agent(source="hub", hub_id="hub-001")
-        )
+        ctx = _make_ctx(agent=_make_agent(source="hub", hub_id="hub-001"))
 
         ctx = await mw.pre_dispatch(ctx)
         assert ctx.transport == "relay"
@@ -258,7 +260,10 @@ class TestAMPRelayDispatch:
         assert relay_transport.response_handler is response_handler
         assert relay_transport.relay_service is relay_svc
         assert relay_transport._call_counter is relay_svc.agent_call_counter
-        assert relay_transport._ownership_lease_maintainer is relay_svc.ownership_lease_maintainer
+        assert (
+            relay_transport._ownership_lease_maintainer
+            is relay_svc.ownership_lease_maintainer
+        )
 
     @pytest.mark.asyncio
     async def test_relay_transport_returns_relay_dispatched(self):
@@ -282,7 +287,11 @@ class TestAMPRelayDispatch:
 
         relay_transport_mock = MagicMock()
         relay_transport_mock.dispatch = AsyncMock(
-            return_value=ProcessingResult(ProcessingStatus.RELAY_DISPATCHED, response_text="", message_id="amsg-001")
+            return_value=ProcessingResult(
+                ProcessingStatus.RELAY_DISPATCHED,
+                response_text="",
+                message_id="amsg-001",
+            )
         )
 
         amp = AgentMessageProcessor(
@@ -303,9 +312,7 @@ class TestAMPRelayDispatch:
             message_content=MessageContent(message_text=""),
         )
 
-        result = await amp.process_single_message(
-            msg, "room-001", agent, "umsg-001"
-        )
+        result = await amp.process_single_message(msg, "room-001", agent, "umsg-001")
 
         assert result.status == ProcessingStatus.RELAY_DISPATCHED
         relay_transport_mock.dispatch.assert_awaited_once()
@@ -327,7 +334,9 @@ class TestAMPRelayDispatch:
 
         dt = MagicMock()
         dt.dispatch = AsyncMock(
-            return_value=ProcessingResult(ProcessingStatus.SUCCESS, response_text="response text")
+            return_value=ProcessingResult(
+                ProcessingStatus.SUCCESS, response_text="response text"
+            )
         )
 
         amp = AgentMessageProcessor(
@@ -347,15 +356,15 @@ class TestAMPRelayDispatch:
             message_content=MessageContent(message_text=""),
         )
 
-        result = await amp.process_single_message(
-            msg, "room-001", agent, "umsg-001"
-        )
+        result = await amp.process_single_message(msg, "room-001", agent, "umsg-001")
 
         assert result.status == ProcessingStatus.SUCCESS
         dt.dispatch.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_room_runtime_preflight_failure_preserves_reason_and_skips_transport(self):
+    async def test_room_runtime_preflight_failure_preserves_reason_and_skips_transport(
+        self,
+    ):
         from execution.dispatch.agent_message_processor import AgentMessageProcessor
 
         room_runtime = MagicMock()
@@ -467,7 +476,9 @@ class TestAMPRelayDispatch:
         dt.dispatch.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_room_runtime_missing_prepared_message_preserves_preflight_reason(self):
+    async def test_room_runtime_missing_prepared_message_preserves_preflight_reason(
+        self,
+    ):
         from execution.dispatch.agent_message_processor import AgentMessageProcessor
 
         room_runtime = MagicMock()

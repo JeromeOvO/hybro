@@ -396,7 +396,7 @@ def test_ingest_projects_text_into_deduplicated_fact():
             "source_agent_id": "agent-1",
             "kind": "agent_text",
             "text": "Carrier A can quote the risk.",
-        }
+        },
     ]
 
 
@@ -485,9 +485,7 @@ def test_ingest_narrative_only_artifact_preserves_untrusted_text_evidence():
     updated = AgentResultIngestor().ingest(_run_state(), result)
 
     evidence = next(
-        fact
-        for fact in updated.facts
-        if fact.get("kind") == "agent_text_evidence"
+        fact for fact in updated.facts if fact.get("kind") == "agent_text_evidence"
     )
     assert evidence == {
         "fact_id": "agent-msg-narrative:text_evidence",
@@ -871,6 +869,7 @@ def test_reingesting_artifacts_replaces_current_keys_and_removes_stale_records()
         for artifact in with_one.artifacts
     )
 
+
 def test_reingesting_failed_or_canceled_text_removes_remote_evidence():
     ingestor = AgentResultIngestor()
     failed_text = "PRIVATE_SENTINEL_failed_partial_response"
@@ -968,10 +967,7 @@ def test_sparse_replay_preserves_legacy_artifact_without_source_metadata():
     )
     assert updated is state
     assert output.artifact_keys == ["agent-msg-1:artifact_id:old"]
-    assert [
-        artifact["artifact_key"]
-        for artifact in updated.artifacts
-    ] == [
+    assert [artifact["artifact_key"] for artifact in updated.artifacts] == [
         "agent-msg-1:artifact_id:old",
         "agent-msg-2:artifact_id:other",
     ]
@@ -1061,10 +1057,7 @@ def test_ingest_projection_bind_failure_uses_available_refs_recovery():
         agent_id="agent-1",
         status="failed",
         text="",
-        error=(
-            "Attachment projection unavailable for "
-            "report.pdf (application/pdf)."
-        ),
+        error=("Attachment projection unavailable for report.pdf (application/pdf)."),
         status_message="attachment_projection_unavailable",
     )
 

@@ -36,13 +36,17 @@ def build_turn_content(message_text: str, attachments: list[Any] | None = None) 
     content = message_text or ""
     if not attachments:
         return content
-    descriptions = [_format_attachment_for_turn(attachment) for attachment in attachments]
+    descriptions = [
+        _format_attachment_for_turn(attachment) for attachment in attachments
+    ]
     return f"{content}\n[Attachments: {', '.join(descriptions)}]"
 
 
 def _format_attachment_for_turn(attachment: Any) -> str:
     name = _attachment_value(attachment, "file_name", "name") or "attachment"
-    mime_type = _attachment_value(attachment, "mime_type", "content_type") or "unknown type"
+    mime_type = (
+        _attachment_value(attachment, "mime_type", "content_type") or "unknown type"
+    )
     size_bytes = _attachment_value(attachment, "size_bytes", "size")
     size = _human_size(size_bytes) if size_bytes else "unknown size"
     return f"{name} ({mime_type}, {size})"
@@ -85,7 +89,9 @@ async def project_message_from_history(
     background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
 ) -> dict:
     messages = await room_history_reader.get_messages_by_ids([message_id])
-    message = next((m for m in messages if getattr(m, "message_id", None) == message_id), None)
+    message = next(
+        (m for m in messages if getattr(m, "message_id", None) == message_id), None
+    )
     if message is None:
         return {"projected": False, "reason": "missing_message"}
     if message.room_id != room_id:
@@ -128,7 +134,11 @@ async def project_message_from_history(
             was_successful=was_successful,
         )
 
-    modified, matched, already_exists = await repository.push_and_trim_conversation_turn_if_absent(
+    (
+        modified,
+        matched,
+        already_exists,
+    ) = await repository.push_and_trim_conversation_turn_if_absent(
         room_id,
         turn,
         turn_id=turn["turn_id"],
@@ -204,7 +214,8 @@ def agent_turn_from_projected_message(
         )
     return agent_turn(
         content=content,
-        agent_id=getattr(message, "agent_id", None) or getattr(message, "sender_id", None),
+        agent_id=getattr(message, "agent_id", None)
+        or getattr(message, "sender_id", None),
         agent_name=resolved_agent_name,
         timestamp=getattr(message, "created_at", None) or now(),
         turn_id=f"message:{message_id}",
@@ -331,15 +342,17 @@ async def initialize_or_update_room_memory(
                 max_summary_chars=MAX_SUMMARY_CHARS,
             )
         else:
-            modified, matched, already_exists = (
-                await repository.push_and_trim_conversation_turn_if_absent(
-                    room_id,
-                    turn,
-                    turn_id=turn["turn_id"],
-                    max_turns=MAX_HISTORY_TURNS,
-                    summary_stub=f"[User] {clean_message[:200]}...",
-                    max_summary_chars=MAX_SUMMARY_CHARS,
-                )
+            (
+                modified,
+                matched,
+                already_exists,
+            ) = await repository.push_and_trim_conversation_turn_if_absent(
+                room_id,
+                turn,
+                turn_id=turn["turn_id"],
+                max_turns=MAX_HISTORY_TURNS,
+                summary_stub=f"[User] {clean_message[:200]}...",
+                max_summary_chars=MAX_SUMMARY_CHARS,
             )
             if already_exists:
                 latest = await repository.get_room_memory(room_id) or room_memory
@@ -376,15 +389,17 @@ async def add_agent_response_to_memory(
         was_successful=was_successful,
     )
     if message_id:
-        modified, matched, _already_exists = (
-            await repository.push_and_trim_conversation_turn_if_absent(
-                room_id,
-                turn,
-                turn_id=turn["turn_id"],
-                max_turns=MAX_HISTORY_TURNS,
-                summary_stub=f"[{agent_name}] {response_text[:200]}...",
-                max_summary_chars=MAX_SUMMARY_CHARS,
-            )
+        (
+            modified,
+            matched,
+            _already_exists,
+        ) = await repository.push_and_trim_conversation_turn_if_absent(
+            room_id,
+            turn,
+            turn_id=turn["turn_id"],
+            max_turns=MAX_HISTORY_TURNS,
+            summary_stub=f"[{agent_name}] {response_text[:200]}...",
+            max_summary_chars=MAX_SUMMARY_CHARS,
         )
     else:
         modified, matched = await repository.push_and_trim_conversation_turn(
@@ -516,22 +531,23 @@ async def extract_turn_notes_llm(
     return extract_turn_notes(content)
 
 
-def enrich_synthesis_with_trajectory(synthesis_text: str, trajectory: Any | None) -> str:
+def enrich_synthesis_with_trajectory(
+    synthesis_text: str, trajectory: Any | None
+) -> str:
     if not trajectory or not getattr(trajectory, "entries", None):
         return synthesis_text
     contributions: list[str] = []
     for entry in getattr(trajectory, "entries", []):
         for result in getattr(entry, "results", []):
-            if getattr(result, "success", False) and getattr(result, "agent_name", None):
+            if getattr(result, "success", False) and getattr(
+                result, "agent_name", None
+            ):
                 contributions.append(
                     f"{result.agent_name}: {(getattr(result, 'task', '') or '')[:100]}"
                 )
     if not contributions:
         return synthesis_text
-    return (
-        f"{synthesis_text}\n\n"
-        f"[Agent contributions: {'; '.join(contributions[:5])}]"
-    )
+    return f"{synthesis_text}\n\n[Agent contributions: {'; '.join(contributions[:5])}]"
 
 
 def extract_message_text(content: Any) -> str:
@@ -543,7 +559,14 @@ def extract_message_text(content: Any) -> str:
         if not content:
             return ""
         attachments = content.get("attachments")
-        for key in ("message_text", "response_text", "response", "content", "message", "text"):
+        for key in (
+            "message_text",
+            "response_text",
+            "response",
+            "content",
+            "message",
+            "text",
+        ):
             value = content.get(key)
             if isinstance(value, str) and value.strip():
                 return build_turn_content(value, attachments)
@@ -557,7 +580,14 @@ def extract_raw_message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
-        for key in ("message_text", "response_text", "response", "content", "message", "text"):
+        for key in (
+            "message_text",
+            "response_text",
+            "response",
+            "content",
+            "message",
+            "text",
+        ):
             value = content.get(key)
             if isinstance(value, str) and value.strip():
                 return value

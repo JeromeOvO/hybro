@@ -39,7 +39,9 @@ def extract_agent_observation(  # noqa: C901
 
     for artifact in artifact_records:
         artifact_key = str(artifact.get("artifact_key") or "")
-        artifact_name = str(artifact.get("name") or artifact.get("summary") or "artifact")
+        artifact_name = str(
+            artifact.get("name") or artifact.get("summary") or "artifact"
+        )
         evidence_refs = [artifact_key] if artifact_key else []
         for data in _iter_data_parts(artifact):
             for path, value in _flatten_data(data):
@@ -84,7 +86,10 @@ def extract_agent_observation(  # noqa: C901
                 "value": text_evidence,
                 "source_agent_message_id": agent_message_id,
                 "source_agent_id": agent_id,
-                "evidence_refs": [agent_message_id, f"{agent_message_id}:text_or_status"],
+                "evidence_refs": [
+                    agent_message_id,
+                    f"{agent_message_id}:text_or_status",
+                ],
                 "trusted_for_blocker_keys": False,
             }
         )
@@ -105,7 +110,11 @@ def extract_agent_observation(  # noqa: C901
             )
 
     if status == "awaiting_input":
-        message = _nonempty(status_message) or _nonempty(text) or "Agent requested additional input."
+        message = (
+            _nonempty(status_message)
+            or _nonempty(text)
+            or "Agent requested additional input."
+        )
         _record_missing(
             unknowns_by_key,
             blockers_by_key,
@@ -187,7 +196,9 @@ def _is_missing_list_path(path: str) -> bool:
 
 
 def _normalize_missing_key(value: str) -> str:
-    return ".".join(segment for segment in value.strip().replace(" ", "_").split(".") if segment)
+    return ".".join(
+        segment for segment in value.strip().replace(" ", "_").split(".") if segment
+    )
 
 
 def _nonempty(value: str | None) -> str | None:

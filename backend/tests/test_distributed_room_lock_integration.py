@@ -25,6 +25,7 @@ LOCK_PREFIX = "room:lock:"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_rmc(redis_client) -> RoomMessageCenter:
     """Build a minimal RoomMessageCenter wired to a real DAL Redis room lock."""
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
@@ -53,6 +54,7 @@ async def redis():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 class TestRealRedisLockPrimitives:

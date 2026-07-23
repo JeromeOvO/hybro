@@ -65,7 +65,9 @@ class StateMemoryRepository:
         self.get_calls += 1
         return self.doc if self.doc and self.doc.get("room_id") == room_id else None
 
-    async def compact_turns_bulk(self, room_id: str, compacted_turns: list[dict]) -> bool:
+    async def compact_turns_bulk(
+        self, room_id: str, compacted_turns: list[dict]
+    ) -> bool:
         self.compacted_entries.extend(compacted_turns)
         if not self.compact_result:
             return False
@@ -76,7 +78,9 @@ class StateMemoryRepository:
                     turn["content"] = None
                     turn["content_ref"] = entry["content_ref"]
                     turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
-        self.doc["memory_content"]["conversation_history"] = self.doc["conversation_history"]
+        self.doc["memory_content"]["conversation_history"] = self.doc[
+            "conversation_history"
+        ]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 
@@ -121,27 +125,37 @@ async def test_should_compact_disabled():
 async def test_should_compact_below_threshold():
     repo = StateMemoryRepository(room_doc([full_turn("t1", "hello", tokens=10)]))
 
-    assert not await compaction.should_compact(repo, "r1", config(max_full_turns=5, max_total_tokens=100))
+    assert not await compaction.should_compact(
+        repo, "r1", config(max_full_turns=5, max_total_tokens=100)
+    )
 
 
 @pytest.mark.asyncio
 async def test_should_compact_above_full_turns():
-    repo = StateMemoryRepository(room_doc([full_turn("t1", "one"), full_turn("t2", "two")]))
+    repo = StateMemoryRepository(
+        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+    )
 
-    assert await compaction.should_compact(repo, "r1", config(max_full_turns=1, max_total_tokens=999))
+    assert await compaction.should_compact(
+        repo, "r1", config(max_full_turns=1, max_total_tokens=999)
+    )
 
 
 @pytest.mark.asyncio
 async def test_should_compact_above_token_threshold():
     repo = StateMemoryRepository(room_doc([full_turn("t1", "one", tokens=50)]))
 
-    assert await compaction.should_compact(repo, "r1", config(max_full_turns=5, max_total_tokens=10))
+    assert await compaction.should_compact(
+        repo, "r1", config(max_full_turns=5, max_total_tokens=10)
+    )
 
 
 @pytest.mark.asyncio
 async def test_compact_room_memory_preserves_recent():
     repo = StateMemoryRepository(
-        room_doc([full_turn("t1", "one"), full_turn("t2", "two"), full_turn("t3", "three")])
+        room_doc(
+            [full_turn("t1", "one"), full_turn("t2", "two"), full_turn("t3", "three")]
+        )
     )
 
     result = await compaction.compact_room_memory(
@@ -160,7 +174,9 @@ async def test_compact_room_memory_preserves_recent():
 
 @pytest.mark.asyncio
 async def test_compact_room_memory_stores_content():
-    repo = StateMemoryRepository(room_doc([full_turn("t1", "one"), full_turn("t2", "two")]))
+    repo = StateMemoryRepository(
+        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+    )
     content_repo = StateContentRepository()
 
     await compaction.compact_room_memory(
@@ -223,18 +239,23 @@ async def test_compact_room_memory_stale_snapshot_already_compact_is_clean_noop(
 async def test_compact_if_needed_returns_none_below_threshold():
     repo = StateMemoryRepository(room_doc([full_turn("t1", "one", tokens=5)]))
 
-    assert await compaction.compact_if_needed(
-        repository=repo,
-        content_repository=StateContentRepository(),
-        room_id="r1",
-        config=config(max_full_turns=5, max_total_tokens=999),
-        now=now,
-    ) is None
+    assert (
+        await compaction.compact_if_needed(
+            repository=repo,
+            content_repository=StateContentRepository(),
+            room_id="r1",
+            config=config(max_full_turns=5, max_total_tokens=999),
+            now=now,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
 async def test_compact_if_needed_uses_single_memory_load_when_compacting():
-    repo = StateMemoryRepository(room_doc([full_turn("t1", "one"), full_turn("t2", "two")]))
+    repo = StateMemoryRepository(
+        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+    )
 
     result = await compaction.compact_if_needed(
         repository=repo,
@@ -250,7 +271,9 @@ async def test_compact_if_needed_uses_single_memory_load_when_compacting():
 
 @pytest.mark.asyncio
 async def test_run_compaction_uses_single_memory_load_when_compacting():
-    repo = StateMemoryRepository(room_doc([full_turn("t1", "one"), full_turn("t2", "two")]))
+    repo = StateMemoryRepository(
+        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+    )
 
     result = await compaction.run_compaction(
         repository=repo,
@@ -282,10 +305,13 @@ async def test_run_compaction_returns_skipped_result():
 
 @pytest.mark.asyncio
 async def test_expand_turn_content_full_turn():
-    assert await compaction.expand_turn_content_from_turn(
-        StateContentRepository(),
-        full_turn("t1", "full content"),
-    ) == "full content"
+    assert (
+        await compaction.expand_turn_content_from_turn(
+            StateContentRepository(),
+            full_turn("t1", "full content"),
+        )
+        == "full content"
+    )
 
 
 @pytest.mark.asyncio
@@ -301,10 +327,13 @@ async def test_expand_turn_content_compact_turn():
         stored_at=NOW,
     )
 
-    assert await compaction.expand_turn_content_from_turn(
-        content_repo,
-        compact_turn("t1", "doc1"),
-    ) == "stored"
+    assert (
+        await compaction.expand_turn_content_from_turn(
+            content_repo,
+            compact_turn("t1", "doc1"),
+        )
+        == "stored"
+    )
 
 
 @pytest.mark.asyncio

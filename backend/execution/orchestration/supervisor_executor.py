@@ -259,7 +259,9 @@ class SupervisorExecutor:
         guardrails_enabled: bool | None = None,
     ) -> None:
         if event_publisher is None:
-            raise RuntimeError("SupervisorExecutor event_publisher dependency is required")
+            raise RuntimeError(
+                "SupervisorExecutor event_publisher dependency is required"
+            )
         self.supervisor_service = supervisor_service
         self.room_runtime = room_runtime
         self.tsm = tsm
@@ -278,8 +280,9 @@ class SupervisorExecutor:
         self.orchestration_run_store = (
             orchestration_run_store or InMemoryOrchestrationRunStore()
         )
-        self.orchestration_planner = orchestration_planner or RoomSupervisorPlannerAdapter(
-            supervisor_service=supervisor_service
+        self.orchestration_planner = (
+            orchestration_planner
+            or RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
         )
         self.orchestration_resource_provider = (
             orchestration_resource_provider or OrchestrationResourceProvider()
@@ -500,9 +503,7 @@ class SupervisorExecutor:
         step_number: int,
         agent_names: dict[str, str],
     ) -> StepResult | None:
-        status = SupervisorExecutor._step_status_from_state_output_status(
-            output.status
-        )
+        status = SupervisorExecutor._step_status_from_state_output_status(output.status)
         if status is None:
             return None
         agent_id = output.agent_id or (intent.agent_id if intent else "")
@@ -814,12 +815,9 @@ class SupervisorExecutor:
                 state,
                 self._state_run_result(status=RunStatus.FAILED, state=state),
             )
-        if (
-            state.status == OrchestrationStatus.AWAITING_USER
-            and (
-                self._has_open_pending_hitl(state)
-                or self._has_recoverable_supervisor_hitl_question(state)
-            )
+        if state.status == OrchestrationStatus.AWAITING_USER and (
+            self._has_open_pending_hitl(state)
+            or self._has_recoverable_supervisor_hitl_question(state)
         ):
             return await self._log_state_and_return(
                 room_id,
@@ -828,7 +826,7 @@ class SupervisorExecutor:
                     status=RunStatus.AWAITING_INPUT,
                     state=state,
                 ),
-                    )
+            )
 
         if (
             state.status == OrchestrationStatus.AWAITING_USER
@@ -1021,7 +1019,10 @@ class SupervisorExecutor:
                     user_message_id,
                     str(exc),
                 )
-                if isinstance(exc, PlannerActionValidationError) and not exc.recoverable:
+                if (
+                    isinstance(exc, PlannerActionValidationError)
+                    and not exc.recoverable
+                ):
                     await self._emit_supervisor_stage(
                         room_id=room_id,
                         user_message_id=user_message_id,
@@ -1275,6 +1276,7 @@ class SupervisorExecutor:
                         stage="goal_complete",
                     )
                     if state.participant_snapshot is not None:
+
                         def record_completion_evidence(
                             updated: OrchestrationRunState,
                             evidence=planner_action.completion_evidence,
@@ -1459,8 +1461,7 @@ class SupervisorExecutor:
             )
         else:
             reasoning = (
-                f"Routed to next required participant {next_agent_id} "
-                "by turn policy."
+                f"Routed to next required participant {next_agent_id} by turn policy."
             )
         return planner_action.model_copy(
             update={
@@ -1621,9 +1622,7 @@ class SupervisorExecutor:
                 agent_registry=agent_registry,
                 room_config=room_config,
             )
-        existing = await self.run_store.get_latest_by_user_message_id(
-            user_message_id
-        )
+        existing = await self.run_store.get_latest_by_user_message_id(user_message_id)
         if existing is not None:
             return await self._reconcile_loaded_run_state(
                 existing,
@@ -1994,9 +1993,7 @@ class SupervisorExecutor:
             state,
             event_type=OrchestrationEventType.DISPATCH_INTENT_RECORDED,
             payload={
-                "dispatch_intent_ids": [
-                    intent.dispatch_intent_id for intent in intents
-                ]
+                "dispatch_intent_ids": [intent.dispatch_intent_id for intent in intents]
             },
             mutate=lambda updated: self._apply_v2_dispatch_intents(
                 updated,
@@ -2013,13 +2010,13 @@ class SupervisorExecutor:
             token=token,
             request_user_id=request_user_id,
             quoted_text=quoted_text,
-            planned_message_ids=[
-                intent.planned_agent_message_id for intent in intents
-            ],
+            planned_message_ids=[intent.planned_agent_message_id for intent in intents],
             run_state=state,
             original_attachments=self._user_attachments_from_message(user_message),
         )
-        persisted_after_dispatch = await self.orchestration_run_store.get_run(state.run_id)
+        persisted_after_dispatch = await self.orchestration_run_store.get_run(
+            state.run_id
+        )
         if persisted_after_dispatch is not None:
             state = persisted_after_dispatch
         await self._emit_supervisor_stage(
@@ -2033,11 +2030,9 @@ class SupervisorExecutor:
         entry.completed_at = utcnow()
 
         blocker_available_resource_refs = set(resource_fingerprints)
-        blocker_attempted_agent_ids = (
-            self._attempted_agent_ids_for_blocker_context(
-                state,
-                current_agent_ids={target.agent_id for target in action.targets},
-            )
+        blocker_attempted_agent_ids = self._attempted_agent_ids_for_blocker_context(
+            state,
+            current_agent_ids={target.agent_id for target in action.targets},
         )
         blocker_eligible_alternate_agent_ids = (
             self._eligible_alternate_agent_ids_for_blocker_context(
@@ -2088,9 +2083,7 @@ class SupervisorExecutor:
             )
             entry.results = results
             paused = [
-                result
-                for result in results
-                if result.status == StepStatus.PAUSED
+                result for result in results if result.status == StepStatus.PAUSED
             ]
             awaiting = [
                 result
@@ -2116,9 +2109,7 @@ class SupervisorExecutor:
                     advance_step=False,
                     available_resource_refs=blocker_available_resource_refs,
                     attempted_agent_ids=blocker_attempted_agent_ids,
-                    eligible_alternate_agent_ids=(
-                        blocker_eligible_alternate_agent_ids
-                    ),
+                    eligible_alternate_agent_ids=(blocker_eligible_alternate_agent_ids),
                     conditional_result_viable=blocker_conditional_result_viable,
                 )
                 state, awaiting_status = await self._run_agent_awaiting_input_action(
@@ -2147,8 +2138,7 @@ class SupervisorExecutor:
                 conditional_result_viable=False,
             )
             logger.info(
-                "orchestration_input_required_recoverable run_id=%s "
-                "awaiting_count=%d",
+                "orchestration_input_required_recoverable run_id=%s awaiting_count=%d",
                 state.run_id,
                 len(awaiting),
             )
@@ -2346,9 +2336,7 @@ class SupervisorExecutor:
                 user_message=user_message,
             )
             paused = [
-                result
-                for result in results
-                if result.status == StepStatus.PAUSED
+                result for result in results if result.status == StepStatus.PAUSED
             ]
             awaiting = [
                 result
@@ -2482,9 +2470,7 @@ class SupervisorExecutor:
     ) -> StepResult | None:
         if output is None:
             return None
-        status = SupervisorExecutor._step_status_from_state_output_status(
-            output.status
-        )
+        status = SupervisorExecutor._step_status_from_state_output_status(output.status)
         if status not in {
             StepStatus.SUCCESS,
             StepStatus.FAILED,
@@ -2580,21 +2566,14 @@ class SupervisorExecutor:
         if message_content and getattr(message_content, "message_text", None):
             response_text = message_content.message_text
 
-        task_metadata = (
-            _field_from_task(task, "metadata")
-            if task is not None
-            else None
-        )
+        task_metadata = _field_from_task(task, "metadata") if task is not None else None
         task_metadata_dict = task_metadata if isinstance(task_metadata, Mapping) else {}
         status_payload = _field_from_task(task, "status", "message")
         status_message = _field_from_task(status_payload, "message_text")
         if not isinstance(status_message, str):
             parts = _field_from_task(status_payload, "parts")
             if isinstance(parts, list):
-                part_texts = [
-                    _field_from_task(part, "text")
-                    for part in parts
-                ]
+                part_texts = [_field_from_task(part, "text") for part in parts]
                 status_message = "\n".join(
                     text.strip()
                     for text in part_texts
@@ -2618,7 +2597,9 @@ class SupervisorExecutor:
             status=(
                 StepStatus.AWAITING_INPUT
                 if is_input_required
-                else StepStatus.SUCCESS if is_success else StepStatus.FAILED
+                else StepStatus.SUCCESS
+                if is_success
+                else StepStatus.FAILED
             ),
             error_message=None
             if is_success or is_input_required
@@ -2767,7 +2748,10 @@ class SupervisorExecutor:
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
             )
-        if task_state in {"failed", "canceled", "rejected"} and continuation_state is not None:
+        if (
+            task_state in {"failed", "canceled", "rejected"}
+            and continuation_state is not None
+        ):
             await self._reconcile_persisted_continuation(
                 state=continuation_state,
                 continuation_id=claimed_continuation.continuation_id,
@@ -2929,24 +2913,32 @@ class SupervisorExecutor:
         ]
         if status in {"resolved", "abandoned"}:
             for intent in updated.dispatch_intents:
-                if intent.dispatch_intent_id in lineage_intent_ids and intent.status not in {
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "rejected",
-                    "expired",
-                    "abandoned",
-                }:
+                if (
+                    intent.dispatch_intent_id in lineage_intent_ids
+                    and intent.status
+                    not in {
+                        "completed",
+                        "failed",
+                        "canceled",
+                        "rejected",
+                        "expired",
+                        "abandoned",
+                    }
+                ):
                     intent.status = terminal_status
             for dispatch in updated.active_dispatches:
-                if dispatch.agent_message_id in lineage_message_ids and dispatch.status not in {
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "rejected",
-                    "expired",
-                    "abandoned",
-                }:
+                if (
+                    dispatch.agent_message_id in lineage_message_ids
+                    and dispatch.status
+                    not in {
+                        "completed",
+                        "failed",
+                        "canceled",
+                        "rejected",
+                        "expired",
+                        "abandoned",
+                    }
+                ):
                     dispatch.status = terminal_status
             if status == "abandoned":
                 for output in updated.agent_outputs:
@@ -3143,9 +3135,7 @@ class SupervisorExecutor:
         prompt: str,
     ) -> str | None:
         normalized_prompt = " ".join(
-            "".join(
-                char.lower() if char.isalnum() else " " for char in prompt
-            ).split()
+            "".join(char.lower() if char.isalnum() else " " for char in prompt).split()
         )
         for fact in reversed(state.facts):
             if not isinstance(fact, dict):
@@ -3155,13 +3145,9 @@ class SupervisorExecutor:
             if value is None:
                 continue
             normalized_key = " ".join(
-                "".join(
-                    char.lower() if char.isalnum() else " " for char in key
-                ).split()
+                "".join(char.lower() if char.isalnum() else " " for char in key).split()
             )
-            if normalized_key and (
-                f" {normalized_key} " in f" {normalized_prompt} "
-            ):
+            if normalized_key and (f" {normalized_key} " in f" {normalized_prompt} "):
                 return str(value)
         return None
 
@@ -3188,8 +3174,7 @@ class SupervisorExecutor:
         return {
             token
             for token in "".join(
-                char.lower() if char.isalnum() else " "
-                for char in prompt
+                char.lower() if char.isalnum() else " " for char in prompt
             ).split()
             if len(token) > 2 and token not in stop_words
         }
@@ -3247,9 +3232,8 @@ class SupervisorExecutor:
                 or fact_kind in {"context", "attachment_text"}
             )
             text_tokens = self._input_required_prompt_tokens(text)
-            if (
-                prompt_tokens & key_tokens
-                or (is_projection and prompt_tokens & text_tokens)
+            if prompt_tokens & key_tokens or (
+                is_projection and prompt_tokens & text_tokens
             ):
                 add_payload(
                     ref_id=ref_id or f"fact:{len(resource_payloads) + 1}",
@@ -3360,9 +3344,7 @@ class SupervisorExecutor:
         delivered_ref_ids = {ref.ref_id for ref in source_refs}
         attempted_fingerprints = set(continuation.attempted_resource_fingerprints)
         if source_intent is not None:
-            attempted_fingerprints.update(
-                source_intent.selected_resource_fingerprints
-            )
+            attempted_fingerprints.update(source_intent.selected_resource_fingerprints)
         resource_payloads = [
             payload
             for payload in resolved.resource_payloads
@@ -3376,14 +3358,10 @@ class SupervisorExecutor:
         return resolved.model_copy(
             update={
                 "selected_context_refs": [
-                    ref
-                    for ref in resolved.selected_context_refs
-                    if ref in new_ref_ids
+                    ref for ref in resolved.selected_context_refs if ref in new_ref_ids
                 ],
                 "selected_artifact_refs": [
-                    ref
-                    for ref in resolved.selected_artifact_refs
-                    if ref in new_ref_ids
+                    ref for ref in resolved.selected_artifact_refs if ref in new_ref_ids
                 ],
                 "selected_attachment_refs": [
                     ref
@@ -3399,7 +3377,11 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         result: StepResult,
     ) -> PendingAgentContinuation | None:
-        if not result.agent_message_id or not result.a2a_task_id or not result.a2a_context_id:
+        if (
+            not result.agent_message_id
+            or not result.a2a_task_id
+            or not result.a2a_context_id
+        ):
             return None
         for continuation in state.pending_agent_continuations:
             if (
@@ -3723,22 +3705,19 @@ class SupervisorExecutor:
         conversation_context: str | None,
         request_user_id: str | None,
         quoted_text: str | None,
-        ) -> tuple[OrchestrationRunState, RunStatus]:
+    ) -> tuple[OrchestrationRunState, RunStatus]:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
         awaiting_result = awaiting[0]
         continuation_message_id = (
-            awaiting_result.paused_message_id
-            or awaiting_result.agent_message_id
+            awaiting_result.paused_message_id or awaiting_result.agent_message_id
         )
         display_message_id = (
-            awaiting_result.agent_message_id
-            or awaiting_result.paused_message_id
+            awaiting_result.agent_message_id or awaiting_result.paused_message_id
         )
         hitl_prompt = (
-            awaiting_result.status_message
-            or "The agent needs additional information."
+            awaiting_result.status_message or "The agent needs additional information."
         )
         if not continuation_message_id:
             trajectory.status = TrajectoryStatus.FAILED
@@ -3961,9 +3940,17 @@ class SupervisorExecutor:
             return
         try:
             clear_callback = (
-                getattr(self.continuation_store, "get_and_clear_continuation_on_user_message", None)
+                getattr(
+                    self.continuation_store,
+                    "get_and_clear_continuation_on_user_message",
+                    None,
+                )
                 if to_user_message
-                else getattr(self.continuation_store, "get_and_clear_continuation_on_message", None)
+                else getattr(
+                    self.continuation_store,
+                    "get_and_clear_continuation_on_message",
+                    None,
+                )
             )
             if clear_callback is None:
                 return
@@ -4120,8 +4107,7 @@ class SupervisorExecutor:
                         question.get("source") == "supervisor"
                         and question.get("status") in {"open", "creating"}
                         and not question.get("resolved")
-                        and question.get("prompt")
-                        == recovered_question.get("prompt")
+                        and question.get("prompt") == recovered_question.get("prompt")
                         and question.get("step") == recovered_question.get("step")
                     )
                 if not matches_question:
@@ -4144,9 +4130,7 @@ class SupervisorExecutor:
                     updated.open_questions.append(resolved_question)
                 prompts.extend(recovered_prompts)
             answer_fact = {
-                "fact_id": (
-                    f"{state.run_id}:hitl-reply:{state.state_version + 1}"
-                ),
+                "fact_id": (f"{state.run_id}:hitl-reply:{state.state_version + 1}"),
                 "source": "hitl_user_reply",
                 "text": answer,
                 "request_ids": resolved_request_ids,
@@ -4419,10 +4403,14 @@ class SupervisorExecutor:
                 )
 
             if pending:
-                synced_output_ids = {output.agent_message_id for output in synced.agent_outputs}
+                synced_output_ids = {
+                    output.agent_message_id for output in synced.agent_outputs
+                }
                 pending_to_ingest: list[StepResult] = []
                 for result in pending:
-                    result_message_id = result.agent_message_id or result.paused_message_id
+                    result_message_id = (
+                        result.agent_message_id or result.paused_message_id
+                    )
                     if result_message_id and result_message_id in synced_output_ids:
                         continue
                     pending_to_ingest.append(result)
@@ -4443,9 +4431,7 @@ class SupervisorExecutor:
                         advance_step=False,
                     )
                 blocking_run_status = (
-                    RunStatus.AWAITING_INPUT
-                    if has_awaiting_input
-                    else RunStatus.PAUSED
+                    RunStatus.AWAITING_INPUT if has_awaiting_input else RunStatus.PAUSED
                 )
                 if synced.status != pending_status:
                     synced = await self._save_v2_state(
@@ -4468,7 +4454,10 @@ class SupervisorExecutor:
                     and self.hitl_coordinator is not None
                 )
                 if can_rehydrate_hitl:
-                    synced, awaiting_status = await self._run_agent_awaiting_input_action(
+                    (
+                        synced,
+                        awaiting_status,
+                    ) = await self._run_agent_awaiting_input_action(
                         state=synced,
                         results=entry.results,
                         awaiting=hitl_required_pending,
@@ -4695,8 +4684,7 @@ class SupervisorExecutor:
         questions = action.questions or [
             ClarifyQuestion(
                 prompt=(
-                    action.clarification_question
-                    or "The supervisor needs your input."
+                    action.clarification_question or "The supervisor needs your input."
                 ),
                 prompt_type=action.prompt_type,
                 choices=action.choices,
@@ -4787,16 +4775,12 @@ class SupervisorExecutor:
                     *pending_request_ids,
                     *created_request_ids,
                 ],
-                failed_cancel_request_ids=list(
-                    cleanup_failures.get("request_ids", [])
-                ),
+                failed_cancel_request_ids=list(cleanup_failures.get("request_ids", [])),
                 source="supervisor",
                 prompt_by_request_id=prompt_by_request_id,
                 extra_by_request_id=extra_by_request_id,
                 created_message_ids=created_messages,
-                failed_delete_message_ids=list(
-                    cleanup_failures.get("message_ids", [])
-                ),
+                failed_delete_message_ids=list(cleanup_failures.get("message_ids", [])),
             )
 
         def mark_supervisor_request_open(
@@ -4958,9 +4942,7 @@ class SupervisorExecutor:
                 )
                 hitl_agent_message.message_id = f"{pending_request_ids[qi]}:message"
                 created_messages.append(hitl_agent_message.message_id)
-                await self.message_writer.upsert_room_agent_message(
-                    hitl_agent_message
-                )
+                await self.message_writer.upsert_room_agent_message(hitl_agent_message)
 
                 def persist_request_creating(
                     updated: OrchestrationRunState,
@@ -5015,9 +4997,7 @@ class SupervisorExecutor:
                     "prompt_type": question.prompt_type,
                     "choices": question.choices,
                     "blocker_keys": list(question.blocker_keys),
-                    "required_obligation_keys": list(
-                        question.required_obligation_keys
-                    ),
+                    "required_obligation_keys": list(question.required_obligation_keys),
                     "blocker_obligations": {
                         blocker_key: list(obligations)
                         for blocker_key, obligations in (
@@ -5026,6 +5006,7 @@ class SupervisorExecutor:
                     },
                     "display_message_id": hitl_agent_message.message_id,
                 }
+
                 def persist_request_open(
                     updated: OrchestrationRunState,
                     *,
@@ -5379,10 +5360,8 @@ class SupervisorExecutor:
 
         if trajectory.system_agent_message_id:
             try:
-                db_msg = (
-                    await self.message_reader.get_room_agent_message_by_message_id(
-                        trajectory.system_agent_message_id
-                    )
+                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
+                    trajectory.system_agent_message_id
                 )
                 if db_msg and db_msg.message_content:
                     db_msg.message_content.message_text = synthesis
@@ -5407,6 +5386,7 @@ class SupervisorExecutor:
 
         entry.completed_at = utcnow()
         trajectory.status = TrajectoryStatus.COMPLETED
+
         def record_completion_evidence(updated: OrchestrationRunState) -> None:
             updated.completion_evidence = planner_action.completion_evidence
 
@@ -5472,7 +5452,9 @@ class SupervisorExecutor:
 
     @staticmethod
     def _normalize_awaiting_input_results(results: list[StepResult]) -> None:
-        awaiting = [result for result in results if result.status == StepStatus.AWAITING_INPUT]
+        awaiting = [
+            result for result in results if result.status == StepStatus.AWAITING_INPUT
+        ]
         for extra in awaiting[1:]:
             extra.success = False
             extra.error_message = (
@@ -5538,7 +5520,8 @@ class SupervisorExecutor:
         return [
             copy.deepcopy(artifact)
             for artifact in state.artifacts
-            if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
+            if isinstance(artifact, dict)
+            and artifact.get("artifact_key") in artifact_keys
         ]
 
     async def _v2_artifacts_for_output_message(
@@ -5743,11 +5726,14 @@ class SupervisorExecutor:
                 )
                 if output is not None:
                     history = OutcomeHistoryView.from_state(current)
-                    evaluator = getattr(
-                        self,
-                        "delegation_outcome_evaluator",
-                        None,
-                    ) or DelegationOutcomeEvaluator()
+                    evaluator = (
+                        getattr(
+                            self,
+                            "delegation_outcome_evaluator",
+                            None,
+                        )
+                        or DelegationOutcomeEvaluator()
+                    )
                     evaluated = evaluator.evaluate(
                         current,
                         next_state,
@@ -5854,9 +5840,7 @@ class SupervisorExecutor:
                     payload={
                         "agent_message_id": output_message_id,
                         "agent_id": result.agent_id,
-                        "status": self._v2_result_status_to_agent_result_status(
-                            result
-                        ),
+                        "status": self._v2_result_status_to_agent_result_status(result),
                     },
                 )
             if outcome is not None:
@@ -6003,8 +5987,7 @@ class SupervisorExecutor:
             for outcome in family_outcomes[: through_index + 1]
         }
         latest_outcome_by_intent_id = {
-            outcome.dispatch_intent_id: outcome
-            for outcome in state.delegation_outcomes
+            outcome.dispatch_intent_id: outcome for outcome in state.delegation_outcomes
         }
         intents_by_id = {
             intent.dispatch_intent_id: intent for intent in state.dispatch_intents
@@ -6053,6 +6036,7 @@ class SupervisorExecutor:
             reason=reason.strip(),
             replacement_goal_family_fingerprint=replacement_goal_family_fingerprint,
         )
+
         def mutate(updated: OrchestrationRunState) -> None:
             recorded_disposition = next(
                 (
@@ -6084,12 +6068,9 @@ class SupervisorExecutor:
                 ):
                     dispatch.status = "abandoned"
             for failure in updated.open_failures:
-                if (
-                    failure.status == "open"
-                    and (
-                        failure.dispatch_intent_id in intent_ids
-                        or failure.agent_message_id in message_ids
-                    )
+                if failure.status == "open" and (
+                    failure.dispatch_intent_id in intent_ids
+                    or failure.agent_message_id in message_ids
                 ):
                     failure.status = "abandoned"
                     failure.updated_at = utcnow()
@@ -6216,9 +6197,7 @@ class SupervisorExecutor:
                 fact = facts_by_id.get(ref.ref_id)
                 if fact is not None:
                     selected_content = {
-                        key: value
-                        for key, value in fact.items()
-                        if key != "fact_id"
+                        key: value for key, value in fact.items() if key != "fact_id"
                     }
             elif ref.kind == DispatchRefKind.ARTIFACT:
                 selected_content = artifacts_by_key.get(ref.ref_id)
@@ -6238,9 +6217,7 @@ class SupervisorExecutor:
         for ref_id in intent.required_resource_refs:
             if ref_id not in selected_ref_ids:
                 fingerprints.add(
-                    canonical_content_fingerprint(
-                        {"required_resource_ref": ref_id}
-                    )
+                    canonical_content_fingerprint({"required_resource_ref": ref_id})
                 )
 
         return sorted(fingerprints)
@@ -6407,9 +6384,7 @@ class SupervisorExecutor:
                     prompt_type=question.prompt_type,
                     choices=question.choices,
                     blocker_keys=list(question.blocker_keys),
-                    required_obligation_keys=list(
-                        question.required_obligation_keys
-                    ),
+                    required_obligation_keys=list(question.required_obligation_keys),
                     blocker_obligations={
                         blocker_key: list(obligations)
                         for blocker_key, obligations in (
@@ -6503,7 +6478,9 @@ class SupervisorExecutor:
         return envelope
 
     @staticmethod
-    def _orchestration_envelope_str(envelope: Mapping[str, Any], key: str) -> str | None:
+    def _orchestration_envelope_str(
+        envelope: Mapping[str, Any], key: str
+    ) -> str | None:
         value = envelope.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -6535,7 +6512,9 @@ class SupervisorExecutor:
             for question in state.open_questions
         )
 
-    def _has_current_step_recoverable_intents(self, state: OrchestrationRunState) -> bool:
+    def _has_current_step_recoverable_intents(
+        self, state: OrchestrationRunState
+    ) -> bool:
         step_id = f"{state.run_id}:step-{state.steps_used + 1}"
         return any(
             intent.status not in TERMINAL_DISPATCH_STATUSES
@@ -6552,8 +6531,7 @@ class SupervisorExecutor:
             related_failures = [
                 failure
                 for failure in state.open_failures
-                if failure.recoverable
-                and failure.status in {"open", "abandoned"}
+                if failure.recoverable and failure.status in {"open", "abandoned"}
                 if related_open_failure_for_dispatch_intent(
                     [failure],
                     retry_intent=intent,
@@ -7071,8 +7049,7 @@ class SupervisorExecutor:
         projection = "\n".join(lines)
         if len(projection) > DISPATCH_REF_PROJECTION_MAX_CHARS:
             projection = (
-                projection[: DISPATCH_REF_PROJECTION_MAX_CHARS - 3].rstrip()
-                + "..."
+                projection[: DISPATCH_REF_PROJECTION_MAX_CHARS - 3].rstrip() + "..."
             )
         return f"{task.rstrip()}\n\n[Backend-selected references]\n{projection}"
 
@@ -7459,9 +7436,7 @@ class SupervisorExecutor:
                                 expected_outputs=list(intent.expected_outputs),
                             )
                             selected_resource_fingerprints = (
-                                self._resolved_resource_fingerprints(
-                                    resolved_payload
-                                )
+                                self._resolved_resource_fingerprints(resolved_payload)
                             )
                             claimed = await self._claim_matching_continuation(
                                 state=run_state,
@@ -7696,7 +7671,11 @@ class SupervisorExecutor:
                         requires_policy=result.requires_policy,
                     )
 
-                if result.status == ProcessingStatus.SUCCESS and request_user_id and self.rate_limit_service:
+                if (
+                    result.status == ProcessingStatus.SUCCESS
+                    and request_user_id
+                    and self.rate_limit_service
+                ):
                     await self.rate_limit_service.record_request(
                         agent_id=agent.agent_id,
                         user_id=request_user_id,
@@ -7714,16 +7693,24 @@ class SupervisorExecutor:
                     and preflight_failure.get("message")
                     else None
                 )
-                error_text = None if is_success else (
-                    preflight_message
-                    or result.response_text
-                    or "Agent processing failed"
+                error_text = (
+                    None
+                    if is_success
+                    else (
+                        preflight_message
+                        or result.response_text
+                        or "Agent processing failed"
+                    )
                 )
-                error_code = None if is_success or preflight_failure is None else (
-                    preflight_code or result.status_message
+                error_code = (
+                    None
+                    if is_success or preflight_failure is None
+                    else (preflight_code or result.status_message)
                 )
-                status_message = None if is_success or preflight_failure is None else (
-                    preflight_message or result.status_message or error_text
+                status_message = (
+                    None
+                    if is_success or preflight_failure is None
+                    else (preflight_message or result.status_message or error_text)
                 )
                 if not is_success and preflight_failure is not None:
                     await self.tsm.fail_pre_dispatch_task(
@@ -8063,7 +8050,6 @@ class SupervisorExecutor:
             message_id,
             user_message,
         )
-
 
     # ------------------------------------------------------------------
     # Reconcile PAUSED results against actual DB state

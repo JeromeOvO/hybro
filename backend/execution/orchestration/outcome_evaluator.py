@@ -200,8 +200,7 @@ def _output_artifacts(
     owned_artifacts = [
         artifact
         for artifact in state.artifacts
-        if isinstance(artifact, dict)
-        and artifact.get("artifact_key") in artifact_keys
+        if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
     ]
     if not expected_output.artifact_name or allow_name_fallback:
         return owned_artifacts
@@ -426,9 +425,7 @@ class DelegationOutcomeEvaluator:
             | eligible_fresh_satisfied
         )
         remaining = obligations - satisfied
-        newly_satisfied = sorted(
-            satisfied - effective_prior_satisfied
-        )
+        newly_satisfied = sorted(satisfied - effective_prior_satisfied)
 
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
@@ -521,9 +518,7 @@ class DelegationOutcomeEvaluator:
         elif obligations and not remaining:
             status = "fulfilled"
         elif (
-            intent.expected_outputs
-            and not obligations
-            and has_matching_output_evidence
+            intent.expected_outputs and not obligations and has_matching_output_evidence
         ):
             status = "fulfilled"
         elif (
@@ -542,7 +537,9 @@ class DelegationOutcomeEvaluator:
             if not intent.expected_outputs
             else canonical_content_fingerprint(
                 {
-                    "artifacts": [_stable_value(artifact) for artifact in output_artifacts],
+                    "artifacts": [
+                        _stable_value(artifact) for artifact in output_artifacts
+                    ],
                     "facts": after_facts,
                 }
             )

@@ -82,9 +82,7 @@ class TestCreateAgentGroup:
             }
         )
 
-        result = await create_agent_group(
-            mock_request, user=None, db=mock_db_service
-        )
+        result = await create_agent_group(mock_request, user=None, db=mock_db_service)
         assert result["success"] is False
         assert result["status_code"] == 400
 

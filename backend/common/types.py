@@ -93,6 +93,7 @@ PartUnion = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind"
 
 class Part(RootModel[PartUnion]):
     """Wrapper that preserves .root access pattern used throughout the codebase."""
+
     pass
 
 
@@ -161,7 +162,9 @@ class Task(BaseModel):
 
 
 class TaskStatusUpdateEvent(BaseModel):
-    id: str = Field(validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId")
+    id: str = Field(
+        validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId"
+    )
     kind: str = "status-update"
     context_id: str | None = Field(default=None, alias="contextId")
     status: TaskStatus
@@ -176,7 +179,9 @@ class TaskStatusUpdateEvent(BaseModel):
 
 
 class TaskArtifactUpdateEvent(BaseModel):
-    id: str = Field(validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId")
+    id: str = Field(
+        validation_alias=AliasChoices("id", "taskId"), serialization_alias="taskId"
+    )
     kind: str = "artifact-update"
     context_id: str | None = Field(default=None, alias="contextId")
     artifact: Artifact

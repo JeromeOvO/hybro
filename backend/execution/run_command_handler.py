@@ -274,7 +274,9 @@ class RunCommandHandler:
             RunEventType.RUN_CREATED.value: RunState.QUEUED,
         }
 
-        resolved_state: RunState | None = terminal_type_map.get(event_type_str) or active_type_map.get(event_type_str)
+        resolved_state: RunState | None = terminal_type_map.get(
+            event_type_str
+        ) or active_type_map.get(event_type_str)
         if resolved_state is None:
             logger.warning(
                 "heal_head_from_events: unknown event type %s for run %s — skipping",

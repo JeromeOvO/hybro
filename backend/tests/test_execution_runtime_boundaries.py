@@ -454,9 +454,7 @@ ROOM_MESSAGE_CENTER_FORBIDDEN_POLICY_SYMBOLS = {
     "validate_hitl_answered_blockers",
 }
 
-ORCHESTRATION_RUN_STATE_CONTROL_FIELDS = frozenset(
-    OrchestrationRunState.model_fields
-)
+ORCHESTRATION_RUN_STATE_CONTROL_FIELDS = frozenset(OrchestrationRunState.model_fields)
 
 MUTATING_COLLECTION_METHODS = {
     "add",
@@ -593,9 +591,7 @@ def _import_violations(
                     forbidden_modules=forbidden_modules,
                     forbidden_symbols=forbidden_symbols,
                 ):
-                    violations.append(
-                        f"{rel_path}:{node.lineno}: import {alias.name}"
-                    )
+                    violations.append(f"{rel_path}:{node.lineno}: import {alias.name}")
         elif isinstance(node, ast.ImportFrom):
             module = _resolve_import_from_module(node, rel_path)
             for alias in node.names:
@@ -844,7 +840,9 @@ def _run_state_control_mutation_violations_for_source(  # noqa: C901
 
     def record_target(target: ast.AST, lineno: int) -> None:
         if _run_state_control_field_access(target, run_state_names):
-            violations.append(f"{rel_path}:{lineno}: assign {_expression_label(target)}")
+            violations.append(
+                f"{rel_path}:{lineno}: assign {_expression_label(target)}"
+            )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -881,7 +879,11 @@ def _run_state_control_mutation_violations_for_source(  # noqa: C901
                 run_state_names,
             ):
                 update = next(
-                    (keyword.value for keyword in node.keywords if keyword.arg == "update"),
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "update"
+                    ),
                     None,
                 )
                 if update is not None:
@@ -1011,13 +1013,9 @@ def ok(run_state: OrchestrationRunState, other: dict[str, object], value: object
 
     assert len(violations) == 6
     assert any("facts" in item and "assign" in item for item in violations)
-    assert any(
-        "active_dispatches" in item and "assign" in item for item in violations
-    )
+    assert any("active_dispatches" in item and "assign" in item for item in violations)
     assert any("facts" in item and "mutate" in item for item in violations)
-    assert any(
-        "open_questions" in item and "mutate" in item for item in violations
-    )
+    assert any("open_questions" in item and "mutate" in item for item in violations)
     assert not any("metadata" in item for item in violations)
     assert not any("local_cache" in item for item in violations)
 
@@ -1080,7 +1078,9 @@ from ...orchestration.action_validator import PlannerActionValidator
     assert any("PlannerActionValidator" in item for item in direct_violations)
 
 
-def test_direct_transport_and_queue_executor_do_not_use_supervisor_control_plane() -> None:
+def test_direct_transport_and_queue_executor_do_not_use_supervisor_control_plane() -> (
+    None
+):
     violations: list[str] = []
     for rel_path in (
         Path("execution/dispatch/transports/direct.py"),
@@ -1090,8 +1090,7 @@ def test_direct_transport_and_queue_executor_do_not_use_supervisor_control_plane
 
     assert not violations, (
         "DirectTransport and QueueExecutor must not import or call "
-        "orchestration run-state / next-step policy helpers:\n"
-        + "\n".join(violations)
+        "orchestration run-state / next-step policy helpers:\n" + "\n".join(violations)
     )
 
 
@@ -1106,12 +1105,13 @@ def test_runtime_boundary_modules_do_not_mutate_run_state_control_fields() -> No
 
     assert not violations, (
         "Runtime boundary modules must not mutate orchestration run-state "
-        "control fields outside supervisor paths:\n"
-        + "\n".join(violations)
+        "control fields outside supervisor paths:\n" + "\n".join(violations)
     )
 
 
-def test_room_message_center_only_wires_supervisor_entrypoint_not_policy_helpers() -> None:
+def test_room_message_center_only_wires_supervisor_entrypoint_not_policy_helpers() -> (
+    None
+):
     violations = _room_message_center_policy_helper_violations(
         Path("execution/orchestration/room_message_center.py")
     )

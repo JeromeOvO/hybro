@@ -172,7 +172,9 @@ def test_normalized_agent_response_deduplicates_canonical_and_legacy_files() -> 
 
 
 @pytest.mark.asyncio
-async def test_publish_response_alias_normalizes_legacy_parts_for_public_delivery() -> None:
+async def test_publish_response_alias_normalizes_legacy_parts_for_public_delivery() -> (
+    None
+):
     private_bytes = "PRIVATE_SENTINEL_response_inline_bytes"
     private_metadata = "PRIVATE_SENTINEL_response_metadata"
     converted_uri = "s3://public-artifacts/converted-inline.txt"
@@ -402,7 +404,9 @@ def test_normalized_processing_status_defaults_to_completed() -> None:
     assert payload["status"] == "completed"
 
 
-def test_normalized_processing_status_maps_legacy_input_required_to_awaiting_input() -> None:
+def test_normalized_processing_status_maps_legacy_input_required_to_awaiting_input() -> (
+    None
+):
     payload = normalize_hub_publish_payload(
         "processing_status",
         "msg-1",
@@ -415,7 +419,9 @@ def test_normalized_processing_status_maps_legacy_input_required_to_awaiting_inp
 
 
 @pytest.mark.asyncio
-async def test_publish_journals_before_internal_dispatch_and_preserves_legacy_repeats() -> None:
+async def test_publish_journals_before_internal_dispatch_and_preserves_legacy_repeats() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
     dispatcher = Dispatcher()
     service = HubPublishService(journal=journal, dispatcher=dispatcher)
@@ -471,10 +477,14 @@ async def test_publish_ignores_unsupported_legacy_event_types() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_stable_response_seq_suppresses_duplicate_internal_dispatch() -> None:
+async def test_publish_stable_response_seq_suppresses_duplicate_internal_dispatch() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
     sink = Sink()
-    dispatcher = HubInternalResponseRouter(sink=sink, journal=journal, worker_id="worker-1")
+    dispatcher = HubInternalResponseRouter(
+        sink=sink, journal=journal, worker_id="worker-1"
+    )
     service = HubPublishService(journal=journal, dispatcher=dispatcher)
     event = {
         "room_id": "room-1",
@@ -494,7 +504,9 @@ async def test_publish_stable_response_seq_suppresses_duplicate_internal_dispatc
 
 
 @pytest.mark.asyncio
-async def test_publish_stable_response_seq_retries_unprocessed_dispatch_failure() -> None:
+async def test_publish_stable_response_seq_retries_unprocessed_dispatch_failure() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
 
     class FailingOnceDispatcher:
@@ -527,7 +539,9 @@ async def test_publish_stable_response_seq_retries_unprocessed_dispatch_failure(
 
 
 @pytest.mark.asyncio
-async def test_publish_claims_but_does_not_mark_processed_after_publisher_only_delivery() -> None:
+async def test_publish_claims_but_does_not_mark_processed_after_publisher_only_delivery() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
     publisher = EventPublisher()
     service = HubPublishService(
@@ -560,7 +574,9 @@ async def test_publish_claims_but_does_not_mark_processed_after_publisher_only_d
 
 
 @pytest.mark.asyncio
-async def test_publish_deduplicates_remote_fanout_while_journal_claim_is_active() -> None:
+async def test_publish_deduplicates_remote_fanout_while_journal_claim_is_active() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
     publisher = EventPublisher()
     service = HubPublishService(
@@ -621,7 +637,9 @@ async def test_publish_does_not_emit_after_direct_dispatch_processed_journal() -
 
 
 @pytest.mark.asyncio
-async def test_response_replay_worker_dispatches_claimed_journal_and_marks_processed() -> None:
+async def test_response_replay_worker_dispatches_claimed_journal_and_marks_processed() -> (
+    None
+):
     journal = InMemoryHubResponseJournal()
     record = await journal.create_or_get(
         {
@@ -876,7 +894,9 @@ async def test_publish_uses_authorized_lineage_agent_id_when_payload_omits_it() 
 
 
 @pytest.mark.asyncio
-async def test_publish_uses_tracked_task_id_from_lineage_when_payload_omits_task_id() -> None:
+async def test_publish_uses_tracked_task_id_from_lineage_when_payload_omits_task_id() -> (
+    None
+):
     lineage = HubPublishLineageSnapshot(
         room_id="room-1",
         room_owner_id="owner-1",

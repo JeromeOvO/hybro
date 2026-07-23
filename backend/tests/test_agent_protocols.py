@@ -33,5 +33,9 @@ async def test_agent_call_counter_uses_existing_success_count_field() -> None:
     await repo.increment_agent_call_count("agent-1", success=True)
 
     assert mongo.collection_obj.calls == [
-        ({"agent_id": "agent-1"}, {"$inc": {"call_count": 1, "call_success_count": 1}}, {})
+        (
+            {"agent_id": "agent-1"},
+            {"$inc": {"call_count": 1, "call_success_count": 1}},
+            {},
+        )
     ]

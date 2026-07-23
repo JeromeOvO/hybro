@@ -110,7 +110,11 @@ class Agent(BaseModel):
     provider_name: str | None = None
 
     # Fields excluded from DB serialization (populated at read time).
-    _DB_EXCLUDE_FIELDS: ClassVar[set[str]] = {"hub_owner_id", "is_hub_online", "provider_name"}
+    _DB_EXCLUDE_FIELDS: ClassVar[set[str]] = {
+        "hub_owner_id",
+        "is_hub_online",
+        "provider_name",
+    }
 
     def db_dump(self, **kwargs) -> dict:
         """Serialize for MongoDB, excluding derived hub fields."""

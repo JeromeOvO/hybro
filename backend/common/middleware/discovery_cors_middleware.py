@@ -27,7 +27,7 @@ def _default_open_cors_path_prefixes(api_prefix: str) -> tuple[str, ...]:
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     """
     Middleware that adds permissive CORS headers for Discovery, Gateway, and Relay API endpoints.
-    
+
     Applies to paths starting with {api_prefix}/discovery, {api_prefix}/gateway,
     or {api_prefix}/relay.
     Allows all origins, methods, and headers for external API access.
@@ -51,22 +51,26 @@ class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
             _path_matches_prefix(request.url.path, prefix)
             for prefix in self._open_cors_path_prefixes
         )
-        
+
         if is_external_api and request.method == "OPTIONS":
             response = Response()
             response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
             response.headers["Access-Control-Allow-Headers"] = "*"
             response.headers["Access-Control-Max-Age"] = "3600"
             return response
-        
+
         response = await call_next(request)
-        
+
         if is_external_api:
             if "Access-Control-Allow-Credentials" in response.headers:
                 del response.headers["Access-Control-Allow-Credentials"]
             response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
             response.headers["Access-Control-Allow-Headers"] = "*"
-        
+
         return response

@@ -168,9 +168,7 @@ class AgentResolverService:
         # Server-side enforcement: sanitize allowed IDs before Pinecone query.
         # Ensures only active + visible (public or owned by user) agents are
         # included, regardless of what the caller passes.
-        allowed_agent_ids = await self._sanitize_allowed_ids(
-            allowed_agent_ids, user_id
-        )
+        allowed_agent_ids = await self._sanitize_allowed_ids(allowed_agent_ids, user_id)
 
         # Caller scoped to specific agents but none survived sanitization.
         if allowed_agent_ids is not None and len(allowed_agent_ids) == 0:
@@ -289,18 +287,14 @@ class AgentResolverService:
         """Ask the LLM to pick the best agent; move it to the front."""
         try:
             if self.agent_selection_service is None:
-                raise LLMServiceNotBoundError(
-                    "AgentSelectionLLMService is not bound"
-                )
+                raise LLMServiceNotBoundError("AgentSelectionLLMService is not bound")
             best_agent_id = (
                 await self.agent_selection_service.select_best_agent_for_task(
                     query_text,
                     [_agent_to_routing_candidate(agent) for agent in candidates],
                 )
             )
-            best = next(
-                (a for a in candidates if a.agent_id == best_agent_id), None
-            )
+            best = next((a for a in candidates if a.agent_id == best_agent_id), None)
             if best is not None and best.agent_status == AgentStatus.active:
                 others = [a for a in candidates if a.agent_id != best_agent_id]
                 return [best, *others]
@@ -319,9 +313,7 @@ class AgentResolverService:
     # Health probing
     # ------------------------------------------------------------------
 
-    async def _pick_first_healthy(
-        self, candidates: list[Agent]
-    ) -> ResolveResult:
+    async def _pick_first_healthy(self, candidates: list[Agent]) -> ResolveResult:
         """Return the first candidate that passes a real-time health probe.
 
         Uses an in-memory TTL cache to avoid redundant HTTP calls.

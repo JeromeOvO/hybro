@@ -173,9 +173,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         snippet for snippet in expected_snippets if snippet in main_source
     ]
     leaked_legacy = [snippet for snippet in forbidden_snippets if snippet in source]
-    leaked_legacy.extend(
-        _provider_named_removed_runtime_imports(Path("container.py"))
-    )
+    leaked_legacy.extend(_provider_named_removed_runtime_imports(Path("container.py")))
     leaked_legacy.extend(_provider_named_removed_runtime_calls(Path("container.py")))
     assert missing == [], f"container.py missing focused LLM bindings: {missing}"
     assert leaked_to_main == [], f"main.py owns focused LLM bindings: {leaked_to_main}"
@@ -328,7 +326,9 @@ def _provider_named_removed_runtime_binding_names(tree: ast.AST) -> set[str]:
             and node.module in PROVIDER_NAMED_REMOVED_RUNTIME_MODULES
         ):
             binding_names.update(alias.asname or alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module == REMOVED_RUNTIME_PACKAGE:
+        elif (
+            isinstance(node, ast.ImportFrom) and node.module == REMOVED_RUNTIME_PACKAGE
+        ):
             binding_names.update(
                 alias.asname or alias.name
                 for alias in node.names

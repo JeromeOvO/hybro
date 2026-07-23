@@ -159,8 +159,7 @@ async def test_projection_content_fingerprint_tracks_extracted_text():
     assert changed_payload is not None
     assert first_payload.content_fingerprint == same_payload.content_fingerprint
     assert (
-        first_projection.content_fingerprint
-        != changed_projection.content_fingerprint
+        first_projection.content_fingerprint != changed_projection.content_fingerprint
     )
     assert first_payload.content_fingerprint != changed_payload.content_fingerprint
 
@@ -211,7 +210,9 @@ async def test_pdf_projection_failure_for_empty_text_pdf():
 async def test_pdf_projection_failure_for_oversized_pdf_without_reading_bytes():
     content_reader = AsyncMock()
     content_reader.get_bytes = AsyncMock(return_value=b"")
-    service = AttachmentProjectionService(content_reader=content_reader, max_pdf_bytes=10)
+    service = AttachmentProjectionService(
+        content_reader=content_reader, max_pdf_bytes=10
+    )
     attachment = _pdf_attachment()
     attachment.size_bytes = 11
 

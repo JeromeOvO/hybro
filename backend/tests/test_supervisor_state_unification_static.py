@@ -5,7 +5,10 @@ from pathlib import Path
 def _function_source(source: str, name: str) -> str:
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == name:
+        if (
+            isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+            and node.name == name
+        ):
             return ast.get_source_segment(source, node) or ""
     raise AssertionError(f"{name} not found")
 
@@ -68,7 +71,9 @@ def test_new_execution_files_do_not_assign_supervisor_trajectory():
         for node in ast.walk(tree):
             for target in _assignment_targets(node):
                 if _is_supervisor_trajectory_key_assignment(target):
-                    offenders.append(f"{path}:{node.lineno}:{lines[node.lineno - 1].strip()}")
+                    offenders.append(
+                        f"{path}:{node.lineno}:{lines[node.lineno - 1].strip()}"
+                    )
 
     assert offenders == []
 

@@ -134,7 +134,9 @@ async def cancel_remote_task(
     try:
         card = AgentCard(**sdk_agent_card_data(agent_card_data))
         async with httpx.AsyncClient(timeout=timeout) as client:
-            request = CancelTaskRequest(id=str(uuid4()), params=TaskIdParams(id=task_id))
+            request = CancelTaskRequest(
+                id=str(uuid4()), params=TaskIdParams(id=task_id)
+            )
             response = await with_docker_host_fallback(
                 card,
                 lambda candidate: A2AClient(client, agent_card=candidate).cancel_task(

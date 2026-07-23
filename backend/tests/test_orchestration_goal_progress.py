@@ -259,9 +259,7 @@ def test_goal_progress_allows_later_satisfaction_to_supersede_invalidation():
 
     updated = rebuild_goal_progress(invalidated)
 
-    assert updated.goal_progress[0].satisfied_required_obligations == [
-        "quote:$present"
-    ]
+    assert updated.goal_progress[0].satisfied_required_obligations == ["quote:$present"]
     assert updated.goal_progress[0].remaining_required_obligations == []
 
 

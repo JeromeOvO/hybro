@@ -253,7 +253,9 @@ class TestResolve:
     @pytest.mark.asyncio
     async def test_returns_failure_when_no_candidates(self, resolver):
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(
+            return_value=[]
+        )
 
         result = await resolver.resolve("test query")
         assert result.agent is None
@@ -273,7 +275,9 @@ class TestResolve:
     async def test_returns_top_candidate_when_health_disabled(self, resolver):
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(
+            return_value=[a1]
+        )
 
         with patch("agent.resolver.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False
@@ -285,7 +289,9 @@ class TestResolve:
     async def test_delegates_to_pick_first_healthy_when_enabled(self, resolver):
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(
+            return_value=[a1]
+        )
         resolver._pick_first_healthy = AsyncMock(
             return_value=ResolveResult(agent=a1, tried_agents=["Alpha"])
         )
@@ -306,7 +312,9 @@ class TestResolve:
         )
         a1 = _make_agent("a1", "Alpha")
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
-        resolver._resolution_repository.query_similar_agents = AsyncMock(return_value=[a1])
+        resolver._resolution_repository.query_similar_agents = AsyncMock(
+            return_value=[a1]
+        )
 
         with patch("agent.resolver.settings") as mock_settings:
             mock_settings.agent_health_check_enabled = False

@@ -716,7 +716,9 @@ class TestRequestInput:
     ):
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
-        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(return_value=True)
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
+            return_value=True
+        )
         mock_hitl_db_service.persist_hitl_user_answer = AsyncMock(
             side_effect=[False, True]
         )
@@ -814,9 +816,9 @@ class TestRequestInput:
 
         assert result is None
         assert mock_hitl_db_service.persist_hitl_group_metadata.await_count == 2
-        clear_call = (
-            mock_hitl_db_service.persist_hitl_group_metadata.await_args_list[-1]
-        )
+        clear_call = mock_hitl_db_service.persist_hitl_group_metadata.await_args_list[
+            -1
+        ]
         assert clear_call.kwargs == {
             "group_id": None,
             "group_total": None,
@@ -833,7 +835,9 @@ class TestRequestInput:
     ):
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
-        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(return_value=False)
+        mock_hitl_db_service.update_agent_message_task_state = AsyncMock(
+            return_value=False
+        )
         mock_hitl_db_service.update_hitl_request = AsyncMock(return_value=False)
 
         with pytest.raises(HITLRequestProjectionError) as exc_info:
@@ -944,7 +948,9 @@ class TestRequestInput:
                 continuation_message_id="agent-msg-456",
             )
 
-        request_doc = mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args.args[0]
+        request_doc = (
+            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args.args[0]
+        )
         assert exc_info.value.request_id == request_doc["request_id"]
 
     @pytest.mark.asyncio
@@ -1720,9 +1726,7 @@ class TestRequestInput:
                 }
             )
         )
-        followup = request.model_copy(
-            update={"request_id": "hitl-next"}
-        )
+        followup = request.model_copy(update={"request_id": "hitl-next"})
         hitl_service.request_input = AsyncMock(return_value=followup)
 
         result = await hitl_service._handle_agent_response(request, "5000000")

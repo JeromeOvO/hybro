@@ -150,7 +150,9 @@ async def test_mark_cancelled_writes_l2_and_publishes_with_custom_config():
     watcher = make_watcher(
         redis=redis,
         event_bus=event_bus,
-        config=DeliveryConfig(redis_cancel_key_prefix="cx:", cancellation_ttl_seconds=11),
+        config=DeliveryConfig(
+            redis_cancel_key_prefix="cx:", cancellation_ttl_seconds=11
+        ),
     )
 
     await watcher.mark_cancelled("msg-1")
@@ -232,7 +234,9 @@ async def test_change_stream_insert_event_marks_cancellation():
     watcher = make_watcher(collection=collection)
 
     await watcher.start()
-    await stream.queue.put({"_id": {"token": 1}, "fullDocument": {"message_id": "msg-1"}})
+    await stream.queue.put(
+        {"_id": {"token": 1}, "fullDocument": {"message_id": "msg-1"}}
+    )
     await asyncio.sleep(0)
 
     assert watcher.is_cancelled("msg-1") is True
@@ -244,7 +248,9 @@ async def test_change_stream_insert_event_marks_cancellation():
 
 @pytest.mark.asyncio
 async def test_initial_watch_setup_failure_is_visible_to_startup_and_stop_resets():
-    watcher = make_watcher(collection=FakeCollection(error=RuntimeError("watch failed")))
+    watcher = make_watcher(
+        collection=FakeCollection(error=RuntimeError("watch failed"))
+    )
 
     with pytest.raises(RuntimeError, match="watch failed"):
         await watcher.start()

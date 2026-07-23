@@ -192,8 +192,7 @@ async def test_resolver_returns_projection_failure_for_incompatible_attachment()
             "ref_id": "file-1",
             "code": "attachment_projection_unavailable",
             "message": (
-                "Attachment projection unavailable for "
-                "report.pdf (application/pdf)."
+                "Attachment projection unavailable for report.pdf (application/pdf)."
             ),
         }
     ]

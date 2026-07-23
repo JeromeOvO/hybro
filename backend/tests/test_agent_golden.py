@@ -40,27 +40,29 @@ async def test_agent_golden_register_list_match_and_direct_callability():
 
 @pytest.mark.asyncio
 async def test_agent_golden_private_and_inactive_agents_do_not_leak_to_discovery():
-    facade, _, vector, llm, _ = _facade_with_docs([
-        {
-            "agent_id": "public",
-            "is_public": True,
-            "agent_status": "active",
-            "agent_card": {"name": "Public", "url": "https://public"},
-        },
-        {
-            "agent_id": "private",
-            "provider_id": "u1",
-            "is_public": False,
-            "agent_status": "active",
-            "agent_card": {"name": "Private", "url": "https://private"},
-        },
-        {
-            "agent_id": "inactive",
-            "is_public": True,
-            "agent_status": "inactive",
-            "agent_card": {"name": "Inactive", "url": "https://inactive"},
-        },
-    ])
+    facade, _, vector, llm, _ = _facade_with_docs(
+        [
+            {
+                "agent_id": "public",
+                "is_public": True,
+                "agent_status": "active",
+                "agent_card": {"name": "Public", "url": "https://public"},
+            },
+            {
+                "agent_id": "private",
+                "provider_id": "u1",
+                "is_public": False,
+                "agent_status": "active",
+                "agent_card": {"name": "Private", "url": "https://private"},
+            },
+            {
+                "agent_id": "inactive",
+                "is_public": True,
+                "agent_status": "inactive",
+                "agent_card": {"name": "Inactive", "url": "https://inactive"},
+            },
+        ]
+    )
     vector.results = [
         VectorSearchResult(id="private", score=0.99),
         VectorSearchResult(id="inactive", score=0.98),

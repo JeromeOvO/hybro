@@ -41,6 +41,7 @@ def _make_redis(*, set_nx_return=True, connected=True):
 # _acquire_distributed_lock / _release_distributed_lock
 # =========================================================================
 
+
 class TestDistributedLockPrimitives:
     @pytest.mark.asyncio
     async def test_acquire_calls_client_set_with_ttl(self):
@@ -50,7 +51,9 @@ class TestDistributedLockPrimitives:
         result = await rmc._acquire_distributed_lock("room-1", "owner-abc", ttl=60)
 
         assert result is True
-        redis._client.set.assert_awaited_once_with("room:lock:room-1", "owner-abc", nx=True, ex=60)
+        redis._client.set.assert_awaited_once_with(
+            "room:lock:room-1", "owner-abc", nx=True, ex=60
+        )
 
     @pytest.mark.asyncio
     async def test_acquire_returns_false_when_key_exists(self):
@@ -108,6 +111,7 @@ class TestDistributedLockPrimitives:
 # _acquire_room_lock / _release_room_lock (combined flow)
 # =========================================================================
 
+
 class TestAcquireRoomLock:
     @pytest.mark.asyncio
     async def test_acquire_with_redis_returns_owner_token(self):
@@ -164,7 +168,12 @@ class TestAcquireRoomLock:
         owner = await rmc._acquire_room_lock("room-1", timeout=0.3)
 
         assert owner is None
-        assert "room-1" not in rmc._room_locks or not rmc._room_locks.get("room-1", MagicMock(locked=lambda: False)).locked()
+        assert (
+            "room-1" not in rmc._room_locks
+            or not rmc._room_locks.get(
+                "room-1", MagicMock(locked=lambda: False)
+            ).locked()
+        )
 
     @pytest.mark.asyncio
     async def test_timeout_releases_distributed_if_local_times_out(self):
@@ -205,8 +214,10 @@ class TestConcurrentLocalLock:
         first = order[0][0]
         second = "B" if first == "A" else "A"
         assert order == [
-            f"{first}-start", f"{first}-end",
-            f"{second}-start", f"{second}-end",
+            f"{first}-start",
+            f"{first}-end",
+            f"{second}-start",
+            f"{second}-end",
         ]
 
 
@@ -335,6 +346,7 @@ class TestLockHoldDurationWarning:
     async def test_warns_when_approaching_ttl(self, caplog):
         """Release with acquired_at near TTL threshold emits a WARNING."""
         import time as _time
+
         rmc = _make_rmc(redis=None)
 
         owner = await rmc._acquire_room_lock("room-1", timeout=5)
@@ -342,6 +354,7 @@ class TestLockHoldDurationWarning:
         fake_acquired_at = _time.monotonic() - (ROOM_LOCK_HOLD_TTL_SECONDS * 0.85)
 
         import logging
+
         with caplog.at_level(
             logging.WARNING, logger="execution.orchestration.room_message_center"
         ):
@@ -353,12 +366,14 @@ class TestLockHoldDurationWarning:
     async def test_info_for_long_but_safe_hold(self, caplog):
         """Release with acquired_at > 60s but < 80% TTL emits INFO, not WARNING."""
         import time as _time
+
         rmc = _make_rmc(redis=None)
 
         owner = await rmc._acquire_room_lock("room-1", timeout=5)
         fake_acquired_at = _time.monotonic() - 120  # 2 minutes, well under 80% of 600s
 
         import logging
+
         with caplog.at_level(
             logging.INFO, logger="execution.orchestration.room_message_center"
         ):
@@ -374,9 +389,11 @@ class TestLockHoldDurationWarning:
 
         owner = await rmc._acquire_room_lock("room-1", timeout=5)
         import time as _time
+
         fake_acquired_at = _time.monotonic() - 2  # 2 seconds
 
         import logging
+
         with caplog.at_level(
             logging.DEBUG, logger="execution.orchestration.room_message_center"
         ):

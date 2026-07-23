@@ -69,9 +69,7 @@ def record_planner_action(
         {
             "action": str(action.action),
             "reasoning": action.reasoning,
-            "targets": [
-                target.model_dump(mode="json") for target in action.targets
-            ],
+            "targets": [target.model_dump(mode="json") for target in action.targets],
             "planner_action": action.model_dump(mode="json"),
             "created_at": utcnow().isoformat(),
         }

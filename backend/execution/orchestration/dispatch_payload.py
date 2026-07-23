@@ -543,7 +543,9 @@ def _artifact_resource_payloads(
         if materialized_count:
             continue
         fallback_data = {
-            key: value for key, value in artifact.items() if key not in projection_fields
+            key: value
+            for key, value in artifact.items()
+            if key not in projection_fields
         }
         if fallback_data:
             _bounded_artifact_text(
@@ -630,9 +632,7 @@ async def _resolve_attachment_projection(
     if payload is None:
         return None, "attachment_projection_unavailable"
     resolved = ResolvedResourcePayload.model_validate(
-        payload.model_dump(mode="json")
-        if hasattr(payload, "model_dump")
-        else payload
+        payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
     )
     if _context_payload_invalid_code(resolved) is not None:
         return None, "attachment_projection_unavailable"
@@ -709,9 +709,7 @@ async def _resolve_attachment_refs(
         )
         if projection_payload is not None:
             if projection_payload.ref_id not in selected_projection_ref_ids:
-                selected_context_refs_from_attachments.append(
-                    projection_payload.ref_id
-                )
+                selected_context_refs_from_attachments.append(projection_payload.ref_id)
                 resource_payloads_from_attachments.append(projection_payload)
                 selected_projection_ref_ids.add(projection_payload.ref_id)
             continue

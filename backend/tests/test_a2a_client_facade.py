@@ -70,6 +70,7 @@ async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
         "AsyncClient",
         lambda *, timeout: _AsyncClientContext(),
     )
+
     def _to_sdk_message(message_data):
         captured["message_data"] = message_data
         return SimpleNamespace(kind="message")
@@ -211,9 +212,7 @@ async def test_fetch_agent_card_with_fallback_uses_previous_path_on_404(monkeypa
 
     monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
 
-    result = await client_facade.fetch_agent_card_with_fallback(
-        "https://agent.example"
-    )
+    result = await client_facade.fetch_agent_card_with_fallback("https://agent.example")
 
     assert captured_paths == ["/.well-known/agent-card.json", "/.well-known/agent.json"]
     assert result["name"] == "Fallback Agent"

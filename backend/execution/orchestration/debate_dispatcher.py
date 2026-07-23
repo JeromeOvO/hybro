@@ -29,7 +29,9 @@ class SequentialDebateDispatcher:
 
         truncated = prior_response[:max_chars]
         if len(prior_response) > max_chars:
-            truncated += f" ... [truncated — full response: {len(prior_response)} chars]"
+            truncated += (
+                f" ... [truncated — full response: {len(prior_response)} chars]"
+            )
 
         return (
             f"YOUR TASK: {original_task}\n\n"

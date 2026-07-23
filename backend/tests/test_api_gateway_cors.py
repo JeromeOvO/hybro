@@ -25,10 +25,11 @@ def test_open_cors_gateway_groups_allow_external_preflight():
 
 
 def test_open_cors_actual_responses_do_not_allow_credentials_with_wildcard():
-    from main import app
-    from api_gateway.dependencies import get_api_gateway_deps
     from unittest.mock import AsyncMock
-    
+
+    from api_gateway.dependencies import get_api_gateway_deps
+    from main import app
+
     mock_deps = AsyncMock()
     app.dependency_overrides[get_api_gateway_deps] = lambda: mock_deps
 
@@ -37,7 +38,7 @@ def test_open_cors_actual_responses_do_not_allow_credentials_with_wildcard():
         "/api/v1/relay/hub/status",
         headers={"Origin": "https://external.example"},
     )
-    
+
     app.dependency_overrides.clear()
 
     assert response.headers["access-control-allow-origin"] == "*"

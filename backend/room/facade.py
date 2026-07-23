@@ -44,11 +44,13 @@ from room.translators import (
     user_message_doc_from_input,
 )
 
-_ALLOWED_ROOM_UPDATE_KEYS = frozenset({
-    "room_name",
-    "extend_info",
-    "processing_message_id",
-})
+_ALLOWED_ROOM_UPDATE_KEYS = frozenset(
+    {
+        "room_name",
+        "extend_info",
+        "processing_message_id",
+    }
+)
 
 logger = get_logger(__name__)
 
@@ -225,9 +227,7 @@ class RoomFacade:
         return await reader.get_for_room_file(room_id, file_id)
 
     async def cleanup_room_owned_data(self, room_id: str) -> dict[str, int]:
-        result: dict[str, int] = await self._message_repository.delete_for_room(
-            room_id
-        )
+        result: dict[str, int] = await self._message_repository.delete_for_room(room_id)
         if self._quote_repository is not None:
             result["quotes"] = await self._quote_repository.delete_for_room(room_id)
         return result
@@ -288,7 +288,9 @@ class RoomFacade:
     async def update_agent_message_status(
         self, message_id: str, status: str, **kwargs: Any
     ) -> bool:
-        return await self._message_repository.update_status(message_id, status, **kwargs)
+        return await self._message_repository.update_status(
+            message_id, status, **kwargs
+        )
 
     async def get_message(self, message_id: str) -> RoomMessageInfo | None:
         doc = await self._message_repository.get_by_id(message_id)
@@ -304,9 +306,7 @@ class RoomFacade:
         doc = await getter(message_id) if getter is not None else None
         return _safe_parse_agent_message(doc)
 
-    async def get_user_messages_for_room(
-        self, room_id: str
-    ) -> list[RoomUserMessage]:
+    async def get_user_messages_for_room(self, room_id: str) -> list[RoomUserMessage]:
         try:
             docs = await self._message_repository.get_user_messages_for_room(room_id)
             return [
@@ -318,9 +318,7 @@ class RoomFacade:
             logger.error("Failed to get room user messages", exc_info=True)
             return []
 
-    async def get_agent_messages_for_room(
-        self, room_id: str
-    ) -> list[RoomAgentMessage]:
+    async def get_agent_messages_for_room(self, room_id: str) -> list[RoomAgentMessage]:
         try:
             docs = await self._message_repository.get_agent_messages_for_room(room_id)
             messages = [
@@ -338,8 +336,10 @@ class RoomFacade:
         self, related_message_id: str
     ) -> list[RoomAgentMessage]:
         try:
-            docs = await self._message_repository.get_agent_messages_by_related_message_id(
-                related_message_id
+            docs = (
+                await self._message_repository.get_agent_messages_by_related_message_id(
+                    related_message_id
+                )
             )
             return [
                 message
@@ -355,7 +355,9 @@ class RoomFacade:
     ) -> list[RoomMessageInfo]:
         return [
             message_info_from_doc(doc)
-            for doc in await self._message_repository.get_for_room(room_id, limit, before)
+            for doc in await self._message_repository.get_for_room(
+                room_id, limit, before
+            )
         ]
 
     async def get_messages_by_ids(
@@ -484,7 +486,9 @@ class RoomFacade:
             timestamp = msg.task_updated_at or msg.task_created_at
             if timestamp is None:
                 return True
-            return (utcnow() - ensure_utc(timestamp)).total_seconds() > stale_task_threshold
+            return (
+                utcnow() - ensure_utc(timestamp)
+            ).total_seconds() > stale_task_threshold
 
         def mark_failed(msg: RoomAgentMessage, error_text: str) -> None:
             task = msg.message_content.message_task if msg.message_content else None
@@ -526,9 +530,7 @@ class RoomFacade:
                 )
                 await self.update_agent_message(msg.message_id, msg)
 
-    async def get_message_thread(
-        self, parent_message_id: str
-    ) -> list[RoomMessageInfo]:
+    async def get_message_thread(self, parent_message_id: str) -> list[RoomMessageInfo]:
         return [
             message_info_from_doc(doc)
             for doc in await self._message_repository.get_thread(parent_message_id)
@@ -560,12 +562,11 @@ class RoomFacade:
         if not agents:
             return None
         agent = agents[0]
-        related_message_id = (
-            message_doc.get("related_message_id") or message_doc.get("parent_message_id")
+        related_message_id = message_doc.get("related_message_id") or message_doc.get(
+            "parent_message_id"
         )
         task_data = (
-            message_doc.get("message_content", {})
-            .get("message_task", {})
+            message_doc.get("message_content", {}).get("message_task", {})
             if isinstance(message_doc.get("message_content"), dict)
             else {}
         )
@@ -626,7 +627,9 @@ class RoomFacade:
         return lineage
 
     async def is_message_cancelled(self, message_id: str) -> bool:
-        repository_checker = getattr(self._message_repository, "is_message_cancelled", None)
+        repository_checker = getattr(
+            self._message_repository, "is_message_cancelled", None
+        )
         if repository_checker is not None:
             return bool(await repository_checker(message_id))
         doc = await self._message_repository.get_by_id(message_id)
@@ -685,7 +688,9 @@ class RoomFacade:
                 inaccessible.append(agent.agent_id)
 
         if inaccessible:
-            raise ValueError(f"Access denied to private agents: {', '.join(inaccessible)}")
+            raise ValueError(
+                f"Access denied to private agents: {', '.join(inaccessible)}"
+            )
         if inactive:
             raise ValueError(f"Inactive agent IDs: {', '.join(inactive)}")
         return {agent.agent_id: agent.name or agent.agent_id for agent in agents}

@@ -10,6 +10,7 @@ Tests cover:
 
 import ast
 import asyncio
+from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -57,9 +58,8 @@ async def test_processing_claim_heartbeat_refreshes_until_cancelled(monkeypatch)
     with pytest.raises(asyncio.CancelledError):
         await rmc._heartbeat_processing_claim("message-1")
 
-    rmc.message_writer.refresh_processing_claim.assert_awaited_once_with(
-        "message-1"
-    )
+    rmc.message_writer.refresh_processing_claim.assert_awaited_once_with("message-1")
+
 
 # =============================================================================
 # _validate_room_message_request Tests
@@ -260,7 +260,11 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
     )
     rmc.delivery.clear_cancellation.assert_called_once_with("user-msg-1")
     rmc._release_room_lock.assert_awaited_once_with(
-        "room-1", "owner-1", acquired_at=pytest.approx(rmc._release_room_lock.call_args.kwargs["acquired_at"])
+        "room-1",
+        "owner-1",
+        acquired_at=pytest.approx(
+            rmc._release_room_lock.call_args.kwargs["acquired_at"]
+        ),
     )
 
 
@@ -278,7 +282,9 @@ def _make_trajectory_with_paused(agent_id="a1", agent_name="Agent1", msg_id="msg
         action=SupervisorAction(
             action=ActionType.DELEGATE,
             reasoning="test",
-            targets=[{"agent_id": agent_id, "agent_name": agent_name, "task": "do stuff"}],
+            targets=[
+                {"agent_id": agent_id, "agent_name": agent_name, "task": "do stuff"}
+            ],
         ),
         results=[
             StepResult(
@@ -407,6 +413,7 @@ async def test_resume_supervisor_agent_interrupt_publishes_agent_message_committ
 class TestExtractClarifyQuestion:
     def test_extracts_clarify_question(self):
         from datetime import datetime
+
         entry = TrajectoryEntry(
             step_number=1,
             action=SupervisorAction(
@@ -424,6 +431,7 @@ class TestExtractClarifyQuestion:
 
     def test_returns_none_when_no_clarify(self):
         from datetime import datetime
+
         entry = TrajectoryEntry(
             step_number=1,
             action=SupervisorAction(
@@ -444,6 +452,7 @@ class TestExtractClarifyQuestion:
 
     def test_returns_last_clarify_when_multiple(self):
         from datetime import datetime
+
         e1 = TrajectoryEntry(
             step_number=1,
             action=SupervisorAction(
@@ -490,9 +499,7 @@ class TestAppendPausedResult:
 
     def test_replaces_paused_result_with_failure_when_no_text(self):
         t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        RoomMessageCenter._append_paused_result_to_trajectory(
-            t, "msg-p1", None
-        )
+        RoomMessageCenter._append_paused_result_to_trajectory(t, "msg-p1", None)
         result = t.entries[0].results[0]
         assert result.status == StepStatus.FAILED
         assert result.success is False
@@ -500,9 +507,7 @@ class TestAppendPausedResult:
 
     def test_no_change_when_message_id_not_found(self):
         t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        RoomMessageCenter._append_paused_result_to_trajectory(
-            t, "msg-other", "text"
-        )
+        RoomMessageCenter._append_paused_result_to_trajectory(t, "msg-other", "text")
         assert t.entries[0].results[0].status == StepStatus.PAUSED
 
 
@@ -594,7 +599,9 @@ def _body_containing_statement(
         bodies: list[list[ast.stmt]] = []
         for attr in ("body", "orelse", "finalbody"):
             body = getattr(node, attr, None)
-            if isinstance(body, list) and all(isinstance(item, ast.stmt) for item in body):
+            if isinstance(body, list) and all(
+                isinstance(item, ast.stmt) for item in body
+            ):
                 bodies.append(body)
         if isinstance(node, ast.Try):
             bodies.extend(handler.body for handler in node.handlers)
@@ -603,7 +610,9 @@ def _body_containing_statement(
         for body in bodies:
             if any(item is statement for item in body):
                 return body
-    raise AssertionError(f"body containing statement at line {statement.lineno} not found")
+    raise AssertionError(
+        f"body containing statement at line {statement.lineno} not found"
+    )
 
 
 def _statement_containing_call(
@@ -1026,8 +1035,7 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
     )
 
     assert [
-        call.args[0]
-        for call in rmc.message_writer.cancel_descendants.await_args_list
+        call.args[0] for call in rmc.message_writer.cancel_descendants.await_args_list
     ] == ["agent-msg-1", "agent-msg-2"]
     rmc.message_writer.cancel_agent_messages_by_ids.assert_awaited_once_with(
         ["agent-msg-1", "agent-msg-2"]
@@ -1449,9 +1457,21 @@ def test_supervisor_terminal_post_loop_side_effects_complete_before_terminal_sta
         "_run_supervisor_terminal_post_loop_integration",
     )
     first_terminal_emit = min(
-        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.COMPLETED"),
-        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.CANCELED"),
-        _call_line("_handle_supervisor_run_result", "_emit_processing_status", "SSEProcessingStatus.FAILED"),
+        _call_line(
+            "_handle_supervisor_run_result",
+            "_emit_processing_status",
+            "SSEProcessingStatus.COMPLETED",
+        ),
+        _call_line(
+            "_handle_supervisor_run_result",
+            "_emit_processing_status",
+            "SSEProcessingStatus.CANCELED",
+        ),
+        _call_line(
+            "_handle_supervisor_run_result",
+            "_emit_processing_status",
+            "SSEProcessingStatus.FAILED",
+        ),
     )
     assert integration_line < first_terminal_emit
 
@@ -1465,17 +1485,19 @@ def test_clarifying_soft_complete_appends_turn_completed_before_frontend_complet
         emit_occurrence=2,
     )
 
+
 @pytest.mark.asyncio
 async def test_supervisor_resume_race_condition():
     """
     Tests that resume_queue_from_continuation correctly handles concurrent resumes
     for the same room by locking before doing a destructive read, avoiding stale trajectory state.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from models.supervisor import DelegateTarget
 
     continuation_store = AsyncMock()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     trajectory = SupervisorTrajectory(
         room_id="room-1",
         entries=[
@@ -1488,14 +1510,32 @@ async def test_supervisor_resume_race_condition():
                     targets=[
                         DelegateTarget(agent_id="a1", agent_name="A1", task="t"),
                         DelegateTarget(agent_id="a2", agent_name="A2", task="t"),
-                    ]
+                    ],
                 ),
                 results=[
-                    StepResult(step_number=1, agent_id="a1", agent_name="A1", task="t", response_text="", status=StepStatus.PAUSED, agent_message_id="msg-1", paused_message_id="msg-1"),
-                    StepResult(step_number=1, agent_id="a2", agent_name="A2", task="t", response_text="", status=StepStatus.PAUSED, agent_message_id="msg-2", paused_message_id="msg-2"),
-                ]
+                    StepResult(
+                        step_number=1,
+                        agent_id="a1",
+                        agent_name="A1",
+                        task="t",
+                        response_text="",
+                        status=StepStatus.PAUSED,
+                        agent_message_id="msg-1",
+                        paused_message_id="msg-1",
+                    ),
+                    StepResult(
+                        step_number=1,
+                        agent_id="a2",
+                        agent_name="A2",
+                        task="t",
+                        response_text="",
+                        status=StepStatus.PAUSED,
+                        agent_message_id="msg-2",
+                        paused_message_id="msg-2",
+                    ),
+                ],
             )
-        ]
+        ],
     )
 
     # Initial state shared by both
@@ -1504,41 +1544,47 @@ async def test_supervisor_resume_race_condition():
         "supervisor": True,
         "agent_registry": [],
         "room_config": {},
-        "trajectory": trajectory.model_dump(mode="json")
+        "trajectory": trajectory.model_dump(mode="json"),
     }
 
     # Simulate get_pending_continuation_on_message being called concurrently and returning the same state.
     async def mock_get_pending(msg_id):
-        await asyncio.sleep(0.01) # force yield
+        await asyncio.sleep(0.01)  # force yield
         return continuation_state.copy()
-        
-    continuation_store.get_pending_continuation_on_message.side_effect = mock_get_pending
-    
+
+    continuation_store.get_pending_continuation_on_message.side_effect = (
+        mock_get_pending
+    )
+
     # Track when get_and_clear is called to verify they get sequential, updated state
     cleared_msgs = set()
+
     async def mock_get_and_clear(msg_id):
         if msg_id in cleared_msgs:
             return None
         cleared_msgs.add(msg_id)
         return continuation_state.copy()
 
-    continuation_store.get_and_clear_continuation_on_message.side_effect = mock_get_and_clear
+    continuation_store.get_and_clear_continuation_on_message.side_effect = (
+        mock_get_and_clear
+    )
     continuation_store.get_and_clear_continuation_on_user_message.return_value = None
 
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     rmc.continuation_store = continuation_store
-    
+
     # Real asyncio lock for the room
     room_locks = {}
+
     async def mock_acquire(room_id):
         if room_id not in room_locks:
             room_locks[room_id] = asyncio.Lock()
         await room_locks[room_id].acquire()
         return "owner"
-    
+
     async def mock_release(room_id, owner, acquired_at=None):
         room_locks[room_id].release()
-        
+
     rmc._acquire_room_lock = AsyncMock(side_effect=mock_acquire)
     rmc._release_room_lock = AsyncMock(side_effect=mock_release)
 
@@ -1549,10 +1595,16 @@ async def test_supervisor_resume_race_condition():
             for res in entry.results:
                 if res.agent_message_id == msg_id:
                     res.status = StepStatus.SUCCESS
-        
+
         # Save mutated state back so the next lock owner sees it
         continuation_state["trajectory"] = traj.model_dump(mode="json")
-        return RunStatus.PAUSED if any(r.status == StepStatus.PAUSED for e in traj.entries for r in e.results) else RunStatus.COMPLETED
+        return (
+            RunStatus.PAUSED
+            if any(
+                r.status == StepStatus.PAUSED for e in traj.entries for r in e.results
+            )
+            else RunStatus.COMPLETED
+        )
 
     rmc._resume_supervisor = AsyncMock(side_effect=mock_resume_supervisor)
 
@@ -1561,13 +1613,15 @@ async def test_supervisor_resume_race_condition():
         rmc.resume_queue_from_continuation("msg-1", "result 1"),
         rmc.resume_queue_from_continuation("msg-2", "result 2"),
     )
-    
+
     # Both should return successfully
     assert all(results)
-    
+
     # Both messages should have been processed
     assert len(cleared_msgs) == 2
-    
+
     # The final state in continuation_state should have both agents SUCCESS
     final_traj = SupervisorTrajectory.model_validate(continuation_state["trajectory"])
-    assert all(r.status == StepStatus.SUCCESS for e in final_traj.entries for r in e.results)
+    assert all(
+        r.status == StepStatus.SUCCESS for e in final_traj.entries for r in e.results
+    )

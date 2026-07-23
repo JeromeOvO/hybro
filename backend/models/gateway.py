@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 # Request models
 # ---------------------------------------------------------------------------
 
+
 class GatewayDiscoverRequest(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid4()))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -25,6 +26,7 @@ class GatewaySendRequest(BaseModel):
 # Response models
 # ---------------------------------------------------------------------------
 
+
 class GatewayCardResponse(BaseModel):
     agent_id: str
     agent_card: dict
@@ -32,6 +34,7 @@ class GatewayCardResponse(BaseModel):
 
 class GatewayDiscoveryAgentResult(BaseModel):
     """Discovery result enriched with agent_id for gateway consumers."""
+
     agent_id: str
     agent_card: dict
     match_score: float
@@ -39,6 +42,7 @@ class GatewayDiscoveryAgentResult(BaseModel):
 
 class GatewayDiscoveryResponse(BaseModel):
     """Gateway discovery response with agent_id on each result."""
+
     query: str
     agents: list[GatewayDiscoveryAgentResult]
     count: int

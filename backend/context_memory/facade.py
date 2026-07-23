@@ -108,7 +108,9 @@ class ContextMemoryFacade:
             )
             if message is None:
                 raise ValueError(f"Message {message_id} not found in room {room_id}")
-            current_task = projection.extract_message_text(getattr(message, "content", None))
+            current_task = projection.extract_message_text(
+                getattr(message, "content", None)
+            )
 
         budget = self.token_budget.with_model_window(token_budget)
         if agent_id is None:
@@ -272,9 +274,7 @@ class ContextMemoryFacade:
     async def legacy_get_room_memory_by_room_id(self, room_id: str) -> dict | None:
         return await self.memory_repository.get_room_memory(room_id)
 
-    async def legacy_get_room_memory_by_memory_id(
-        self, memory_id: str
-    ) -> dict | None:
+    async def legacy_get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
         return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
 
     async def legacy_update_room_memory_by_room_id(
@@ -510,9 +510,7 @@ class ContextMemoryFacade:
             config=self.compaction_config,
         )
 
-    async def content_get_content_by_document_id(
-        self, document_id: str
-    ) -> str | None:
+    async def content_get_content_by_document_id(self, document_id: str) -> str | None:
         doc = await self.content_repository.get_content_by_document_id(document_id)
         return content_from_document(doc, now=self.now())
 

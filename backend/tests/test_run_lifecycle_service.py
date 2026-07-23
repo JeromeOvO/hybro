@@ -167,7 +167,9 @@ async def test_record_and_maybe_emit_run_event_records_before_emit(monkeypatch):
         return payload
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
-    monkeypatch.setattr(mod.run_command_handler, "record_processing_status", fake_record)
+    monkeypatch.setattr(
+        mod.run_command_handler, "record_processing_status", fake_record
+    )
     event_publisher = FakeEventPublisher(calls)
 
     result = await mod.record_and_maybe_emit_run_event(
@@ -234,9 +236,7 @@ def test_build_run_event_payload_includes_correlation_id():
         "payload": {"status": "processing"},
     }
 
-    assert mod.build_run_event_payload(
-        payload, client_request_id="cr-1"
-    ) == {
+    assert mod.build_run_event_payload(payload, client_request_id="cr-1") == {
         "event_id": "evt-1",
         "run_id": "msg-1",
         "seq": 2,
@@ -288,11 +288,18 @@ async def test_record_and_maybe_emit_run_event_skips_when_payload_none(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(monkeypatch):
+async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(
+    monkeypatch,
+):
     monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
-    payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 3, "type": "RUN_COMPLETED"}
+    payload = {
+        "event_id": "evt-1",
+        "run_id": "msg-1",
+        "seq": 3,
+        "type": "RUN_COMPLETED",
+    }
     event_publisher = FakeEventPublisher()
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
     monkeypatch.setattr(

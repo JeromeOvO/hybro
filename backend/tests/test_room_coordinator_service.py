@@ -130,9 +130,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         passed_responses = (
             coordinator.summary_service.summarize_agent_responses_stream.call_args[0][0]
         )
-        assert all(
-            isinstance(item, RoomMessageSummary) for item in passed_responses
-        )
+        assert all(isinstance(item, RoomMessageSummary) for item in passed_responses)
         assert passed_responses[0].agent_name == "Agent A"
         coordinator._create_and_emit_summary_message.assert_awaited_once()
 

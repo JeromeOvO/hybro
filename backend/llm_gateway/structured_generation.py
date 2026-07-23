@@ -6,7 +6,9 @@ JSON_OBJECT_INSTRUCTION = (
 )
 
 
-def with_json_object_instruction(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def with_json_object_instruction(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     updated = [dict(message) for message in messages]
     if updated and updated[0].get("role") == "system":
         updated[0]["content"] = (

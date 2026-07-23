@@ -389,7 +389,9 @@ async def test_save_user_message_verifies_room_persists_raw_doc_and_returns_save
     assert messages.user_messages["msg-user"]["room_id"] == "r1"
     assert messages.user_messages["msg-user"]["message_type"] == "user"
     assert messages.user_messages["msg-user"]["user_id"] == "u1"
-    assert messages.user_messages["msg-user"]["message_content"]["message_text"] == "hello"
+    assert (
+        messages.user_messages["msg-user"]["message_content"]["message_text"] == "hello"
+    )
     assert messages.user_messages["msg-user"]["client_request_id"] == "client-1"
     assert messages.user_messages["msg-user"]["message_created_at"] == NOW
 
@@ -464,7 +466,9 @@ async def test_status_and_history_methods_delegate_and_translate_results():
         "message_created_at": NOW,
     }
 
-    assert await facade.update_agent_message_status("a1", "completed", task_updated_at=NOW)
+    assert await facade.update_agent_message_status(
+        "a1", "completed", task_updated_at=NOW
+    )
     assert messages.status_updates == [("a1", "completed", {"task_updated_at": NOW})]
 
     user = await facade.get_message("u1")
@@ -520,7 +524,9 @@ async def test_update_agent_message_does_not_rehydrate_existing_task_metadata():
 
     stored_task = messages.agent_messages["a1"]["message_content"]["message_task"]
     assert stored_task.get("metadata") is None
-    assert private_sentinel not in json.dumps(messages.agent_messages["a1"], default=str)
+    assert private_sentinel not in json.dumps(
+        messages.agent_messages["a1"], default=str
+    )
 
 
 @pytest.mark.asyncio
@@ -939,7 +945,9 @@ class FakeMessageRepository:
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         out = []
         for message_id in message_ids:
-            doc = self.user_messages.get(message_id) or self.agent_messages.get(message_id)
+            doc = self.user_messages.get(message_id) or self.agent_messages.get(
+                message_id
+            )
             if doc is not None:
                 out.append(deepcopy(doc))
         return out

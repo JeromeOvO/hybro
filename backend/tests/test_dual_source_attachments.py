@@ -19,7 +19,9 @@ def room_svc():
     svc.delivery = MagicMock()
     reader = MagicMock()
     reader.get_for_room_file = AsyncMock(
-        side_effect=lambda room_id, file_id: _file_meta(file_id, room_id) if room_id == "room1" else None
+        side_effect=lambda room_id, file_id: (
+            _file_meta(file_id, room_id) if room_id == "room1" else None
+        )
     )
     svc.bind_attachment_metadata_reader(reader)
     return svc
@@ -107,7 +109,9 @@ class TestDualSourceMerge:
 
 class TestCrossRoomRejection:
     async def test_file_from_different_room_rejected(self, room_svc):
-        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(return_value=None)
+        room_svc._attachment_metadata_reader.get_for_room_file = AsyncMock(
+            return_value=None
+        )
 
         request = RoomCenterUserMessageRequest(
             room_id="room1",
@@ -157,7 +161,9 @@ class TestPreDedupGuard:
     def test_extract_attachments_rejects_over_limit(self):
         from api.room_center import _extract_attachments
 
-        attachments = [{"file_id": f"f{i}"} for i in range(MAX_ATTACHMENT_REFS_PER_REQUEST + 1)]
+        attachments = [
+            {"file_id": f"f{i}"} for i in range(MAX_ATTACHMENT_REFS_PER_REQUEST + 1)
+        ]
         request_data = {"attachments": attachments}
         message = None
         result_atts, result_inline, err = _extract_attachments(request_data, message)

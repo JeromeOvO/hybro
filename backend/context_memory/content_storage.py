@@ -68,7 +68,9 @@ async def expand_mongodb_reference(
     return doc.get("content") or ""
 
 
-def content_from_document(doc: dict | None, *, now: datetime | None = None) -> str | None:
+def content_from_document(
+    doc: dict | None, *, now: datetime | None = None
+) -> str | None:
     if not doc or is_content_expired(doc, now=now):
         return None
     return doc.get("content")

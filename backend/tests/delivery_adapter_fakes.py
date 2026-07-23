@@ -35,14 +35,18 @@ class FakeDeliveryCompat:
 
     async def open_connection(self, room_id: str) -> SSEConnection:
         if self.draining:
-            raise ConnectionRefusedError("Server is draining - rejecting new SSE connections")
+            raise ConnectionRefusedError(
+                "Server is draining - rejecting new SSE connections"
+            )
         connection = SSEConnection(
             room_id=room_id,
             connection_id=f"conn-{len(self.room_connections.get(room_id, {})) + 1}",
             heartbeat_interval=0.01,
             now=utcnow,
         )
-        self.room_connections.setdefault(room_id, {})[connection.connection_id] = connection
+        self.room_connections.setdefault(room_id, {})[connection.connection_id] = (
+            connection
+        )
         return connection
 
     async def remove_connection(self, room_id: str, connection_id: str) -> None:

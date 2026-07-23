@@ -79,9 +79,7 @@ async def test_heal_no_newer_events_returns_false():
 async def test_heal_terminal_event_projects_forward():
     """run_events has a terminal RUN_COMPLETED at seq=3, head is at seq=1 — should heal."""
     run_repo, event_repo, handler = _run_handler()
-    run_repo.find_one = AsyncMock(
-        return_value=_make_run_doc(seq=1, state="processing")
-    )
+    run_repo.find_one = AsyncMock(return_value=_make_run_doc(seq=1, state="processing"))
     event_repo.find_one = AsyncMock(
         return_value=_make_event(seq=3, event_type=RunEventType.RUN_COMPLETED.value)
     )
@@ -105,9 +103,7 @@ async def test_heal_terminal_event_projects_forward():
 async def test_heal_failed_event_with_payload():
     """run_events has a RUN_FAILED with error_code — error fields propagate to head."""
     run_repo, event_repo, handler = _run_handler()
-    run_repo.find_one = AsyncMock(
-        return_value=_make_run_doc(seq=1, state="processing")
-    )
+    run_repo.find_one = AsyncMock(return_value=_make_run_doc(seq=1, state="processing"))
     event_repo.find_one = AsyncMock(
         return_value=_make_event(
             seq=2,
@@ -130,9 +126,7 @@ async def test_heal_failed_event_with_payload():
 async def test_heal_active_event_projects_forward():
     """run_events has a RUN_STARTED at seq=2 but head is QUEUED at seq=0."""
     run_repo, event_repo, handler = _run_handler()
-    run_repo.find_one = AsyncMock(
-        return_value=_make_run_doc(seq=0, state="queued")
-    )
+    run_repo.find_one = AsyncMock(return_value=_make_run_doc(seq=0, state="queued"))
     event_repo.find_one = AsyncMock(
         return_value=_make_event(seq=2, event_type=RunEventType.RUN_STARTED.value)
     )

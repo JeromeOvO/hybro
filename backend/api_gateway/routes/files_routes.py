@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from api_gateway.dependencies import get_file_storage, get_room_ownership_reader

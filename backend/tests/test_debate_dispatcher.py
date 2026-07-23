@@ -108,7 +108,9 @@ class TestSequentialDebateDispatcher:
 
 
 def test_debate_prompt_injector_default_constructor_does_not_import_database_service():
-    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+    with patch(
+        "importlib.import_module", side_effect=AssertionError("legacy import attempted")
+    ):
         injector = DebatePromptInjector()
 
     assert injector._message_store is not None
@@ -169,7 +171,9 @@ def test_debate_prompt_injector_default_constructor_does_not_import_database_ser
         """Test prior response with special characters."""
         original = "Analyze text"
         prior_name = "TextAnalyzer"
-        prior_response = 'Text with "quotes" and \'apostrophes\' and special chars: $%^&*()'
+        prior_response = (
+            "Text with \"quotes\" and 'apostrophes' and special chars: $%^&*()"
+        )
 
         result = SequentialDebateDispatcher.build_debate_prompt(
             original_task=original,
@@ -178,4 +182,7 @@ def test_debate_prompt_injector_default_constructor_does_not_import_database_ser
         )
 
         # Should preserve special characters
-        assert 'Text with "quotes" and \'apostrophes\' and special chars: $%^&*()' in result
+        assert (
+            "Text with \"quotes\" and 'apostrophes' and special chars: $%^&*()"
+            in result
+        )

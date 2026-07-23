@@ -75,7 +75,9 @@ class BoundRoomMemoryFacade:
     def __init__(self, service):
         self.service = service
 
-    async def add_synthesis_to_history(self, room_id: str, synthesis_text: str, trajectory=None):
+    async def add_synthesis_to_history(
+        self, room_id: str, synthesis_text: str, trajectory=None
+    ):
         from common.utils.context_utils import (
             LLM_TURN_NOTES_THRESHOLD,
             MAX_HISTORY_TURNS,
@@ -110,8 +112,7 @@ class BoundRoomMemoryFacade:
             turn_notes=notes,
         )
         summary_stub = (
-            f"[Supervisor synthesis ({turn.turn_id[:8]})] "
-            f"{enriched_content[:200]}..."
+            f"[Supervisor synthesis ({turn.turn_id[:8]})] {enriched_content[:200]}..."
         )
         modified, matched = await self.service._store.push_and_trim_conversation_turn(
             room_id,
@@ -236,7 +237,9 @@ class BoundAssemblyFacade:
             current_task_pct=budget.current_task_pct,
         )
 
-    def assemble_supervisor_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+    def assemble_supervisor_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
         return context_memory_assembly.assemble_supervisor_context_from_memory(
             room_memory_doc,
             current_task,
@@ -244,7 +247,9 @@ class BoundAssemblyFacade:
             **kwargs,
         )
 
-    def assemble_agent_execution_context_from_memory(self, room_memory_doc, current_task, **kwargs):
+    def assemble_agent_execution_context_from_memory(
+        self, room_memory_doc, current_task, **kwargs
+    ):
         return context_memory_assembly.assemble_agent_execution_context_from_memory(
             room_memory_doc,
             current_task,
@@ -310,7 +315,9 @@ class TestAddSynthesisToHistory:
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -331,7 +338,9 @@ class TestAddSynthesisToHistory:
         """Should return None when room document doesn't exist."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         result = await service.add_synthesis_to_history(
             room_id="nonexistent",
@@ -347,7 +356,9 @@ class TestAddSynthesisToHistory:
         """Should return None when DB persistence fails."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         result = await service.add_synthesis_to_history(
             room_id="test_room",
@@ -367,7 +378,9 @@ class TestSynthesisLLMEnrichment:
         """Long synthesis text should trigger background _enrich_turn_notes_background."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         long_text = "This is a very detailed synthesis. " * 50
 
@@ -393,7 +406,9 @@ class TestSynthesisLLMEnrichment:
         """Short synthesis text should NOT trigger background enrichment."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         with patch.object(
             holder, "_enrich_turn_notes_background", new_callable=AsyncMock
@@ -434,7 +449,9 @@ class TestUpdateRoomSummary:
             "important_constraints": ["Must finish by Friday"],
         }
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -452,11 +469,11 @@ class TestUpdateRoomSummary:
         self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """On LLM failure, existing summary should be preserved (graceful degradation)."""
-        mock_supervisor_llm_service.call_json.side_effect = Exception(
-            "LLM timeout"
-        )
+        mock_supervisor_llm_service.call_json.side_effect = Exception("LLM timeout")
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -480,7 +497,9 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         success = await service.update_room_summary(
             room_id="nonexistent",
@@ -510,7 +529,9 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -520,7 +541,9 @@ class TestUpdateRoomSummary:
         assert success is True
         saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
         assert saved_summary["current_goal"] == "Original goal"
-        assert saved_summary["key_decisions"] == []  # LLM explicitly returned empty list
+        assert (
+            saved_summary["key_decisions"] == []
+        )  # LLM explicitly returned empty list
         assert saved_summary["open_questions"] == ["New question"]
 
     @pytest.mark.asyncio
@@ -541,7 +564,9 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(mock_db_service, mock_supervisor_llm_service)
+        service, _holder = room_memory_adapter(
+            mock_db_service, mock_supervisor_llm_service
+        )
 
         success = await service.update_room_summary(
             room_id="test_room",
@@ -615,7 +640,9 @@ class TestPromptCacheOptimization:
         room_config = RoomConfig(is_debate_mode=False)
         trajectory = SupervisorTrajectory()
 
-        with patch.object(service, "_call_supervisor_llm", new_callable=AsyncMock) as mock_llm:
+        with patch.object(
+            service, "_call_supervisor_llm", new_callable=AsyncMock
+        ) as mock_llm:
             mock_llm.return_value = {
                 "action": "done",
                 "reasoning": "test",
@@ -664,8 +691,16 @@ class TestPromptCacheOptimization:
         room_config = RoomConfig(is_debate_mode=False)
         trajectory = SupervisorTrajectory()
 
-        with patch.object(service, "_call_supervisor_llm", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = {"action": "done", "reasoning": "test", "targets": [], "synthesis_instruction": None, "clarification_question": None}
+        with patch.object(
+            service, "_call_supervisor_llm", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = {
+                "action": "done",
+                "reasoning": "test",
+                "targets": [],
+                "synthesis_instruction": None,
+                "clarification_question": None,
+            }
 
             await service.decide_next(
                 message_text="Test message",
@@ -676,8 +711,12 @@ class TestPromptCacheOptimization:
             )
 
             call_args = mock_llm.call_args
-            system_prompt_arg = call_args.kwargs.get("system_prompt", call_args[0][0] if call_args[0] else "")
-            user_prompt_arg = call_args.kwargs.get("user_prompt", call_args[0][1] if len(call_args[0]) > 1 else "")
+            system_prompt_arg = call_args.kwargs.get(
+                "system_prompt", call_args[0][0] if call_args[0] else ""
+            )
+            user_prompt_arg = call_args.kwargs.get(
+                "user_prompt", call_args[0][1] if len(call_args[0]) > 1 else ""
+            )
 
             assert "This is the conversation background" in system_prompt_arg
             assert "This is the conversation background" not in user_prompt_arg
@@ -733,7 +772,6 @@ class TestCompactionTrigger:
         rmc.room_reader.get_room_by_room_id.return_value = None
         rmc.message_writer.cancel_descendants.return_value = None
         rmc.message_writer.cancel_agent_messages_by_ids.return_value = None
-
 
         mock_memory_service = AsyncMock()
         mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
@@ -847,20 +885,24 @@ class TestParseV2ActionCaseInsensitive:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
+
         return RoomSupervisorService()
 
-    @pytest.mark.parametrize("action_str,expected_action", [
-        ("delegate", "delegate"),
-        ("DELEGATE", "delegate"),
-        ("Delegate", "delegate"),
-        ("synthesize", "synthesize"),
-        ("SYNTHESIZE", "synthesize"),
-        ("clarify", "clarify"),
-        ("CLARIFY", "clarify"),
-        ("done", "done"),
-        ("DONE", "done"),
-        ("Done", "done"),
-    ])
+    @pytest.mark.parametrize(
+        "action_str,expected_action",
+        [
+            ("delegate", "delegate"),
+            ("DELEGATE", "delegate"),
+            ("Delegate", "delegate"),
+            ("synthesize", "synthesize"),
+            ("SYNTHESIZE", "synthesize"),
+            ("clarify", "clarify"),
+            ("CLARIFY", "clarify"),
+            ("done", "done"),
+            ("DONE", "done"),
+            ("Done", "done"),
+        ],
+    )
     def test_parses_any_case(self, service, action_str, expected_action):
         """Action strings in any case should be recognized."""
         from models.supervisor import ActionType
@@ -906,7 +948,11 @@ class TestParseV2ActionCaseInsensitive:
             "action": "DELEGATE",
             "reasoning": "Send to agent",
             "targets": [
-                {"agent_id": "agent-1", "agent_name": "TestAgent", "task": "Do something"},
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "TestAgent",
+                    "task": "Do something",
+                },
             ],
         }
         action = service._parse_supervisor_action(response_json)
@@ -957,6 +1003,7 @@ class TestParseV2ActionClarifySanitization:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
+
         return RoomSupervisorService()
 
     def _clarify_json(self, **overrides):
@@ -970,7 +1017,9 @@ class TestParseV2ActionClarifySanitization:
         return base
 
     def test_valid_prompt_type_text(self, service):
-        action = service._parse_supervisor_action(self._clarify_json(prompt_type="text"))
+        action = service._parse_supervisor_action(
+            self._clarify_json(prompt_type="text")
+        )
         assert action.prompt_type == "text"
 
     def test_valid_prompt_type_choice_with_choices(self, service):
@@ -981,7 +1030,9 @@ class TestParseV2ActionClarifySanitization:
         assert action.choices == ["A", "B", "C"]
 
     def test_valid_prompt_type_confirmation(self, service):
-        action = service._parse_supervisor_action(self._clarify_json(prompt_type="confirmation"))
+        action = service._parse_supervisor_action(
+            self._clarify_json(prompt_type="confirmation")
+        )
         assert action.prompt_type == "confirmation"
 
     def test_invalid_prompt_type_number_becomes_none(self, service):
@@ -989,15 +1040,21 @@ class TestParseV2ActionClarifySanitization:
         assert action.prompt_type is None
 
     def test_invalid_prompt_type_unknown_string_becomes_none(self, service):
-        action = service._parse_supervisor_action(self._clarify_json(prompt_type="multiple_choice"))
+        action = service._parse_supervisor_action(
+            self._clarify_json(prompt_type="multiple_choice")
+        )
         assert action.prompt_type is None
 
     def test_choices_non_list_becomes_none(self, service):
-        action = service._parse_supervisor_action(self._clarify_json(choices="not a list"))
+        action = service._parse_supervisor_action(
+            self._clarify_json(choices="not a list")
+        )
         assert action.choices is None
 
     def test_choices_list_with_non_strings_becomes_none(self, service):
-        action = service._parse_supervisor_action(self._clarify_json(choices=["ok", 123, None]))
+        action = service._parse_supervisor_action(
+            self._clarify_json(choices=["ok", 123, None])
+        )
         assert action.choices is None
 
     def test_missing_prompt_type_is_none(self, service):
@@ -1030,16 +1087,22 @@ class TestTrajectoryStatusSerialization:
             warnings.simplefilter("always")
             data = trajectory.model_dump(mode="json")
             pydantic_warnings = [
-                x for x in w
-                if "PydanticSerializationUnexpectedValue" in str(x.message)
+                x for x in w if "PydanticSerializationUnexpectedValue" in str(x.message)
             ]
             assert len(pydantic_warnings) == 0
 
         assert data["status"] == "completed"
 
-    @pytest.mark.parametrize("status", [
-        "completed", "failed", "canceled", "running", "awaiting_input",
-    ])
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "completed",
+            "failed",
+            "canceled",
+            "running",
+            "awaiting_input",
+        ],
+    )
     def test_all_statuses_roundtrip_cleanly(self, status):
         """Every TrajectoryStatus value should serialize and deserialize."""
         import warnings
@@ -1056,8 +1119,7 @@ class TestTrajectoryStatusSerialization:
             warnings.simplefilter("always")
             data = trajectory.model_dump(mode="json")
             pydantic_warnings = [
-                x for x in w
-                if "PydanticSerializationUnexpectedValue" in str(x.message)
+                x for x in w if "PydanticSerializationUnexpectedValue" in str(x.message)
             ]
             assert len(pydantic_warnings) == 0
 
@@ -1080,8 +1142,7 @@ class TestTrajectoryStatusSerialization:
             warnings.simplefilter("always")
             trajectory.model_dump(mode="json")
             pydantic_warnings = [
-                x for x in w
-                if "PydanticSerializationUnexpectedValue" in str(x.message)
+                x for x in w if "PydanticSerializationUnexpectedValue" in str(x.message)
             ]
             assert len(pydantic_warnings) > 0, (
                 "Expected Pydantic warning when status is a raw string, "
@@ -1102,8 +1163,12 @@ class TestHandleV2RunResultUnifiedSummary:
     def rmc(self):
         """Build a RoomMessageCenter with key collaborators mocked."""
         with (
-            patch("execution.orchestration.room_message_center.default_store") as mock_db,
-            patch("execution.orchestration.room_message_center.delivery") as mock_delivery,
+            patch(
+                "execution.orchestration.room_message_center.default_store"
+            ) as mock_db,
+            patch(
+                "execution.orchestration.room_message_center.delivery"
+            ) as mock_delivery,
             patch("execution.orchestration.room_message_center.coordinator"),
             patch("execution.orchestration.room_message_center.room_runtime"),
             patch("execution.orchestration.room_message_center.task_notifier"),
@@ -1111,7 +1176,9 @@ class TestHandleV2RunResultUnifiedSummary:
             patch("execution.orchestration.room_message_center.remote_task_reader"),
             patch("execution.orchestration.room_message_center.agent_resolver_service"),
             patch("execution.orchestration.room_message_center.room_memory"),
-            patch("execution.orchestration.room_message_center.room_supervisor_service"),
+            patch(
+                "execution.orchestration.room_message_center.room_supervisor_service"
+            ),
             patch("execution.orchestration.room_message_center.rate_limit_service"),
             patch("execution.orchestration.room_message_center.debate_prompt_injector"),
         ):
@@ -1126,7 +1193,9 @@ class TestHandleV2RunResultUnifiedSummary:
                 debate_rounds=2,
                 event_publisher=RecordingEventPublisher(),
             )
-            rmc._emit_unified_summary = AsyncMock(return_value=("synthesis", "Final synthesis."))
+            rmc._emit_unified_summary = AsyncMock(
+                return_value=("synthesis", "Final synthesis.")
+            )
             rmc._emit_deterministic_digest = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
             rmc._processing_status_emitter = _noop_processing_status_emitter
@@ -1719,18 +1788,25 @@ class TestParseV2ActionMultiQuestion:
         from execution.orchestration.room_supervisor_service import (
             RoomSupervisorService,
         )
+
         return RoomSupervisorService()
 
     def test_parses_valid_questions_array(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need more info",
-            "questions": [
-                {"prompt": "Travel dates?", "prompt_type": "text"},
-                {"prompt": "Budget?", "prompt_type": "choice", "choices": ["Low", "High"]},
-                {"prompt": "Proceed?", "prompt_type": "confirmation"},
-            ],
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need more info",
+                "questions": [
+                    {"prompt": "Travel dates?", "prompt_type": "text"},
+                    {
+                        "prompt": "Budget?",
+                        "prompt_type": "choice",
+                        "choices": ["Low", "High"],
+                    },
+                    {"prompt": "Proceed?", "prompt_type": "confirmation"},
+                ],
+            }
+        )
         assert action.questions is not None
         assert len(action.questions) == 3
         assert action.questions[0].prompt == "Travel dates?"
@@ -1739,55 +1815,65 @@ class TestParseV2ActionMultiQuestion:
         assert action.questions[2].prompt_type == "confirmation"
 
     def test_falls_back_to_clarification_question_when_no_questions(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need info",
-            "clarification_question": "What dates?",
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "clarification_question": "What dates?",
+            }
+        )
         assert action.questions is None
         assert action.clarification_question == "What dates?"
 
     def test_ignores_questions_with_invalid_prompts(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need info",
-            "questions": [
-                {"prompt": 123},
-                {"prompt": "Valid question?", "prompt_type": "text"},
-            ],
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [
+                    {"prompt": 123},
+                    {"prompt": "Valid question?", "prompt_type": "text"},
+                ],
+            }
+        )
         assert action.questions is not None
         assert len(action.questions) == 1
         assert action.questions[0].prompt == "Valid question?"
 
     def test_sanitizes_invalid_prompt_type_in_questions(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need info",
-            "questions": [
-                {"prompt": "Q1?", "prompt_type": "invalid_type"},
-                {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
-            ],
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [
+                    {"prompt": "Q1?", "prompt_type": "invalid_type"},
+                    {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
+                ],
+            }
+        )
         assert action.questions is not None
         assert len(action.questions) == 2
         assert action.questions[0].prompt_type is None
         assert action.questions[1].choices is None
 
     def test_empty_questions_array_yields_none(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need info",
-            "questions": [],
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [],
+            }
+        )
         assert action.questions is None
 
     def test_questions_array_not_a_list_yields_none(self, service):
-        action = service._parse_supervisor_action({
-            "action": "clarify",
-            "reasoning": "need info",
-            "questions": "not a list",
-        })
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": "not a list",
+            }
+        )
         assert action.questions is None
 
 
@@ -1800,7 +1886,10 @@ async def test_state_driven_supervisor_builds_planner_context_without_trajectory
                 "action": "ask_user",
                 "reasoning": "Need one missing value before delegation.",
                 "questions": [
-                    {"prompt": "What coverage limit do you need?", "prompt_type": "text"},
+                    {
+                        "prompt": "What coverage limit do you need?",
+                        "prompt_type": "text",
+                    },
                 ],
             }
         ]
@@ -1882,7 +1971,9 @@ async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info
         },
     )
 
-    message = await app.room_store.get_room_user_message_by_message_id(response.message_id)
+    message = await app.room_store.get_room_user_message_by_message_id(
+        response.message_id
+    )
     assert message is not None
     assert message.extend_info is not None
     assert "supervisor_trajectory" not in message.extend_info
@@ -1966,18 +2057,17 @@ async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_e
 
     assert len(app.planner.contexts) == 2
     complete_context = app.planner.contexts[1].prompt_payload()["state_context"]
-    assert [
-        output["agent_id"] for output in complete_context["agent_outputs"]
-    ] == ["broker", "insurer"]
-    assert {
-        fact["fact_id"] for fact in complete_context["facts"]
-    } >= {
+    assert [output["agent_id"] for output in complete_context["agent_outputs"]] == [
+        "broker",
+        "insurer",
+    ]
+    assert {fact["fact_id"] for fact in complete_context["facts"]} >= {
         f"{broker_message_id}:text",
         f"{insurer_message_id}:text_evidence",
     }
-    assert {
-        artifact["artifact_key"] for artifact in complete_context["artifacts"]
-    } >= {quote_artifact_key}
+    assert {artifact["artifact_key"] for artifact in complete_context["artifacts"]} >= {
+        quote_artifact_key
+    }
 
     state = await app.run_store.get_latest_by_user_message_id(result.message_id)
     assert state is not None

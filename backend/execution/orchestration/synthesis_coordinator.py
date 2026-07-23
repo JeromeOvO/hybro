@@ -168,13 +168,19 @@ class SynthesisCoordinator:
                     ):
                         continue
                     task = msg.message_content and msg.message_content.message_task
-                    if task and task.status and task.status.state != TaskState.completed:
+                    if (
+                        task
+                        and task.status
+                        and task.status.state != TaskState.completed
+                    ):
                         continue
                     text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
                         # Get agent name from database
-                        agent_name = await self._message_store.get_agent_name_by_agent_id(
-                            msg.agent_id
+                        agent_name = (
+                            await self._message_store.get_agent_name_by_agent_id(
+                                msg.agent_id
+                            )
                         )
                         agent_responses.append(
                             {
@@ -402,10 +408,8 @@ class SynthesisCoordinator:
 
         summary_content = MessageContent(message_task=summary_task)
 
-        user_message = (
-            await self._message_store.get_room_user_message_by_message_id(
-                room_user_message_id
-            )
+        user_message = await self._message_store.get_room_user_message_by_message_id(
+            room_user_message_id
         )
         user_id = user_message.user_id if user_message else None
         client_request_id = user_message.client_request_id if user_message else None

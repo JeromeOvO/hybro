@@ -198,9 +198,7 @@ async def keyword_search(
         one_liner = notes.get("one_liner") if isinstance(notes, dict) else None
         content_type = doc.get("content_type") or "text"
         content = (
-            one_liner[: config.max_snippet_chars]
-            if one_liner
-            else f"[{content_type}]"
+            one_liner[: config.max_snippet_chars] if one_liner else f"[{content_type}]"
         )
         content_preview = one_liner[: config.max_snippet_chars] if one_liner else None
         timestamp = _parse_timestamp(doc.get("stored_at"))
@@ -298,9 +296,11 @@ def apply_mmr(
     while remaining:
         best_idx = max(
             remaining,
-            key=lambda i: lambda_param * results[i].combined_score
-            - (1 - lambda_param)
-            * max(cosine_similarity(profiles[i], profiles[s]) for s in selected),
+            key=lambda i: (
+                lambda_param * results[i].combined_score
+                - (1 - lambda_param)
+                * max(cosine_similarity(profiles[i], profiles[s]) for s in selected)
+            ),
         )
         selected.append(best_idx)
         remaining.remove(best_idx)
@@ -313,15 +313,13 @@ async def hydrate_empty_results(
     content_repository: ContentStorageRepository,
     config: MemorySearchConfig,
 ) -> None:
-    turn_ids = [record.turn_id for record in results if record.turn_id and not record.content]
+    turn_ids = [
+        record.turn_id for record in results if record.turn_id and not record.content
+    ]
     if not turn_ids:
         return
     docs = await content_repository.hydrate_turn_notes(room_id, turn_ids)
-    by_turn = {
-        doc.get("turn_id"): doc
-        for doc in docs
-        if not is_content_expired(doc)
-    }
+    by_turn = {doc.get("turn_id"): doc for doc in docs if not is_content_expired(doc)}
     for record in results:
         if record.content or record.turn_id not in by_turn:
             continue

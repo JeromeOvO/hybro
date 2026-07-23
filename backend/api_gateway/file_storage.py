@@ -140,7 +140,9 @@ class ObjectStorageFileStorage:
         except Exception as exc:
             _raise_file_storage_error("get_bytes", exc)
 
-    async def get_for_room_file(self, room_id: str, file_id: str) -> dict[str, Any] | None:
+    async def get_for_room_file(
+        self, room_id: str, file_id: str
+    ) -> dict[str, Any] | None:
         try:
             doc = await self._file_uploads_collection.find_one(
                 {"room_id": room_id, "file_id": file_id}

@@ -100,7 +100,7 @@ class TestRoomModel:
             room_owner_id="user-123",
             room_owner_name="Test User",
         )
-        
+
         assert room.room_id is not None
         assert room.room_name == "Test Room"
         assert room.room_owner_id == "user-123"
@@ -116,7 +116,7 @@ class TestRoomModel:
             room_owner_name="Test User",
             room_agent_set=agent_set,
         )
-        
+
         assert room.room_agent_set == agent_set
         assert len(room.room_agent_set) == 2
 
@@ -127,9 +127,9 @@ class TestRoomModel:
             room_owner_id="user-123",
             room_owner_name="Test User",
         )
-        
+
         data = room.model_dump()
-        
+
         assert "room_id" in data
         assert "room_name" in data
         assert data["room_name"] == "Test Room"
@@ -146,7 +146,7 @@ class TestRoomUserMessageModel:
             user_id="user-789",
             message_content=MessageContent(message_text="Hello"),
         )
-        
+
         assert message.message_type == "user"
         assert message.room_id == "room-123"
         assert message.message_content.message_text == "Hello"
@@ -159,7 +159,7 @@ class TestRoomUserMessageModel:
             message_content=MessageContent(message_text="Hello"),
             extend_info={"custom_field": "custom_value"},
         )
-        
+
         assert message.extend_info["custom_field"] == "custom_value"
 
 
@@ -174,7 +174,7 @@ class TestRoomAgentMessageModel:
             agent_id="agent-789",
             message_content=MessageContent(message_text="Response"),
         )
-        
+
         assert message.message_type == "agent"
         assert message.agent_id == "agent-789"
 
@@ -185,7 +185,7 @@ class TestRoomAgentMessageModel:
             contextId="context-123",
             status=TaskStatus(state=TaskState.working),
         )
-        
+
         message = RoomAgentMessage(
             room_id="room-123",
             message_id="msg-456",
@@ -197,7 +197,7 @@ class TestRoomAgentMessageModel:
             has_task_tracking=True,
             task_created_at=datetime.now(),
         )
-        
+
         assert message.has_task_tracking is True
         assert message.message_content.message_task is not None
 
@@ -211,7 +211,7 @@ class TestRoomAgentMessageModel:
             step_number=1,
             total_steps=3,
         )
-        
+
         assert message.step_number == 1
         assert message.total_steps == 3
 
@@ -240,7 +240,7 @@ class TestAgentModel:
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
         )
-        
+
         assert agent.agent_status == AgentStatus.active
         assert agent.is_public is True
         assert agent.call_count == 0
@@ -253,7 +253,7 @@ class TestAgentModel:
             agent_card=sample_agent_card,
             agent_status=AgentStatus.inactive,
         )
-        
+
         data = agent.model_dump()
         assert data["agent_status"] == "inactive"
 
@@ -265,7 +265,7 @@ class TestAgentModel:
             rate_limit_per_user_per_hour=100,
             rate_limit_system_per_hour=1000,
         )
-        
+
         assert agent.rate_limit_per_user_per_hour == 100
         assert agent.rate_limit_system_per_hour == 1000
 
@@ -298,7 +298,7 @@ class TestConversationTurnModel:
             representation=TurnRepresentation.FULL,
             timestamp=datetime.now(),
         )
-        
+
         assert turn.role == TurnRole.USER
         assert turn.content == "Hello"
 
@@ -314,7 +314,7 @@ class TestConversationTurnModel:
             representation=TurnRepresentation.FULL,
             timestamp=datetime.now(),
         )
-        
+
         assert turn.role == TurnRole.AGENT
         assert turn.agent_id == "agent-123"
         assert turn.agent_name == "TestAgent"
@@ -331,7 +331,7 @@ class TestConversationTurnModel:
             estimated_tokens_compact=20,
             timestamp=datetime.now(),
         )
-        
+
         assert turn.representation == TurnRepresentation.COMPACT
         assert turn.brief_summary is not None
 
@@ -345,7 +345,7 @@ class TestRoomMemoryModel:
             room_id="room-123",
             memory_id=str(uuid4()),
         )
-        
+
         assert memory.room_id == "room-123"
         assert memory.total_compactions == 0
 
@@ -359,14 +359,14 @@ class TestRoomMemoryModel:
                 timestamp=datetime.now(),
             ),
         ]
-        
+
         memory_content = MemoryContent(conversation_history=turns)
         memory = RoomMemory(
             room_id="room-123",
             memory_id=str(uuid4()),
             memory_content=memory_content,
         )
-        
+
         history = memory.get_conversation_history()
         assert len(history) == 1
 
@@ -387,7 +387,7 @@ class TestHITLRequestModel:
             source="supervisor",
             prompt="Please clarify",
         )
-        
+
         assert request.request_id is not None
         assert request.status == HITLStatus.PENDING
         assert request.prompt_type == HITLPromptType.TEXT
@@ -402,7 +402,7 @@ class TestHITLRequestModel:
             prompt_type=HITLPromptType.CHOICE,
             choices=["Option A", "Option B", "Option C"],
         )
-        
+
         assert request.prompt_type == HITLPromptType.CHOICE
         assert len(request.choices) == 3
 
@@ -416,7 +416,7 @@ class TestHITLRequestModel:
             agent_id="agent-789",
             agent_name="TestAgent",
         )
-        
+
         assert request.source == "agent"
         assert request.agent_id == "agent-789"
 
@@ -428,9 +428,9 @@ class TestHITLRequestModel:
             source="supervisor",
             prompt="Test prompt",
         )
-        
+
         data = request.model_dump(mode="json")
-        
+
         assert isinstance(data["created_at"], str)
         assert data["status"] == "pending"
 

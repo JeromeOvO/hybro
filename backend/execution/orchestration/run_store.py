@@ -84,9 +84,7 @@ class InMemoryOrchestrationRunStore:
         state: OrchestrationRunState,
     ) -> OrchestrationRunState:
         if state.run_id in self._states_by_run_id:
-            raise OrchestrationStoreConflict(
-                f"run_id {state.run_id!r} already exists"
-            )
+            raise OrchestrationStoreConflict(f"run_id {state.run_id!r} already exists")
 
         stored = _copy_state(state)
         self._states_by_run_id[stored.run_id] = stored
@@ -188,9 +186,7 @@ class InMemoryOrchestrationRunStore:
         goal: str,
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
-        candidate_agent_ids = _candidate_agent_ids_from_envelope(
-            normalized_envelope
-        )
+        candidate_agent_ids = _candidate_agent_ids_from_envelope(normalized_envelope)
         candidate_scope = _candidate_scope_from_legacy_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
@@ -242,9 +238,7 @@ class MongoOrchestrationRunStore:
     ) -> OrchestrationRunState:
         existing = await self._runs.find_one({"run_id": state.run_id})
         if existing is not None:
-            raise OrchestrationStoreConflict(
-                f"run_id {state.run_id!r} already exists"
-            )
+            raise OrchestrationStoreConflict(f"run_id {state.run_id!r} already exists")
         try:
             await self._runs.insert_one(_state_doc(state))
         except Exception as exc:
@@ -339,9 +333,7 @@ class MongoOrchestrationRunStore:
         docs = await self._runs.find(
             {
                 "status": {
-                    "$nin": [
-                        status.value for status in TERMINAL_ORCHESTRATION_STATUSES
-                    ]
+                    "$nin": [status.value for status in TERMINAL_ORCHESTRATION_STATUSES]
                 }
             },
             sort=[("updated_at", 1), ("created_at", 1), ("run_id", 1)],
@@ -359,9 +351,7 @@ class MongoOrchestrationRunStore:
         goal: str,
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
-        candidate_agent_ids = _candidate_agent_ids_from_envelope(
-            normalized_envelope
-        )
+        candidate_agent_ids = _candidate_agent_ids_from_envelope(normalized_envelope)
         candidate_scope = _candidate_scope_from_legacy_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
@@ -374,9 +364,7 @@ class MongoOrchestrationRunStore:
             goal=goal,
             candidate_agent_ids=candidate_agent_ids,
             candidate_scope=candidate_scope,
-            client_request_id=_client_request_id_from_envelope(
-                normalized_envelope
-            ),
+            client_request_id=_client_request_id_from_envelope(normalized_envelope),
             schema_version=2,
         )
 

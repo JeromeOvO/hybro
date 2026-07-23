@@ -258,7 +258,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     try:
         # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
 
-
         mongo_dal = create_mongo_dal()
         _mongo_dal = mongo_dal
         app.state.mongo_dal = mongo_dal
@@ -336,7 +335,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             bind_a2a_artifact_storage(a2a_artifact_storage)
             await ensure_runtime_indexes(mongo=mongo_dal)
 
-
             vector_dal = create_vector_dal()
             route_room_center = RoomRouteAdapter()
             debate_prompt_injector = DebatePromptInjector()
@@ -377,8 +375,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from a2a_adapter.task_status import coerce_task_state
             from execution.hitl.factory import create_hitl_service
 
-            agent_capability_issue_repository = create_agent_capability_issue_repository(
-                mongo_dal
+            agent_capability_issue_repository = (
+                create_agent_capability_issue_repository(mongo_dal)
             )
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
@@ -736,6 +734,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 increment_agent_call_count=agent_room_store.increment_agent_call_count,
                 is_message_cancelled=task_store.is_message_cancelled,
             )
+
             async def get_quoted_snippet_by_id(quote_id: str):
                 quote_doc = await _room_deps.room_quote_repository.get_by_id(quote_id)
                 return (
@@ -850,7 +849,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             async def execution_inquiry_agent_messages_by_related_message_id(
                 related_message_id: str,
             ):
-                request = RoomCenterAgentMessageRequest(related_message_id=related_message_id)
+                request = RoomCenterAgentMessageRequest(
+                    related_message_id=related_message_id
+                )
                 return await room_services.inquiry_agent_messages_by_related_message_id(
                     request
                 )
@@ -1129,9 +1130,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 limit=500
             )
         except Exception:
-            logger.warning(
-                "startup heal: failed; continuing startup", exc_info=True
-            )
+            logger.warning("startup heal: failed; continuing startup", exc_info=True)
         else:
             if healed:
                 logger.info("startup heal: healed %s diverged run(s)", healed)
@@ -1298,7 +1297,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(
                 file_uploads_collection=file_uploads_collection,
-                room_user_messages_collection=mongo_dal.collection("room_user_messages"),
+                room_user_messages_collection=mongo_dal.collection(
+                    "room_user_messages"
+                ),
                 object_storage=object_storage,
             )
         )
@@ -1613,9 +1614,7 @@ def create_redis_runtime_deps(
             streams_client,
             kv=command_client,
             maxlen=relay_stream_maxlen or settings.relay_stream_maxlen,
-            heartbeat_ttl=(
-                relay_hub_heartbeat_ttl or settings.relay_hub_heartbeat_ttl
-            ),
+            heartbeat_ttl=(relay_hub_heartbeat_ttl or settings.relay_hub_heartbeat_ttl),
         ),
     )
 

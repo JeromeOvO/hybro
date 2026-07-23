@@ -472,9 +472,7 @@ def _candidate_agent_context(raw_item: Any) -> CandidateAgentContext | None:
         output_modes=_string_list(
             _first_attr_value(raw_item, "output_modes", "default_output_modes")
         ),
-        supports_file_upload=bool(
-            _first_attr_value(raw_item, "supports_file_upload")
-        ),
+        supports_file_upload=bool(_first_attr_value(raw_item, "supports_file_upload")),
         success_rate=_optional_float(getattr(raw_item, "success_rate", None)),
         is_healthy=_candidate_health(raw_item),
     )

@@ -53,9 +53,7 @@ def _make_facade(**overrides):
     room_center.run_message_preflight_to_room = AsyncMock(
         side_effect=run_message_preflight_to_room
     )
-    room_center.update_user_message_orchestration_status = AsyncMock(
-        return_value=True
-    )
+    room_center.update_user_message_orchestration_status = AsyncMock(return_value=True)
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
         request_input=AsyncMock(),
@@ -155,7 +153,9 @@ def test_constructor_core_dependencies_are_typed_ports():
 @pytest.mark.asyncio
 async def test_execute_persists_ack_without_starting_orchestration():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = RoomCenterUserMessageResponse(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = RoomCenterUserMessageResponse(
         room_id="room-1",
         message_id="msg-1",
         user_id="user-1",
@@ -329,7 +329,9 @@ async def test_execute_continues_when_active_run_lookup_fails():
 @pytest.mark.asyncio
 async def test_execute_emits_processing_for_ready_room_preflight():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = _room_response_with_preflight(
         room_id="room-1",
         message_id="frontend-msg-1",
         dispatch_root_message_id="root-msg-1",
@@ -379,7 +381,9 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
     preflight_context = object()
     room_center = SimpleNamespace(
         send_message_to_room=AsyncMock(
-            side_effect=AssertionError("legacy single-step room path should not be used")
+            side_effect=AssertionError(
+                "legacy single-step room path should not be used"
+            )
         ),
         persist_message_to_room=AsyncMock(
             return_value=(
@@ -426,14 +430,18 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
     assert ack.should_start_orchestration is True
     assert order == ["record:processing", "emit:processing", "room_preflight"]
     room_center.persist_message_to_room.assert_awaited_once()
-    room_center.run_message_preflight_to_room.assert_awaited_once_with(preflight_context)
+    room_center.run_message_preflight_to_room.assert_awaited_once_with(
+        preflight_context
+    )
     room_center.send_message_to_room.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_execute_does_not_emit_completed_for_success_without_preflight_outcome():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = RoomCenterUserMessageResponse(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = RoomCenterUserMessageResponse(
         room_id="room-1",
         message_id="msg-1",
         success=True,
@@ -461,7 +469,9 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
 @pytest.mark.asyncio
 async def test_execute_emits_completed_for_completed_room_preflight():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = _room_response_with_preflight(
         room_id="room-1",
         message_id="msg-1",
         success=True,
@@ -494,14 +504,18 @@ async def test_execute_emits_completed_for_completed_room_preflight():
 @pytest.mark.asyncio
 async def test_execute_returns_ack_when_post_persist_status_emit_fails():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = _room_response_with_preflight(
         room_id="room-1",
         message_id="msg-1",
         dispatch_root_message_id="msg-1",
         success=True,
         preflight_outcome="ready",
     )
-    deps["run_lifecycle"].record_processing_status.side_effect = RuntimeError("sse down")
+    deps["run_lifecycle"].record_processing_status.side_effect = RuntimeError(
+        "sse down"
+    )
 
     ack = await facade.execute(
         ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
@@ -516,7 +530,9 @@ async def test_execute_returns_ack_when_post_persist_status_emit_fails():
 @pytest.mark.asyncio
 async def test_execute_emits_processing_then_failed_for_persisted_preflight_failure():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = _room_response_with_preflight(
         room_id="room-1",
         message_id="msg-1",
         success=False,
@@ -596,7 +612,9 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
 @pytest.mark.asyncio
 async def test_execute_emits_canceled_for_canceled_room_preflight():
     facade, deps = _make_facade()
-    deps["room_center"].send_message_to_room.return_value = _room_response_with_preflight(
+    deps[
+        "room_center"
+    ].send_message_to_room.return_value = _room_response_with_preflight(
         room_id="room-1",
         message_id="msg-1",
         success=True,
@@ -683,7 +701,9 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 
     await facade.start_orchestration(request, ack)
 
-    orchestration_request = deps["room_message_center"].process_room_user_message.call_args.args[0]
+    orchestration_request = deps[
+        "room_message_center"
+    ].process_room_user_message.call_args.args[0]
     assert orchestration_request.room_id == "room-1"
     assert orchestration_request.room_user_message_id == "msg-1"
     assert orchestration_request.user_id == "user-1"
@@ -750,9 +770,7 @@ async def test_resolve_hitl_updates_orchestration_state_after_successful_respons
         recovery_started.set()
         await release_recovery.wait()
 
-    deps["room_message_center"].process_room_user_message.side_effect = (
-        process_recovery
-    )
+    deps["room_message_center"].process_room_user_message.side_effect = process_recovery
 
     result = await asyncio.wait_for(
         facade.resolve_hitl(
@@ -774,7 +792,9 @@ async def test_resolve_hitl_updates_orchestration_state_after_successful_respons
     assert saved.status == OrchestrationStatus.RUNNING
     assert len(facade._inflight) == 1
     deps["room_message_center"].process_room_user_message.assert_awaited_once()
-    resumed_request = deps["room_message_center"].process_room_user_message.await_args.args[0]
+    resumed_request = deps[
+        "room_message_center"
+    ].process_room_user_message.await_args.args[0]
     assert resumed_request.room_id == "room-1"
     assert resumed_request.room_user_message_id == "msg-1"
     assert resumed_request.is_recovery is True
@@ -817,7 +837,9 @@ async def test_resolve_hitl_raises_after_repeated_run_store_conflicts():
         orchestration_run_store=run_store,
     )
 
-    with pytest.raises(OrchestrationStoreConflict, match="failed to record resolved HITL"):
+    with pytest.raises(
+        OrchestrationStoreConflict, match="failed to record resolved HITL"
+    ):
         await facade.resolve_hitl(
             room_id="room-1",
             request_id="hitl-1",
@@ -906,11 +928,13 @@ async def test_resolve_hitl_records_policy_followup_without_queue_resume():
     assert saved.status == OrchestrationStatus.AWAITING_USER
     assert saved.pending_hitl_request_ids == ["hitl-2"]
     old_question = next(
-        question for question in saved.open_questions
+        question
+        for question in saved.open_questions
         if question.get("request_id") == "hitl-1"
     )
     next_question = next(
-        question for question in saved.open_questions
+        question
+        for question in saved.open_questions
         if question.get("request_id") == "hitl-2"
     )
     assert old_question["status"] == "resolved"
@@ -946,7 +970,9 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
         order.append("cleanup")
 
     deps["cancellation_state"].cancel_message_and_broadcast.side_effect = broadcast
-    deps["hitl_message_cancellation"].cancel_requests_for_message.side_effect = cancel_hitl
+    deps[
+        "hitl_message_cancellation"
+    ].cancel_requests_for_message.side_effect = cancel_hitl
     deps["cancellation_store"].cancel_message.side_effect = persist
     deps["run_lifecycle"].record_processing_status.side_effect = record
     deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.side_effect = cleanup
@@ -988,9 +1014,7 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
     assert saved is not None
     assert saved.status == OrchestrationStatus.CANCELED
     assert saved.pending_hitl_request_ids == []
-    assert saved.open_questions == [
-        {"request_id": "hitl-1", "status": "canceled"}
-    ]
+    assert saved.open_questions == [{"request_id": "hitl-1", "status": "canceled"}]
     deps[
         "room_center"
     ].update_user_message_orchestration_status.assert_awaited_once_with(
@@ -1264,7 +1288,11 @@ def test_hub_agent_response_adapter_maps_continuation_message_id_and_thaws_paylo
         ({"kind": "partial", "message_id": "m1"}, False, "Unsupported non-terminal"),
         ({"kind": "unknown", "message_id": "m1"}, False, "Unsupported AgentEvent"),
         ({"kind": "response", "message_id": "m1"}, False, "requires terminal"),
-        ({"kind": "response", "message_id": "m1", "is_final": False}, True, "is_final=False"),
+        (
+            {"kind": "response", "message_id": "m1", "is_final": False},
+            True,
+            "is_final=False",
+        ),
         ({"kind": "processing_status", "message_id": "m1"}, False, "requires state"),
         (
             {"kind": "processing_status", "message_id": "m1", "state": "working"},
@@ -1287,12 +1315,32 @@ def test_hub_agent_response_adapter_maps_continuation_message_id_and_thaws_paylo
             "requires verified lifecycle_message_id",
         ),
         ({"kind": "error", "message_id": "m1"}, True, "requires error_text or text"),
-        ({"kind": "interactive", "message_id": "m1", "state": "working"}, False, "Unsupported"),
+        (
+            {"kind": "interactive", "message_id": "m1", "state": "working"},
+            False,
+            "Unsupported",
+        ),
         ({"kind": "response", "message_id": 123}, True, "non-empty string"),
-        ({"kind": "response", "message_id": "m1", "task_id": "other"}, True, "conflicts"),
-        ({"kind": "response", "message_id": "m1", "parts": ["bad"]}, True, "list of objects"),
-        ({"kind": "response", "message_id": "m1", "append": "yes"}, True, "must be a boolean"),
-        ({"kind": "response", "message_id": "m1", "step_number": True}, True, "integer"),
+        (
+            {"kind": "response", "message_id": "m1", "task_id": "other"},
+            True,
+            "conflicts",
+        ),
+        (
+            {"kind": "response", "message_id": "m1", "parts": ["bad"]},
+            True,
+            "list of objects",
+        ),
+        (
+            {"kind": "response", "message_id": "m1", "append": "yes"},
+            True,
+            "must be a boolean",
+        ),
+        (
+            {"kind": "response", "message_id": "m1", "step_number": True},
+            True,
+            "integer",
+        ),
     ],
 )
 def test_hub_agent_response_adapter_rejects_invalid_payloads(

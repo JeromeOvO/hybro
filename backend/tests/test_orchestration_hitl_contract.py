@@ -217,7 +217,9 @@ async def test_group_expiry_expires_pending_siblings_once_with_user_correlation(
 async def test_processing_status_public_payload_uses_related_message_correlation():
     emitted = []
     publisher = SimpleNamespace(emit=AsyncMock(side_effect=emitted.append))
-    run_lifecycle = SimpleNamespace(record_processing_status=AsyncMock(return_value=None))
+    run_lifecycle = SimpleNamespace(
+        record_processing_status=AsyncMock(return_value=None)
+    )
     resolver = SimpleNamespace(resolve_client_request_id=AsyncMock(return_value="cr-1"))
 
     await emit_processing_status(

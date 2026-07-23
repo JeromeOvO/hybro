@@ -207,7 +207,9 @@ def _is_missing_object(exc: ClientError) -> bool:
     return error.get("Code") in _MISSING_OBJECT_CODES
 
 
-def _object_storage_error(operation: str, key: str, exc: Exception) -> ObjectStorageError:
+def _object_storage_error(
+    operation: str, key: str, exc: Exception
+) -> ObjectStorageError:
     if isinstance(exc, ObjectStorageError):
         return exc
     return ObjectStorageError(

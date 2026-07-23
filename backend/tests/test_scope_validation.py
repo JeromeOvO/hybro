@@ -51,7 +51,13 @@ def room_center():
     return rc
 
 
-def _make_agent(agent_id, name="TestAgent", is_public=True, provider_id="owner-1", status=AgentStatus.active):
+def _make_agent(
+    agent_id,
+    name="TestAgent",
+    is_public=True,
+    provider_id="owner-1",
+    status=AgentStatus.active,
+):
     agent = MagicMock(spec=Agent)
     agent.agent_id = agent_id
     agent.agent_status = status
@@ -79,13 +85,14 @@ def _make_room(room_id="room-1", owner_id="user-1", agent_set=None, extend_info=
 
 
 class TestValidateCanonicalMentions:
-
     @pytest.mark.asyncio
     async def test_valid_public_agent_returns_list(self, room_center):
         agent = _make_agent("agent-1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(["agent-1"], sender_user_id="user-1")
+        result = await room_center._validate_canonical_mentions(
+            ["agent-1"], sender_user_id="user-1"
+        )
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["agent_id"] == "agent-1"
@@ -94,7 +101,9 @@ class TestValidateCanonicalMentions:
     async def test_nonexistent_agent_returns_error(self, room_center):
         room_center.database_service.get_agent_by_agent_id.return_value = None
 
-        result = await room_center._validate_canonical_mentions(["ghost-agent"], sender_user_id="user-1")
+        result = await room_center._validate_canonical_mentions(
+            ["ghost-agent"], sender_user_id="user-1"
+        )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
         assert result.scope_resolution_error.code == "unauthorized_mention"
@@ -104,7 +113,9 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", status=AgentStatus.inactive)
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(["agent-1"], sender_user_id="user-1")
+        result = await room_center._validate_canonical_mentions(
+            ["agent-1"], sender_user_id="user-1"
+        )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
 
@@ -113,7 +124,9 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", is_public=False, provider_id="other-user")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(["agent-1"], sender_user_id="user-1")
+        result = await room_center._validate_canonical_mentions(
+            ["agent-1"], sender_user_id="user-1"
+        )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
         assert result.scope_resolution_error.code == "unauthorized_mention"
@@ -123,7 +136,9 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", is_public=False, provider_id="user-1")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(["agent-1"], sender_user_id="user-1")
+        result = await room_center._validate_canonical_mentions(
+            ["agent-1"], sender_user_id="user-1"
+        )
         assert isinstance(result, list)
         assert len(result) == 1
 
@@ -134,7 +149,6 @@ class TestValidateCanonicalMentions:
 
 
 class TestResolveExplicitTargetScope:
-
     @pytest.mark.asyncio
     async def test_room_team_with_agents_returns_tuple(self, room_center):
         room = _make_room(agent_set={"a1": "Alpha"})
@@ -142,7 +156,11 @@ class TestResolveExplicitTargetScope:
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
         result = await room_center._resolve_explicit_target_scope(
-            room, "hello", "room_team", False, sender_user_id="user-1",
+            room,
+            "hello",
+            "room_team",
+            False,
+            sender_user_id="user-1",
         )
         assert isinstance(result, tuple)
         assert len(result) == 3
@@ -152,7 +170,11 @@ class TestResolveExplicitTargetScope:
         room = _make_room(agent_set={})
 
         result = await room_center._resolve_explicit_target_scope(
-            room, "hello", "room_team", False, sender_user_id="user-1",
+            room,
+            "hello",
+            "room_team",
+            False,
+            sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
@@ -164,7 +186,11 @@ class TestResolveExplicitTargetScope:
         room_center.database_service.get_agent_group_by_id.return_value = None
 
         result = await room_center._resolve_explicit_target_scope(
-            room, "hello", "nonexistent-group-id", False, sender_user_id="user-1",
+            room,
+            "hello",
+            "nonexistent-group-id",
+            False,
+            sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
@@ -180,7 +206,11 @@ class TestResolveExplicitTargetScope:
         room_center.database_service.get_agent_group_by_id.return_value = group
 
         result = await room_center._resolve_explicit_target_scope(
-            room, "hello", "group-1", False, sender_user_id="user-1",
+            room,
+            "hello",
+            "group-1",
+            False,
+            sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
@@ -197,7 +227,11 @@ class TestResolveExplicitTargetScope:
         room_center.database_service.get_agent_group_by_id.return_value = group
 
         result = await room_center._resolve_explicit_target_scope(
-            room, "hello", "group-1", False, sender_user_id="user-1",
+            room,
+            "hello",
+            "group-1",
+            False,
+            sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
@@ -231,7 +265,9 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message = AsyncMock(return_value=True)
 
         result = await room_center.send_message_to_room(
-            request, target_group="room_team", mentioned_agent_ids=["ghost-agent"],
+            request,
+            target_group="room_team",
+            mentioned_agent_ids=["ghost-agent"],
         )
 
         assert result.success is False
@@ -256,7 +292,9 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message = AsyncMock(return_value=True)
 
         result = await room_center.send_message_to_room(
-            request, target_group="room_team", mentioned_agent_ids=None,
+            request,
+            target_group="room_team",
+            mentioned_agent_ids=None,
         )
 
         assert result.success is False
@@ -282,7 +320,9 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message = AsyncMock(return_value=True)
 
         result = await room_center.send_message_to_room(
-            request, target_group="nonexistent-group", mentioned_agent_ids=None,
+            request,
+            target_group="nonexistent-group",
+            mentioned_agent_ids=None,
         )
 
         assert result.success is False
@@ -300,7 +340,9 @@ class TestLegacyInlineMentionBehavior:
     reject-before-persist. This test class pins the explicit design decision."""
 
     @pytest.mark.asyncio
-    async def test_legacy_inline_mention_drops_unknown_agent_silently(self, room_center):
+    async def test_legacy_inline_mention_drops_unknown_agent_silently(
+        self, room_center
+    ):
         """parse_agent_mentions silently drops agents not in room — no error."""
         text = "<@unknown-agent|Ghost> do something"
         agent_set = {"a1": "Alpha"}
@@ -317,7 +359,10 @@ class TestLegacyInlineMentionBehavior:
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
         scope = await room_center._resolve_explicit_target_scope(
-            room, "<@unknown|Ghost> hello", "room_team", False,
+            room,
+            "<@unknown|Ghost> hello",
+            "room_team",
+            False,
         )
         assert isinstance(scope, tuple)
         assert "a1" in scope[0]
@@ -363,7 +408,9 @@ class TestLegacyInlineMentionBehavior:
         room_center._prepare_for_supervisor = prepare_supervisor
 
         result = await room_center.send_message_to_room(
-            request, target_group="room_team", mentioned_agent_ids=None,
+            request,
+            target_group="room_team",
+            mentioned_agent_ids=None,
         )
 
         assert result.success is True
@@ -405,10 +452,10 @@ class TestLegacyInlineMentionBehavior:
         original.extend_info = {
             "supervisor_trajectory": trajectory.model_dump(mode="json")
         }
-        room_center.database_service.get_room_user_message_by_message_id.return_value = (
-            original
+        room_center.database_service.get_room_user_message_by_message_id.return_value = original
+        room_center.database_service.update_room_user_message_by_message_id = (
+            AsyncMock()
         )
-        room_center.database_service.update_room_user_message_by_message_id = AsyncMock()
         room_center.database_service.update_room_by_room_id = AsyncMock()
         user_message = RoomUserMessage(
             room_id="room-1",
@@ -489,7 +536,9 @@ class TestLegacyInlineMentionBehavior:
         room_center._prepare_for_supervisor = prepare_supervisor
 
         result = await room_center.send_message_to_room(
-            request, target_group="room_team", mentioned_agent_ids=None,
+            request,
+            target_group="room_team",
+            mentioned_agent_ids=None,
         )
 
         assert result.success is True
@@ -512,10 +561,11 @@ class TestLegacyInlineMentionBehavior:
 
 
 class TestResolveRoomAgentRefsVisibility:
-
     @pytest.mark.asyncio
     async def test_private_agent_marked_inaccessible_for_non_owner(self, room_center):
-        agent = _make_agent("priv-1", "PrivateBot", is_public=False, provider_id="owner-user")
+        agent = _make_agent(
+            "priv-1", "PrivateBot", is_public=False, provider_id="owner-user"
+        )
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
         refs, status = await room_center._resolve_room_agent_refs(
@@ -526,7 +576,9 @@ class TestResolveRoomAgentRefsVisibility:
 
     @pytest.mark.asyncio
     async def test_private_agent_available_for_owner(self, room_center):
-        agent = _make_agent("priv-1", "PrivateBot", is_public=False, provider_id="owner-user")
+        agent = _make_agent(
+            "priv-1", "PrivateBot", is_public=False, provider_id="owner-user"
+        )
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
         refs, status = await room_center._resolve_room_agent_refs(
@@ -564,7 +616,9 @@ class TestResolveRoomAgentRefsVisibility:
                 return _make_agent("ok-1", "OkBot")
             return None
 
-        room_center.database_service.get_agent_by_agent_id = AsyncMock(side_effect=get_agent)
+        room_center.database_service.get_agent_by_agent_id = AsyncMock(
+            side_effect=get_agent
+        )
 
         refs, status = await room_center._resolve_room_agent_refs(
             {"ok-1": "OkBot", "gone-1": "GoneBot"}, viewer_user_id="viewer-user"
@@ -613,16 +667,23 @@ class TestAllAgentsPostPersistMessageId:
 
         # Make _resolve_explicit_target_scope return an error (simulating selector failure)
         error_response = RoomCenterUserMessageResponse(
-            message_id=None, message=None, success=False,
+            message_id=None,
+            message=None,
+            success=False,
             error="Agent selection failed.",
             scope_resolution_error=ScopeResolutionError(
-                code="empty_scope", message="Agent selection failed.",
+                code="empty_scope",
+                message="Agent selection failed.",
             ),
             status_code=500,
         )
-        room_center._resolve_explicit_target_scope = AsyncMock(return_value=error_response)
+        room_center._resolve_explicit_target_scope = AsyncMock(
+            return_value=error_response
+        )
         result = await room_center.send_message_to_room(
-            request, target_group="all_agents", mentioned_agent_ids=None,
+            request,
+            target_group="all_agents",
+            mentioned_agent_ids=None,
         )
 
         assert result.success is False
@@ -643,7 +704,9 @@ class TestClientRequestIdPropagation:
     """Verify client_request_id stays on the request message for execution preflight."""
 
     @pytest.mark.asyncio
-    async def test_send_message_to_room_preserves_client_request_id_for_execution_preflight(self, room_center):
+    async def test_send_message_to_room_preserves_client_request_id_for_execution_preflight(
+        self, room_center
+    ):
         room = _make_room(agent_set={"a1": "Alpha"})
         room_center.database_service.get_room_by_room_id.return_value = room
 
@@ -668,17 +731,24 @@ class TestClientRequestIdPropagation:
 
         # Make scope resolution return an error so the function returns early.
         error_response = RoomCenterUserMessageResponse(
-            message_id=None, message=None, success=False,
+            message_id=None,
+            message=None,
+            success=False,
             error="Agent selection failed.",
             scope_resolution_error=ScopeResolutionError(
-                code="empty_scope", message="Agent selection failed.",
+                code="empty_scope",
+                message="Agent selection failed.",
             ),
             status_code=500,
         )
-        room_center._resolve_explicit_target_scope = AsyncMock(return_value=error_response)
+        room_center._resolve_explicit_target_scope = AsyncMock(
+            return_value=error_response
+        )
 
         result = await room_center.send_message_to_room(
-            request, target_group="all_agents", mentioned_agent_ids=None,
+            request,
+            target_group="all_agents",
+            mentioned_agent_ids=None,
         )
 
         assert result.preflight_outcome == "failed"

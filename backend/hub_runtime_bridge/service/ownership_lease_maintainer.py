@@ -44,7 +44,9 @@ class OwnershipLeaseMaintainer:
 
     def track(self, aliases: dict, lease_token: str | None = None) -> None:
         clean_aliases = {
-            key: value for key, value in aliases.items() if isinstance(value, str) and value
+            key: value
+            for key, value in aliases.items()
+            if isinstance(value, str) and value
         }
         if not clean_aliases:
             return

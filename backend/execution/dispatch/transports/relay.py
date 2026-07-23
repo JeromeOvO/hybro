@@ -37,7 +37,9 @@ class RelayTaskTracker(Protocol):
 
 @runtime_checkable
 class RelayAgentCallCounter(Protocol):
-    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> bool: ...
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool
+    ) -> bool: ...
 
 
 class RelayTransport(AgentTransport):
@@ -68,7 +70,9 @@ class RelayTransport(AgentTransport):
     ) -> ProcessingResult:
         if not self.relay_service:
             logger.error("Relay transport selected but relay service not available")
-            return ProcessingResult(ProcessingStatus.FAILED, "Relay service unavailable")
+            return ProcessingResult(
+                ProcessingStatus.FAILED, "Relay service unavailable"
+            )
 
         now = utcnow()
         task_id = f"relay-pending-{message.message_id[:12]}"
@@ -80,7 +84,9 @@ class RelayTransport(AgentTransport):
         agent_url = ""
         if hasattr(ctx.agent, "agent_card") and hasattr(ctx.agent.agent_card, "url"):
             agent_url = ctx.agent.agent_card.url or ""
-        elif hasattr(ctx.agent, "agent_card") and isinstance(ctx.agent.agent_card, dict):
+        elif hasattr(ctx.agent, "agent_card") and isinstance(
+            ctx.agent.agent_card, dict
+        ):
             agent_url = ctx.agent.agent_card.get("url", "")
 
         await self._task_tracker.enable_task_tracking_on_message(

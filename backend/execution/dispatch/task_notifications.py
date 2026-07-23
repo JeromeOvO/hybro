@@ -107,7 +107,9 @@ class TaskNotificationAdapter:
         )
 
 
-def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatus | None:
+def _map_task_state_to_processing_status(
+    state: TaskState,
+) -> SSEProcessingStatus | None:
     """Map TaskState updates to lifecycle processing_status values."""
     if state == TaskState.completed:
         return SSEProcessingStatus.COMPLETED
@@ -219,7 +221,7 @@ async def _notify_task_update_impl(
         """Summarize part kinds as counts instead of listing all."""
         if not parts:
             return "none"
-        kinds = Counter(getattr(getattr(p, 'root', p), 'kind', '?') for p in parts)
+        kinds = Counter(getattr(getattr(p, "root", p), "kind", "?") for p in parts)
         return ",".join(f"{k}:{v}" for k, v in kinds.items())
 
     if task:
@@ -329,9 +331,7 @@ async def _notify_task_update_impl(
 
         elif state == TaskState.auth_required:
             requires_auth = True
-            status_message = (
-                extract_status_message(task) or "Authentication required"
-            )
+            status_message = extract_status_message(task) or "Authentication required"
 
     # The A2A adapter persists the agent's human-readable response separately
     # from Task artifacts.  DataPart-only artifacts intentionally produce no
@@ -359,8 +359,10 @@ async def _notify_task_update_impl(
                 needs_write = True
 
         if needs_write:
-            update_ok = await notification_store.update_room_agent_message_by_message_id(
-                room_agent_message.message_id, room_agent_message
+            update_ok = (
+                await notification_store.update_room_agent_message_by_message_id(
+                    room_agent_message.message_id, room_agent_message
+                )
             )
             if not update_ok:
                 logger.error(
@@ -390,7 +392,9 @@ async def _notify_task_update_impl(
 
     client_request_id = room_agent_message.client_request_id
     if not client_request_id:
-        resolver = getattr(notification_store, "resolve_client_request_id_for_agent_message", None)
+        resolver = getattr(
+            notification_store, "resolve_client_request_id_for_agent_message", None
+        )
         if callable(resolver):
             resolved = resolver(room_agent_message)
             client_request_id = (

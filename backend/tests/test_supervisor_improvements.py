@@ -35,10 +35,13 @@ from models.supervisor import (
 
 
 def test_room_supervisor_default_constructor_does_not_import_database_service():
-    with patch("importlib.import_module", side_effect=AssertionError("legacy import attempted")):
+    with patch(
+        "importlib.import_module", side_effect=AssertionError("legacy import attempted")
+    ):
         service = RoomSupervisorService()
 
     assert service._supervisor_service is None
+
 
 # =============================================================================
 # Part 1a: Trajectory response preview (3000-char cap)
@@ -48,7 +51,9 @@ def test_room_supervisor_default_constructor_does_not_import_database_service():
 class TestTrajectoryResponsePreview:
     """Verify _format_trajectory uses 3000-char preview (not 500)."""
 
-    def _make_trajectory_with_response(self, response_text: str) -> SupervisorTrajectory:
+    def _make_trajectory_with_response(
+        self, response_text: str
+    ) -> SupervisorTrajectory:
         trajectory = SupervisorTrajectory()
         entry = TrajectoryEntry(
             step_number=1,
@@ -135,9 +140,11 @@ class TestQualityEvaluationPrompt:
             SUPERVISOR_SYSTEM_PROMPT,
         )
 
-        assert "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT or \
-               "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT or \
-               "couldn" in SUPERVISOR_SYSTEM_PROMPT
+        assert (
+            "couldn't\n  find anything" in SUPERVISOR_SYSTEM_PROMPT
+            or "couldn't find anything" in SUPERVISOR_SYSTEM_PROMPT
+            or "couldn" in SUPERVISOR_SYSTEM_PROMPT
+        )
 
 
 # =============================================================================
@@ -207,9 +214,7 @@ def _make_executor() -> SupervisorExecutor:  # noqa: C901
                             task=target.task,
                             depends_on=list(target.depends_on),
                             parallel_group=target.parallel_group,
-                            required_resource_refs=list(
-                                target.required_resource_refs
-                            ),
+                            required_resource_refs=list(target.required_resource_refs),
                         )
                         for target in action.targets
                     ],
@@ -299,23 +304,37 @@ class TestSupervisorSSEStageNotifications:
             ),
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
-        se._dispatch_targets = AsyncMock(return_value=[
-            StepResult(
-                step_number=1, agent_id="a1", agent_name="Agent1",
-                task="t1", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-            StepResult(
-                step_number=1, agent_id="a2", agent_name="Agent2",
-                task="t2", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-            StepResult(
-                step_number=1, agent_id="a3", agent_name="Agent3",
-                task="t3", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-        ])
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                StepResult(
+                    step_number=1,
+                    agent_id="a1",
+                    agent_name="Agent1",
+                    task="t1",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+                StepResult(
+                    step_number=1,
+                    agent_id="a2",
+                    agent_name="Agent2",
+                    task="t2",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+                StepResult(
+                    step_number=1,
+                    agent_id="a3",
+                    agent_name="Agent3",
+                    task="t3",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+            ]
+        )
         se._checkpoint_trajectory = AsyncMock(return_value=None)
 
         await se.run(
@@ -347,13 +366,19 @@ class TestSupervisorSSEStageNotifications:
             ),
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
-        se._dispatch_targets = AsyncMock(return_value=[
-            StepResult(
-                step_number=1, agent_id="a1", agent_name="Agent1",
-                task="t1", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-        ])
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                StepResult(
+                    step_number=1,
+                    agent_id="a1",
+                    agent_name="Agent1",
+                    task="t1",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+            ]
+        )
         se._checkpoint_trajectory = AsyncMock(return_value=None)
 
         await se.run(
@@ -385,13 +410,19 @@ class TestSupervisorSSEStageNotifications:
                 synthesis_instruction="combine",
             ),
         ]
-        se._dispatch_targets = AsyncMock(return_value=[
-            StepResult(
-                step_number=1, agent_id="a1", agent_name="Agent1",
-                task="t1", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-        ])
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                StepResult(
+                    step_number=1,
+                    agent_id="a1",
+                    agent_name="Agent1",
+                    task="t1",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+            ]
+        )
         se._checkpoint_trajectory = AsyncMock(return_value=None)
         se.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
             return_value=None
@@ -428,13 +459,19 @@ class TestSupervisorSSEStageNotifications:
             ),
             SupervisorAction(action=ActionType.DONE, reasoning="done"),
         ]
-        se._dispatch_targets = AsyncMock(return_value=[
-            StepResult(
-                step_number=1, agent_id="a1", agent_name="Agent1",
-                task="t1", success=True, status=StepStatus.SUCCESS,
-                response_text="result",
-            ),
-        ])
+        se._dispatch_targets = AsyncMock(
+            return_value=[
+                StepResult(
+                    step_number=1,
+                    agent_id="a1",
+                    agent_name="Agent1",
+                    task="t1",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    response_text="result",
+                ),
+            ]
+        )
         se._checkpoint_trajectory = AsyncMock(return_value=None)
 
         await se.run(

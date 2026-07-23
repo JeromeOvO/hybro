@@ -170,7 +170,9 @@ def test_capability_score_attachments_not_capable():
 def test_capability_score_attachments_wildcard_capable():
     """Attachments + wildcard agent → 1.0."""
     agent = create_test_agent("a1", "WildcardAgent", input_modes=["*/*"])
-    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+    assert (
+        compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+    )
 
 
 def test_capability_score_empty_required_modes_requires_file_support():
@@ -183,17 +185,24 @@ def test_capability_score_empty_required_modes_requires_file_support():
 
 def test_capability_score_accepts_generic_mime_agent():
     agent = create_test_agent("a1", "JsonAgent", input_modes=["application/json"])
-    assert compute_capability_score(agent, required_input_modes=["application/json"]) == 1.0
+    assert (
+        compute_capability_score(agent, required_input_modes=["application/json"])
+        == 1.0
+    )
 
 
 def test_capability_score_rejects_pdf_for_image_only_agent():
     agent = create_test_agent("a1", "ImageOnly", input_modes=["image/*"])
-    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 0.0
+    assert (
+        compute_capability_score(agent, required_input_modes=["application/pdf"]) == 0.0
+    )
 
 
 def test_capability_score_accepts_pdf_for_pdf_agent():
     agent = create_test_agent("a1", "PDFAgent", input_modes=["application/pdf"])
-    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+    assert (
+        compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
+    )
 
 
 def test_rank_agent_docs_filters_incompatible_attachment_agents():
@@ -401,20 +410,22 @@ async def test_agent_matcher_returns_sorted_result():
     agent1 = create_test_agent("a1", "Agent1")
     agent2 = create_test_agent("a2", "Agent2")
     facade = MagicMock()
-    facade.match_for_message = AsyncMock(return_value=[
-        {
-            "agent": _info_from_agent(agent1),
-            "vector_score": 0.9,
-            "capability_score": 1.0,
-            "final_score": 0.92,
-        },
-        {
-            "agent": _info_from_agent(agent2),
-            "vector_score": 0.7,
-            "capability_score": 1.0,
-            "final_score": 0.74,
-        },
-    ])
+    facade.match_for_message = AsyncMock(
+        return_value=[
+            {
+                "agent": _info_from_agent(agent1),
+                "vector_score": 0.9,
+                "capability_score": 1.0,
+                "final_score": 0.92,
+            },
+            {
+                "agent": _info_from_agent(agent2),
+                "vector_score": 0.7,
+                "capability_score": 1.0,
+                "final_score": 0.74,
+            },
+        ]
+    )
     matcher = AgentMatcher(facade=facade)
 
     result = await matcher.match("help with python coding")
@@ -431,16 +442,18 @@ async def test_agent_matcher_filters_missing_agents_from_stale_matches():
     """Vector hits without live agent records should not reach selection."""
     live_agent = create_test_agent("a1", "LiveAgent")
     facade = MagicMock()
-    facade.match_for_message = AsyncMock(return_value=[
-        {"agent": None, "final_score": 0.99},
-        {
-            "agent": _info_from_agent(live_agent),
-            "vector_score": 0.7,
-            "capability_score": 1.0,
-            "final_score": 0.74,
-        },
-        MagicMock(agent=None, score=0.6),
-    ])
+    facade.match_for_message = AsyncMock(
+        return_value=[
+            {"agent": None, "final_score": 0.99},
+            {
+                "agent": _info_from_agent(live_agent),
+                "vector_score": 0.7,
+                "capability_score": 1.0,
+                "final_score": 0.74,
+            },
+            MagicMock(agent=None, score=0.6),
+        ]
+    )
     matcher = AgentMatcher(facade=facade)
 
     result = await matcher.match("help with python coding")
@@ -453,10 +466,7 @@ async def test_agent_matcher_filters_missing_agents_from_stale_matches():
 @pytest.mark.asyncio
 async def test_agent_matcher_debate_mode_returns_more_agents():
     """Test debate mode is forwarded to the facade."""
-    agents = [
-        create_test_agent(f"a{i}", f"Agent{i}")
-        for i in range(6)
-    ]
+    agents = [create_test_agent(f"a{i}", f"Agent{i}") for i in range(6)]
     facade = MagicMock()
     facade.match_for_message = AsyncMock(
         return_value=[{"agent": _info_from_agent(agents[0]), "final_score": 0.8}]
@@ -477,22 +487,28 @@ async def test_agent_matcher_with_required_input_modes():
     """Test required_input_modes is forwarded."""
     file_agent = create_test_agent("a1", "FileAgent", input_modes=["text", "image/png"])
     facade = MagicMock()
-    facade.match_for_message = AsyncMock(return_value=[
-        {
-            "agent": _info_from_agent(file_agent),
-            "vector_score": 0.8,
-            "capability_score": 1.0,
-            "final_score": 0.83,
-        }
-    ])
+    facade.match_for_message = AsyncMock(
+        return_value=[
+            {
+                "agent": _info_from_agent(file_agent),
+                "vector_score": 0.8,
+                "capability_score": 1.0,
+                "final_score": 0.83,
+            }
+        ]
+    )
     matcher = AgentMatcher(facade=facade)
 
-    result = await matcher.match("process this file", required_input_modes=["image/png"])
+    result = await matcher.match(
+        "process this file", required_input_modes=["image/png"]
+    )
 
     assert len(result.agents) > 0
     assert result.agents[0].agent.agent_id == "a1"
     assert result.agents[0].capability_score == 1.0
-    assert facade.match_for_message.call_args.kwargs["required_input_modes"] == ["image/png"]
+    assert facade.match_for_message.call_args.kwargs["required_input_modes"] == [
+        "image/png"
+    ]
 
 
 @pytest.mark.asyncio
@@ -500,9 +516,15 @@ async def test_agent_matcher_without_required_input_modes():
     """Test match without required_input_modes (no attachments)."""
     agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
     facade = MagicMock()
-    facade.match_for_message = AsyncMock(return_value=[
-        {"agent": _info_from_agent(agent), "capability_score": 1.0, "final_score": 0.83}
-    ])
+    facade.match_for_message = AsyncMock(
+        return_value=[
+            {
+                "agent": _info_from_agent(agent),
+                "capability_score": 1.0,
+                "final_score": 0.83,
+            }
+        ]
+    )
     matcher = AgentMatcher(facade=facade)
 
     result = await matcher.match("help me with text processing")
@@ -525,9 +547,9 @@ async def test_agent_matcher_with_user_id():
     """Test match passes user_id for private agent visibility."""
     agent = create_test_agent("a1", "PrivateAgent")
     facade = MagicMock()
-    facade.match_for_message = AsyncMock(return_value=[
-        {"agent": _info_from_agent(agent), "final_score": 0.9}
-    ])
+    facade.match_for_message = AsyncMock(
+        return_value=[{"agent": _info_from_agent(agent), "final_score": 0.9}]
+    )
     matcher = AgentMatcher(facade=facade)
 
     await matcher.match("test", user_id="user123")

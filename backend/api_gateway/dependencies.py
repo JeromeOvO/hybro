@@ -97,9 +97,7 @@ def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
 def bind_api_gateway_deps(app: Any, deps: APIGatewayDeps) -> None:
     missing = missing_required_deps(deps)
     if missing:
-        raise RuntimeError(
-            "APIGatewayDeps incomplete - missing: " + ", ".join(missing)
-        )
+        raise RuntimeError("APIGatewayDeps incomplete - missing: " + ", ".join(missing))
 
     app.state.api_gateway_deps = deps
 

@@ -220,7 +220,9 @@ async def test_room_services_room_setting_returns_room_metadata_only():
     )
     svc.bind_facade(facade)
 
-    response = await svc.inquiry_room_setting(RoomCenterRoomSettingRequest(room_id="r1"))
+    response = await svc.inquiry_room_setting(
+        RoomCenterRoomSettingRequest(room_id="r1")
+    )
 
     assert response.success is True
     assert response.active_runs is None
@@ -256,8 +258,8 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 violations.append(f"{method_name}:{node.lineno}: {node.attr}")
 
-    assert not violations, "Migrated methods still use legacy store branches:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Migrated methods still use legacy store branches:\n" + "\n".join(violations)
     )
 
 
@@ -281,10 +283,13 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
         message_content=MessageContent(message_text="hello"),
     )
 
-    assert await svc._persist_user_message(
-        user_message,
-        room_agent_set={"a1": "Agent One"},
-    ) is True
+    assert (
+        await svc._persist_user_message(
+            user_message,
+            room_agent_set={"a1": "Agent One"},
+        )
+        is True
+    )
 
     facade.persist_user_message.assert_awaited_once_with(user_message)
     svc._store.add_room_user_message.assert_not_awaited()
@@ -440,8 +445,8 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 violations.append(f"{method_name}:{node.lineno}: {node.attr}")
 
-    assert not violations, "Migrated message methods still use legacy store:\n" + "\n".join(
-        violations
+    assert not violations, (
+        "Migrated message methods still use legacy store:\n" + "\n".join(violations)
     )
 
 
@@ -505,19 +510,25 @@ async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails
 class TestLooksLikeAgentId:
     """Tests for UUID-style agent ID detection."""
 
-    @pytest.mark.parametrize("value", [
-        "550e8400-e29b-41d4-a716-446655440000",
-        "550e8400e29b41d4a716446655440000",
-    ])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "550e8400-e29b-41d4-a716-446655440000",
+            "550e8400e29b41d4a716446655440000",
+        ],
+    )
     def test_recognizes_valid_uuids(self, value):
         assert RoomServices._looks_like_agent_id(value) is True
 
-    @pytest.mark.parametrize("value", [
-        "MyAgent",
-        "agent-name",
-        "",
-        "not-a-uuid-at-all",
-    ])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "MyAgent",
+            "agent-name",
+            "",
+            "not-a-uuid-at-all",
+        ],
+    )
     def test_rejects_non_uuid_strings(self, value):
         assert RoomServices._looks_like_agent_id(value) is False
 
@@ -555,9 +566,7 @@ class TestNormalizeRoomAgentSet:
 
     def test_handles_ambiguous_data(self, room_center):
         """When keys and values both look like IDs, preserves original."""
-        data = {
-            "550e8400e29b41d4a716446655440000": "660e8400e29b41d4a716446655440000"
-        }
+        data = {"550e8400e29b41d4a716446655440000": "660e8400e29b41d4a716446655440000"}
         result = room_center._normalize_room_agent_set(data)
         assert result == data
 
@@ -622,11 +631,23 @@ class TestExtractAgentMessageContent:
     def test_extracts_content_for_mentioned_agent(self, room_center):
         text = "<@a1|Alpha> write code. <@a2|Beta> review it."
         mentions = [
-            {"agent_id": "a1", "agent_name": "Alpha", "mention_text": "<@a1|Alpha>", "position": 0},
-            {"agent_id": "a2", "agent_name": "Beta", "mention_text": "<@a2|Beta>", "position": 22},
+            {
+                "agent_id": "a1",
+                "agent_name": "Alpha",
+                "mention_text": "<@a1|Alpha>",
+                "position": 0,
+            },
+            {
+                "agent_id": "a2",
+                "agent_name": "Beta",
+                "mention_text": "<@a2|Beta>",
+                "position": 22,
+            },
         ]
 
-        result = room_center.extract_agent_message_content(text, "a1", "Alpha", mentions)
+        result = room_center.extract_agent_message_content(
+            text, "a1", "Alpha", mentions
+        )
         assert "write code" in result
         assert "<@" not in result
 
@@ -634,7 +655,12 @@ class TestExtractAgentMessageContent:
         """Agent not in mentions gets full text with all mentions stripped."""
         text = "<@a1|Alpha> do something"
         mentions = [
-            {"agent_id": "a1", "agent_name": "Alpha", "mention_text": "<@a1|Alpha>", "position": 0},
+            {
+                "agent_id": "a1",
+                "agent_name": "Alpha",
+                "mention_text": "<@a1|Alpha>",
+                "position": 0,
+            },
         ]
 
         result = room_center.extract_agent_message_content(text, "a2", "Beta", mentions)

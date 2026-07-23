@@ -15,7 +15,9 @@ from hub_runtime_bridge.transport.relay_transport import (
 
 
 class HubRelayService:
-    def __init__(self, *, push_event, offline_failure_port=None, call_counter=None) -> None:
+    def __init__(
+        self, *, push_event, offline_failure_port=None, call_counter=None
+    ) -> None:
         self._push_event = push_event
         self._offline_failure_port = offline_failure_port
         self._call_counter = call_counter
@@ -53,10 +55,14 @@ class HubRelayService:
         )
 
     async def cancel_hub_task(self, command: HubCancelCommand) -> bool:
-        return bool(await self._push_event(command.hub_id, cancel_command_to_event(command)))
+        return bool(
+            await self._push_event(command.hub_id, cancel_command_to_event(command))
+        )
 
     async def reply_to_hub_task(self, command: HubReplyCommand) -> bool:
-        return bool(await self._push_event(command.hub_id, reply_command_to_event(command)))
+        return bool(
+            await self._push_event(command.hub_id, reply_command_to_event(command))
+        )
 
 
 __all__ = ["HubRelayService"]

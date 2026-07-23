@@ -28,6 +28,7 @@ bind_auth_config(
     authorized_parties=tuple(settings.frontend_origins),
 )
 
+
 class InterceptHandler(logging.Handler):
     def emit(self, record):
         level = logger.level(record.levelname, no=record.levelno).name
@@ -38,6 +39,7 @@ class InterceptHandler(logging.Handler):
             level, record.getMessage()
         )
 
+
 class HighFrequencyAccessLogFilter(logging.Filter):
     SUPPRESSED_PATHS = ("/relay/hub/", "/heartbeat")
 
@@ -46,6 +48,7 @@ class HighFrequencyAccessLogFilter(logging.Filter):
         if any(path in message for path in self.SUPPRESSED_PATHS):
             return '" 2' not in message
         return True
+
 
 logging_config = LOGGING_CONFIG.copy()
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
@@ -75,6 +78,7 @@ else:
         level=settings.log_level,
     )
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     runtime = create_application_runtime(settings)
@@ -84,6 +88,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await shutdown_runtime(app, runtime)
+
 
 def compute_health_status(
     *,
@@ -119,13 +124,16 @@ def compute_health_status(
         "status_code": 503 if degraded else 200,
     }
 
+
 health_check_service = create_health_check_service(
     redis_url=settings.redis_url,
     compute_health_status=compute_health_status,
 )
 
+
 def get_health_check():
     return health_check_service
+
 
 def create_app(
     platform_facade_factory=None,
@@ -133,7 +141,7 @@ def create_app(
     extra_routes=None,
 ) -> FastAPI:
     app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
-    
+
     app.state.platform_facade_factory = platform_facade_factory
     app.state.agent_rate_limiter_factory = agent_rate_limiter_factory
 
@@ -152,8 +160,8 @@ def create_app(
         ],
     )
     app.add_middleware(
-        DiscoveryCORSMiddleware, 
-        open_cors_path_prefixes=open_cors_path_prefixes(settings.api_prefix)
+        DiscoveryCORSMiddleware,
+        open_cors_path_prefixes=open_cors_path_prefixes(settings.api_prefix),
     )
 
     @app.get("/health")
@@ -168,8 +176,9 @@ def create_app(
     if extra_routes:
         for router in extra_routes:
             app.include_router(router, prefix=settings.api_prefix)
-            
+
     return app
+
 
 app = create_app()
 
@@ -202,9 +211,12 @@ if settings.auth_mode == "mock":
     app.dependency_overrides[get_api_key] = mock_get_api_key
     app.dependency_overrides[get_api_key_no_track] = mock_get_api_key
 
+
 def main() -> None:
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
 
 if __name__ == "__main__":
     main()

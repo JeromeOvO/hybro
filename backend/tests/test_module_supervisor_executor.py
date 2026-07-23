@@ -239,9 +239,7 @@ async def test_supervisor_dispatch_publishes_label_and_dispatched_task():
         "public_dispatch_text": "Read the attachment.",
     }
     assert process_kwargs["dispatch_task"] == "Read the attachment."
-    assert process_kwargs["attachment_forwarding_policy"] == (
-        "explicit_refs_only"
-    )
+    assert process_kwargs["attachment_forwarding_policy"] == ("explicit_refs_only")
     assert process_kwargs["resolved_resource_payloads"] == []
     assert process_kwargs["explicit_attachment_refs"] == []
 
@@ -329,7 +327,9 @@ async def test_supervisor_dispatch_resolves_payload_refs_in_live_path(monkeypatc
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
     assert message.extend_info["public_task_label"] == "Requesting Test Agent"
-    assert message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    assert (
+        message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    )
     assert "artifact-1" in process_kwargs["dispatch_task"]
     assert "Broker submission" in process_kwargs["dispatch_task"]
 
@@ -369,7 +369,9 @@ async def test_supervisor_dispatch_missing_required_context_ref_fails_before_pro
     se.run_store = InMemoryOrchestrationRunStore()
     await se.run_store.create_run(state)
     se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
-    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=None
+    )
     se.rate_limit_service = None
     se.room_runtime.create_agent_message = MagicMock()
     se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
@@ -464,7 +466,9 @@ async def test_supervisor_dispatch_projects_valid_context_ref_into_agent_task():
     assert create_kwargs["content"] == "Requesting Test Agent"
     assert create_kwargs["task_content"] == "Requesting Test Agent"
     assert message.extend_info["public_task_label"] == "Requesting Test Agent"
-    assert message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    assert (
+        message.extend_info["public_dispatch_text"] == process_kwargs["dispatch_task"]
+    )
     assert "[Backend-selected references]" in process_kwargs["dispatch_task"]
     assert "Selected context refs:" in process_kwargs["dispatch_task"]
     assert "ref=fact-1" in process_kwargs["dispatch_task"]
@@ -545,7 +549,9 @@ async def test_supervisor_dispatch_missing_required_attachment_ref_fails_before_
     se.run_store = InMemoryOrchestrationRunStore()
     await se.run_store.create_run(state)
     se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
-    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    se.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=None
+    )
     se.rate_limit_service = None
     se.room_runtime.create_agent_message = MagicMock()
     se.message_writer.add_room_agent_message = AsyncMock(return_value=True)
@@ -1168,13 +1174,14 @@ async def test_supervisor_generic_failed_result_does_not_create_preflight_task()
 
 
 @pytest.mark.asyncio
-async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(caplog):
+async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(
+    caplog,
+):
     se = _make_supervisor_executor()
     message = _make_supervisor_agent_message(preflight=False)
     private_task = "PRIVATE_TASK_SENTINEL_dispatch_body"
     private_exception = (
-        "PRIVATE_EXCEPTION_SENTINEL_dispatch_failure includes "
-        f"{private_task}"
+        f"PRIVATE_EXCEPTION_SENTINEL_dispatch_failure includes {private_task}"
     )
     target = _make_dispatch_target().model_copy(update={"task": private_task})
     se.agent_dispatcher.resolve_agent = AsyncMock(return_value=_make_resolved_agent())
@@ -1259,9 +1266,7 @@ class TestLogAndReturn:
         trajectory = SupervisorTrajectory()
         result = SupervisorRunResult(status="completed", trajectory=trajectory)
         se = _make_supervisor_executor()
-        returned = await se._log_and_return(
-            "room-1", trajectory, result
-        )
+        returned = await se._log_and_return("room-1", trajectory, result)
         assert returned is result
         assert returned.status == "completed"
 
@@ -1388,7 +1393,9 @@ class TestClarifyCleanupCompensation:
         assert result.status == "failed"
         assert hitl_mock.cancel_request.await_count == 1
         hitl_mock.cancel_request.assert_awaited_once_with("req-a", "room-1")
-        assert se.message_writer.delete_room_agent_message_by_message_id.await_count == 2
+        assert (
+            se.message_writer.delete_room_agent_message_by_message_id.await_count == 2
+        )
 
 
 class TestProcessingStatusLifecycleOrder:
@@ -1420,9 +1427,7 @@ class TestProcessingStatusLifecycleOrder:
         assert emit.await_count == 3
         se.delivery.send_processing_status.assert_not_called()
         assert order == ["emit", "emit", "emit"]
-        assert [
-            call.kwargs["details"]["message"] for call in emit.await_args_list
-        ] == [
+        assert [call.kwargs["details"]["message"] for call in emit.await_args_list] == [
             "Reviewing progress (step 1 of 1)...",
             "Planning next action...",
             "Unable to continue the workflow.",
@@ -1461,9 +1466,9 @@ class TestProcessingStatusLifecycleOrder:
         se = _make_supervisor_executor()
         order: list[str] = []
         emit = AsyncMock(
-            side_effect=lambda *a, **k: order.append("emit")
-            if k.get("status") == "awaiting_input"
-            else None
+            side_effect=lambda *a, **k: (
+                order.append("emit") if k.get("status") == "awaiting_input" else None
+            )
         )
         se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(
@@ -1506,9 +1511,7 @@ class TestProcessingStatusLifecycleOrder:
             room_id="room-1",
             user_message_id="msg-1",
             message_text="hello",
-            agent_registry=[
-                AgentProfile(agent_id="agent-1", agent_name="Agent")
-            ],
+            agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent")],
             room_config=RoomConfig(),
         )
 
@@ -1581,9 +1584,9 @@ class TestProcessingStatusLifecycleOrder:
         se = _make_supervisor_executor()
         order: list[str] = []
         emit = AsyncMock(
-            side_effect=lambda *a, **k: order.append("emit")
-            if k.get("status") == "awaiting_input"
-            else None
+            side_effect=lambda *a, **k: (
+                order.append("emit") if k.get("status") == "awaiting_input" else None
+            )
         )
         se.bind_execution_event_deps(emit)
         se.supervisor_service.decide_next = AsyncMock(

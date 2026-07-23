@@ -8,7 +8,6 @@ from common.utils.a2a_file_modes import (
     agent_supports_any_file,
 )
 
-
 VECTOR_WEIGHT = settings.match_vector_weight
 CAPABILITY_WEIGHT = settings.match_capability_weight
 DEBATE_THRESHOLD = settings.match_debate_threshold
@@ -38,9 +37,7 @@ def compute_final_score(
     vector_weight: float | None = None,
     capability_weight: float | None = None,
 ) -> float:
-    resolved_vector_weight = (
-        VECTOR_WEIGHT if vector_weight is None else vector_weight
-    )
+    resolved_vector_weight = VECTOR_WEIGHT if vector_weight is None else vector_weight
     resolved_capability_weight = (
         CAPABILITY_WEIGHT if capability_weight is None else capability_weight
     )

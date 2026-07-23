@@ -2,7 +2,9 @@ from __future__ import annotations
 
 
 class HubLivenessService:
-    def __init__(self, *, repository=None, streams=None, local_is_connected=None) -> None:
+    def __init__(
+        self, *, repository=None, streams=None, local_is_connected=None
+    ) -> None:
         self._repository = repository
         self._streams = streams
         self._local_is_connected = local_is_connected or (lambda hub_id: False)

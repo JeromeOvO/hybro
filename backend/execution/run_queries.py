@@ -42,5 +42,7 @@ class RunQueryAdapter:
             docs = await self._run_repository.get_active_for_room(room_id)
             return [run_doc_to_run_info(doc) for doc in docs]
         except Exception:
-            logger.warning("active-run lookup failed for room_id=%s", room_id, exc_info=True)
+            logger.warning(
+                "active-run lookup failed for room_id=%s", room_id, exc_info=True
+            )
             return []

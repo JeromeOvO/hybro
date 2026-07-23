@@ -79,7 +79,9 @@ class DeliveryConfig:
                 "redis_reconnect_max_delay must be greater than or equal to redis_reconnect_delay"
             )
         if self.cs_backoff_max < self.cs_backoff_base:
-            raise ValueError("cs_backoff_max must be greater than or equal to cs_backoff_base")
+            raise ValueError(
+                "cs_backoff_max must be greater than or equal to cs_backoff_base"
+            )
         if (
             self.redis_room_subscription_production_limit
             + self.redis_subscription_reserved_connections
@@ -143,7 +145,9 @@ def _require_at_least(
         raise ValueError(f"{field_name} must be {qualifier} {minimum}")
 
 
-def _normalize_terminal_statuses(value: frozenset[str] | Iterable[str]) -> frozenset[str]:
+def _normalize_terminal_statuses(
+    value: frozenset[str] | Iterable[str],
+) -> frozenset[str]:
     if isinstance(value, str):
         raise ValueError("terminal_processing_statuses must be an iterable of strings")
     statuses = []

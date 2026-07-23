@@ -158,10 +158,7 @@ class ConversationTurn(BaseModel):
     @model_validator(mode="after")
     def _validate_content_for_representation(self) -> "ConversationTurn":
         """Enforce that FULL-representation turns always have content set."""
-        if (
-            self.representation == TurnRepresentation.FULL
-            and self.content is None
-        ):
+        if self.representation == TurnRepresentation.FULL and self.content is None:
             raise ValueError(
                 f"ConversationTurn {self.turn_id}: content must not be None "
                 f"when representation is FULL"
@@ -203,6 +200,7 @@ class ConversationTurn(BaseModel):
             return "Supervisor"
         return "Unknown"
 
+
 bind_context_turn_factory(ConversationTurn)
 
 
@@ -221,12 +219,18 @@ class RoomSummary(BaseModel):
 
     # Structured named slots (agent-maintainable)
     current_goal: str | None = None  # What the user/room is trying to accomplish
-    key_decisions: list[str] = Field(default_factory=list)  # Decisions that should persist
-    open_questions: list[str] = Field(default_factory=list)  # Unresolved questions or blockers
+    key_decisions: list[str] = Field(
+        default_factory=list
+    )  # Decisions that should persist
+    open_questions: list[str] = Field(
+        default_factory=list
+    )  # Unresolved questions or blockers
     recent_agent_contributions: list[str] = Field(
         default_factory=list
     )  # Last 3-5 agent result summaries
-    important_constraints: list[str] = Field(default_factory=list)  # Hard constraints stated
+    important_constraints: list[str] = Field(
+        default_factory=list
+    )  # Hard constraints stated
 
     # Metadata
     last_updated_at: datetime | None = None
@@ -391,7 +395,9 @@ class UserMemory(BaseModel):
     preferences: dict[str, Any] = Field(default_factory=dict)
 
     # Learned patterns
-    preferred_agents: list[str] = Field(default_factory=list)  # agent_ids user frequently uses
+    preferred_agents: list[str] = Field(
+        default_factory=list
+    )  # agent_ids user frequently uses
     communication_style: str | None = None  # Detected style
 
     # Cross-room facts

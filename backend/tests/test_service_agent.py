@@ -102,24 +102,30 @@ class TestNormalizeAgentUrl:
 class TestIsLocalAgentUrl:
     """Tests for the is_local_agent_url helper."""
 
-    @pytest.mark.parametrize("url", [
-        "http://localhost:8000",
-        "http://localhost:8000/agent",
-        "http://127.0.0.1:9000",
-        "http://0.0.0.0:10020",
-        "http://[::1]:8080",
-        "http://LOCALHOST:8000",          # case-insensitive
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8000",
+            "http://localhost:8000/agent",
+            "http://127.0.0.1:9000",
+            "http://0.0.0.0:10020",
+            "http://[::1]:8080",
+            "http://LOCALHOST:8000",  # case-insensitive
+        ],
+    )
     def test_local_urls_return_true(self, url):
         assert is_local_agent_url(url) is True, f"Expected True for {url!r}"
 
-    @pytest.mark.parametrize("url", [
-        "http://agent.example.com:8000",
-        "https://api.hybro.ai/v1/agent",
-        "http://192.168.1.10:10020",      # private IP but not loopback
-        "http://10.0.0.1:10020",          # RFC-1918, not loopback
-        "http://172.16.0.1:10020",        # RFC-1918, not loopback
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://agent.example.com:8000",
+            "https://api.hybro.ai/v1/agent",
+            "http://192.168.1.10:10020",  # private IP but not loopback
+            "http://10.0.0.1:10020",  # RFC-1918, not loopback
+            "http://172.16.0.1:10020",  # RFC-1918, not loopback
+        ],
+    )
     def test_non_local_urls_return_false(self, url):
         assert is_local_agent_url(url) is False, f"Expected False for {url!r}"
 
@@ -234,13 +240,13 @@ class TestRegisterAgent:
             )
         )
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(
             agent_card=sample_agent_card,
             provider_id=mock_user.user_id,
         )
         result = await agent_service.register_agent(request)
-        
+
         assert result.success is True
         assert result.agent_id == "agent-123"
         assert result.provider_id == mock_user.user_id
@@ -275,7 +281,7 @@ class TestRegisterAgent:
     async def test_raises_error_when_agent_card_missing(self, agent_service):
         """Should fail fast before bind."""
         request = AgentCenterRequest(agent_card=None)
-        
+
         with pytest.raises(RuntimeError, match="bind_facade"):
             await agent_service.register_agent(request)
 
@@ -291,7 +297,7 @@ class TestRegisterAgent:
         agent_service.bind_facade(facade)
         request = AgentCenterRequest(agent_card=sample_agent_card)
         result = await agent_service.register_agent(request)
-        
+
         assert result.success is False
         assert result.status_code == 400
         assert "already registered" in result.error.lower()
@@ -306,7 +312,7 @@ class TestRegisterAgent:
         agent_service.bind_facade(facade)
         request = AgentCenterRequest(agent_card=sample_agent_card)
         result = await agent_service.register_agent(request)
-        
+
         assert result.success is False
         assert result.status_code == 500
 
@@ -327,10 +333,10 @@ class TestQueryAgentByAgentId:
         facade = MagicMock()
         facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(agent_id=sample_agent.agent_id)
         result = await agent_service.query_agent_by_agent_id(request)
-        
+
         assert result.success is True
         assert result.agent.agent_id == sample_agent.agent_id
 
@@ -338,7 +344,7 @@ class TestQueryAgentByAgentId:
     async def test_raises_error_when_agent_id_missing(self, agent_service):
         """Should raise error when agent_id is not provided."""
         request = AgentCenterRequest(agent_id=None)
-        
+
         with pytest.raises(AgentIdRequiredError):
             await agent_service.query_agent_by_agent_id(request)
 
@@ -348,16 +354,18 @@ class TestQueryAgentByAgentId:
     ):
         """Should return 404 for private agent when user is not owner."""
         facade = MagicMock()
-        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_private_agent))
+        facade.get_agent = AsyncMock(
+            return_value=_info_from_agent(sample_private_agent)
+        )
         agent_service.bind_facade(facade)
-        
+
         # Request without user_id (unauthenticated)
         request = AgentCenterRequest(
             agent_id=sample_private_agent.agent_id,
             user_id=None,
         )
         result = await agent_service.query_agent_by_agent_id(request)
-        
+
         assert result.success is False
         assert result.status_code == 404
 
@@ -367,15 +375,17 @@ class TestQueryAgentByAgentId:
     ):
         """Should return private agent when user is the owner."""
         facade = MagicMock()
-        facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_private_agent))
+        facade.get_agent = AsyncMock(
+            return_value=_info_from_agent(sample_private_agent)
+        )
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(
             agent_id=sample_private_agent.agent_id,
             user_id=mock_user.user_id,  # Owner's user_id
         )
         result = await agent_service.query_agent_by_agent_id(request)
-        
+
         assert result.success is True
 
 
@@ -390,10 +400,10 @@ class TestGetAgentsByProviderId:
         facade = MagicMock()
         facade.list_agents = AsyncMock(return_value=[_info_from_agent(sample_agent)])
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(provider_id=mock_user.user_id)
         result = await agent_service.get_agents_by_provider_id(request)
-        
+
         assert result.success is True
         assert len(result.agents) == 1
 
@@ -402,7 +412,7 @@ class TestGetAgentsByProviderId:
         """Should return error when provider_id is not provided."""
         request = AgentCenterRequest(provider_id=None)
         result = await agent_service.get_agents_by_provider_id(request)
-        
+
         assert result.success is False
         assert result.status_code == 400
 
@@ -416,12 +426,14 @@ class TestGetAllActiveAgents:
     ):
         """Should return only active agents."""
         facade = MagicMock()
-        facade.list_visible_agents = AsyncMock(return_value=[_info_from_agent(sample_agent)])
+        facade.list_visible_agents = AsyncMock(
+            return_value=[_info_from_agent(sample_agent)]
+        )
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest()
         result = await agent_service.get_all_active_agents(request)
-        
+
         assert result.success is True
         assert len(result.agents) == 1
 
@@ -433,10 +445,10 @@ class TestGetAllActiveAgents:
         facade = MagicMock()
         facade.list_visible_agents = AsyncMock(return_value=[])
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(user_id=mock_user.user_id)
         await agent_service.get_all_active_agents(request)
-        
+
         facade.list_visible_agents.assert_called_once_with(
             user_id=mock_user.user_id,
             active_only=True,
@@ -484,7 +496,7 @@ class TestUpdateAgent:
         facade = MagicMock()
         facade.update_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
         agent_service.bind_facade(facade)
-        
+
         updated_agent = sample_agent.model_copy(
             update={"agent_status": AgentStatus.inactive}
         )
@@ -492,9 +504,9 @@ class TestUpdateAgent:
             agent_id=sample_agent.agent_id,
             agent=updated_agent,
         )
-        
+
         result = await agent_service.update_agent(request)
-        
+
         assert result.success is True
         facade.update_agent.assert_called_once()
 
@@ -506,14 +518,14 @@ class TestUpdateAgent:
         facade = MagicMock()
         facade.update_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(
             agent_id=sample_agent.agent_id,
             agent_card=sample_agent_card,
         )
-        
+
         result = await agent_service.update_agent(request)
-        
+
         assert result.success is True
         facade.update_agent.assert_called_once()
 
@@ -521,7 +533,7 @@ class TestUpdateAgent:
     async def test_raises_error_when_agent_id_missing(self, agent_service):
         """Should raise error when agent_id is not provided."""
         request = AgentCenterRequest(agent_id=None)
-        
+
         with pytest.raises(AgentIdRequiredError):
             await agent_service.update_agent(request)
 
@@ -543,10 +555,10 @@ class TestRemoveAgent:
         facade.get_agent = AsyncMock(return_value=_info_from_agent(sample_agent))
         facade.delete_agent = AsyncMock(return_value=True)
         agent_service.bind_facade(facade)
-        
+
         request = AgentCenterRequest(agent_id=sample_agent.agent_id)
         result = await agent_service.remove_agent(request)
-        
+
         assert result.success is True
         facade.delete_agent.assert_called_once_with(
             sample_agent.agent_id,
@@ -557,7 +569,7 @@ class TestRemoveAgent:
     async def test_raises_error_when_agent_id_missing(self, agent_service):
         """Should raise error when agent_id is not provided."""
         request = AgentCenterRequest(agent_id=None)
-        
+
         with pytest.raises(AgentIdRequiredError):
             await agent_service.remove_agent(request)
 
@@ -583,22 +595,27 @@ class TestValidateAgentCard:
             "defaultOutputModes": ["text"],
             "skills": [{"id": "skill-1", "name": "Test Skill"}],
         }
-        
+
         errors = await agent_service.validate_agent_card(valid_card)
         assert errors == []
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("missing_field", [
-        "name",
-        "description",
-        "url",
-        "version",
-        "capabilities",
-        "defaultInputModes",
-        "defaultOutputModes",
-        "skills",
-    ])
-    async def test_detects_each_missing_required_field(self, agent_service, missing_field):
+    @pytest.mark.parametrize(
+        "missing_field",
+        [
+            "name",
+            "description",
+            "url",
+            "version",
+            "capabilities",
+            "defaultInputModes",
+            "defaultOutputModes",
+            "skills",
+        ],
+    )
+    async def test_detects_each_missing_required_field(
+        self, agent_service, missing_field
+    ):
         """Should detect each individual missing required field."""
         complete_card = {
             "name": "Test Agent",
@@ -617,12 +634,15 @@ class TestValidateAgentCard:
         assert any(missing_field in e for e in errors)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_url", [
-        "not-a-valid-url",
-        "ftp://agent.example.com",
-        "agent.example.com",
-        "",
-    ])
+    @pytest.mark.parametrize(
+        "invalid_url",
+        [
+            "not-a-valid-url",
+            "ftp://agent.example.com",
+            "agent.example.com",
+            "",
+        ],
+    )
     async def test_validates_url_format(self, agent_service, invalid_url):
         """Should reject URLs that don't start with http:// or https://."""
         card = {
@@ -658,12 +678,15 @@ class TestValidateAgentCard:
         assert "Field 'url' must be a string." in errors
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad_capabilities", [
-        "not-an-object",
-        ["a", "list"],
-        42,
-        True,
-    ])
+    @pytest.mark.parametrize(
+        "bad_capabilities",
+        [
+            "not-an-object",
+            ["a", "list"],
+            42,
+            True,
+        ],
+    )
     async def test_validates_capabilities_type(self, agent_service, bad_capabilities):
         """Should reject non-dict capabilities."""
         card = {
@@ -701,7 +724,9 @@ class TestValidateAgentCard:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("field", ["defaultInputModes", "defaultOutputModes"])
-    async def test_validates_mode_fields_items_must_be_strings(self, agent_service, field):
+    async def test_validates_mode_fields_items_must_be_strings(
+        self, agent_service, field
+    ):
         """Should reject mode field items that are not strings."""
         card = {
             "name": "Test Agent",
@@ -764,29 +789,27 @@ class TestMaskSensitiveInformation:
     def test_masks_top_level_field(self, agent_service):
         """Should mask top-level sensitive fields."""
         from models.response import AgentCenterResponse
-        
+
         response = AgentCenterResponse(
             success=True,
             agent_url="https://secret-agent.example.com",
         )
-        
+
         masked = agent_service._mask_sensitive_information(response, ["agent_url"])
-        
+
         assert masked.agent_url is None or masked.agent_url == ""
 
     def test_masks_nested_field_in_agent(self, agent_service, sample_agent):
         """Should mask nested fields in agent object."""
         from models.response import AgentCenterResponse
-        
+
         response = AgentCenterResponse(
             success=True,
             agent=sample_agent,
         )
-        
-        masked = agent_service._mask_sensitive_information(
-            response, ["agent_card.url"]
-        )
-        
+
+        masked = agent_service._mask_sensitive_information(response, ["agent_card.url"])
+
         # The URL should be masked
         assert masked.agent.agent_card.url == ""
 
@@ -799,25 +822,21 @@ class TestMaskSensitiveInformation:
             agent_card=sample_agent_card,
         )
 
-        masked = agent_service._mask_sensitive_information(
-            response, ["agent_card.url"]
-        )
+        masked = agent_service._mask_sensitive_information(response, ["agent_card.url"])
 
         assert masked.agent_card.url == ""
 
     def test_masks_nested_field_in_agents_list(self, agent_service, sample_agent):
         """Should mask nested fields in agents list."""
         from models.response import AgentCenterResponse
-        
+
         response = AgentCenterResponse(
             success=True,
             agents=[sample_agent, sample_agent],
         )
-        
-        masked = agent_service._mask_sensitive_information(
-            response, ["agent_card.url"]
-        )
-        
+
+        masked = agent_service._mask_sensitive_information(response, ["agent_card.url"])
+
         # All agent URLs should be masked
         for agent in masked.agents:
             assert agent.agent_card.url == ""

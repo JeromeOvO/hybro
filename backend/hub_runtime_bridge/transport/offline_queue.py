@@ -13,14 +13,18 @@ class OfflineQueueEntry:
 
 
 class OfflineQueue:
-    def __init__(self, *, max_size: int, ttl_seconds: int, clock=time.monotonic) -> None:
+    def __init__(
+        self, *, max_size: int, ttl_seconds: int, clock=time.monotonic
+    ) -> None:
         self._items: deque[OfflineQueueEntry] = deque()
         self._max_size = max_size
         self._ttl = ttl_seconds
         self._clock = clock
 
     def append(self, event: Any) -> Any | None:
-        dropped = self._items.popleft().event if len(self._items) >= self._max_size else None
+        dropped = (
+            self._items.popleft().event if len(self._items) >= self._max_size else None
+        )
         self._items.append(OfflineQueueEntry(event=event, enqueued_at=self._clock()))
         return dropped
 

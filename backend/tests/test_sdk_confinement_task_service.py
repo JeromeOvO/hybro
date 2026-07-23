@@ -20,14 +20,18 @@ def test_remote_task_reader_has_no_direct_a2a_sdk_imports():
 
 
 @pytest.mark.asyncio
-async def test_remote_task_reader_passes_agent_card_to_adapter_for_normalization(monkeypatch):
+async def test_remote_task_reader_passes_agent_card_to_adapter_for_normalization(
+    monkeypatch,
+):
     calls = []
 
     async def _fetch_remote_task(agent_card, task_id):
         calls.append((agent_card, task_id))
         return None
 
-    monkeypatch.setattr(remote_task_reader_module, "fetch_remote_task", _fetch_remote_task)
+    monkeypatch.setattr(
+        remote_task_reader_module, "fetch_remote_task", _fetch_remote_task
+    )
     card = AgentCard(
         name="Agent",
         url="https://agent.example",
@@ -50,7 +54,9 @@ async def test_remote_task_reader_accepts_execution_agent_id_keyword(monkeypatch
         calls.append((agent_card, task_id))
         return None
 
-    monkeypatch.setattr(remote_task_reader_module, "fetch_remote_task", _fetch_remote_task)
+    monkeypatch.setattr(
+        remote_task_reader_module, "fetch_remote_task", _fetch_remote_task
+    )
     card = AgentCard(
         name="Agent",
         url="https://agent.example",

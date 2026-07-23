@@ -169,7 +169,9 @@ async def test_publish_and_handle_cancellation_use_configured_channel():
 
     await bus.publish_cancellation("msg-1")
     await bus.handle_cancellation_message(
-        json.dumps({"kind": "cancellation", "origin": "worker-2", "message_id": "msg-2"})
+        json.dumps(
+            {"kind": "cancellation", "origin": "worker-2", "message_id": "msg-2"}
+        )
     )
 
     channel, envelope = decode_publish(redis)

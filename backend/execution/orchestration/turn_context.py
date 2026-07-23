@@ -65,7 +65,11 @@ async def load_turn_context(
             raise TurnQuoteMissingError(
                 f"Quoted snippet not found for quote_id={quote_id} user_message={uid}"
             )
-        if isinstance(legacy_quoted, str) and legacy_quoted and legacy_quoted != snippet.text:
+        if (
+            isinstance(legacy_quoted, str)
+            and legacy_quoted
+            and legacy_quoted != snippet.text
+        ):
             logger.warning(
                 "quote dual-write mismatch: snippet wins room=%s user_msg=%s quote_id=%s",
                 room_id,

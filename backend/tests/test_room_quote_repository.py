@@ -73,9 +73,7 @@ def test_room_quote_repository_roundtrips_quote_model():
         source_kind="user_turn",
     )
 
-    inserted = snippet.model_copy(
-        update={"created_at": datetime.fromtimestamp(0)}
-    )
+    inserted = snippet.model_copy(update={"created_at": datetime.fromtimestamp(0)})
     created_id = "Q1"
 
     # mutate stable id to avoid model_dump randomness in test assertions

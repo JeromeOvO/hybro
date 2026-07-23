@@ -17,7 +17,9 @@ def _parse_created_at(doc: dict[str, Any]) -> datetime:
     return utcnow()
 
 
-def compute_processing_message_id_mirror(active_runs: list[dict[str, Any]]) -> str | None:
+def compute_processing_message_id_mirror(
+    active_runs: list[dict[str, Any]],
+) -> str | None:
     """§N.1: derive single display message_id from non-terminal runs (pure; not persisted)."""
     if not active_runs:
         return None

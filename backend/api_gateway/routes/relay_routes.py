@@ -57,6 +57,7 @@ async def relay_register(
 # GET /relay/hub/{hub_id}/events  (SSE)
 # ------------------------------------------------------------------
 
+
 @router.get("/hub/{hub_id}/events")
 async def relay_events(
     hub_id: str,
@@ -71,12 +72,16 @@ async def relay_events(
 
     async def event_generator():
         try:
-            async for event in svc.connect_hub(hub_id, api_key, last_event_id=resume_from):
+            async for event in svc.connect_hub(
+                hub_id, api_key, last_event_id=resume_from
+            ):
                 if await request.is_disconnected():
                     break
                 if isinstance(event, dict) and event.get("type") == "_disconnect":
                     break
-                stream_id = event.pop("_stream_id", None) if isinstance(event, dict) else None
+                stream_id = (
+                    event.pop("_stream_id", None) if isinstance(event, dict) else None
+                )
                 data = json.dumps(event)
                 if stream_id:
                     yield f"id: {stream_id}\ndata: {data}\n\n"
@@ -99,6 +104,7 @@ async def relay_events(
 # ------------------------------------------------------------------
 # POST /relay/hub/{hub_id}/publish
 # ------------------------------------------------------------------
+
 
 @router.post("/hub/{hub_id}/publish", status_code=status.HTTP_204_NO_CONTENT)
 async def relay_publish(
@@ -124,9 +130,8 @@ async def relay_publish(
 # POST /relay/hub/{hub_id}/agents/sync
 # ------------------------------------------------------------------
 
-@router.post(
-    "/hub/{hub_id}/agents/sync", response_model=HubAgentSyncResponse
-)
+
+@router.post("/hub/{hub_id}/agents/sync", response_model=HubAgentSyncResponse)
 async def relay_sync_agents(
     hub_id: str,
     body: HubAgentSyncRequest,
@@ -135,7 +140,10 @@ async def relay_sync_agents(
 ):
     try:
         synced = await svc.sync_agents(
-            hub_id, body.agents, api_key, prune_missing=body.prune_missing,
+            hub_id,
+            body.agents,
+            api_key,
+            prune_missing=body.prune_missing,
         )
     except PermissionError as exc:
         raise HTTPException(
@@ -147,6 +155,7 @@ async def relay_sync_agents(
 # ------------------------------------------------------------------
 # GET /relay/hub/status
 # ------------------------------------------------------------------
+
 
 @router.get("/hub/status", response_model=HubStatusResponse)
 async def relay_status(
@@ -160,6 +169,7 @@ async def relay_status(
 # ------------------------------------------------------------------
 # POST /relay/hub/{hub_id}/heartbeat
 # ------------------------------------------------------------------
+
 
 @router.post("/hub/{hub_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
 async def relay_heartbeat(

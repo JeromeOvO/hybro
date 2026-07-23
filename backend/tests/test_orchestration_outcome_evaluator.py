@@ -304,7 +304,9 @@ def test_required_obligation_cannot_regress_without_invalidation_event():
         {},
     )
 
-    assert "quote:requested_coverage.limit" not in outcome.remaining_required_obligations
+    assert (
+        "quote:requested_coverage.limit" not in outcome.remaining_required_obligations
+    )
 
 
 def test_invalidated_required_evidence_is_not_restored_from_retained_artifact():
@@ -337,9 +339,7 @@ def test_invalidated_required_evidence_is_not_restored_from_retained_artifact():
 
     output = _output("agent-msg-2")
     output.artifact_keys = []
-    outcome = evaluator.evaluate(
-        _state(), after, intent, output, {}
-    )
+    outcome = evaluator.evaluate(_state(), after, intent, output, {})
 
     assert outcome.status == "no_progress"
     assert outcome.remaining_required_obligations == [
@@ -377,9 +377,7 @@ def test_fresh_delegation_evidence_supersedes_prior_invalidation():
         source_event_id="event-1",
     )
 
-    outcome = evaluator.evaluate(
-        _state(), after, intent, _output("agent-msg-2"), {}
-    )
+    outcome = evaluator.evaluate(_state(), after, intent, _output("agent-msg-2"), {})
 
     assert outcome.status == "partial"
     assert outcome.newly_satisfied_required_obligations == [
@@ -404,9 +402,7 @@ def test_unrelated_artifact_does_not_satisfy_delegation_obligations():
         ]
     )
 
-    outcome = evaluator.evaluate(
-        _state(), after, _intent("agent-msg-1"), output, {}
-    )
+    outcome = evaluator.evaluate(_state(), after, _intent("agent-msg-1"), output, {})
 
     assert outcome.status == "no_progress"
     assert outcome.satisfied_output_keys == []
@@ -438,9 +434,7 @@ def test_invalidation_is_scoped_to_its_goal_family():
     repeated_output = _output("agent-msg-2")
     repeated_output.artifact_keys = []
 
-    outcome = evaluator.evaluate(
-        before, after, repeated_intent, repeated_output, {}
-    )
+    outcome = evaluator.evaluate(before, after, repeated_intent, repeated_output, {})
 
     assert outcome.status == "fulfilled"
     assert outcome.remaining_required_obligations == []
@@ -553,9 +547,7 @@ def test_one_named_artifact_does_not_satisfy_multiple_named_outputs():
     ]
     after = _state(artifacts=[_artifact("agent-msg-1", {"quote": "ready"})])
 
-    outcome = evaluator.evaluate(
-        _state(), after, intent, _output("agent-msg-1"), {}
-    )
+    outcome = evaluator.evaluate(_state(), after, intent, _output("agent-msg-1"), {})
 
     assert outcome.status == "partial"
     assert outcome.newly_satisfied_required_obligations == ["quote:$present"]
@@ -752,9 +744,7 @@ def test_optional_only_outputs_with_matching_evidence_return_fulfilled():
         ]
     )
 
-    outcome = evaluator.evaluate(
-        _state(), after, intent, _output("agent-msg-1"), {}
-    )
+    outcome = evaluator.evaluate(_state(), after, intent, _output("agent-msg-1"), {})
 
     assert outcome.status == "fulfilled"
 

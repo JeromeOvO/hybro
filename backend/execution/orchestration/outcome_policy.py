@@ -188,9 +188,8 @@ def evaluate_retry(
         return RetryDecision(True, kind)
     if latest.status == "failed":
         return _evaluate_operational_retry(run_state, latest, target)
-    if (
-        latest.status == "blocked"
-        and _latest_outcome_has_open_validated_user_blocker(run_state, latest)
+    if latest.status == "blocked" and _latest_outcome_has_open_validated_user_blocker(
+        run_state, latest
     ):
         return _rejected("delegate_blocked_pending_user")
     if target.repair_of_intent_id != latest.dispatch_intent_id:
@@ -272,8 +271,7 @@ def _evaluate_operational_retry(
     ]
     if not failures:
         intents_by_id = {
-            intent.dispatch_intent_id: intent
-            for intent in run_state.dispatch_intents
+            intent.dispatch_intent_id: intent for intent in run_state.dispatch_intents
         }
         failed_intent = intents_by_id.get(latest.dispatch_intent_id)
         if failed_intent is None:
@@ -286,8 +284,7 @@ def _evaluate_operational_retry(
             }
             for outcome in run_state.delegation_outcomes
             if outcome.agent_id == target.agent_id
-            and outcome.goal_revision_fingerprint
-            == latest.goal_revision_fingerprint
+            and outcome.goal_revision_fingerprint == latest.goal_revision_fingerprint
             if (intent := intents_by_id.get(outcome.dispatch_intent_id)) is not None
         ]
         retry_intent = DispatchIntent(

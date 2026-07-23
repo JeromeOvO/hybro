@@ -142,14 +142,18 @@ class TestExtractParts:
 
     def test_file_part_extraction(self):
         part = self._make_part("file", text=None)
-        part.root.model_dump = MagicMock(return_value={"kind": "file", "file": {"uri": "s3://x"}})
+        part.root.model_dump = MagicMock(
+            return_value={"kind": "file", "file": {"uri": "s3://x"}}
+        )
         result = extract_parts([part])
         assert len(result.file_parts) == 1
         assert result.has_non_text is True
 
     def test_data_part_extraction(self):
         part = self._make_part("data", text=None)
-        part.root.model_dump = MagicMock(return_value={"kind": "data", "data": {"k": "v"}})
+        part.root.model_dump = MagicMock(
+            return_value={"kind": "data", "data": {"k": "v"}}
+        )
         result = extract_parts([part])
         assert len(result.data_parts) == 1
 
@@ -182,7 +186,6 @@ class TestExtractParts:
 # ExtractedParts
 # ---------------------------------------------------------------------------
 class TestExtractedParts:
-
     def test_text_joins_parts(self):
         ep = ExtractedParts(text_parts=["a", "b", "c"])
         assert ep.text == "abc"
@@ -200,7 +203,6 @@ class TestExtractedParts:
 # append_artifact_to_task_dict
 # ---------------------------------------------------------------------------
 class TestAppendArtifactToTaskDict:
-
     def test_append_to_none_creates_list(self):
         art = {"artifactId": "a1", "parts": [{"kind": "text", "text": "x"}]}
         result = append_artifact_to_task_dict(None, art)

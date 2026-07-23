@@ -13,7 +13,9 @@ from execution.orchestration.outcome_evaluator import canonical_content_fingerpr
 from models.room import UserAttachment
 
 ResourceKind = Literal["attachment", "context", "artifact"]
-ResourceOrigin = Literal["user_message", "context_projection", "agent_message", "system"]
+ResourceOrigin = Literal[
+    "user_message", "context_projection", "agent_message", "system"
+]
 ResourceStatus = Literal["ready", "processing", "failed", "unavailable"]
 
 

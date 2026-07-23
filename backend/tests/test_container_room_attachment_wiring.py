@@ -30,9 +30,7 @@ async def test_create_room_deps_wires_attachment_metadata_reader_to_facade():
         attachment_metadata_reader=reader,
     )
 
-    attachment = await deps.room_registry.get_attachment_for_room_file(
-        "room1", "file1"
-    )
+    attachment = await deps.room_registry.get_attachment_for_room_file("room1", "file1")
 
     assert attachment == {
         "file_id": "file1",

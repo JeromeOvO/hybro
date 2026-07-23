@@ -228,7 +228,6 @@ class TestIsHubAlive:
         health.check_agent_health.assert_not_awaited()
 
 
-
 def test_container_binds_health_service_to_agent_liveness():
     tree = ast.parse(Path("container.py").read_text())
 
@@ -238,10 +237,7 @@ def test_container_binds_health_service_to_agent_liveness():
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name | ast.Attribute)
         and (
-            (
-                isinstance(node.func, ast.Name)
-                and node.func.id == "AgentLivenessService"
-            )
+            (isinstance(node.func, ast.Name) and node.func.id == "AgentLivenessService")
             or (
                 isinstance(node.func, ast.Attribute)
                 and node.func.attr == "AgentLivenessService"
@@ -441,6 +437,7 @@ class TestHeartbeatCheckConnectionIdGuard:
         svc = _make_service(mongo=mongo, streams=streams)
         writer = _make_writer()
         svc.bind_agent_registry_writer(writer)
+
         async def wait_for_events(*args, **kwargs):
             await asyncio.sleep(10)
             return []
@@ -704,6 +701,7 @@ class TestHeartbeatExpiryDisconnect:
 
         svc = _make_service(mongo=mongo, streams=streams)
         svc.bind_agent_registry_writer(_make_writer())
+
         async def wait_for_events(*args, **kwargs):
             await asyncio.sleep(10)
             return []

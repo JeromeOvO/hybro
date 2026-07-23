@@ -189,9 +189,7 @@ class TaskStateManager:
                     ),
                 ),
                 metadata=(
-                    {"preflight_failure_code": error_code}
-                    if error_code
-                    else None
+                    {"preflight_failure_code": error_code} if error_code else None
                 ),
             )
             message.message_content.message_task = task
@@ -243,6 +241,4 @@ class TaskStateManager:
         messages_to_cancel.extend(message_queue)
 
         for msg in messages_to_cancel:
-            await self.transition_task(
-                msg, coerce_task_state("canceled"), persist=True
-            )
+            await self.transition_task(msg, coerce_task_state("canceled"), persist=True)

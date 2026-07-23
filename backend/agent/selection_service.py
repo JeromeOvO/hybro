@@ -17,14 +17,16 @@ logger = get_logger(__name__)
 
 class RoutingStrategy(StrEnum):
     """Strategy for routing messages to agents"""
-    SINGLE = "single"       # Route to 1 best agent (simple questions)
-    PARALLEL = "parallel"   # Route to 2-3 agents simultaneously (multi-perspective)
+
+    SINGLE = "single"  # Route to 1 best agent (simple questions)
+    PARALLEL = "parallel"  # Route to 2-3 agents simultaneously (multi-perspective)
     SEQUENTIAL = "sequential"  # Route to agents with dependency chain (complex tasks)
 
 
 @dataclass
 class AgentSelection:
     """Represents a selected agent with reason for selection"""
+
     agent_id: str
     agent_name: str
     reason: str
@@ -34,6 +36,7 @@ class AgentSelection:
 @dataclass
 class AgentSelectionResult:
     """Result of agent selection process"""
+
     strategy: RoutingStrategy
     agents: list[AgentSelection]
     reasoning: str
@@ -77,7 +80,8 @@ class AgentSelectionService:
         """
         logger.info(
             "AgentSelectionService: Selecting agents for message (length: %d chars, debate=%s)",
-            len(message_text), is_debate_mode
+            len(message_text),
+            is_debate_mode,
         )
 
         # Delegate to AgentMatcher — let exceptions propagate so callers
@@ -96,7 +100,7 @@ class AgentSelectionService:
                 strategy=RoutingStrategy.SINGLE,
                 agents=[],
                 reasoning="No matching agents found in the network",
-                needs_debate=False
+                needs_debate=False,
             )
 
         # Map MatchedAgent to AgentSelection, respecting top_k cap
@@ -111,7 +115,11 @@ class AgentSelectionService:
         ]
 
         # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1
-        strategy = RoutingStrategy.SINGLE if len(agent_selections) == 1 else RoutingStrategy.PARALLEL
+        strategy = (
+            RoutingStrategy.SINGLE
+            if len(agent_selections) == 1
+            else RoutingStrategy.PARALLEL
+        )
 
         reasoning = f"Matched {len(agent_selections)} agent(s) from {match_result.total_candidates} candidates"
 

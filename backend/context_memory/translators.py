@@ -194,10 +194,7 @@ def room_memory_info_from_doc(doc: dict[str, Any]) -> RoomMemoryInfo:
         content=render_room_memory_content(state),
         created_at=_maybe_datetime(state.memory_created_at),
         updated_at=_maybe_datetime(state.last_activity_at),
-        token_count=sum(
-            _turn_token_count(turn)
-            for turn in state.conversation_history
-        ),
+        token_count=sum(_turn_token_count(turn) for turn in state.conversation_history),
     )
 
 
@@ -284,8 +281,7 @@ def search_result_from_record(
         content=content,
         score=score,
         memory_id=metadata.get("memory_id"),
-        source_message_id=metadata.get("source_message_id")
-        or metadata.get("turn_id"),
+        source_message_id=metadata.get("source_message_id") or metadata.get("turn_id"),
         metadata=metadata,
     )
 

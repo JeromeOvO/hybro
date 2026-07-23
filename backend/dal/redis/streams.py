@@ -46,9 +46,7 @@ class RedisStreamsImpl:
             details={"operation": operation, "error": str(exc)},
         )
 
-    async def xadd(
-        self, stream: str, fields: dict, maxlen: int | None = None
-    ) -> str:
+    async def xadd(self, stream: str, fields: dict, maxlen: int | None = None) -> str:
         client = self._ensure_client()
         if client is None:
             return ""

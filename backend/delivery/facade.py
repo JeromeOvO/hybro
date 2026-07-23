@@ -143,7 +143,9 @@ class DeliveryFacade:
 
     @property
     def change_stream_connected(self) -> bool:
-        return bool(getattr(self._cancellation_watcher, "change_stream_connected", False))
+        return bool(
+            getattr(self._cancellation_watcher, "change_stream_connected", False)
+        )
 
     @property
     def redis_connected(self) -> bool:

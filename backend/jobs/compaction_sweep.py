@@ -163,7 +163,9 @@ class CompactionSweep:
                 finally:
                     queue.task_done()
 
-        workers = [asyncio.create_task(_worker()) for _ in range(MAX_CONCURRENT_COMPACTIONS)]
+        workers = [
+            asyncio.create_task(_worker()) for _ in range(MAX_CONCURRENT_COMPACTIONS)
+        ]
 
         for room_id in await deps.list_room_ids_with_memory():
             if not room_id:

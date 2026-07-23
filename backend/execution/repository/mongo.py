@@ -14,7 +14,9 @@ class RunMongoRepository:
     async def find_one(self, query: dict) -> dict | None:
         return await self._runs.find_one(query)
 
-    async def find(self, query: dict, *, sort: list[tuple[str, int]] | None = None, limit: int = 0) -> list[dict]:
+    async def find(
+        self, query: dict, *, sort: list[tuple[str, int]] | None = None, limit: int = 0
+    ) -> list[dict]:
         kwargs: dict = {}
         if sort is not None:
             kwargs["sort"] = sort

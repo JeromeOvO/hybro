@@ -54,7 +54,9 @@ class MongoCollectionAdapter:
         result = await self._collection.insert_many(documents)
         return [str(inserted_id) for inserted_id in result.inserted_ids]
 
-    async def update_one(self, query: dict, update: dict | list[dict], **kwargs) -> bool:
+    async def update_one(
+        self, query: dict, update: dict | list[dict], **kwargs
+    ) -> bool:
         result = await self._collection.update_one(query, update, **kwargs)
         return result.modified_count > 0 or result.upserted_id is not None
 
@@ -116,9 +118,7 @@ class MongoCollectionAdapter:
     async def distinct(self, key: str, query: dict | None = None) -> list:
         return await self._collection.distinct(key, query or {})
 
-    def watch(
-        self, pipeline: list[dict] | None = None, **kwargs
-    ) -> MongoChangeStream:
+    def watch(self, pipeline: list[dict] | None = None, **kwargs) -> MongoChangeStream:
         return self._collection.watch(pipeline or [], **kwargs)
 
 

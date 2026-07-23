@@ -232,9 +232,7 @@ async def _compaction_write_was_stale_noop(
     if not fresh_doc:
         return False
     target_ids = {
-        entry.get("turn_id")
-        for entry in compacted_entries
-        if entry.get("turn_id")
+        entry.get("turn_id") for entry in compacted_entries if entry.get("turn_id")
     }
     if not target_ids:
         return False
@@ -300,7 +298,9 @@ async def fetch_turn_content(
     if not doc:
         return f"[Error: Room {room_id} not found]"
     state = normalize_room_memory(doc)
-    turn = next((item for item in state.conversation_history if item.turn_id == turn_id), None)
+    turn = next(
+        (item for item in state.conversation_history if item.turn_id == turn_id), None
+    )
     if turn is None:
         return f"[Error: Turn {turn_id} not found in room history]"
     try:
@@ -324,7 +324,9 @@ async def get_compaction_stats(
     if not doc:
         return {"error": f"Room {room_id} not found"}
     state = normalize_room_memory(doc)
-    full_turns = [turn for turn in state.conversation_history if turn.representation == "full"]
+    full_turns = [
+        turn for turn in state.conversation_history if turn.representation == "full"
+    ]
     compact_turns = [
         turn for turn in state.conversation_history if turn.representation == "compact"
     ]

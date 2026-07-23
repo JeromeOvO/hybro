@@ -36,11 +36,16 @@ def room_runtime():
 
 def _make_msg_with_attachment(s3_key="uploads/r/f1/photo.png"):
     att = UserAttachment(
-        file_id="f1", s3_key=s3_key, mime_type="image/png",
-        file_name="photo.png", size_bytes=100,
+        file_id="f1",
+        s3_key=s3_key,
+        mime_type="image/png",
+        file_name="photo.png",
+        size_bytes=100,
     )
     return RoomUserMessage(
-        room_id="room1", message_id="msg1", message_type="user",
+        room_id="room1",
+        message_id="msg1",
+        message_type="user",
         message_content=MessageContent(message_text="hi", attachments=[att]),
     )
 
@@ -61,7 +66,10 @@ class TestMessageRetrieval:
         )
 
         assert result.success
-        assert result.message_list[0].message_content.attachments[0].file_url == "https://presigned"
+        assert (
+            result.message_list[0].message_content.attachments[0].file_url
+            == "https://presigned"
+        )
         mock_s3.get_presigned_url.assert_awaited_once_with(
             "uploads/r/f1/photo.png",
             filename="photo.png",
@@ -110,7 +118,9 @@ class TestMessageRetrieval:
 
     async def test_no_attachments_no_s3_call(self, room_runtime):
         msg = RoomUserMessage(
-            room_id="room1", message_id="msg1", message_type="user",
+            room_id="room1",
+            message_id="msg1",
+            message_type="user",
             message_content=MessageContent(message_text="hi"),
         )
         facade = MagicMock()
@@ -155,9 +165,7 @@ class TestRoomMessageRetrieval:
         facade.get_user_messages_for_room = AsyncMock(return_value=[])
         facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
         room_runtime.bind_facade(facade)
-        room_runtime.bind_s3_service(
-            SimpleNamespace(get_presigned_url=AsyncMock())
-        )
+        room_runtime.bind_s3_service(SimpleNamespace(get_presigned_url=AsyncMock()))
 
         result = await room_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
@@ -376,7 +384,9 @@ class TestRefreshArtifactPresignedUrls:
                                     name="report.xlsx",
                                     mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 ),
-                                metadata={"s3_key": "artifacts/room1/msg1/inline-0.xlsx"},
+                                metadata={
+                                    "s3_key": "artifacts/room1/msg1/inline-0.xlsx"
+                                },
                             )
                         )
                     ],
@@ -405,7 +415,9 @@ class TestRefreshArtifactPresignedUrls:
         )
 
         # URI should be updated
-        refreshed_uri = msg.message_content.message_task.artifacts[0].parts[0].root.file.uri
+        refreshed_uri = (
+            msg.message_content.message_task.artifacts[0].parts[0].root.file.uri
+        )
         assert refreshed_uri == "https://new-presigned"
 
     async def test_no_filename_omits_from_filenames_dict(self, room_runtime):
@@ -434,7 +446,9 @@ class TestRefreshArtifactPresignedUrls:
                                     uri="https://old-presigned",
                                     mime_type="image/png",
                                 ),
-                                metadata={"s3_key": "artifacts/room1/msg1/inline-0.png"},
+                                metadata={
+                                    "s3_key": "artifacts/room1/msg1/inline-0.png"
+                                },
                             )
                         )
                     ],

@@ -183,9 +183,7 @@ def test_rejected_delegate_maps_obligations_from_structured_blocker_fields():
     assert action is not None
     assert action.questions[0].blocker_obligations == {
         "agent_blocker:agent-1:client.industry": ["quote:industry"],
-        "agent_blocker:agent-1:requested_coverage.limit": [
-            "quote:requested_limit"
-        ],
+        "agent_blocker:agent-1:requested_coverage.limit": ["quote:requested_limit"],
     }
 
 
@@ -306,9 +304,7 @@ def test_hitl_resolution_allows_same_agent_repair_and_fulfilled_progress():
                 "attempt_fingerprint": "attempt-2",
                 "status": "fulfilled",
                 "remaining_required_obligations": [],
-                "newly_satisfied_required_obligations": [
-                    "quote:requested_limit"
-                ],
+                "newly_satisfied_required_obligations": ["quote:requested_limit"],
                 "blockers": [],
             }
         )

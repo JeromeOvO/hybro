@@ -118,7 +118,9 @@ def _safe_failure_projection(
     safe_error = (
         safe_local_error
         if safe_local_error is not None
-        else _GENERIC_AGENT_FAILURE_MESSAGE if has_failure_detail else None
+        else _GENERIC_AGENT_FAILURE_MESSAGE
+        if has_failure_detail
+        else None
     )
     return None, safe_error, safe_error_code
 
@@ -288,9 +290,7 @@ class AgentResultIngestor:
             None,
         )
         previous_artifact_keys = (
-            set(existing_output.artifact_keys)
-            if existing_output is not None
-            else set()
+            set(existing_output.artifact_keys) if existing_output is not None else set()
         )
         artifact_keys_referenced_by_other_outputs = {
             artifact_key
@@ -410,8 +410,7 @@ class AgentResultIngestor:
             if not (
                 isinstance(fact, dict)
                 and fact.get("source_agent_message_id") == result.agent_message_id
-                and fact.get("kind")
-                in {"agent_observation", "agent_text_evidence"}
+                and fact.get("kind") in {"agent_observation", "agent_text_evidence"}
                 and fact.get("fact_id") not in observation_fact_ids
             )
         ]
@@ -422,10 +421,7 @@ class AgentResultIngestor:
         unknowns_changed = _upsert_unknowns(state, observation.unknowns)
         blockers_changed = _upsert_blockers(state, observation.blocker_candidates)
         return (
-            stale_facts_removed
-            or facts_changed
-            or unknowns_changed
-            or blockers_changed
+            stale_facts_removed or facts_changed or unknowns_changed or blockers_changed
         )
 
     @staticmethod
@@ -595,8 +591,7 @@ class AgentResultIngestor:
                 (
                     item
                     for item in state.open_failures
-                    if item.fingerprint == failure.fingerprint
-                    and item.status == "open"
+                    if item.fingerprint == failure.fingerprint and item.status == "open"
                 ),
                 None,
             )
@@ -668,10 +663,7 @@ class AgentResultIngestor:
             state.facts = [
                 fact
                 for fact in state.facts
-                if not (
-                    isinstance(fact, dict)
-                    and fact.get("fact_id") == fact_id
-                )
+                if not (isinstance(fact, dict) and fact.get("fact_id") == fact_id)
             ]
             return True
         if text and _is_fact_projectable(result):
@@ -692,10 +684,7 @@ class AgentResultIngestor:
             state.facts = [
                 fact
                 for fact in state.facts
-                if not (
-                    isinstance(fact, dict)
-                    and fact.get("fact_id") == fact_id
-                )
+                if not (isinstance(fact, dict) and fact.get("fact_id") == fact_id)
             ]
             return True
         return False
@@ -818,7 +807,10 @@ def _upsert_blockers(
                 )
                 changed = True
                 continue
-            if existing.validation_status == "validated" or existing.validated_user_only:
+            if (
+                existing.validation_status == "validated"
+                or existing.validated_user_only
+            ):
                 replacement = existing.model_copy(
                     update={
                         "evidence_refs": merged_evidence_refs,
@@ -965,11 +957,12 @@ def _retry_lineage_score(
         and failed_intent.task_hash
         and retry_intent.task_hash == failed_intent.task_hash
     )
-    same_task = _normalized_task(retry_intent.task) == _normalized_task(failed_intent.task)
-    shared_non_attachment_refs = (
-        _intent_ref_keys(retry_intent, include_attachments=False)
-        & _intent_ref_keys(failed_intent, include_attachments=False)
+    same_task = _normalized_task(retry_intent.task) == _normalized_task(
+        failed_intent.task
     )
+    shared_non_attachment_refs = _intent_ref_keys(
+        retry_intent, include_attachments=False
+    ) & _intent_ref_keys(failed_intent, include_attachments=False)
     shared_attachment_refs = (
         _intent_ref_keys(retry_intent, include_attachments=True)
         - _intent_ref_keys(retry_intent, include_attachments=False)
@@ -987,7 +980,10 @@ def _retry_lineage_score(
         retry_intent.attachment_refs
     )
     has_shared_ref_lineage = bool(
-        (shared_non_attachment_refs and (same_task or same_task_hash or attachment_drop))
+        (
+            shared_non_attachment_refs
+            and (same_task or same_task_hash or attachment_drop)
+        )
         or (shared_attachment_refs and (same_task or same_task_hash))
     )
     if not (mentions_failed_message or has_shared_ref_lineage):
@@ -1000,6 +996,8 @@ def _retry_lineage_score(
         1 if same_task else 0,
         1 if attachment_drop else 0,
     )
+
+
 def _normalized_task(task: str) -> str:
     return " ".join(task.lower().split())
 
@@ -1012,10 +1010,7 @@ def _intent_ref_keys(
     refs = list(intent.context_refs) + list(intent.artifact_refs)
     if include_attachments:
         refs.extend(intent.attachment_refs)
-    return {
-        (ref.kind.value, ref.ref_id)
-        for ref in refs
-    }
+    return {(ref.kind.value, ref.ref_id) for ref in refs}
 
 
 def _intent_mentions_any_message(
@@ -1031,9 +1026,14 @@ def _intent_mentions_any_message(
     ):
         ref_id = getattr(ref, "ref_id", "")
         source_agent_message_id = getattr(ref, "source_agent_message_id", None)
-        if isinstance(source_agent_message_id, str) and source_agent_message_id in message_ids:
+        if (
+            isinstance(source_agent_message_id, str)
+            and source_agent_message_id in message_ids
+        ):
             return True
-        if isinstance(ref_id, str) and any(ref_id.startswith(f"{message_id}:") for message_id in message_ids):
+        if isinstance(ref_id, str) and any(
+            ref_id.startswith(f"{message_id}:") for message_id in message_ids
+        ):
             return True
     return False
 

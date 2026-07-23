@@ -21,6 +21,7 @@ class MockAPIKeyPrincipal:
     name: str = "Local Dev Key"
     is_active: bool = True
 
+
 api_key_authenticator: APIKeyAuthenticator | None = None
 
 
@@ -39,10 +40,10 @@ def _require_api_key_authenticator() -> APIKeyAuthenticator:
 def hash_api_key(api_key: str) -> str:
     """
     Hash an API key using SHA-256.
-    
+
     Args:
         api_key: The plaintext API key
-        
+
     Returns:
         str: The SHA-256 hash (hex digest)
     """

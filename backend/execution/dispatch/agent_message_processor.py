@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 
 if TYPE_CHECKING:
+
     class RoomMemoryReader(Protocol):
         async def get_room_memory_by_room_id(self, room_id: str): ...
 
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
             task_updated_at,
             task_data: dict,
         ) -> bool: ...
+
 
 logger = get_logger(__name__)
 
@@ -98,6 +100,7 @@ class AgentMessageProcessor:
         if not self._lazy_initialized:
             self._lazy_initialized = True
             from execution.dispatch.middleware.cloud_health import CloudHealthMiddleware
+
             chain = DispatchChain()
             if self._health_service is not None:
                 chain.add(
@@ -134,7 +137,9 @@ class AgentMessageProcessor:
         self._relay_service_explicit = relay_service
         self.relay_service = relay_service
 
-        resolved_transport = transport or getattr(relay_service, "relay_transport", None)
+        resolved_transport = transport or getattr(
+            relay_service, "relay_transport", None
+        )
         if resolved_transport is None:
             direct_transport = self.transports.get("direct")
             response_handler = getattr(direct_transport, "response_handler", None)
@@ -147,7 +152,9 @@ class AgentMessageProcessor:
                     task_tracker=self._task_tracker,
                     call_counter=getattr(relay_service, "agent_call_counter", None),
                     delivery=self.delivery,
-                    ownership_store=getattr(relay_service, "task_ownership_store", None),
+                    ownership_store=getattr(
+                        relay_service, "task_ownership_store", None
+                    ),
                     ownership_lease_maintainer=getattr(
                         relay_service,
                         "ownership_lease_maintainer",

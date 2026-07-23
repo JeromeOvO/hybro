@@ -70,7 +70,9 @@ def _validate_external_uri(uri: str) -> str | None:
         return "missing hostname"
 
     try:
-        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        resolved = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
     except socket.gaierror:
         return f"DNS resolution failed for {hostname}"
 
@@ -133,7 +135,9 @@ async def convert_inline_bytes_to_s3(
         if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
             logger.warning(
                 "Inline conversion cap (%d) reached: room=%s message=%s - skipping remaining",
-                MAX_INLINE_CONVERSIONS_PER_MESSAGE, room_id, message_id,
+                MAX_INLINE_CONVERSIONS_PER_MESSAGE,
+                room_id,
+                message_id,
             )
             break
 
@@ -142,11 +146,16 @@ async def convert_inline_bytes_to_s3(
         except Exception:
             logger.warning(
                 "Invalid base64 in file part: room=%s message=%s - skipping",
-                room_id, message_id,
+                room_id,
+                message_id,
             )
             continue
 
-        mime = file_info.get("mime_type") or file_info.get("mimeType") or "application/octet-stream"
+        mime = (
+            file_info.get("mime_type")
+            or file_info.get("mimeType")
+            or "application/octet-stream"
+        )
         ext = mime.split("/")[-1] if "/" in mime else "bin"
         storage_key = f"artifacts/{room_id}/{message_id}/notify-{converted}.{ext}"
 
@@ -160,7 +169,8 @@ async def convert_inline_bytes_to_s3(
             )
             orig_name = file_info.get("name")
             presigned_url = await storage.generate_presigned_url(
-                storage_key, filename=orig_name,
+                storage_key,
+                filename=orig_name,
             )
             file_info["bytes"] = None
             file_info["uri"] = presigned_url
@@ -171,11 +181,16 @@ async def convert_inline_bytes_to_s3(
         except Exception:
             logger.error(
                 "Failed to upload inline file part to storage: room=%s message=%s",
-                room_id, message_id, exc_info=True,
+                room_id,
+                message_id,
+                exc_info=True,
             )
 
     return await _download_external_uris_to_s3(
-        parts, room_id, message_id, converted_so_far=converted,
+        parts,
+        room_id,
+        message_id,
+        converted_so_far=converted,
     )
 
 
@@ -204,7 +219,10 @@ async def _download_external_uris_to_s3(
         if rejection:
             logger.warning(
                 "Skipping unsafe external URI (%s): room=%s message=%s uri=%s",
-                rejection, room_id, message_id, uri[:120],
+                rejection,
+                room_id,
+                message_id,
+                uri[:120],
             )
             continue
         uri_parts.append((part, file_info, uri))
@@ -221,7 +239,9 @@ async def _download_external_uris_to_s3(
             if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
                 logger.warning(
                     "Conversion cap (%d) reached during URI download: room=%s message=%s",
-                    MAX_INLINE_CONVERSIONS_PER_MESSAGE, room_id, message_id,
+                    MAX_INLINE_CONVERSIONS_PER_MESSAGE,
+                    room_id,
+                    message_id,
                 )
                 break
 
@@ -237,10 +257,16 @@ async def _download_external_uris_to_s3(
                         )
                         continue
                     content_length = _response_content_length(response)
-                    if content_length is not None and content_length > _max_download_bytes:
+                    if (
+                        content_length is not None
+                        and content_length > _max_download_bytes
+                    ):
                         logger.warning(
                             "External URI Content-Length %d exceeds limit %d: room=%s message=%s",
-                            content_length, _max_download_bytes, room_id, message_id,
+                            content_length,
+                            _max_download_bytes,
+                            room_id,
+                            message_id,
                         )
                         continue
                     data = await _read_limited_response_body(
@@ -250,7 +276,9 @@ async def _download_external_uris_to_s3(
                     if data is None:
                         logger.warning(
                             "External URI body exceeds size limit (%d bytes): room=%s message=%s",
-                            _max_download_bytes, room_id, message_id,
+                            _max_download_bytes,
+                            room_id,
+                            message_id,
                         )
                         continue
                     content_type = (
@@ -262,11 +290,16 @@ async def _download_external_uris_to_s3(
             except Exception:
                 logger.warning(
                     "Failed to download external URI: room=%s message=%s uri=%s",
-                    room_id, message_id, uri[:120], exc_info=True,
+                    room_id,
+                    message_id,
+                    uri[:120],
+                    exc_info=True,
                 )
                 continue
 
-            mime = file_info.get("mime_type") or file_info.get("mimeType") or content_type
+            mime = (
+                file_info.get("mime_type") or file_info.get("mimeType") or content_type
+            )
             ext = mime.split("/")[-1] if "/" in mime else "bin"
             storage_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
 
@@ -280,7 +313,8 @@ async def _download_external_uris_to_s3(
                 )
                 orig_name = file_info.get("name")
                 presigned_url = await storage.generate_presigned_url(
-                    storage_key, filename=orig_name,
+                    storage_key,
+                    filename=orig_name,
                 )
                 file_info["uri"] = presigned_url
                 if part_dict.get("metadata") is None:
@@ -290,7 +324,9 @@ async def _download_external_uris_to_s3(
             except Exception:
                 logger.error(
                     "Failed to upload downloaded URI to storage: room=%s message=%s",
-                    room_id, message_id, exc_info=True,
+                    room_id,
+                    message_id,
+                    exc_info=True,
                 )
 
     return converted
@@ -334,12 +370,15 @@ async def convert_pydantic_artifacts_to_s3(
             try:
                 storage = _require_storage_service()
                 await storage.upload_file(
-                    file_data=io.BytesIO(decoded), s3_key=storage_key,
-                    content_type=mime, content_length=len(decoded),
+                    file_data=io.BytesIO(decoded),
+                    s3_key=storage_key,
+                    content_type=mime,
+                    content_length=len(decoded),
                 )
                 orig_name = getattr(fc, "name", None)
                 presigned_url = await storage.generate_presigned_url(
-                    storage_key, filename=orig_name,
+                    storage_key,
+                    filename=orig_name,
                 )
                 root.file = FileContent(
                     uri=presigned_url,
@@ -351,7 +390,9 @@ async def convert_pydantic_artifacts_to_s3(
             except Exception:
                 logger.error(
                     "Failed to upload inline base64 to storage: room=%s message=%s",
-                    room_id, message_id, exc_info=True,
+                    room_id,
+                    message_id,
+                    exc_info=True,
                 )
 
         uri_items: list[tuple[object, object, str]] = []
@@ -369,7 +410,9 @@ async def convert_pydantic_artifacts_to_s3(
             if rejection:
                 logger.warning(
                     "Skipping unsafe external URI (%s): room=%s message=%s",
-                    rejection, room_id, message_id,
+                    rejection,
+                    room_id,
+                    message_id,
                 )
                 continue
             uri_items.append((root, fc, uri))
@@ -390,7 +433,10 @@ async def convert_pydantic_artifacts_to_s3(
                         if response.status_code != 200:
                             continue
                         content_length = _response_content_length(response)
-                        if content_length is not None and content_length > _max_download_bytes:
+                        if (
+                            content_length is not None
+                            and content_length > _max_download_bytes
+                        ):
                             continue
                         data = await _read_limited_response_body(
                             response,
@@ -402,7 +448,9 @@ async def convert_pydantic_artifacts_to_s3(
                 except Exception:
                     logger.warning(
                         "Failed to download external URI: room=%s message=%s",
-                        room_id, message_id, exc_info=True,
+                        room_id,
+                        message_id,
+                        exc_info=True,
                     )
                     continue
 
@@ -413,12 +461,15 @@ async def convert_pydantic_artifacts_to_s3(
                 try:
                     storage = _require_storage_service()
                     await storage.upload_file(
-                        file_data=io.BytesIO(data), s3_key=storage_key,
-                        content_type=mime, content_length=len(data),
+                        file_data=io.BytesIO(data),
+                        s3_key=storage_key,
+                        content_type=mime,
+                        content_length=len(data),
                     )
                     orig_name = getattr(fc, "name", None)
                     presigned_url = await storage.generate_presigned_url(
-                        storage_key, filename=orig_name,
+                        storage_key,
+                        filename=orig_name,
                     )
                     fc.uri = presigned_url
                     root.metadata = {**(root.metadata or {}), "s3_key": storage_key}
@@ -426,7 +477,9 @@ async def convert_pydantic_artifacts_to_s3(
                 except Exception:
                     logger.error(
                         "Failed to upload downloaded URI to storage: room=%s message=%s",
-                        room_id, message_id, exc_info=True,
+                        room_id,
+                        message_id,
+                        exc_info=True,
                     )
 
     return converted

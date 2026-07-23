@@ -426,7 +426,9 @@ class ExecutionFacade:
         try:
             active_runs = await self._run_reader.get_runs_for_room(request.room_id)
         except Exception:
-            logger.warning("active room run lookup failed before execute", exc_info=True)
+            logger.warning(
+                "active room run lookup failed before execute", exc_info=True
+            )
             return None
         if not active_runs:
             return None
@@ -553,7 +555,10 @@ class ExecutionFacade:
             client_request_id=request.client_request_id,
             extend_info=self._room_request_extend_info(request),
         )
-        persisted_response, preflight_context = await self._room_center.persist_message_to_room(
+        (
+            persisted_response,
+            preflight_context,
+        ) = await self._room_center.persist_message_to_room(
             room_request,
             request.target_group,
             request.mentioned_agent_ids,
@@ -664,7 +669,10 @@ class ExecutionFacade:
             current = await self._orchestration_run_store.get_latest_by_user_message_id(
                 message_id
             )
-            if current is not None and current.status in TERMINAL_ORCHESTRATION_STATUSES:
+            if (
+                current is not None
+                and current.status in TERMINAL_ORCHESTRATION_STATUSES
+            ):
                 logger.info(
                     "cancellation ignored for terminal orchestration",
                     extra={

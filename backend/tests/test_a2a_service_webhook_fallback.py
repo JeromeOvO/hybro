@@ -255,7 +255,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message", fake_send_message
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com")
@@ -296,7 +298,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message", fake_send_message
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "")
@@ -333,7 +337,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message", fake_send_message
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com/")
@@ -374,7 +380,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=False
             ),
-            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message", fake_send_message
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "https://api.example.com")
@@ -411,7 +419,9 @@ class TestSendMessageTrackedAgentWebhookFallback:
             patch.object(
                 service, "has_push_notification_capability", return_value=True
             ),
-            patch("a2a_adapter.runtime_service.adapter_send_message", fake_send_message),
+            patch(
+                "a2a_adapter.runtime_service.adapter_send_message", fake_send_message
+            ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
         ):
             _bind_webhook_base_url(service, "")
@@ -710,7 +720,9 @@ class TestReplyToTaskWebhookFallback:
         _bind_webhook_base_url(service, "")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            return _terminal_task_with_private_request_history_response(private_sentinel)
+            return _terminal_task_with_private_request_history_response(
+                private_sentinel
+            )
 
         with (
             patch(

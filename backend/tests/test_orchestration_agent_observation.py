@@ -46,12 +46,13 @@ def test_extracts_missing_fields_as_unknowns_and_candidate_blockers():
         "agent_blocker:agent-1:requested_coverage.limit",
     ]
     assert all(item.source == "agent" for item in observation.blocker_candidates)
-    assert all(item.validation_status == "candidate" for item in observation.blocker_candidates)
-    assert all(item.validated_user_only is False for item in observation.blocker_candidates)
-    assert {
-        fact["semantic_key"]: fact["value"]
-        for fact in observation.facts
-    } == {
+    assert all(
+        item.validation_status == "candidate" for item in observation.blocker_candidates
+    )
+    assert all(
+        item.validated_user_only is False for item in observation.blocker_candidates
+    )
+    assert {fact["semantic_key"]: fact["value"] for fact in observation.facts} == {
         "agent_observation:agent-msg-1:submission:client.name": "Example Inc",
         "agent_observation:agent-msg-1:submission:requested_coverage.retention": 25000,
     }
@@ -104,10 +105,7 @@ def test_does_not_create_missing_unknown_for_false_zero_or_empty_list():
 
     assert observation.unknowns == []
     assert observation.blocker_candidates == []
-    assert {
-        fact["semantic_key"]: fact["value"]
-        for fact in observation.facts
-    } == {
+    assert {fact["semantic_key"]: fact["value"] for fact in observation.facts} == {
         "agent_observation:agent-msg-3:submission:claim_count": 0,
         "agent_observation:agent-msg-3:submission:has_claims": False,
         "agent_observation:agent-msg-3:submission:operating_countries": [],

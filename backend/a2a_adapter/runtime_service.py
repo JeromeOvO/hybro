@@ -533,9 +533,7 @@ class A2AService:
         """Validate an incoming message from the agent based on its kind."""
         return adapter_validate_message_data(data)
 
-    async def process_a2a_response(
-        self, response: dict[str, Any]
-    ) -> Any:
+    async def process_a2a_response(self, response: dict[str, Any]) -> Any:
         if response.get("kind") == "error":
             raise A2AServiceError()
 

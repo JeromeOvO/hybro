@@ -55,7 +55,9 @@ class InMemoryHubResponseJournal:
         )
         return dict(record)
 
-    async def mark_processed(self, journal_id: str, claim_token: str | None = None) -> None:
+    async def mark_processed(
+        self, journal_id: str, claim_token: str | None = None
+    ) -> None:
         record = self._records.get(journal_id)
         if not record:
             return
@@ -69,7 +71,9 @@ class InMemoryHubResponseJournal:
             self._records[journal_id]["dead_lettered"] = True
             self._records[journal_id]["dead_letter_reason"] = reason
 
-    async def release_claim(self, journal_id: str, claim_token: str | None = None) -> None:
+    async def release_claim(
+        self, journal_id: str, claim_token: str | None = None
+    ) -> None:
         record = self._records.get(journal_id)
         if not record:
             return
@@ -106,9 +110,9 @@ class MongoHubResponseJournal:
         await _maybe_await(create_index([("journal_id", 1)], unique=True))
         await _maybe_await(
             create_index(
-            [("stable_idempotency_key", 1)],
-            unique=True,
-            partialFilterExpression={"stable_idempotency_key": {"$type": "string"}},
+                [("stable_idempotency_key", 1)],
+                unique=True,
+                partialFilterExpression={"stable_idempotency_key": {"$type": "string"}},
             )
         )
 
@@ -177,34 +181,40 @@ class MongoHubResponseJournal:
         matched = await _maybe_await(self._collection.update_one(query, update))
         if not matched:
             return None
-        record = await _maybe_await(self._collection.find_one({"journal_id": journal_id}))
+        record = await _maybe_await(
+            self._collection.find_one({"journal_id": journal_id})
+        )
         return dict(record) if record else None
 
-    async def mark_processed(self, journal_id: str, claim_token: str | None = None) -> None:
+    async def mark_processed(
+        self, journal_id: str, claim_token: str | None = None
+    ) -> None:
         query = {"journal_id": journal_id}
         if claim_token:
             query["claim_token"] = claim_token
         await _maybe_await(
             self._collection.update_one(
-            query,
-            {
-                "$set": {
-                    "processed": True,
-                    "processed_at": utcnow(),
-                }
-            },
+                query,
+                {
+                    "$set": {
+                        "processed": True,
+                        "processed_at": utcnow(),
+                    }
+                },
             )
         )
 
     async def mark_dead_letter(self, journal_id: str, reason: str) -> None:
         await _maybe_await(
             self._collection.update_one(
-            {"journal_id": journal_id},
-            {"$set": {"dead_lettered": True, "dead_letter_reason": reason}},
+                {"journal_id": journal_id},
+                {"$set": {"dead_lettered": True, "dead_letter_reason": reason}},
             )
         )
 
-    async def release_claim(self, journal_id: str, claim_token: str | None = None) -> None:
+    async def release_claim(
+        self, journal_id: str, claim_token: str | None = None
+    ) -> None:
         query = {"journal_id": journal_id}
         if claim_token:
             query["claim_token"] = claim_token
@@ -226,16 +236,16 @@ class MongoHubResponseJournal:
         now = utcnow()
         result = await _maybe_await(
             self._collection.find(
-            {
-                "processed": {"$ne": True},
-                "dead_lettered": {"$ne": True},
-                "$or": [
-                    {"claim_expires_at": {"$exists": False}},
-                    {"claim_expires_at": None},
-                    {"claim_expires_at": {"$lte": now}},
-                ],
-            },
-            limit=limit,
+                {
+                    "processed": {"$ne": True},
+                    "dead_lettered": {"$ne": True},
+                    "$or": [
+                        {"claim_expires_at": {"$exists": False}},
+                        {"claim_expires_at": None},
+                        {"claim_expires_at": {"$lte": now}},
+                    ],
+                },
+                limit=limit,
             )
         )
         to_list = getattr(result, "to_list", None)
@@ -259,6 +269,7 @@ def _claim_is_active(value, comparison) -> bool:
 
 def _claim_is_replayable(value, comparison) -> bool:
     return value is None or ensure_utc(value) <= ensure_utc(comparison)
+
 
 __all__ = [
     "HubResponseJournal",

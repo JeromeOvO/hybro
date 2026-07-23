@@ -5,14 +5,21 @@ import json
 from uuid import uuid4
 
 
-def stable_response_key(hub_id: str, task_id: str | None, response_seq: object) -> str | None:
+def stable_response_key(
+    hub_id: str, task_id: str | None, response_seq: object
+) -> str | None:
     if not hub_id or not task_id or response_seq is None:
         return None
     return f"hub-response:{hub_id}:{task_id}:{response_seq}"
 
 
 def legacy_correlation_fingerprint(
-    hub_id: str, room_id: str, agent_message_id: str, event_type: str, batch_index: int, payload: dict
+    hub_id: str,
+    room_id: str,
+    agent_message_id: str,
+    event_type: str,
+    batch_index: int,
+    payload: dict,
 ) -> str:
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode("utf-8")

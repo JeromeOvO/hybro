@@ -82,7 +82,9 @@ class AgentService:
             )
         except ValueError as exc:
             status = 400 if "already registered" in str(exc).lower() else 500
-            return AgentCenterResponse(success=False, error=str(exc), status_code=status)
+            return AgentCenterResponse(
+                success=False, error=str(exc), status_code=status
+            )
         except Exception as exc:
             logger.error("AgentCenter: Failed to register agent: %s", exc)
             return AgentCenterResponse(success=False, error=str(exc), status_code=500)
@@ -248,7 +250,11 @@ class AgentService:
             raise QueryTextRequiredError()
         if request.agent_count is not None and request.agent_count <= 0:
             raise IllgalParameterError()
-        count = request.agent_count if request.agent_count and request.agent_count > 0 else 5
+        count = (
+            request.agent_count
+            if request.agent_count and request.agent_count > 0
+            else 5
+        )
         matches = await self._require_facade().match_agents(
             request.query_text,
             limit=count,

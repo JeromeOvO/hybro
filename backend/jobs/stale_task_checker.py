@@ -549,7 +549,9 @@ class StaleTaskChecker:
                 and state_value == CommonTaskState.COMPLETED.value
                 and projected_task.artifacts
             ):
-                task_text = extract_text_from_artifacts(projected_task.artifacts) or None
+                task_text = (
+                    extract_text_from_artifacts(projected_task.artifacts) or None
+                )
             await self._store.update_task_on_message(
                 message_id,
                 projected_task_data,

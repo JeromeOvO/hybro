@@ -179,7 +179,8 @@ Actions remaining: {steps_remaining}.
 
 ## What should happen next?"""
 
-SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
+SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = (
+    """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
 
 ## Original User Goal
 {user_goal}
@@ -211,7 +212,10 @@ SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = """You are synthesizing the results from mu
 - Be concise. The user has already seen each agent's individual response.
 - Focus on the unified answer, not a recap of each agent's full response.
 
-""" + HYBRO_MARKDOWN_RESPONSE_FORMAT + "\n"
+"""
+    + HYBRO_MARKDOWN_RESPONSE_FORMAT
+    + "\n"
+)
 
 
 class RoomSupervisorService:
@@ -228,9 +232,7 @@ class RoomSupervisorService:
     ) -> None:
         self._supervisor_service = supervisor_service
 
-    def bind_supervisor_service(
-        self, supervisor_service: SupervisorLLMService
-    ) -> None:
+    def bind_supervisor_service(self, supervisor_service: SupervisorLLMService) -> None:
         self._supervisor_service = supervisor_service
 
     # =========================================================================
@@ -370,7 +372,9 @@ class RoomSupervisorService:
             # the root cause of duplicated agent responses.
             if action.action == ActionType.DELEGATE and len(trajectory.entries) >= 1:
                 action = self._guard_consecutive_redelegation(
-                    action, trajectory, max_consecutive=1,
+                    action,
+                    trajectory,
+                    max_consecutive=1,
                 )
 
             logger.info(
@@ -422,7 +426,9 @@ class RoomSupervisorService:
             synthesis_instruction=synthesis_instruction
             or "Combine the agent responses into a unified, coherent answer.",
         )
-        user_prompt = "Write the final answer that best fulfills the original user goal."
+        user_prompt = (
+            "Write the final answer that best fulfills the original user goal."
+        )
         return system_prompt, user_prompt
 
     async def synthesize_stream(
@@ -560,9 +566,7 @@ class RoomSupervisorService:
                     for qi, q in enumerate(entry.action.questions, 1):
                         lines.append(f"  Question {qi}: {q.prompt}")
                 elif entry.action.clarification_question:
-                    lines.append(
-                        f"  Asked user: {entry.action.clarification_question}"
-                    )
+                    lines.append(f"  Asked user: {entry.action.clarification_question}")
             elif entry.action.action == ActionType.SYNTHESIZE:
                 lines.append(f"  Instruction: {entry.action.synthesis_instruction}")
             elif entry.action.action == ActionType.DONE:
@@ -630,10 +634,7 @@ class RoomSupervisorService:
         for entry in reversed(trajectory.entries):
             if entry.action.action != ActionType.DELEGATE:
                 break
-            matches = {
-                r.agent_id for r in entry.results
-                if r.success == count_success
-            }
+            matches = {r.agent_id for r in entry.results if r.success == count_success}
             matched = target_ids & matches
             if not matched:
                 break
@@ -653,13 +654,14 @@ class RoomSupervisorService:
         offender_names = [
             t.agent_name for t in action.targets if t.agent_id in offender_ids
         ]
-        remaining = [
-            t for t in action.targets if t.agent_id not in offender_ids
-        ]
+        remaining = [t for t in action.targets if t.agent_id not in offender_ids]
         if remaining:
             logger.warning(
                 "%s guard: stripping %s (%d %s) — delegating to remaining %s only",
-                label, offender_names, threshold, reason_suffix,
+                label,
+                offender_names,
+                threshold,
+                reason_suffix,
                 [t.agent_name for t in remaining],
             )
             return SupervisorAction(
@@ -673,7 +675,10 @@ class RoomSupervisorService:
             )
         logger.warning(
             "%s guard: all targets %s hit %d %s — forcing DONE",
-            label, offender_names, threshold, reason_suffix,
+            label,
+            offender_names,
+            threshold,
+            reason_suffix,
         )
         return SupervisorAction(
             action=ActionType.DONE,
@@ -711,16 +716,20 @@ class RoomSupervisorService:
 
         # --- Failure guard ---
         fail_counts = self._count_consecutive_outcomes(
-            target_ids, trajectory, count_success=False,
+            target_ids,
+            trajectory,
+            count_success=False,
         )
         fail_offenders = {
-            aid for aid, c in fail_counts.items()
-            if c >= max_consecutive_failures
+            aid for aid, c in fail_counts.items() if c >= max_consecutive_failures
         }
         if fail_offenders:
             action = self._strip_offenders(
-                action, fail_offenders, "Failure",
-                max_consecutive_failures, "consecutive failures",
+                action,
+                fail_offenders,
+                "Failure",
+                max_consecutive_failures,
+                "consecutive failures",
             )
             if action.action == ActionType.DONE:
                 return action
@@ -728,7 +737,9 @@ class RoomSupervisorService:
 
         # --- Success guard ---
         success_counts = self._count_consecutive_outcomes(
-            target_ids, trajectory, count_success=True,
+            target_ids,
+            trajectory,
+            count_success=True,
         )
         success_offenders = {
             aid for aid, c in success_counts.items() if c >= max_consecutive
@@ -736,8 +747,11 @@ class RoomSupervisorService:
         if not success_offenders:
             return action
         return self._strip_offenders(
-            action, success_offenders, "Success",
-            max_consecutive, "consecutive successes",
+            action,
+            success_offenders,
+            "Success",
+            max_consecutive,
+            "consecutive successes",
         )
 
     def _parse_supervisor_action(self, response_json: dict) -> SupervisorAction:
@@ -806,19 +820,23 @@ class RoomSupervisorService:
                     continue
                 q_pt = q.get("prompt_type")
                 q_choices = q.get("choices")
-                valid.append(ClarifyQuestion(
-                    prompt=q["prompt"],
-                    prompt_type=(
-                        q_pt if isinstance(q_pt, str)
-                        and q_pt in ("text", "choice", "confirmation")
-                        else None
-                    ),
-                    choices=(
-                        q_choices if isinstance(q_choices, list)
-                        and all(isinstance(c, str) for c in q_choices)
-                        else None
-                    ),
-                ))
+                valid.append(
+                    ClarifyQuestion(
+                        prompt=q["prompt"],
+                        prompt_type=(
+                            q_pt
+                            if isinstance(q_pt, str)
+                            and q_pt in ("text", "choice", "confirmation")
+                            else None
+                        ),
+                        choices=(
+                            q_choices
+                            if isinstance(q_choices, list)
+                            and all(isinstance(c, str) for c in q_choices)
+                            else None
+                        ),
+                    )
+                )
             if valid:
                 parsed_questions = valid
 
@@ -1054,6 +1072,7 @@ class RoomSupervisorService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
+
 
 # Singleton instance
 room_supervisor_service = RoomSupervisorService()

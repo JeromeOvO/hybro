@@ -155,9 +155,7 @@ def _to_bedrock_messages(messages: list[dict]) -> tuple[str, list[dict[str, Any]
             if bedrock_messages and bedrock_messages[-1]["role"] == mapped_role:
                 bedrock_messages[-1]["content"].extend(content_block)
             else:
-                bedrock_messages.append(
-                    {"role": mapped_role, "content": content_block}
-                )
+                bedrock_messages.append({"role": mapped_role, "content": content_block})
     if not bedrock_messages:
         bedrock_messages.append(
             {"role": "user", "content": [{"type": "text", "text": ""}]}
@@ -267,7 +265,9 @@ def _normalize_structured_args(
 ) -> tuple[str, dict | None]:
     if len(args) == 2:
         legacy_schema, legacy_model = args
-        return str(legacy_model), legacy_schema if isinstance(legacy_schema, dict) else None
+        return str(legacy_model), legacy_schema if isinstance(
+            legacy_schema, dict
+        ) else None
     if len(args) == 1:
         first = args[0]
         if isinstance(first, dict):

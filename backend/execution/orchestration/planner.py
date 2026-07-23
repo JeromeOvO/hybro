@@ -312,9 +312,7 @@ class RoomSupervisorPlannerAdapter:
 
     @staticmethod
     def _has_completion_basis(context: OrchestrationPlannerContext) -> bool:
-        return bool(
-            context.state_context.agent_outputs or context.state_context.facts
-        )
+        return bool(context.state_context.agent_outputs or context.state_context.facts)
 
     async def _raw_action(
         self,
@@ -340,8 +338,8 @@ class RoomSupervisorPlannerAdapter:
             "Treat state_context.run.goal as the durable user goal. Compare that "
             "goal with the accumulated facts, artifacts, agent outputs, and open "
             "questions on every turn.\n\n"
-            "Return valid JSON only. The JSON object must include \"action\" and "
-            "\"reasoning\".\n\n"
+            'Return valid JSON only. The JSON object must include "action" and '
+            '"reasoning".\n\n'
             "If the goal is not yet complete, delegate the next useful task or use "
             "ask_user only when user-only information truly blocks progress. If the "
             "available results satisfy the goal, return complete. Execution will "
@@ -355,8 +353,8 @@ class RoomSupervisorPlannerAdapter:
             "goal, ask_user only for a concrete user-only blocker, otherwise fail "
             "with an actionable reason. Never repeat the same agent and goal when "
             "the accumulated evidence has not changed.\n\n"
-            "For a delegate action, \"targets\" is required and each target object "
-            "must include \"agent_id\" and a non-empty \"task\" string. The task "
+            'For a delegate action, "targets" is required and each target object '
+            'must include "agent_id" and a non-empty "task" string. The task '
             "must be the exact instruction the target agent should execute, with "
             "enough context to act without reading hidden planner state.\n\n"
             "For a delegate action, each target may include context_refs, "

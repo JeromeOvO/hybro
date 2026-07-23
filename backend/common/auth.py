@@ -63,6 +63,7 @@ def resolve_provider_name(provider_id: str | None) -> str | None:
         return None
     return _cached_clerk_user_name(provider_id)
 
+
 class ClerkUser:
     """Represents an authenticated Clerk user"""
 
@@ -89,7 +90,6 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
-
         # Use Clerk SDK to authenticate the request
         # The SDK handles JWKS fetching, caching, and JWT verification automatically
         # Create authentication options with secret key and authorized parties
@@ -114,8 +114,8 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user_id = payload.get("sub") # Subject claim contains user ID
-        session_id = payload.get("sid") # Session ID claim
+        user_id = payload.get("sub")  # Subject claim contains user ID
+        session_id = payload.get("sid")  # Session ID claim
 
         if not user_id:
             raise HTTPException(
@@ -192,17 +192,16 @@ async def get_current_user_with_query_token(
     if token:
         # For query parameter tokens, we need to create a modified request
         # with the token in the Authorization header for the SDK to verify
-        
+
         # Build headers list from original request, replacing/adding authorization
         # ASGI headers must be lowercase bytes tuples
         original_headers = list(request.scope.get("headers", []))
-        
+
         # Remove any existing authorization header (case-insensitive)
         filtered_headers = [
-            (k, v) for k, v in original_headers 
-            if k.lower() != b"authorization"
+            (k, v) for k, v in original_headers if k.lower() != b"authorization"
         ]
-        
+
         # Add the new authorization header
         filtered_headers.append((b"authorization", f"Bearer {token}".encode()))
 

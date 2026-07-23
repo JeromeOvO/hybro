@@ -305,8 +305,7 @@ def test_common_settings_expose_delivery_config_fields():
 
     settings = Settings(_env_file=None)
     values = {
-        field: getattr(settings, field)
-        for field in DeliveryConfig.__dataclass_fields__
+        field: getattr(settings, field) for field in DeliveryConfig.__dataclass_fields__
     }
 
     assert DeliveryConfig(**values) == DeliveryConfig()
@@ -397,7 +396,10 @@ def test_delivery_import_boundary():
                     if target:
                         root = target.split(".")[0]
                         assert root not in FORBIDDEN_DELIVERY_ROOTS, path
-                        assert target not in {"common.config", "common.config.settings"}, path
+                        assert target not in {
+                            "common.config",
+                            "common.config.settings",
+                        }, path
             elif isinstance(node, ast.Attribute) and node.attr == "settings":
                 chain = _attribute_chain(node.value)
                 assert chain not in imported_common_config_aliases, path
@@ -418,7 +420,10 @@ def test_business_modules_do_not_import_delivery_concretes():
                     assert node.module.split(".")[0] != "delivery", path
                 elif isinstance(node, ast.Call):
                     call_name = _attribute_chain(node.func)
-                    if call_name in {"importlib.import_module", "__import__"} and node.args:
+                    if (
+                        call_name in {"importlib.import_module", "__import__"}
+                        and node.args
+                    ):
                         target = _static_string(node.args[0])
                         assert not (target and target.split(".")[0] == "delivery"), path
 

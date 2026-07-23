@@ -153,11 +153,17 @@ class AgentRouteAdapter:
     ) -> AgentCenterResponse:
         if response.success and response.agents:
             for agent in response.agents:
-                if not agent.agent_card.provider or not agent.agent_card.provider.organization:
+                if (
+                    not agent.agent_card.provider
+                    or not agent.agent_card.provider.organization
+                ):
                     agent.provider_name = resolve_provider_name(agent.provider_id)
         if response.success and response.agent:
             agent = response.agent
-            if not agent.agent_card.provider or not agent.agent_card.provider.organization:
+            if (
+                not agent.agent_card.provider
+                or not agent.agent_card.provider.organization
+            ):
                 agent.provider_name = resolve_provider_name(agent.provider_id)
         return self._mask_sensitive_information(
             response, ["agent_url", "agent_card.url"]
@@ -209,5 +215,6 @@ class AgentRouteAdapter:
         self, response: AgentCenterResponse, fields: list[str]
     ) -> AgentCenterResponse:
         return self.agent_service._mask_sensitive_information(response, fields)
+
 
 __all__ = ["AgentRouteAdapter"]

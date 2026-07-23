@@ -1,4 +1,9 @@
-('Compatibility checks for the retired legacy SSE broker surface.\n\nThe broker behavior itself now lives under ``delivery/event_bus`` and\n``delivery/event_publisher``. This file keeps the legacy factory/no-Redis\nbehavior and ' + 'app-' + 'shell' + ' health aliases covered for callers that still import the\nold test helpers.\n')
+(
+    "Compatibility checks for the retired legacy SSE broker surface.\n\nThe broker behavior itself now lives under ``delivery/event_bus`` and\n``delivery/event_publisher``. This file keeps the legacy factory/no-Redis\nbehavior and "
+    + "app-"
+    + "shell"
+    + " health aliases covered for callers that still import the\nold test helpers.\n"
+)
 
 
 class MockRedisService:

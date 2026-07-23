@@ -59,9 +59,7 @@ def test_record_planner_action_increments_step_and_logs_decision():
     assert updated.last_planner_action.action == "ask_user"
     assert updated.decision_log[-1]["reasoning"] == "Need the applicant revenue."
     assert updated.decision_log[-1]["targets"] == []
-    assert updated.decision_log[-1]["planner_action"] == action.model_dump(
-        mode="json"
-    )
+    assert updated.decision_log[-1]["planner_action"] == action.model_dump(mode="json")
 
 
 def test_record_planner_action_never_exceeds_step_budget():

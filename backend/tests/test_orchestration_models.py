@@ -438,7 +438,10 @@ def test_delegate_target_carries_explicit_refs_and_expected_outputs():
             DispatchContentRef(kind=DispatchRefKind.CONTEXT, ref_id="room-background")
         ],
         artifact_refs=[
-            DispatchContentRef(kind=DispatchRefKind.ARTIFACT, ref_id="broker-msg:artifact_id:submission")
+            DispatchContentRef(
+                kind=DispatchRefKind.ARTIFACT,
+                ref_id="broker-msg:artifact_id:submission",
+            )
         ],
         attachment_refs=[
             DispatchContentRef(kind=DispatchRefKind.ATTACHMENT, ref_id="file-1")
@@ -456,7 +459,9 @@ def test_delegate_target_carries_explicit_refs_and_expected_outputs():
         targets=[target],
     )
 
-    assert action.targets[0].artifact_refs[0].ref_id == "broker-msg:artifact_id:submission"
+    assert (
+        action.targets[0].artifact_refs[0].ref_id == "broker-msg:artifact_id:submission"
+    )
     assert action.targets[0].attachment_policy == "explicit_refs_only"
     assert action.targets[0].expected_outputs[1].kind == "pricing_guidance"
 

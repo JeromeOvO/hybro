@@ -139,7 +139,10 @@ async def test_object_storage_file_storage_uploads_and_records_metadata():
     assert uploaded.file_name == "report.pdf"
     assert uploaded.mime_type == "application/pdf"
     assert uploaded.size_bytes == 5
-    assert uploaded.url == "https://signed.example/uploads/room-1/file-123/report.pdf?ttl=3600"
+    assert (
+        uploaded.url
+        == "https://signed.example/uploads/room-1/file-123/report.pdf?ttl=3600"
+    )
 
 
 @pytest.mark.asyncio
@@ -222,9 +225,7 @@ async def test_object_storage_file_storage_reads_bytes_by_storage_key():
     data = await storage.get_bytes("uploads/room/file/report.pdf", max_bytes=1024)
 
     assert data == b"stored-bytes"
-    assert object_storage.get_bytes_calls == [
-        ("uploads/room/file/report.pdf", 1024)
-    ]
+    assert object_storage.get_bytes_calls == [("uploads/room/file/report.pdf", 1024)]
 
 
 @pytest.mark.asyncio

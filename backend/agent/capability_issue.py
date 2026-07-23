@@ -50,9 +50,7 @@ class AgentCapabilityIssueService:
     ) -> None:
         self._repo = repository
         self._threshold = (
-            threshold
-            if threshold is not None
-            else settings.capability_issue_threshold
+            threshold if threshold is not None else settings.capability_issue_threshold
         )
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._now = now
@@ -159,7 +157,9 @@ class AgentCapabilityIssueServiceAdapter:
         """Backwards-compat binder retained for phased migration."""
         self._service = AgentCapabilityIssueService(repository=repository)
 
-    def bind_mongo(self, mongo: Any, collection_name: str = "agent_capability_issues") -> None:
+    def bind_mongo(
+        self, mongo: Any, collection_name: str = "agent_capability_issues"
+    ) -> None:
         """Bind a MongoDAL directly."""
         self.bind_repository(
             AgentCapabilityIssueMongoRepository(

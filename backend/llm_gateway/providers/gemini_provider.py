@@ -149,7 +149,9 @@ def _usage_from_gemini(response: Any) -> LLMUsage | None:
 def _read_usage(usage: Any, snake_name: str, camel_name: str) -> int:
     if isinstance(usage, dict):
         return int(usage.get(snake_name) or usage.get(camel_name) or 0)
-    return int(getattr(usage, snake_name, None) or getattr(usage, camel_name, None) or 0)
+    return int(
+        getattr(usage, snake_name, None) or getattr(usage, camel_name, None) or 0
+    )
 
 
 def _with_schema_instruction(messages: list[dict], schema: dict) -> list[dict]:
@@ -194,7 +196,9 @@ def _normalize_structured_args(
 ) -> tuple[str, dict | None]:
     if len(args) == 2:
         legacy_schema, legacy_model = args
-        return str(legacy_model), legacy_schema if isinstance(legacy_schema, dict) else None
+        return str(legacy_model), legacy_schema if isinstance(
+            legacy_schema, dict
+        ) else None
     if len(args) == 1:
         first = args[0]
         if isinstance(first, dict):

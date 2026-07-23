@@ -394,9 +394,7 @@ class TestStaleTaskCheckerSemaphore:
                 store=SimpleNamespace(
                     is_message_cancelled=AsyncMock(return_value=False),
                     get_room_user_message_by_message_id=AsyncMock(
-                        return_value=SimpleNamespace(
-                            processing_claimed_at=utcnow()
-                        )
+                        return_value=SimpleNamespace(processing_claimed_at=utcnow())
                     ),
                 ),
                 rooms_collection=None,

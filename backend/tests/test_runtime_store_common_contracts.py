@@ -110,9 +110,12 @@ def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none
 
     assert cleared_room_payload["applied_from_group"] is None
     assert "room_agent_set" not in cleared_room_payload
-    assert runtime_to_room(cleared_room).model_dump(
-        mode="json", exclude_unset=True
-    )["applied_from_group"] is None
+    assert (
+        runtime_to_room(cleared_room).model_dump(mode="json", exclude_unset=True)[
+            "applied_from_group"
+        ]
+        is None
+    )
 
     cleared_context = RuntimeChatContext(
         memory_id="ctx-1",
@@ -123,9 +126,12 @@ def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none
     cleared_context_payload = _dump_runtime(cleared_context)
 
     assert cleared_context_payload["context_data"] is None
-    assert runtime_to_chat_context(cleared_context).model_dump(
-        mode="json", exclude_unset=True
-    )["context_data"] is None
+    assert (
+        runtime_to_chat_context(cleared_context).model_dump(
+            mode="json", exclude_unset=True
+        )["context_data"]
+        is None
+    )
 
     memory = RuntimeRoomMemory(room_id="r1", memory_id="mem-1")
     memory_payload = _dump_runtime(memory)
