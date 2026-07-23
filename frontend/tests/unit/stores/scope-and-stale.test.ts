@@ -49,9 +49,9 @@ describe('membership change detection', () => {
     const newIds = ['agent-c', 'agent-a', 'agent-b']
     const changed =
       currentIds.length !== newIds.length ||
-      !new Set(currentIds).isSubsetOf?.(new Set(newIds)) ||
       [...new Set(currentIds)].sort().join(',') !== [...new Set(newIds)].sort().join(',')
     expect(changed).toBe(false)
+
   })
 
   it('detects changed membership when an agent is added', () => {
