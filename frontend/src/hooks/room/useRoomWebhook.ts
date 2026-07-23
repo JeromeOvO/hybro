@@ -77,19 +77,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // concurrent render cannot kill the still-committed room's lifecycle.
   // After dispose(), stale async callbacks (e.g. SendMessage returning
   // after room switch) become no-ops instead of mutating the new room.
-  const lifecyclesRef = useRef(new Map<string, ProcessingLifecycle>())
+  const [lifecyclesMap] = useState(() => new Map<string, ProcessingLifecycle>())
 
-  let lifecycle = lifecyclesRef.current.get(roomId)
+  let lifecycle = lifecyclesMap.get(roomId)
   if (!lifecycle) {
     lifecycle = createProcessingLifecycle(setProcessing)
-    lifecyclesRef.current.set(roomId, lifecycle)
+    lifecyclesMap.set(roomId, lifecycle)
   }
 
   // After commit: dispose lifecycles for rooms we no longer view
   // (previous rooms + orphans from discarded concurrent renders).
   // On unmount or before re-run: dispose current room's lifecycle.
   useEffect(() => {
-    const map = lifecyclesRef.current
+    const map = lifecyclesMap
     for (const [id, lc] of map) {
       if (id !== roomId) {
         lc.dispose()

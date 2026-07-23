@@ -50,9 +50,11 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+// eslint-disable-next-line @next/next/no-img-element
 vi.mock('next/image', () => ({
-  default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+  default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img alt="" {...props} />,
 }))
+
 
 vi.mock('@/components/ui/sidebar', () => ({
   Sidebar: ({ children, ...props }: React.HTMLAttributes<HTMLElement>) => <aside {...props}>{children}</aside>,
