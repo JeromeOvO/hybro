@@ -19,22 +19,8 @@ class SortOrder(FrozenDTO):
     direction: str = "asc"
 
 
-class VectorRecord(FrozenDTO):
-    id: str
-    vector: list[float]
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class VectorSearchResult(FrozenDTO):
-    id: str
-    score: float
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 __all__ = [
     "PaginationParams",
     "QueryFilter",
     "SortOrder",
-    "VectorRecord",
-    "VectorSearchResult",
 ]

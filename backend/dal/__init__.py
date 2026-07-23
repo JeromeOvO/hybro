@@ -1,6 +1,5 @@
 from dal.index_registry import IndexRegistryImpl
 from dal.mongo import MongoCollectionAdapter, MongoDALImpl
-from dal.pinecone import VectorDALImpl
 from dal.redis import (
     DistributedLockImpl,
     LeaderElectorImpl,
@@ -20,5 +19,4 @@ __all__ = [
     "RedisKVImpl",
     "RedisPubSubImpl",
     "RedisStreamsImpl",
-    "VectorDALImpl",
 ]

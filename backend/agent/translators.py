@@ -103,14 +103,6 @@ def hub_descriptor_to_doc(
     }
 
 
-def docs_by_vector_order(
-    docs: list[dict[str, Any]],
-    agent_ids: list[str],
-) -> list[dict[str, Any]]:
-    docs_by_id = {doc.get("agent_id"): doc for doc in docs}
-    return [docs_by_id[agent_id] for agent_id in agent_ids if agent_id in docs_by_id]
-
-
 def _card(doc: dict[str, Any]) -> dict[str, Any]:
     return dict(doc.get("agent_card") or {})
 

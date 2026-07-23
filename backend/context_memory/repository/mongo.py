@@ -293,6 +293,7 @@ class ContentStorageMongoRepository:
         content_type: str,
         content_hash: str,
         stored_at: datetime,
+        turn_timestamp: datetime | str | None = None,
         expires_at: datetime | None = None,
         turn_notes: dict | None = None,
     ) -> str:
@@ -304,6 +305,7 @@ class ContentStorageMongoRepository:
             "content_type": content_type,
             "content_hash": content_hash,
             "stored_at": stored_at,
+            "turn_timestamp": turn_timestamp,
             "expires_at": expires_at,
             "turn_notes": turn_notes,
         }
@@ -362,7 +364,11 @@ class ContentStorageMongoRepository:
         return stats
 
     async def text_search(
-        self, room_id: str, query: str, limit: int = 50
+        self,
+        room_id: str,
+        query: str,
+        limit: int = 50,
+        skip: int = 0,
     ) -> list[dict]:
         return await self._content.find(
             {
@@ -376,13 +382,54 @@ class ContentStorageMongoRepository:
                 "turn_notes": 1,
                 "content_type": 1,
                 "stored_at": 1,
+                "turn_timestamp": 1,
                 "expires_at": 1,
             },
-            sort=[("score", {"$meta": "textScore"})],
+            sort=[
+                ("score", {"$meta": "textScore"}),
+                ("turn_timestamp", -1),
+                ("stored_at", -1),
+                ("turn_id", 1),
+            ],
             limit=limit,
+            skip=skip,
         )
 
-    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]:
+        """Read a bounded set of lightweight keyword candidates.
+
+        Full content remains excluded and is hydrated separately in bounded
+        batches by the search service.
+        """
+        return await self._content.find(
+            {
+                "room_id": room_id,
+                "$text": {"$search": query},
+                **_unexpired_content_query(),
+            },
+            projection={
+                "score": {"$meta": "textScore"},
+                "turn_id": 1,
+                "turn_notes": 1,
+                "content_type": 1,
+                "stored_at": 1,
+                "turn_timestamp": 1,
+                "expires_at": 1,
+            },
+            sort=[
+                ("score", {"$meta": "textScore"}),
+                ("turn_timestamp", -1),
+                ("stored_at", -1),
+                ("turn_id", 1),
+            ],
+            limit=max(1, int(limit)),
+        )
+
+    async def hydrate_turn_content(
+        self, room_id: str, turn_ids: list[str]
+    ) -> list[dict]:
         if not turn_ids:
             return []
         return await self._content.find(
@@ -391,7 +438,15 @@ class ContentStorageMongoRepository:
                 "turn_id": {"$in": turn_ids},
                 **_unexpired_content_query(),
             },
-            projection={"turn_id": 1, "turn_notes": 1, "expires_at": 1},
+            projection={
+                "turn_id": 1,
+                "turn_notes": 1,
+                "content": 1,
+                "content_type": 1,
+                "turn_timestamp": 1,
+                "stored_at": 1,
+                "expires_at": 1,
+            },
             limit=len(turn_ids),
         )
 

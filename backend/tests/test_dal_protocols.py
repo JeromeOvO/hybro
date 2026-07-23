@@ -15,7 +15,6 @@ from common.protocols import (
     RedisKV,
     RedisPubSub,
     RedisStreams,
-    VectorDAL,
 )
 
 
@@ -30,7 +29,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
         RedisKVImpl,
         RedisPubSubImpl,
         RedisStreamsImpl,
-        VectorDALImpl,
     )
 
     assert isinstance(MongoDALImpl(database=MagicMock()), MongoDAL)
@@ -38,7 +36,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(RedisKVImpl(client=MagicMock()), RedisKV)
     assert isinstance(RedisPubSubImpl(client=MagicMock()), RedisPubSub)
     assert isinstance(RedisStreamsImpl(client=MagicMock()), RedisStreams)
-    assert isinstance(VectorDALImpl(client=MagicMock()), VectorDAL)
     assert isinstance(
         ObjectStorageDALImpl(session=MagicMock(), bucket="bucket"),
         ObjectStorageDAL,
@@ -65,6 +62,8 @@ def test_mongo_collection_protocol_covers_repository_operations():
         "aggregate",
         "create_index",
         "create_indexes",
+        "index_information",
+        "drop_index",
         "bulk_write",
         "distinct",
         "find_one_by_stable_or_native_id",
@@ -111,7 +110,6 @@ def test_dal_top_level_exports_are_explicit():
         "RedisKVImpl",
         "RedisPubSubImpl",
         "RedisStreamsImpl",
-        "VectorDALImpl",
     }
 
 
@@ -123,7 +121,6 @@ def test_dal_subpackages_are_packaged():
         "dal",
         "dal.mongo",
         "dal.redis",
-        "dal.pinecone",
         "dal.s3",
     }.issubset(packages)
 

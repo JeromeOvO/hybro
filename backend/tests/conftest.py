@@ -584,7 +584,6 @@ def mock_settings():
         mock.clerk_secret_key = "test_secret_key"
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"
-        mock.pinecone_api_key = "test_pinecone_key"
         mock.openai_api_key = "test_openai_key"
         mock.context_model_window = 128000
         mock.context_system_prompt_tokens = 2000
@@ -710,8 +709,6 @@ def make_api_gateway_deps(
             "sse_transport": mock_sse_transport,
             "webhook_receiver": MagicMock(),
             "repository_provider": MagicMock(),
-            "embedding_provider": MagicMock(),
-            "vector_index": MagicMock(),
         }
         defaults.update(overrides)
         return APIGatewayDeps(**defaults)

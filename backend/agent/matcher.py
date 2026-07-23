@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agent.matching import (
-    compute_capability_score as _compute_capability_score,
+    accepts_input_modes as _accepts_input_modes,
 )
 from agent.matching import (
     select_top_matches,
@@ -23,18 +23,17 @@ def _agent_supports_files(agent: Agent) -> bool:
     return supports_files(_agent_to_dict(agent))
 
 
-def compute_capability_score(
+def accepts_input_modes(
     agent: Agent,
     required_input_modes: list[str] | None = None,
-) -> float:
-    return _compute_capability_score(_agent_to_dict(agent), required_input_modes)
+) -> bool:
+    return _accepts_input_modes(_agent_to_dict(agent), required_input_modes)
 
 
 @dataclass
 class MatchedAgent:
     agent: Agent
-    vector_score: float
-    capability_score: float
+    lexical_score: float
     final_score: float
 
 
@@ -118,9 +117,11 @@ def _to_matched_agent(match) -> MatchedAgent | None:
             return None
         return MatchedAgent(
             agent=agent,
-            vector_score=match.get("vector_score", match.get("score", 0.0)),
-            capability_score=match.get("capability_score", 1.0),
-            final_score=match.get("final_score", match.get("score", 0.0)),
+            lexical_score=match.get("lexical_score", match.get("score", 0.0)),
+            final_score=match.get(
+                "final_score",
+                match.get("lexical_score", match.get("score", 0.0)),
+            ),
         )
 
     if getattr(match, "agent", None) is None:
@@ -130,7 +131,6 @@ def _to_matched_agent(match) -> MatchedAgent | None:
         return None
     return MatchedAgent(
         agent=agent,
-        vector_score=getattr(match, "score", 0.0),
-        capability_score=1.0,
+        lexical_score=getattr(match, "score", 0.0),
         final_score=getattr(match, "score", 0.0),
     )

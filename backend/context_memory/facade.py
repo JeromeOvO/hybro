@@ -18,7 +18,6 @@ from common.protocols import (
     LLMGateway,
     MemoryRepository,
     RoomHistoryReader,
-    VectorDAL,
 )
 from common.utils.logger import get_logger
 from context_memory import assembly, compaction, projection, search, summary
@@ -49,7 +48,6 @@ class ContextMemoryFacade:
         memory_repository: MemoryRepository,
         content_repository: ContentStorageRepository,
         room_history_reader: RoomHistoryReader,
-        vector: VectorDAL,
         llm_provider: LLMGateway,
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
@@ -63,7 +61,6 @@ class ContextMemoryFacade:
         self.memory_repository = memory_repository
         self.content_repository = content_repository
         self.room_history_reader = room_history_reader
-        self.vector = vector
         self.llm_provider = llm_provider
         self.id_factory = id_factory
         self.now = now
@@ -141,8 +138,6 @@ class ContextMemoryFacade:
             room_id=room_id,
             query=query,
             limit=limit,
-            vector=self.vector,
-            llm_provider=self.llm_provider,
             content_repository=self.content_repository,
             config=self.search_config,
         )
@@ -159,20 +154,6 @@ class ContextMemoryFacade:
             if not memory_deleted:
                 return False
         cleanup_ok = True
-        try:
-            vector_deleted = await search.delete_room_index(
-                room_id=room_id,
-                vector=self.vector,
-                config=self.search_config,
-                unavailable_ok=True,
-            )
-            cleanup_ok = bool(vector_deleted) and cleanup_ok
-        except Exception:
-            logger.exception(
-                "Failed to clean up context memory vector index",
-                extra={"room_id": room_id},
-            )
-            cleanup_ok = False
         try:
             await self.content_repository.delete_content_by_room_id(room_id)
         except Exception:
@@ -217,7 +198,6 @@ class ContextMemoryFacade:
             room_id=room_id,
             config=self.compaction_config,
             now=self.now,
-            index_turn=self.index_turn_for_search,
         )
 
     def assemble_supervisor_context_from_memory(
@@ -397,8 +377,6 @@ class ContextMemoryFacade:
             room_id=room_id,
             query=query,
             limit=limit if limit is not None else self.search_config.max_results,
-            vector=self.vector,
-            llm_provider=self.llm_provider,
             content_repository=self.content_repository,
             config=self.search_config,
         )
@@ -417,7 +395,6 @@ class ContextMemoryFacade:
             room_id=room_id,
             config=self.compaction_config,
             now=self.now,
-            index_turn=self.index_turn_for_search,
         )
 
     async def compact_room_memory(
@@ -441,7 +418,6 @@ class ContextMemoryFacade:
             room_memory_doc=room_memory_doc,
             config=self.compaction_config,
             now=self.now,
-            index_turn=self.index_turn_for_search,
         )
 
     async def expand_turn_content(self, room_id: str, turn_id: str) -> str | None:
@@ -473,22 +449,6 @@ class ContextMemoryFacade:
             self.memory_repository,
             self.content_repository,
             room_id,
-        )
-
-    async def index_turn_for_search(self, room_id: str, turn_doc: dict) -> bool:
-        return await search.index_turn_for_search(
-            room_id=room_id,
-            turn_doc=turn_doc,
-            vector=self.vector,
-            llm_provider=self.llm_provider,
-            config=self.search_config,
-        )
-
-    async def delete_room_index(self, room_id: str) -> bool:
-        return await search.delete_room_index(
-            room_id=room_id,
-            vector=self.vector,
-            config=self.search_config,
         )
 
     async def content_upsert_full_content(

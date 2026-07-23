@@ -28,6 +28,9 @@ class AgentRepository(Protocol):
         query: dict | None = None,
         limit: int = 0,
     ) -> list[dict]: ...
+    async def text_search(
+        self, agent_ids: list[str], query: str, limit: int
+    ) -> list[dict]: ...
     async def update(self, agent_id: str, updates: dict) -> dict | None: ...
     async def public_url_exists(self, subdomain: str, base_domain: str) -> bool: ...
     async def upsert_hub_agent(
@@ -37,10 +40,6 @@ class AgentRepository(Protocol):
         self, hub_id: str, active_agent_ids: list[str]
     ) -> int: ...
     async def activate_agents(self, agent_ids: list[str]) -> int: ...
-    async def get_indexed_description_hash(self, agent_id: str) -> str | None: ...
-    async def set_indexed_description_hash(
-        self, agent_id: str, desc_hash: str
-    ) -> None: ...
 
 
 @runtime_checkable
@@ -214,6 +213,7 @@ class ContentStorageRepository(Protocol):
         content_type: str,
         content_hash: str,
         stored_at: datetime,
+        turn_timestamp: datetime | str | None = None,
         expires_at: datetime | None = None,
         turn_notes: dict | None = None,
     ) -> str: ...
@@ -225,9 +225,16 @@ class ContentStorageRepository(Protocol):
     async def delete_content_by_room_id(self, room_id: str) -> int: ...
     async def get_content_stats_for_room(self, room_id: str) -> dict: ...
     async def text_search(
-        self, room_id: str, query: str, limit: int = 50
+        self,
+        room_id: str,
+        query: str,
+        limit: int = 50,
+        skip: int = 0,
     ) -> list[dict]: ...
-    async def hydrate_turn_notes(
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]: ...
+    async def hydrate_turn_content(
         self, room_id: str, turn_ids: list[str]
     ) -> list[dict]: ...
 

@@ -436,8 +436,6 @@
     ],
     "status_code": 201,
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -461,7 +459,6 @@
     ],
     "status_code": 204,
     "dependencies": [
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -507,8 +504,6 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -532,8 +527,6 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"

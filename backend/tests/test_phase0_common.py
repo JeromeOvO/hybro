@@ -78,7 +78,13 @@ def test_phase0_dtos_can_be_instantiated():
     WorkflowState(run_id="run1", room_id="r1", state="queued", updated_at=now)
     ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
     CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
-    MemorySearchResult(room_id="r1", content="memory", score=0.5)
+    MemorySearchResult(
+        room_id="r1",
+        content="memory",
+        keyword_score=0.5,
+        relevance_score=0.5,
+        temporal_decay_factor=1.0,
+    )
     DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
     SSEEvent(event="message", data={})
     NotificationPayload(room_id="r1", message="notice")

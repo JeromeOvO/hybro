@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import VectorRecord
 from common.errors import ExternalServiceError, ObjectStorageError, TransientError
 from common.protocols import MongoChangeStream
 
@@ -154,6 +153,25 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         partialFilterExpression={"normalized_url": {"$type": "string"}},
     )
     assert _has_create_index(
+        collections["agents"],
+        [
+            ("agent_card.name", "text"),
+            ("agent_card.skills.name", "text"),
+            ("agent_card.skills.tags", "text"),
+            ("agent_card.description", "text"),
+            ("agent_card.skills.description", "text"),
+        ],
+        unique=False,
+        name="agent_lexical_text",
+        weights={
+            "agent_card.name": 10,
+            "agent_card.skills.name": 8,
+            "agent_card.skills.tags": 6,
+            "agent_card.description": 3,
+            "agent_card.skills.description": 3,
+        },
+    )
+    assert _has_create_index(
         collections["conversation_content"],
         [("room_id", 1), ("turn_id", 1)],
         unique=True,
@@ -165,10 +183,18 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             ("content", "text"),
             ("turn_notes.keywords", "text"),
             ("turn_notes.entities", "text"),
+            ("turn_notes.tags", "text"),
             ("turn_notes.one_liner", "text"),
         ],
         unique=False,
         name="turn_notes_text",
+        weights={
+            "content": 1,
+            "turn_notes.keywords": 1,
+            "turn_notes.entities": 1,
+            "turn_notes.tags": 1,
+            "turn_notes.one_liner": 1,
+        },
     )
     assert _has_create_index(
         collections["room_agent_messages"],
@@ -228,6 +254,115 @@ def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
         call.args == (keys,) and call.kwargs == kwargs
         for call in collection.create_index.call_args_list
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current():
+    from container import _ensure_agent_indexes
+
+    collection = MagicMock()
+    collection.index_information = AsyncMock(
+        return_value={
+            "unique_normalized_url": {
+                "partialFilterExpression": {"normalized_url": {"$type": "string"}}
+            }
+        }
+    )
+    collection.create_index = AsyncMock()
+    collection.drop_index = AsyncMock()
+    mongo = MagicMock()
+    mongo.collection.return_value = collection
+
+    assert await _ensure_agent_indexes(mongo) is True
+    collection.drop_index.assert_not_awaited()
+    assert any(
+        call.kwargs.get("name") == "agent_lexical_text"
+        for call in collection.create_index.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_index_with_scalar_prefix_is_rebuilt_even_when_weights_match():
+    from container import _ensure_text_index
+
+    collection = MagicMock()
+    collection.index_information = AsyncMock(
+        return_value={
+            "turn_notes_text": {
+                "key": [
+                    ("room_id", 1),
+                    ("_fts", "text"),
+                    ("_ftsx", 1),
+                ],
+                "weights": {"content": 1},
+            }
+        }
+    )
+    collection.drop_index = AsyncMock()
+    collection.create_index = AsyncMock()
+
+    assert await _ensure_text_index(
+        collection,
+        name="turn_notes_text",
+        weights={"content": 1},
+    )
+
+    collection.drop_index.assert_awaited_once_with("turn_notes_text")
+    collection.create_index.assert_awaited_once_with(
+        [("content", "text")],
+        name="turn_notes_text",
+        unique=False,
+        weights={"content": 1},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed_name", "expected"),
+    [
+        (
+            "agent_lexical_text",
+            {
+                "agent_search_index_ready": False,
+                "memory_search_index_ready": True,
+            },
+        ),
+        (
+            "turn_notes_text",
+            {
+                "agent_search_index_ready": True,
+                "memory_search_index_ready": False,
+            },
+        ),
+    ],
+)
+async def test_search_index_failures_are_reported_independently(
+    failed_name,
+    expected,
+):
+    from container import ensure_runtime_indexes
+
+    collections: dict[str, MagicMock] = {}
+
+    def _collection(name):
+        if name not in collections:
+            collection = MagicMock()
+            collection.index_information = AsyncMock(return_value={})
+            collection.drop_index = AsyncMock()
+
+            async def create_index(_keys, **kwargs):
+                if kwargs.get("name") == failed_name:
+                    raise RuntimeError("index unavailable")
+                return kwargs.get("name")
+
+            collection.create_index = AsyncMock(side_effect=create_index)
+            collections[name] = collection
+        return collections[name]
+
+    mongo = MagicMock()
+    mongo.collection.side_effect = _collection
+
+    assert await ensure_runtime_indexes(mongo=mongo) == expected
 
 
 @pytest.mark.asyncio
@@ -713,92 +848,6 @@ async def test_leader_elector_impl_close_closes_client():
     await elector.close()
 
     client.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_vector_dal_impl_maps_pinecone_matches():
-    from dal.pinecone.client import VectorDALImpl
-
-    index = MagicMock()
-    index.query.return_value = SimpleNamespace(
-        matches=[
-            SimpleNamespace(id="v1", score=0.9, metadata={"room_id": "r1"}),
-            {"id": "v2", "score": 0.8, "metadata": None},
-        ]
-    )
-    index.upsert.return_value = None
-    index.delete.return_value = None
-
-    client = MagicMock()
-    client.Index.return_value = index
-
-    vector = VectorDALImpl(client=client)
-
-    results = await vector.search("idx", [0.1], top_k=2, filter={"x": "y"})
-    await vector.upsert("idx", [VectorRecord(id="v3", vector=[0.2], metadata={"m": 1})])
-    await vector.delete("idx", ["v3"])
-
-    assert [item.id for item in results] == ["v1", "v2"]
-    assert results[0].metadata == {"room_id": "r1"}
-    assert results[1].metadata == {}
-    index.query.assert_called_once_with(
-        vector=[0.1],
-        top_k=2,
-        include_metadata=True,
-        filter={"x": "y"},
-    )
-    index.upsert.assert_called_once_with(
-        vectors=[{"id": "v3", "values": [0.2], "metadata": {"m": 1}}]
-    )
-    index.delete.assert_called_once_with(ids=["v3"])
-
-
-@pytest.mark.asyncio
-async def test_vector_dal_impl_ping_uses_instance_default_index():
-    from dal.pinecone.client import VectorDALImpl
-
-    index = MagicMock()
-    index.describe_index_stats.return_value = {}
-    client = MagicMock()
-    client.Index.return_value = index
-
-    vector = VectorDALImpl(client=client, index_name="custom-index")
-
-    assert await vector.ping() is True
-    client.Index.assert_called_once_with("custom-index")
-
-
-@pytest.mark.asyncio
-async def test_vector_dal_impl_uses_settings_pinecone_config(monkeypatch):
-    from common.config import settings
-    from dal.pinecone.client import VectorDALImpl
-
-    monkeypatch.setattr(settings, "pinecone_api_key", "settings-key")
-    monkeypatch.setattr(settings, "pinecone_index_name", "settings-index")
-
-    index = MagicMock()
-    index.describe_index_stats.return_value = {}
-    client = MagicMock()
-    client.Index.return_value = index
-    pinecone_factory = MagicMock(return_value=client)
-    monkeypatch.setattr("dal.pinecone.client.pinecone.Pinecone", pinecone_factory)
-
-    vector = VectorDALImpl()
-
-    assert await vector.ping() is True
-    pinecone_factory.assert_called_once_with(api_key="settings-key")
-    client.Index.assert_called_once_with("settings-index")
-
-
-def test_pinecone_index_config_falls_back_to_default_when_empty():
-    from common.config import (
-        PINECONE_INDEX_NAME_DEFAULT,
-        Settings,
-    )
-
-    settings = Settings(_env_file=None, pinecone_index_name="")
-
-    assert settings.pinecone_index_name == PINECONE_INDEX_NAME_DEFAULT
 
 
 @pytest.mark.asyncio

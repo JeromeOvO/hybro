@@ -81,9 +81,7 @@ class TokenBudgetConfig:
 
 @dataclass(frozen=True)
 class CompactionConfig:
-    enabled: bool = field(
-        default_factory=lambda: _setting("compaction_enabled", True)
-    )
+    enabled: bool = field(default_factory=lambda: _setting("compaction_enabled", True))
     max_full_turns: int = field(
         default_factory=lambda: _setting("compaction_max_full_turns", 20)
     )
@@ -111,29 +109,20 @@ class MemorySearchConfig:
     enabled: bool = field(
         default_factory=lambda: _setting("memory_search_enabled", True)
     )
-    vector_weight: float = field(
-        default_factory=lambda: _setting("memory_search_vector_weight", 0.7)
-    )
-    keyword_weight: float = field(
-        default_factory=lambda: _setting("memory_search_keyword_weight", 0.3)
-    )
     temporal_decay_enabled: bool = field(
         default_factory=lambda: _setting("memory_search_temporal_decay_enabled", True)
     )
     half_life_days: int = field(
         default_factory=lambda: _setting("memory_search_half_life_days", 30)
     )
-    mmr_lambda: float = field(
-        default_factory=lambda: _setting("memory_search_mmr_lambda", 0.7)
-    )
     max_results: int = field(
         default_factory=lambda: _setting("memory_search_max_results", 10)
     )
-    max_snippet_chars: int = field(
-        default_factory=lambda: _setting("memory_search_max_snippet_chars", 500)
+    max_candidates: int = field(
+        default_factory=lambda: _setting("memory_search_max_candidates", 1000)
     )
-    index_name: str = field(
-        default_factory=lambda: _memory_search_index_name()
+    max_snippet_chars: int = field(
+        default_factory=lambda: _setting("memory_search_max_snippet_chars", 300)
     )
 
 
@@ -141,7 +130,3 @@ class MemorySearchConfig:
 class ContextMemoryLLMConfig:
     turn_notes_model: str = "context_memory_legacy_json_model"
     summary_model: str = "context_memory_legacy_json_model"
-
-
-def _memory_search_index_name() -> str:
-    return _setting("memory_search_index_name", "room-memory")

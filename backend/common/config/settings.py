@@ -4,10 +4,6 @@ import os
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-PINECONE_INDEX_NAME_DEFAULT = "agentmatch"
-PINECONE_API_KEY_DEFAULT = ""
-MEMORY_SEARCH_INDEX_NAME_DEFAULT = "room-memory"
-
 
 class Settings(BaseSettings):
     app_env: str = "development"  # development, staging, production
@@ -24,9 +20,6 @@ class Settings(BaseSettings):
     mongodb_port: int = 27017
     mongodb_username: str = ""
     mongodb_password: str = ""
-
-    pinecone_api_key: str = PINECONE_API_KEY_DEFAULT
-    pinecone_index_name: str = PINECONE_INDEX_NAME_DEFAULT
 
     openai_api_key: str = ""
     lead_ai_model: str = "gpt-5-mini"
@@ -76,13 +69,6 @@ class Settings(BaseSettings):
     supervisor_max_steps: int = 8
     run_watchdog_stale_minutes: int = 90
 
-    # Agent Matching Tuning
-    match_vector_weight: float = 0.85
-    match_capability_weight: float = 0.15
-    match_debate_threshold: float = 0.3
-    match_gap_threshold: float = 0.15
-    match_quality_threshold: float = 0.4
-
     # Agent Health
     agent_health_check_interval: int = 3600
 
@@ -105,13 +91,7 @@ class Settings(BaseSettings):
     capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
 
     # Discovery API Settings
-    discovery_confidence_threshold: float = (
-        0.3  # Minimum similarity score to return an agent
-    )
     discovery_default_limit: int = 5  # Default number of agents to return
-    discovery_query_expansion_threshold: int = (
-        5  # Maximum word count for query expansion
-    )
     discovery_rate_limit_per_key: int | None = (
         100  # Requests per API key per hour (None = unlimited)
     )
@@ -218,18 +198,11 @@ class Settings(BaseSettings):
 
     # Memory Search Settings
     memory_search_enabled: bool = True  # Enable/disable memory search
-    memory_search_vector_weight: float = 0.7  # Weight for vector similarity
-    memory_search_keyword_weight: float = 0.3  # Weight for BM25 keyword matching
     memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
     memory_search_half_life_days: int = 30  # Half-life for temporal decay
-    memory_search_mmr_lambda: float = (
-        0.7  # MMR diversity parameter (0=diverse, 1=relevant)
-    )
     memory_search_max_results: int = 10  # Max results to return
-    memory_search_max_snippet_chars: int = 500  # Max chars per snippet
-    memory_search_index_name: str = (
-        MEMORY_SEARCH_INDEX_NAME_DEFAULT  # Pinecone index for memory
-    )
+    memory_search_max_candidates: int = 1000  # Max keyword candidates to rank
+    memory_search_max_snippet_chars: int = 300  # Max chars per snippet
 
     # AWS S3 (file uploads and binary content storage)
     s3_bucket_name: str = ""
@@ -288,18 +261,6 @@ class Settings(BaseSettings):
             return max(1, int(value))
         except (TypeError, ValueError):
             return 5
-
-    @field_validator("pinecone_index_name", mode="before")
-    @classmethod
-    def normalize_pinecone_index_name(cls, value):
-        value = str(value or "").strip()
-        return value or PINECONE_INDEX_NAME_DEFAULT
-
-    @field_validator("memory_search_index_name", mode="before")
-    @classmethod
-    def normalize_memory_search_index_name(cls, value):
-        value = str(value or "").strip()
-        return value or MEMORY_SEARCH_INDEX_NAME_DEFAULT
 
     @field_validator("feature_run_dual_write", mode="before")
     @classmethod
@@ -386,8 +347,6 @@ settings = Settings()
 
 
 __all__ = [
-    "MEMORY_SEARCH_INDEX_NAME_DEFAULT",
-    "PINECONE_INDEX_NAME_DEFAULT",
     "Settings",
     "settings",
 ]

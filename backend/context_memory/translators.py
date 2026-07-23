@@ -274,12 +274,20 @@ def render_user_memory_content(doc: dict[str, Any]) -> str:
 
 
 def search_result_from_record(
-    *, room_id: str, content: str, score: float, metadata: dict[str, Any]
+    *,
+    room_id: str,
+    content: str,
+    keyword_score: float,
+    relevance_score: float,
+    temporal_decay_factor: float,
+    metadata: dict[str, Any],
 ) -> MemorySearchResult:
     return MemorySearchResult(
         room_id=room_id,
         content=content,
-        score=score,
+        keyword_score=keyword_score,
+        relevance_score=relevance_score,
+        temporal_decay_factor=temporal_decay_factor,
         memory_id=metadata.get("memory_id"),
         source_message_id=metadata.get("source_message_id") or metadata.get("turn_id"),
         metadata=metadata,

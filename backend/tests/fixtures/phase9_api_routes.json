@@ -493,8 +493,6 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -513,18 +511,13 @@
     "response_class": null,
     "response_model": "AgentResponse",
     "status_code": 201,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -543,10 +536,7 @@
     "response_class": null,
     "response_model": null,
     "status_code": 204,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentVectorIndexWriter"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
@@ -577,8 +567,6 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -597,19 +585,13 @@
     "response_class": null,
     "response_model": "AgentResponse",
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [
       "get_current_user"
     ],
     "dependencies": [
-      "get_agent_viewset_embedding_provider",
-      "get_agent_viewset_vector_index",
       "get_current_user",
       "get_viewset_repository",
       "get_viewset_repository_provider"
@@ -628,11 +610,7 @@
     "response_class": null,
     "response_model": "AgentResponse",
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.EmbeddingServiceProtocol",
-      "common.protocols.AgentVectorIndexWriter"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [

@@ -33,7 +33,9 @@ class CompactionResult(FrozenDTO):
 class MemorySearchResult(FrozenDTO):
     room_id: str
     content: str
-    score: float
+    keyword_score: float
+    relevance_score: float
+    temporal_decay_factor: float
     memory_id: str | None = None
     source_message_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

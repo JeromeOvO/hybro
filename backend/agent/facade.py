@@ -1,25 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from agent.constants import AGENT_CARD_NO_OVERWRITE
-from agent.matching import rank_agent_docs, select_top_matches
+from agent.matching import (
+    accepts_input_modes,
+    is_searchable_query,
+    rank_agent_docs,
+    select_top_matches,
+)
 from agent.public_url import PublicUrlGenerator
 from agent.translators import (
     _status_value,
     agent_card_from_doc,
     agent_info_from_doc,
-    docs_by_vector_order,
     hub_descriptor_to_doc,
     registration_doc_from_card,
 )
 from agent.url_utils import is_local_agent_url, normalize_agent_url
-from common.dto import HubAgentCounts, VectorRecord
+from common.dto import HubAgentCounts
 from common.dto.agent import (
     AgentCardSnapshot,
     AgentInfo,
@@ -27,18 +30,14 @@ from common.dto.agent import (
     HubAgentDescriptor,
     SyncedHubAgent,
 )
-from common.errors import VectorIndexUnavailableError
 from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentCardResolver,
     AgentExclusionReader,
     AgentRepository,
     HubLivenessReader,
-    LLMEmbeddingGateway,
-    VectorDAL,
 )
 from common.protocols.hub_protocols import validate_hub_liveness_reader
-from common.utils.a2a_file_modes import agent_accepts_required_input_modes
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +57,7 @@ class AgentFacade:
         self,
         *,
         repository: AgentRepository,
-        vector: VectorDAL,
-        llm_provider: LLMEmbeddingGateway,
         card_resolver: AgentCardResolver,
-        agent_index: str,
         hub_liveness: HubLivenessReader | None = None,
         exclusion_reader: AgentExclusionReader | None = None,
         gateway_base_url: str | None = None,
@@ -72,13 +68,10 @@ class AgentFacade:
         tracer: Any | None = None,
     ) -> None:
         self._repository = repository
-        self._vector = vector
-        self._llm_provider = llm_provider
         self._card_resolver = card_resolver
         validate_hub_liveness_reader(hub_liveness)
         self._hub_liveness = hub_liveness
         self._exclusion_reader = exclusion_reader
-        self._agent_index = agent_index
         self._gateway_base_url = gateway_base_url
         self._public_url_base_domain = public_url_base_domain
         self._public_url_protocol = public_url_protocol
@@ -156,12 +149,8 @@ class AgentFacade:
         return [
             AgentMatchResult(
                 agent_id=match["agent_id"],
-                score=match["final_score"],
-                reason=(
-                    f"Match score: {match['final_score']:.2f} "
-                    f"(vector: {match['vector_score']:.2f}, "
-                    f"capability: {match['capability_score']:.2f})"
-                ),
+                score=match["lexical_score"],
+                reason=f"Lexical match score: {match['lexical_score']:.2f}",
                 agent=match["agent"],
             )
             for match in selected
@@ -233,29 +222,13 @@ class AgentFacade:
 
         self._validate_rate_limits(doc)
         await self._repository.upsert(agent_id, doc)
-        try:
-            await self._index_agent_description(agent_id, card.description)
-        except Exception:
-            await self._repository.delete(agent_id)
-            raise
         return agent_info_from_doc(doc)
 
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
         if doc is None or doc.get("provider_id") != provider_id:
             return False
-        deleted = await self._repository.delete(agent_id)
-        if not deleted:
-            return False
-        try:
-            await self._vector.delete(self._agent_index, [agent_id])
-        except Exception:
-            logger.warning(
-                "Failed to delete vector record for deleted agent %s",
-                agent_id,
-                exc_info=True,
-            )
-        return True
+        return bool(await self._repository.delete(agent_id))
 
     async def update_agent(self, agent_id: str, updates: dict) -> AgentInfo | None:
         unknown = set(updates) - _ALLOWED_UPDATE_KEYS
@@ -272,11 +245,6 @@ class AgentFacade:
         if updated is None:
             return None
 
-        if _description_changed(current, updated):
-            await self._index_agent_description(
-                agent_id,
-                (updated.get("agent_card") or {}).get("description"),
-            )
         return agent_info_from_doc(updated)
 
     async def list_agents(self, provider_id: str) -> list[AgentInfo]:
@@ -353,18 +321,6 @@ class AgentFacade:
                 else:
                     doc["public_url"] = public_url
 
-            try:
-                await self._index_description_if_changed(
-                    agent_id,
-                    doc["agent_card"].get("description"),
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to index synced hub agent %s from hub %s",
-                    agent_id,
-                    hub_id,
-                    exc_info=True,
-                )
             synced.append(
                 SyncedHubAgent(
                     hub_id=hub_id,
@@ -495,35 +451,6 @@ class AgentFacade:
             f"/gateway/agents/{agent_id}/message/send"
         )
 
-    async def _index_agent_description(
-        self,
-        agent_id: str,
-        description: str | None,
-    ) -> None:
-        embedding = await self._llm_provider.embed(description or "")
-        await self._vector.upsert(
-            self._agent_index,
-            [
-                VectorRecord(
-                    id=agent_id,
-                    vector=embedding,
-                    metadata={"type": "a2a_agent", "agent_id": agent_id},
-                )
-            ],
-        )
-
-    async def _index_description_if_changed(
-        self,
-        agent_id: str,
-        description: str | None,
-    ) -> None:
-        desc_hash = _description_hash(description)
-        current_hash = await self._repository.get_indexed_description_hash(agent_id)
-        if current_hash == desc_hash:
-            return
-        await self._index_agent_description(agent_id, description)
-        await self._repository.set_indexed_description_hash(agent_id, desc_hash)
-
     async def _match_agent_records(
         self,
         query: str,
@@ -535,7 +462,7 @@ class AgentFacade:
         required_input_modes: list[str] | None = None,
         is_debate_mode: bool = False,
     ) -> list[dict[str, Any]]:
-        if not query or filter_ids == []:
+        if not is_searchable_query(query) or filter_ids == []:
             return []
 
         # respect_visibility=False widens matching to public agents across users;
@@ -564,72 +491,42 @@ class AgentFacade:
             candidates = [
                 doc
                 for doc in candidates
-                if agent_accepts_required_input_modes(
-                    doc.get("agent_card") or {},
-                    required_input_modes,
-                )
+                if accepts_input_modes(doc, required_input_modes)
             ]
             if not candidates:
                 return []
 
-        candidate_ids = [doc["agent_id"] for doc in candidates]
-        candidate_id_set = set(candidate_ids)
-        embedding = await self._llm_provider.embed(query)
+        candidate_ids = [str(doc["agent_id"]) for doc in candidates]
+        mongo_scores: dict[str, float] = {}
+        mongo_matched_ids: set[str] = set()
         try:
-            results = await self._vector.search(
-                self._agent_index,
-                embedding,
-                top_k=max(limit * 3, 15),
-                filter={"agent_id": {"$in": candidate_ids}},
+            results = await self._repository.text_search(
+                candidate_ids,
+                query,
+                limit=len(candidate_ids),
             )
-        except VectorIndexUnavailableError:
+            for result in results:
+                agent_id = str(result.get("agent_id") or "")
+                if agent_id not in candidate_ids:
+                    continue
+                mongo_matched_ids.add(agent_id)
+                mongo_scores[agent_id] = float(result.get("score", 0.0) or 0.0)
+        except Exception:
             logger.warning(
-                "Agent vector index %s unavailable; falling back to visible "
-                "candidate ranking",
-                self._agent_index,
+                "Agent text search unavailable; using application lexical fallback",
                 exc_info=True,
             )
-            ranked = rank_agent_docs(
-                candidates,
-                {},
-                required_input_modes=required_input_modes,
-            )
-            selected = select_top_matches(
-                ranked,
-                is_debate_mode=is_debate_mode,
-            )[:limit]
-            for match in selected:
-                match["agent"] = agent_info_from_doc(match["agent"])
-            return selected
-        result_ids = [
-            _vector_result_id(result)
-            for result in results
-            if _vector_result_id(result) in candidate_id_set
-        ]
-        if not result_ids:
-            return []
-
-        docs = await self._repository.get_by_ids(result_ids)
-        ordered_docs = [
-            doc
-            for doc in docs_by_vector_order(docs, result_ids)
-            if doc.get("agent_id") in candidate_id_set
-            and doc.get("agent_status") == "active"
-            and (
-                doc.get("is_public", True)
-                or (user_id is not None and doc.get("provider_id") == user_id)
-            )
-        ]
-        vector_scores = {
-            _vector_result_id(result): _vector_result_score(result)
-            for result in results
-        }
         ranked = rank_agent_docs(
-            ordered_docs,
-            vector_scores,
-            required_input_modes=required_input_modes,
+            candidates,
+            mongo_scores,
+            mongo_matched_ids=mongo_matched_ids,
+            query=query,
         )
-        selected = select_top_matches(ranked, is_debate_mode=is_debate_mode)[:limit]
+        selected = select_top_matches(
+            ranked,
+            is_debate_mode=is_debate_mode,
+            limit=limit,
+        )
         for match in selected:
             match["agent"] = agent_info_from_doc(match["agent"])
         return selected
@@ -663,24 +560,6 @@ class AgentFacade:
             value = doc.get(key)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"{key} must be a positive integer or None")
-
-
-def _description_changed(before: dict, after: dict) -> bool:
-    return (before.get("agent_card") or {}).get("description") != (
-        after.get("agent_card") or {}
-    ).get("description")
-
-
-def _vector_result_id(result: Any) -> str:
-    if isinstance(result, dict):
-        return result.get("id") or result.get("agent_id")
-    return result.id
-
-
-def _vector_result_score(result: Any) -> float:
-    if isinstance(result, dict):
-        return float(result.get("score", 0.0))
-    return float(getattr(result, "score", 0.0))
 
 
 def _descriptor_card(descriptor: HubAgentDescriptor) -> dict[str, Any]:
@@ -718,7 +597,3 @@ def _merge_existing_hub_doc(
         **preserved,
     }
     return merged
-
-
-def _description_hash(description: str | None) -> str:
-    return hashlib.sha256((description or "").encode()).hexdigest()

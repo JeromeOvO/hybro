@@ -139,7 +139,18 @@ class ContentRepositorySpy:
         docs = [doc for doc in self.docs.values() if doc["room_id"] == room_id]
         return {"room_id": room_id, "total_documents": len(docs)}
 
-    async def text_search(self, _room_id: str, _query: str, limit: int = 50):
+    async def text_search(
+        self,
+        _room_id: str,
+        _query: str,
+        limit: int = 50,
+        skip: int = 0,
+    ):
+        return []
+
+    async def scan_text_search(
+        self, _room_id: str, _query: str, _limit: int
+    ) -> list[dict]:
         return []
 
 
@@ -152,21 +163,6 @@ class RoomHistoryReaderStub:
 
     async def get_message_thread(self, _parent_message_id: str):
         return []
-
-
-class VectorSpy:
-    def __init__(self):
-        self.upserted: list[tuple[str, list]] = []
-        self.deleted: list[tuple[str, dict]] = []
-
-    async def search(self, _index, _vector, _top_k, filter=None):
-        return []
-
-    async def upsert(self, index, records):
-        self.upserted.append((index, records))
-
-    async def delete_by_filter(self, index, filter):
-        self.deleted.append((index, filter))
 
 
 class LLMStub:
@@ -200,19 +196,17 @@ def facade(
     *,
     memory_repository: MemoryRepositorySpy,
     content_repository: ContentRepositorySpy,
-    vector: VectorSpy | None = None,
     compaction_config: CompactionConfig | None = None,
 ) -> ContextMemoryFacade:
     return ContextMemoryFacade(
         memory_repository=memory_repository,
         content_repository=content_repository,
         room_history_reader=RoomHistoryReaderStub(),
-        vector=vector or VectorSpy(),
         llm_provider=LLMStub(),
         id_factory=lambda: "id-1",
         now=now,
         compaction_config=compaction_config or config(),
-        search_config=MemorySearchConfig(enabled=True, index_name="room-memory-test"),
+        search_config=MemorySearchConfig(enabled=True),
     )
 
 
@@ -269,14 +263,12 @@ async def test_compact_room_memory_preserves_recent_and_stores_content_hash() ->
 
 
 @pytest.mark.asyncio
-async def test_facade_compact_if_needed_indexes_turns_through_context_memory() -> None:
+async def test_facade_compact_if_needed_persists_searchable_content() -> None:
     repo = MemoryRepositorySpy(room_doc([full_turn("t1", "index this turn")]))
     content_repo = ContentRepositorySpy()
-    vector = VectorSpy()
     service = facade(
         memory_repository=repo,
         content_repository=content_repo,
-        vector=vector,
         compaction_config=config(max_full_turns=0, preserve_recent_turns=0),
     )
 
@@ -288,11 +280,7 @@ async def test_facade_compact_if_needed_indexes_turns_through_context_memory() -
     assert content_repo.docs[make_document_id("r1", "t1")]["content"] == (
         "index this turn"
     )
-    assert vector.upserted
-    index_name, records = vector.upserted[0]
-    assert index_name == "room-memory-test"
-    assert records[0].id == "t1"
-    assert records[0].metadata["room_id"] == "r1"
+    assert content_repo.docs[make_document_id("r1", "t1")]["turn_timestamp"] == NOW
 
 
 @pytest.mark.asyncio
@@ -388,24 +376,3 @@ async def test_fetch_turn_content_returns_graceful_fallback_errors() -> None:
     assert missing_room == "[Error: Room missing not found]"
     assert missing_turn == "[Error: Turn t2 not found in room history]"
     assert "unsupported storage" in unsupported
-
-
-@pytest.mark.asyncio
-async def test_compaction_continues_when_vector_indexing_fails() -> None:
-    repo = MemoryRepositorySpy(room_doc([full_turn("t1", "content")]))
-
-    async def fail_index(_room_id: str, _turn_doc: dict) -> bool:
-        return False
-
-    result = await compaction.compact_room_memory(
-        repository=repo,
-        content_repository=ContentRepositorySpy(),
-        room_id="r1",
-        room_memory_doc=None,
-        config=config(preserve_recent_turns=0),
-        now=now,
-        index_turn=fail_index,
-    )
-
-    assert result.compacted_count == 1
-    assert result.metadata["errors"] == ["Failed to index turn t1"]

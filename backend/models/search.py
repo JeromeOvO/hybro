@@ -1,5 +1,5 @@
 """
-Memory search models for hybrid retrieval.
+Memory search models for Mongo keyword retrieval.
 
 This module defines:
 - MemorySearchResult: Individual search result
@@ -49,9 +49,8 @@ class MemorySearchResult(BaseModel):
     content_preview: str | None = None  # Truncated preview for display
 
     # Scoring
-    vector_score: float = 0.0  # Semantic similarity score
     keyword_score: float = 0.0  # BM25 keyword score
-    combined_score: float = 0.0  # Final weighted score
+    relevance_score: float = 0.0  # Keyword score after temporal decay
     temporal_decay_factor: float = 1.0  # Decay multiplier applied
 
     # Metadata
@@ -79,7 +78,5 @@ class MemorySearchResponse(BaseModel):
     searched_at: datetime = Field(default_factory=utcnow)
 
     # Search metadata
-    vector_search_used: bool = True
     keyword_search_used: bool = True
     temporal_decay_applied: bool = True
-    mmr_applied: bool = True

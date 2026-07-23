@@ -29,6 +29,7 @@ async def store_full_content(
     content: str,
     content_type: str,
     turn_notes: dict | None,
+    turn_timestamp: datetime | str | None = None,
     now: datetime,
     config: CompactionConfig,
 ) -> str:
@@ -43,6 +44,7 @@ async def store_full_content(
         content_type=content_type,
         content_hash=hash_content(content),
         stored_at=now,
+        turn_timestamp=turn_timestamp,
         expires_at=expires_at,
         turn_notes=turn_notes,
     )

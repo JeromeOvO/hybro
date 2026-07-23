@@ -22,7 +22,6 @@ from common.utils.context_utils import (
     estimate_tokens,
 )
 from context_memory import search
-from context_memory.config import MemorySearchConfig
 from context_memory.models import SearchRankingRecord
 from models.compaction import CompactionResult
 from models.memory import (
@@ -48,14 +47,10 @@ def mock_compaction_config():
         mock.compaction_preserve_recent = 10
         mock.compaction_content_ttl_days = 0
         mock.memory_search_enabled = True
-        mock.memory_search_vector_weight = 0.7
-        mock.memory_search_keyword_weight = 0.3
         mock.memory_search_temporal_decay_enabled = True
         mock.memory_search_half_life_days = 30
-        mock.memory_search_mmr_lambda = 0.7
         mock.memory_search_max_results = 10
         mock.memory_search_max_snippet_chars = 500
-        mock.memory_search_index_name = "room-memory"
         yield mock
 
 
@@ -226,75 +221,50 @@ class TestExtractTurnNotesLLM:
 
 
 class TestMemorySearchHydration:
-    """Tests for hydrating empty search results from storage."""
+    """Tests for keyword ranking records used by two-stage hydration."""
 
-    @pytest.mark.asyncio
-    async def test_hydrates_empty_content_from_turn_notes(self, mock_compaction_config):
-        results = [
-            SearchRankingRecord(
-                turn_id="turn_1",
-                content="",
-                room_id="room_1",
-                vector_score=0.95,
-                timestamp=datetime(2026, 2, 20),
-            ),
-        ]
-
-        content_repository = MagicMock()
-        content_repository.hydrate_turn_notes = AsyncMock(
-            return_value=[
-                {
-                    "turn_id": "turn_1",
-                    "turn_notes": {
-                        "keywords": ["React"],
-                        "one_liner": "Discussion about React deployment",
-                    },
-                }
-            ]
-        )
-
-        await search.hydrate_empty_results(
-            results,
-            "room_1",
-            content_repository,
-            MemorySearchConfig(max_snippet_chars=500),
-        )
-
-        content_repository.hydrate_turn_notes.assert_awaited_once_with(
-            "room_1", ["turn_1"]
-        )
-        assert results[0].content == "Discussion about React deployment"
-        assert (
-            results[0].metadata["content_preview"]
-            == "Discussion about React deployment"
-        )
-
-    @pytest.mark.asyncio
-    async def test_skips_results_that_already_have_content(
+    def test_keyword_ranking_record_uses_keyword_relevance_fields(
         self, mock_compaction_config
     ):
         results = [
             SearchRankingRecord(
                 turn_id="turn_1",
+                content="",
+                room_id="room_1",
+                keyword_score=0.95,
+                timestamp=datetime(2026, 2, 20),
+            ),
+        ]
+
+        ranked = search.rank_keyword_results(
+            results,
+            temporal_decay_enabled=False,
+            half_life_days=30,
+        )
+
+        assert ranked[0].keyword_score == 1.0
+        assert ranked[0].relevance_score == 1.0
+        assert ranked[0].temporal_decay_factor == 1.0
+
+    def test_keyword_ranking_preserves_existing_content(self, mock_compaction_config):
+        results = [
+            SearchRankingRecord(
+                turn_id="turn_1",
                 content="Already has content",
                 room_id="room_1",
-                vector_score=0.95,
+                keyword_score=0.95,
                 timestamp=datetime(2026, 2, 20),
                 metadata={"content_preview": "Already has content"},
             ),
         ]
 
-        content_repository = MagicMock()
-        content_repository.hydrate_turn_notes = AsyncMock(return_value=[])
-
-        await search.hydrate_empty_results(
+        ranked = search.rank_keyword_results(
             results,
-            "room_1",
-            content_repository,
-            MemorySearchConfig(max_snippet_chars=500),
+            temporal_decay_enabled=False,
+            half_life_days=30,
         )
 
-        content_repository.hydrate_turn_notes.assert_not_awaited()
+        assert ranked[0].content == "Already has content"
 
 
 # =============================================================================
@@ -429,7 +399,8 @@ class TestSearchToContextIntegration:
                 role=MessageRole.USER,
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,
-                vector_score=0.92,
+                keyword_score=0.92,
+                relevance_score=0.92,
                 timestamp=datetime(2026, 2, 20),
             ),
             MemorySearchResult(
@@ -440,7 +411,8 @@ class TestSearchToContextIntegration:
                 agent_name="DevAgent",
                 room_id="room_1",
                 source_type=MemorySourceType.TURN,
-                vector_score=0.85,
+                keyword_score=0.85,
+                relevance_score=0.85,
                 timestamp=datetime(2026, 2, 20),
             ),
         ]

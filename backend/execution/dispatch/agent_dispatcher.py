@@ -93,11 +93,19 @@ class AgentDispatcher:
             len(allowed_agent_ids),
         )
 
-        result = await self.agent_resolver.resolve(
-            user_input,
-            allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
-            user_id=current_message.user_id,
-        )
+        resolve_kwargs = {
+            "allowed_agent_ids": (
+                allowed_agent_ids
+                if self._has_explicit_allowed_scope(current_message)
+                else None
+            ),
+            "user_id": current_message.user_id,
+            "use_llm_selection": True,
+        }
+        required_input_modes = self._derive_required_input_modes(current_message)
+        if required_input_modes is not None:
+            resolve_kwargs["required_input_modes"] = required_input_modes
+        result = await self.agent_resolver.resolve(user_input, **resolve_kwargs)
 
         if result.agent is None:
             logger.error(
@@ -201,6 +209,59 @@ class AgentDispatcher:
                 )
 
         return list(merged_ids)
+
+    @staticmethod
+    def _has_explicit_allowed_scope(current_message: RoomAgentMessage) -> bool:
+        extend_info = current_message.extend_info
+        if not isinstance(extend_info, dict):
+            return False
+        if "allowed_agent_ids" in extend_info:
+            return True
+        target_group = extend_info.get("target_group")
+        groups = (
+            target_group if isinstance(target_group, list | tuple) else [target_group]
+        )
+        return any(
+            isinstance(group, str)
+            and bool(group)
+            and group not in {"all_agents", "room_team"}
+            for group in groups
+        )
+
+    @staticmethod
+    def _derive_required_input_modes(
+        current_message: RoomAgentMessage,
+    ) -> list[str] | None:
+        """Return attachment MIME types for capability-safe agent routing.
+
+        Generated workflow messages do not duplicate the original attachments,
+        so their internally persisted ``required_input_modes`` value is used as
+        a fallback. Directly attached content remains the source of truth.
+        """
+        content = getattr(current_message, "message_content", None)
+        attachments = getattr(content, "attachments", None) if content else None
+        if attachments:
+            modes = [
+                (
+                    attachment.get("mime_type")
+                    if isinstance(attachment, dict)
+                    else getattr(attachment, "mime_type", None)
+                )
+                or "application/octet-stream"
+                for attachment in attachments
+            ]
+            return list(dict.fromkeys(str(mode).strip().lower() for mode in modes))
+
+        extend_info = current_message.extend_info
+        if not isinstance(extend_info, dict):
+            return None
+        persisted_modes = extend_info.get("required_input_modes")
+        if not isinstance(persisted_modes, list | tuple):
+            return None
+        normalized = [
+            str(mode).strip().lower() for mode in persisted_modes if str(mode).strip()
+        ]
+        return list(dict.fromkeys(normalized)) or None
 
     @staticmethod
     def _extract_user_input(current_message: RoomAgentMessage) -> str:

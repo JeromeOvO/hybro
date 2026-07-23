@@ -138,8 +138,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     main_source = Path("main.py").read_text()
     expected_snippets = [
         "supervisor_llm_service = SupervisorLLMService(",
-        "embedding_llm_service = EmbeddingLLMService(llm_provider=llm_provider)",
-        "discovery_llm_service = DiscoveryLLMService(",
         "summary_llm_service = SummaryLLMService(llm_provider=llm_provider)",
         "agent_selection_llm_service = AgentSelectionLLMService(",
         "message_parser_llm_service = MessageParserLLMService(",
@@ -157,9 +155,9 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "facade=context_memory_facade,",
         "usage_store=memory_store,",
         "summary_service=summary_llm_service,",
-        "embedding_provider=embedding_llm_service,",
     ]
     forbidden_snippets = [
+        "discovery_llm_service = DiscoveryLLMService(",
         f"from {REMOVED_RUNTIME_PACKAGE}.openai_service import",
         f"from {REMOVED_RUNTIME_PACKAGE}.gemini_service import",
         f"from {REMOVED_RUNTIME_PACKAGE}.bedrock_service import",

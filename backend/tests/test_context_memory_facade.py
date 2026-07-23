@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from common.errors import VectorIndexUnavailableError
 from common.observability import NoopTracingProvider
 from context_memory.config import (
     CompactionConfig,
@@ -173,7 +172,11 @@ class StateContentRepository:
         return {"room_id": room_id, "total_documents": len(self.docs)}
 
     async def text_search(
-        self, room_id: str, query: str, limit: int = 50
+        self,
+        room_id: str,
+        query: str,
+        limit: int = 50,
+        skip: int = 0,
     ) -> list[dict]:
         return [
             {
@@ -186,8 +189,22 @@ class StateContentRepository:
             }
         ]
 
-    async def hydrate_turn_notes(self, room_id: str, turn_ids: list[str]) -> list[dict]:
-        return []
+    async def scan_text_search(
+        self, room_id: str, query: str, limit: int
+    ) -> list[dict]:
+        return await self.text_search(room_id, query, limit=limit)
+
+    async def hydrate_turn_content(
+        self, room_id: str, turn_ids: list[str]
+    ) -> list[dict]:
+        return [
+            {
+                "turn_id": "t1",
+                "turn_notes": {"one_liner": "matched"},
+                "content": "matched",
+                "content_type": "text",
+            }
+        ]
 
 
 class FakeHistoryReader:
@@ -198,28 +215,6 @@ class FakeHistoryReader:
         return [
             message for message in self.messages if message.message_id in message_ids
         ]
-
-
-class FakeVector:
-    def __init__(
-        self, *, raise_on_delete: bool = False, unavailable_on_delete: bool = False
-    ):
-        self.deleted = []
-        self.raise_on_delete = raise_on_delete
-        self.unavailable_on_delete = unavailable_on_delete
-
-    async def search(self, index, vector, top_k, filter=None):
-        return []
-
-    async def upsert(self, index, records):
-        return None
-
-    async def delete_by_filter(self, index, filter):
-        if self.unavailable_on_delete:
-            raise VectorIndexUnavailableError(index, "delete")
-        if self.raise_on_delete:
-            raise RuntimeError("vector cleanup failed")
-        self.deleted.append((index, filter))
 
 
 class FakeLLM:
@@ -252,13 +247,12 @@ class FailingSummaryWriteRepository(StateMemoryRepository):
         return False
 
 
-def facade(memory_repo=None, content_repo=None, history=None, vector=None, **overrides):
+def facade(memory_repo=None, content_repo=None, history=None, **overrides):
     llm_provider = overrides.pop("llm_provider", FakeLLM())
     return ContextMemoryFacade(
         memory_repository=memory_repo or StateMemoryRepository(),
         content_repository=content_repo or StateContentRepository(),
         room_history_reader=history or FakeHistoryReader(),
-        vector=vector or FakeVector(),
         llm_provider=llm_provider,
         id_factory=lambda: "id-1",
         now=now,
@@ -276,9 +270,7 @@ def facade(memory_repo=None, content_repo=None, history=None, vector=None, **ove
             content_ttl_days=0,
             concurrency=1,
         ),
-        search_config=MemorySearchConfig(
-            enabled=True, temporal_decay_enabled=False, index_name="memory"
-        ),
+        search_config=MemorySearchConfig(enabled=True, temporal_decay_enabled=False),
         **overrides,
     )
 
@@ -431,7 +423,7 @@ async def test_facade_legacy_search_limit_zero_returns_no_results():
     )
 
     assert response["results"] == []
-    assert response["total_matches"] == 1
+    assert response["total_matches"] == 0
 
 
 @pytest.mark.asyncio
@@ -449,31 +441,27 @@ async def test_facade_get_user_memories():
 async def test_facade_delete_room_memory_nothing_to_delete():
     repo = StateMemoryRepository(None)
     content_repo = StateContentRepository()
-    vector = FakeVector()
 
     assert (
-        await facade(
-            memory_repo=repo, content_repo=content_repo, vector=vector
-        ).delete_room_memory("missing")
+        await facade(memory_repo=repo, content_repo=content_repo).delete_room_memory(
+            "missing"
+        )
         is True
     )
     assert repo.deleted == []
     assert content_repo.deleted_rooms == ["missing"]
-    assert vector.deleted == [("memory", {"room_id": {"$eq": "missing"}})]
 
 
 @pytest.mark.asyncio
 async def test_facade_delete_room_memory_existing():
     repo = StateMemoryRepository(existing_doc())
     content_repo = StateContentRepository()
-    vector = FakeVector()
 
-    assert await facade(
-        memory_repo=repo, content_repo=content_repo, vector=vector
-    ).delete_room_memory("r1")
+    assert await facade(memory_repo=repo, content_repo=content_repo).delete_room_memory(
+        "r1"
+    )
     assert repo.deleted == ["r1"]
     assert content_repo.deleted_rooms == ["r1"]
-    assert vector.deleted == [("memory", {"room_id": {"$eq": "r1"}})]
 
 
 @pytest.mark.asyncio
@@ -508,62 +496,9 @@ async def test_facade_delete_room_memory_deletes_memory_before_content_cleanup_f
 
 
 @pytest.mark.asyncio
-async def test_facade_delete_room_memory_returns_false_on_vector_cleanup_failure():
-    assert (
-        await facade(
-            memory_repo=StateMemoryRepository(None),
-            vector=FakeVector(raise_on_delete=True),
-        ).delete_room_memory("r1")
-        is False
-    )
-
-
-@pytest.mark.asyncio
-async def test_facade_delete_room_memory_deletes_memory_before_vector_cleanup_failure():
-    repo = StateMemoryRepository(existing_doc())
-
-    assert (
-        await facade(
-            memory_repo=repo,
-            vector=FakeVector(raise_on_delete=True),
-        ).delete_room_memory("r1")
-        is False
-    )
-    assert repo.doc is None
-    assert repo.deleted == ["r1"]
-
-
-@pytest.mark.asyncio
-async def test_facade_delete_room_memory_attempts_content_cleanup_on_vector_failure():
-    repo = StateMemoryRepository(existing_doc())
-    content_repo = StateContentRepository()
-    await content_repo.upsert_full_content(
-        room_id="r1",
-        turn_id="t1",
-        document_id="doc1",
-        content="full content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-        turn_notes={},
-    )
-
-    assert (
-        await facade(
-            memory_repo=repo,
-            content_repo=content_repo,
-            vector=FakeVector(raise_on_delete=True),
-        ).delete_room_memory("r1")
-        is False
-    )
-    assert content_repo.docs == {}
-
-
-@pytest.mark.asyncio
 async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fails():
     repo = StateMemoryRepository(existing_doc(), fail_delete=True)
     content_repo = StateContentRepository()
-    vector = FakeVector()
     await content_repo.upsert_full_content(
         room_id="r1",
         turn_id="t1",
@@ -579,31 +514,17 @@ async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fa
         await facade(
             memory_repo=repo,
             content_repo=content_repo,
-            vector=vector,
         ).delete_room_memory("r1")
         is False
     )
     assert repo.doc is not None
     assert content_repo.docs["doc1"]["content"] == "full content"
-    assert vector.deleted == []
-
-
-@pytest.mark.asyncio
-async def test_facade_delete_room_memory_treats_vector_unavailable_as_noop():
-    assert (
-        await facade(
-            memory_repo=StateMemoryRepository(None),
-            vector=FakeVector(unavailable_on_delete=True),
-        ).delete_room_memory("r1")
-        is True
-    )
 
 
 @pytest.mark.asyncio
 async def test_facade_legacy_delete_memory_id_uses_canonical_room_cleanup():
     repo = StateMemoryRepository(existing_doc())
     content_repo = StateContentRepository()
-    vector = FakeVector()
     await content_repo.upsert_full_content(
         room_id="r1",
         turn_id="t1",
@@ -618,20 +539,17 @@ async def test_facade_legacy_delete_memory_id_uses_canonical_room_cleanup():
     ok = await facade(
         memory_repo=repo,
         content_repo=content_repo,
-        vector=vector,
     ).legacy_delete_room_memory_by_memory_id("m1")
 
     assert ok is True
     assert repo.deleted == ["r1"]
     assert content_repo.docs == {}
-    assert vector.deleted == [("memory", {"room_id": {"$eq": "r1"}})]
 
 
 @pytest.mark.asyncio
 async def test_facade_legacy_delete_room_id_uses_canonical_room_cleanup():
     repo = StateMemoryRepository(existing_doc())
     content_repo = StateContentRepository()
-    vector = FakeVector()
     await content_repo.upsert_full_content(
         room_id="r1",
         turn_id="t1",
@@ -646,13 +564,11 @@ async def test_facade_legacy_delete_room_id_uses_canonical_room_cleanup():
     ok = await facade(
         memory_repo=repo,
         content_repo=content_repo,
-        vector=vector,
     ).legacy_delete_room_memory_by_room_id("r1")
 
     assert ok is True
     assert repo.deleted == ["r1"]
     assert content_repo.docs == {}
-    assert vector.deleted == [("memory", {"room_id": {"$eq": "r1"}})]
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,15 @@ class RuntimeHealthCheck:
             change_stream_connected=bool(
                 delivery_facade and delivery_facade.change_stream_connected
             ),
+            agent_search_index_ready=bool(
+                getattr(request.app.state, "agent_search_index_ready", False)
+            ),
+            memory_search_index_ready=bool(
+                getattr(request.app.state, "memory_search_index_ready", False)
+            ),
+            search_indexes_ready=bool(
+                getattr(request.app.state, "search_indexes_ready", False)
+            ),
         )
         return JSONResponse(content=result["body"], status_code=result["status_code"])
 
