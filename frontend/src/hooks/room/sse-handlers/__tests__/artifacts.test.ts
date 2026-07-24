@@ -81,4 +81,39 @@ describe('SSE artifact conversion privacy', () => {
     expect(JSON.stringify(artifact)).not.toContain(privateBytes)
     expect(artifact.parts).toEqual([])
   })
+
+  it('keeps durable metadata-only files in terminal SSE artifacts', () => {
+    const artifact = sseArtifactDataFromPayload(
+      {
+        artifact_id: 'artifact-1',
+        name: 'result',
+        parts: [{
+          kind: 'file',
+          metadata: {
+            file_id: 'a'.repeat(32),
+            file_name: 'result.csv',
+            mime_type: 'text/csv',
+            size_bytes: 42,
+            sha256: 'digest',
+          },
+        }],
+      },
+      false,
+      true,
+    )
+
+    expect(artifact.parts).toEqual([{
+      kind: 'file',
+      text: undefined,
+      file: {
+        uri: undefined,
+        fileId: 'a'.repeat(32),
+        mime_type: 'text/csv',
+        name: 'result.csv',
+        sizeBytes: 42,
+        sha256: 'digest',
+      },
+      data: undefined,
+    }])
+  })
 })

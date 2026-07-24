@@ -162,7 +162,7 @@ class AgentHealthService:
         changed, avoiding unnecessary DB writes on every health-check cycle.
         """
         # Blocklist imported from models.agent — see AGENT_CARD_HEALTH_NO_SYNC
-        # for the rationale on why url and iconUrl are both protected here.
+        # for the rationale on why only the registered URL is protected here.
 
         try:
             card_dict = CommonAgentCard.model_validate(

@@ -15,17 +15,19 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class A2AArtifactStorage(Protocol):
-    async def convert_inline_bytes_to_s3(
+class A2AArtifactFiles(Protocol):
+    async def materialize_inline_file_parts(
         self,
         parts: list[dict],
         room_id: str,
         message_id: str,
         *,
         converted_so_far: int = 0,
+        budget: dict[str, Any] | None = None,
+        artifact_slot: str | None = None,
     ) -> int: ...
 
-    async def convert_pydantic_artifacts_to_s3(
+    async def materialize_artifacts(
         self,
         artifacts: list,
         room_id: str,
@@ -34,17 +36,25 @@ class A2AArtifactStorage(Protocol):
         converted_so_far: int = 0,
     ) -> int: ...
 
+    async def delete_superseded_agent_artifacts(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        file_ids: set[str],
+    ) -> int: ...
 
-a2a_artifact_storage: A2AArtifactStorage | None = None
+
+a2a_artifact_storage: A2AArtifactFiles | None = None
 
 
-def bind_a2a_artifact_storage(storage: A2AArtifactStorage) -> None:
+def bind_a2a_artifact_files(storage: A2AArtifactFiles) -> None:
     global a2a_artifact_storage
 
     a2a_artifact_storage = storage
 
 
-def _require_a2a_artifact_storage() -> A2AArtifactStorage:
+def _require_a2a_artifact_storage() -> A2AArtifactFiles:
     if a2a_artifact_storage is None:
         raise RuntimeError("A2A artifact storage dependency has not been bound")
     return a2a_artifact_storage
@@ -472,26 +482,45 @@ def append_artifact_to_task_dict(
     return existing_artifacts
 
 
-async def convert_inline_bytes_to_s3(
+async def materialize_inline_file_parts(
     parts: list[dict],
     room_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
+    budget: dict[str, Any] | None = None,
+    artifact_slot: str | None = None,
 ) -> int:
     if not _parts_need_artifact_storage(parts):
         return converted_so_far
 
     storage = _require_a2a_artifact_storage()
-    return await storage.convert_inline_bytes_to_s3(
+    return await storage.materialize_inline_file_parts(
         parts,
         room_id,
         message_id,
         converted_so_far=converted_so_far,
+        budget=budget,
+        artifact_slot=artifact_slot,
     )
 
 
-async def convert_pydantic_artifacts_to_s3(
+async def delete_superseded_agent_artifacts(
+    *,
+    room_id: str,
+    message_id: str,
+    file_ids: set[str],
+) -> int:
+    if not file_ids:
+        return 0
+    return await _require_a2a_artifact_storage().delete_superseded_agent_artifacts(
+        room_id=room_id,
+        message_id=message_id,
+        file_ids=file_ids,
+    )
+
+
+async def materialize_artifacts(
     artifacts: list,
     room_id: str,
     message_id: str,
@@ -502,7 +531,7 @@ async def convert_pydantic_artifacts_to_s3(
         return converted_so_far
 
     storage = _require_a2a_artifact_storage()
-    return await storage.convert_pydantic_artifacts_to_s3(
+    return await storage.materialize_artifacts(
         artifacts,
         room_id,
         message_id,

@@ -14,6 +14,7 @@ from api_gateway.registry import open_cors_path_prefixes
 from common.auth import bind_auth_config
 from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
+from common.middleware.request_size import RequestBodyLimitMiddleware
 from container import (
     create_application_runtime,
     create_health_check_service,
@@ -168,6 +169,11 @@ def create_app(
     app.add_middleware(
         DiscoveryCORSMiddleware,
         open_cors_path_prefixes=open_cors_path_prefixes(settings.api_prefix),
+    )
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        path=f"{settings.api_prefix}/files/upload",
+        max_bytes=6 * 1024 * 1024,
     )
 
     @app.get("/health")

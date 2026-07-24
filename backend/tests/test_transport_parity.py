@@ -127,8 +127,8 @@ class TestMultiEventSequenceWithPersist:
         # Nonterminal artifact_update events are private and produce no frames.
         h._delivery.send_artifact_update.assert_not_awaited()
 
-        # Nonterminal artifacts are not persisted as public result shadows.
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        # Nonterminal artifacts are durably journaled without public frames.
+        assert h._message_writer.accumulate_artifact_on_message.await_count == 2
 
         # response persists "completed" state via update_task_state_on_message
         h._task_writer.update_task_state_on_message.assert_awaited_once_with(
@@ -185,9 +185,9 @@ class TestMultiEventSequenceSkipPersist:
         h._delivery.send_artifact_update.assert_not_awaited()
         h._delivery.send_agent_response.assert_not_awaited()
 
-        # DB writes are skipped
+        # Terminal DB writes are skipped, while the artifact journal remains durable.
         h._task_writer.update_task_state_on_message.assert_not_awaited()
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        assert h._message_writer.accumulate_artifact_on_message.await_count == 2
 
         # Orchestration resume still fires
         h._rmc.resume_queue_from_continuation.assert_awaited_once()

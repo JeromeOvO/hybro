@@ -26,31 +26,32 @@ ALLOWED_MIME_TYPES = (
     IMAGE_MIME_TYPES | AUDIO_MIME_TYPES | VIDEO_MIME_TYPES | DOCUMENT_MIME_TYPES
 )
 
-MAX_FILE_SIZE_BYTES = (
-    50 * 1024 * 1024
-)  # Deprecated: runtime limit is settings.max_file_size_mb
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 MAX_ATTACHMENT_REFS_PER_REQUEST = 50  # DoS guard on raw (pre-dedup) ref count
 
 
 class FileUploadMetadata(BaseModel):
-    """Stored in MongoDB `file_uploads` collection."""
+    """Stored in MongoDB `room_files` collection."""
 
     file_id: str
     room_id: str
-    user_id: str
-    s3_key: str
+    owner_id: str
+    source: str = "user_upload"
     mime_type: str
     file_name: str
     size_bytes: int
-    uploaded_at: datetime = Field(default_factory=utcnow)
+    sha256: str
+    status: str = "ready"
+    version: int = 1
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class FileUploadResponse(BaseModel):
     """Returned to frontend after successful upload."""
 
     file_id: str
-    file_url: str  # presigned URL (ephemeral -- do NOT persist this)
+    file_url: str  # stable authenticated same-origin content URL
     mime_type: str
     file_name: str
     size_bytes: int

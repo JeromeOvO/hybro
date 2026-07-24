@@ -51,6 +51,9 @@ services:
       - MONGODB_URL=mongodb://mongo:27017/hybro
       - REDIS_URL=redis://redis:6379/0
       - API_PREFIX=/api/v1
+      - HYBRO_FILE_DIR=/var/lib/hybro/files
+    volumes:
+      - room_files:/var/lib/hybro/files
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -87,3 +90,4 @@ services:
 volumes:
   mongo_data:
   redis_data:
+  room_files:

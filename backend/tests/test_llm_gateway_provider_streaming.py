@@ -1,10 +1,8 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from llm_gateway.providers.bedrock_provider import BedrockProvider
 from llm_gateway.providers.gemini_provider import GeminiProvider
 from llm_gateway.providers.openai_provider import OpenAIProvider
 
@@ -79,84 +77,3 @@ async def test_gemini_provider_streaming_falls_back_to_single_generated_chunk():
 
     assert chunks == ["full text"]
     client.models.generate_content.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_streams_content_block_text_deltas():
-    session = _FakeBedrockSession(
-        stream_events=[
-            {
-                "chunk": {
-                    "bytes": json.dumps(
-                        {
-                            "type": "content_block_delta",
-                            "delta": {"text": "a"},
-                        }
-                    ).encode()
-                }
-            },
-            {
-                "chunk": {
-                    "bytes": json.dumps(
-                        {
-                            "type": "message_delta",
-                            "delta": {"stop_reason": "end_turn"},
-                        }
-                    ).encode()
-                }
-            },
-            {
-                "chunk": {
-                    "bytes": json.dumps(
-                        {
-                            "type": "content_block_delta",
-                            "delta": {"text": "b"},
-                        }
-                    ).encode()
-                }
-            },
-        ]
-    )
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    chunks = [
-        chunk
-        async for chunk in provider.generate_stream(
-            [{"role": "user", "content": "hello"}],
-            "anthropic.claude-test",
-        )
-    ]
-
-    assert chunks == ["a", "b"]
-    call = session.client_instance.calls[0]
-    assert call["modelId"] == "anthropic.claude-test"
-    assert call["contentType"] == "application/json"
-    assert call["accept"] == "application/json"
-    body = json.loads(call["body"])
-    assert body["messages"][0]["content"][0]["text"] == "hello"
-
-
-class _FakeBedrockClient:
-    def __init__(self, stream_events):
-        self.stream_events = list(stream_events)
-        self.calls = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def invoke_model_with_response_stream(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"body": _AsyncStream(self.stream_events)}
-
-
-class _FakeBedrockSession:
-    def __init__(self, stream_events):
-        self.client_instance = _FakeBedrockClient(stream_events)
-
-    def client(self, service_name, region_name=None):
-        assert service_name == "bedrock-runtime"
-        assert region_name == "us-west-2"
-        return self.client_instance

@@ -454,57 +454,6 @@
         }
       }
     },
-    "/api/v1/agent/{agent_id}/avatar": {
-      "post": {
-        "tags": [
-          "agent"
-        ],
-        "summary": "Upload Agent Avatar",
-        "description": "Upload a custom avatar image for an agent - PROTECTED (requires ownership)\n\nAccepts multipart/form-data with a single `file` field.\nStores the image under the agent-avatars/ S3 prefix (publicly readable)\nand persists the permanent URL to agent_card.iconUrl in MongoDB.\n\nReturns: { \"iconUrl\": \"<permanent public URL>\" }",
-        "operationId": "upload_agent_avatar_api_v1_agent__agent_id__avatar_post",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/agent/{agent_id}/capability-issues": {
       "get": {
         "tags": [
@@ -1079,7 +1028,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RoomCenterUserMessageResponse"
+                }
               }
             }
           }
@@ -1593,7 +1544,7 @@
           "files"
         ],
         "summary": "Upload File",
-        "description": "Upload a file to S3 for attachment to a room message.\n\nAccepts multipart/form-data with:\n- file: The file to upload\n- room_id: The room this file belongs to\n\nReturns FileUploadResponse with file_id and presigned URL.",
+        "description": "Upload a file for attachment to a room message.\n\nAccepts multipart/form-data with:\n- file: The file to upload\n- room_id: The room this file belongs to\n\nReturns FileUploadResponse with a stable authenticated content URL.",
         "operationId": "upload_file_api_v1_files_upload_post",
         "requestBody": {
           "content": {
@@ -1627,206 +1578,22 @@
         }
       }
     },
-    "/api/v1/discovery/agents": {
-      "post": {
-        "tags": [
-          "discovery"
-        ],
-        "summary": "Discover Agents",
-        "description": "Search for agents based on a text query using lexical matching.\n\nReturns a list of A2A-compliant AgentCards for agents that match the query,\nranked by lexical relevance.\n\n**Authentication:** Requires `X-API-Key` header with a valid API key.\n\n**Example Request:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"limit\": 5\n}\n```\n\n**Example Response:**\n```json\n{\n    \"query\": \"I need help with data analysis\",\n    \"agents\": [\n        {\n            \"agent_card\": { ... },\n            \"match_score\": 0.92\n        }\n    ],\n    \"count\": 1\n}\n```",
-        "operationId": "discover_agents_api_v1_discovery_agents_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DiscoveryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiscoveryResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Invalid or missing API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limit exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiscoveryErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/api-keys": {
+    "/api/v1/files/{file_id}/content": {
       "get": {
         "tags": [
-          "api_keys"
+          "files",
+          "files"
         ],
-        "summary": "List API Keys",
-        "description": "List all API keys belonging to the authenticated user.",
-        "operationId": "list_api_keys_api_v1_api_keys_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyListResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "api_keys"
-        ],
-        "summary": "Create API Key",
-        "description": "Create a new API key and return its plaintext value once.",
-        "operationId": "create_api_key_api_v1_api_keys_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/APIKeyCreateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyCreateResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/api-keys/{key_id}": {
-      "delete": {
-        "tags": [
-          "api_keys"
-        ],
-        "summary": "Deactivate API Key",
-        "description": "Soft-delete an API key owned by the authenticated user.",
-        "operationId": "deactivate_api_key_api_v1_api_keys__key_id__delete",
+        "summary": "Download File",
+        "operationId": "download_file_api_v1_files__file_id__content_get",
         "parameters": [
           {
-            "name": "key_id",
+            "name": "file_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Key Id"
+              "title": "File Id"
             }
           }
         ],
@@ -1835,29 +1602,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyOperationResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "API key not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
-                }
+                "schema": {}
               }
             }
           },
@@ -1867,16 +1612,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyErrorResponse"
                 }
               }
             }
@@ -2001,189 +1736,6 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response List User Pending Tasks Api V1 Users Me A2A Tasks Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/gateway/agents/discover": {
-      "post": {
-        "tags": [
-          "gateway"
-        ],
-        "summary": "Discover cloud agents",
-        "operationId": "gateway_discover_api_v1_gateway_agents_discover_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GatewayDiscoverRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GatewayDiscoveryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/gateway/agents/{agent_id}/message/send": {
-      "post": {
-        "tags": [
-          "gateway"
-        ],
-        "summary": "Send a synchronous message to an agent",
-        "operationId": "gateway_send_api_v1_gateway_agents__agent_id__message_send_post",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GatewaySendRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/gateway/agents/{agent_id}/message/stream": {
-      "post": {
-        "tags": [
-          "gateway"
-        ],
-        "summary": "Stream a message to an agent (SSE)",
-        "operationId": "gateway_stream_api_v1_gateway_agents__agent_id__message_stream_post",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GatewaySendRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/gateway/agents/{agent_id}/card": {
-      "get": {
-        "tags": [
-          "gateway"
-        ],
-        "summary": "Get an agent's card with masked URL",
-        "operationId": "gateway_get_card_api_v1_gateway_agents__agent_id__card_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GatewayCardResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2486,11 +2038,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Handle A2A Webhook Api V1 Webhooks A2A  Message Id  Post"
-                }
+                "schema": {}
               }
             }
           },
@@ -2510,154 +2058,6 @@
   },
   "components": {
     "schemas": {
-      "APIKeyCreateRequest": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Name",
-            "description": "Friendly name for the API key"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "APIKeyCreateRequest"
-      },
-      "APIKeyCreateResponse": {
-        "properties": {
-          "key_id": {
-            "type": "string",
-            "title": "Key Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key_id",
-          "name",
-          "created_at",
-          "api_key"
-        ],
-        "title": "APIKeyCreateResponse"
-      },
-      "APIKeyErrorResponse": {
-        "properties": {
-          "error": {
-            "type": "string",
-            "title": "Error"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          }
-        },
-        "type": "object",
-        "required": [
-          "error",
-          "message"
-        ],
-        "title": "APIKeyErrorResponse"
-      },
-      "APIKeyItemResponse": {
-        "properties": {
-          "key_id": {
-            "type": "string",
-            "title": "Key Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "last_used_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Used At"
-          },
-          "is_active": {
-            "type": "boolean",
-            "title": "Is Active"
-          },
-          "usage_count": {
-            "type": "integer",
-            "title": "Usage Count"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key_id",
-          "name",
-          "created_at",
-          "is_active",
-          "usage_count"
-        ],
-        "title": "APIKeyItemResponse"
-      },
-      "APIKeyListResponse": {
-        "properties": {
-          "keys": {
-            "items": {
-              "$ref": "#/components/schemas/APIKeyItemResponse"
-            },
-            "type": "array",
-            "title": "Keys"
-          },
-          "count": {
-            "type": "integer",
-            "title": "Count"
-          }
-        },
-        "type": "object",
-        "required": [
-          "keys",
-          "count"
-        ],
-        "title": "APIKeyListResponse"
-      },
-      "APIKeyOperationResponse": {
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "title": "Success"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          }
-        },
-        "type": "object",
-        "required": [
-          "success",
-          "message"
-        ],
-        "title": "APIKeyOperationResponse"
-      },
       "AgentAuthentication": {
         "properties": {
           "schemes": {
@@ -2722,6 +2122,21 @@
             ],
             "title": "Statetransitionhistory",
             "default": false
+          },
+          "extensions": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extensions"
           }
         },
         "type": "object",
@@ -2824,7 +2239,91 @@
             "type": "array",
             "title": "Skills"
           },
-          "supports_authenticated_extended_card": {
+          "protocolVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocolversion"
+          },
+          "preferredTransport": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferredtransport"
+          },
+          "additionalInterfaces": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Additionalinterfaces"
+          },
+          "security": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security"
+          },
+          "securitySchemes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Securityschemes"
+          },
+          "signatures": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signatures"
+          },
+          "supportsAuthenticatedExtendedCard": {
             "anyOf": [
               {
                 "type": "boolean"
@@ -2833,7 +2332,7 @@
                 "type": "null"
               }
             ],
-            "title": "Supports Authenticated Extended Card"
+            "title": "Supportsauthenticatedextendedcard"
           }
         },
         "type": "object",
@@ -3428,19 +2927,93 @@
         ],
         "title": "AgentUpdate"
       },
-      "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post": {
+      "Artifact": {
         "properties": {
-          "file": {
-            "type": "string",
-            "format": "binary",
-            "title": "File"
+          "artifactId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifactid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array",
+            "title": "Parts"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "index": {
+            "type": "integer",
+            "title": "Index",
+            "default": 0
+          },
+          "append": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append"
+          },
+          "lastChunk": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastchunk"
           }
         },
         "type": "object",
         "required": [
-          "file"
+          "parts"
         ],
-        "title": "Body_upload_agent_avatar_api_v1_agent__agent_id__avatar_post"
+        "title": "Artifact"
       },
       "Body_upload_file_api_v1_files_upload_post": {
         "properties": {
@@ -3461,227 +3034,117 @@
         ],
         "title": "Body_upload_file_api_v1_files_upload_post"
       },
-      "DiscoveryAgentResult": {
+      "DataPart": {
         "properties": {
-          "agent_card": {
+          "kind": {
+            "type": "string",
+            "const": "data",
+            "title": "Kind",
+            "default": "data"
+          },
+          "data": {
             "additionalProperties": true,
             "type": "object",
-            "title": "Agent Card"
+            "title": "Data"
           },
-          "match_score": {
-            "type": "number",
-            "title": "Match Score"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_card",
-          "match_score"
-        ],
-        "title": "DiscoveryAgentResult",
-        "description": "A single agent result from the Discovery API."
-      },
-      "DiscoveryErrorResponse": {
-        "properties": {
-          "error": {
-            "type": "string",
-            "title": "Error"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          }
-        },
-        "type": "object",
-        "required": [
-          "error",
-          "message"
-        ],
-        "title": "DiscoveryErrorResponse",
-        "description": "Standardized error response for Discovery API."
-      },
-      "DiscoveryRequest": {
-        "properties": {
-          "query": {
-            "type": "string",
-            "title": "Query",
-            "description": "Text query to search for matching agents"
-          },
-          "limit": {
+          "metadata": {
             "anyOf": [
               {
-                "type": "integer",
-                "maximum": 100,
-                "minimum": 1
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Limit",
-            "description": "Maximum number of agents to return (default: 10, max: 100)"
+            "title": "Metadata"
           }
         },
         "type": "object",
         "required": [
-          "query"
+          "data"
         ],
-        "title": "DiscoveryRequest",
-        "description": "Request body for agent discovery endpoint."
+        "title": "DataPart"
       },
-      "DiscoveryResponse": {
+      "FileContent": {
         "properties": {
-          "query": {
-            "type": "string",
-            "title": "Query"
-          },
-          "agents": {
-            "items": {
-              "$ref": "#/components/schemas/DiscoveryAgentResult"
-            },
-            "type": "array",
-            "title": "Agents"
-          },
-          "count": {
-            "type": "integer",
-            "title": "Count"
-          }
-        },
-        "type": "object",
-        "required": [
-          "query",
-          "agents",
-          "count"
-        ],
-        "title": "DiscoveryResponse",
-        "description": "Successful response from the Discovery API."
-      },
-      "GatewayCardResponse": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "agent_card": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Agent Card"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_id",
-          "agent_card"
-        ],
-        "title": "GatewayCardResponse"
-      },
-      "GatewayDiscoverRequest": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "title": "Request Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "query": {
-            "type": "string",
-            "title": "Query"
-          },
-          "limit": {
+          "name": {
             "anyOf": [
               {
-                "type": "integer",
-                "maximum": 100,
-                "minimum": 1
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Limit"
+            "title": "Name"
+          },
+          "mimeType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mimetype"
+          },
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
           }
         },
         "type": "object",
-        "required": [
-          "query"
-        ],
-        "title": "GatewayDiscoverRequest"
+        "title": "FileContent"
       },
-      "GatewayDiscoveryAgentResult": {
+      "FilePart": {
         "properties": {
-          "agent_id": {
+          "kind": {
             "type": "string",
-            "title": "Agent Id"
+            "const": "file",
+            "title": "Kind",
+            "default": "file"
           },
-          "agent_card": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Agent Card"
+          "file": {
+            "$ref": "#/components/schemas/FileContent"
           },
-          "match_score": {
-            "type": "number",
-            "title": "Match Score"
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           }
         },
         "type": "object",
         "required": [
-          "agent_id",
-          "agent_card",
-          "match_score"
+          "file"
         ],
-        "title": "GatewayDiscoveryAgentResult",
-        "description": "Discovery result enriched with agent_id for gateway consumers."
-      },
-      "GatewayDiscoveryResponse": {
-        "properties": {
-          "query": {
-            "type": "string",
-            "title": "Query"
-          },
-          "agents": {
-            "items": {
-              "$ref": "#/components/schemas/GatewayDiscoveryAgentResult"
-            },
-            "type": "array",
-            "title": "Agents"
-          },
-          "count": {
-            "type": "integer",
-            "title": "Count"
-          }
-        },
-        "type": "object",
-        "required": [
-          "query",
-          "agents",
-          "count"
-        ],
-        "title": "GatewayDiscoveryResponse",
-        "description": "Gateway discovery response with agent_id on each result."
-      },
-      "GatewaySendRequest": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "title": "Request Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "message": {
-            "title": "Message"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "GatewaySendRequest"
+        "title": "FilePart"
       },
       "HITLResponseRequest": {
         "properties": {
@@ -3912,6 +3375,126 @@
         ],
         "title": "HubStatusResponse"
       },
+      "Message": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/MessageRole"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "message"
+          },
+          "messageId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messageid"
+          },
+          "contextId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextid"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array",
+            "title": "Parts"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "parts"
+        ],
+        "title": "Message"
+      },
+      "MessageContent": {
+        "properties": {
+          "message_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Text"
+          },
+          "message_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Task"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UserAttachment"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachments"
+          },
+          "content_summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Summary"
+          }
+        },
+        "type": "object",
+        "title": "MessageContent"
+      },
+      "MessageRole": {
+        "type": "string",
+        "enum": [
+          "user",
+          "agent"
+        ],
+        "title": "MessageRole"
+      },
       "PaginatedResponse_AgentResponse_": {
         "properties": {
           "items": {
@@ -3970,6 +3553,40 @@
         ],
         "title": "PaginationMeta"
       },
+      "Part": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextPart"
+          },
+          {
+            "$ref": "#/components/schemas/FilePart"
+          },
+          {
+            "$ref": "#/components/schemas/DataPart"
+          }
+        ],
+        "title": "Part",
+        "description": "Wrapper that preserves .root access pattern used throughout the codebase.",
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "data": "#/components/schemas/DataPart",
+            "file": "#/components/schemas/FilePart",
+            "text": "#/components/schemas/TextPart"
+          }
+        }
+      },
+      "QuoteSourceKind": {
+        "type": "string",
+        "enum": [
+          "agent",
+          "synthesis",
+          "user_turn",
+          "unknown"
+        ],
+        "title": "QuoteSourceKind",
+        "description": "Provenance for a quote; dispatch uses snapshot text, not re-resolution."
+      },
       "RegisterHubRequest": {
         "properties": {
           "hub_id": {
@@ -4000,6 +3617,622 @@
           "user_id"
         ],
         "title": "RegisterHubResponse"
+      },
+      "RoomCenterUserMessageResponse": {
+        "properties": {
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "dispatch_root_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch Root Message Id"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Name"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomUserMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message_list": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RoomUserMessage"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message List"
+          },
+          "scope_resolution_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScopeResolutionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preflight_outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "completed",
+                  "failed",
+                  "canceled"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preflight Outcome"
+          },
+          "preflight_details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preflight Details"
+          },
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "status_code": {
+            "type": "integer",
+            "title": "Status Code",
+            "default": 200
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "RoomCenterUserMessageResponse"
+      },
+      "RoomUserMessage": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "message_created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Message Created At"
+          },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type",
+            "default": "user"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "parent_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Message Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "related_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Message Id"
+          },
+          "message_content": {
+            "$ref": "#/components/schemas/MessageContent"
+          },
+          "step_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Number"
+          },
+          "total_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Steps"
+          },
+          "task_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Updated At"
+          },
+          "task_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Content"
+          },
+          "extend_info": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extend Info"
+          },
+          "processing_claimed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Claimed At"
+          },
+          "quote_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Id"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserQuoteCreatePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "message_id",
+          "message_content"
+        ],
+        "title": "RoomUserMessage"
+      },
+      "ScopeResolutionError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ScopeResolutionError",
+        "description": "Structured error for dispatch scope resolution failures."
+      },
+      "Task": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "task"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessionid"
+          },
+          "contextId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "artifacts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Artifact"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifacts"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Message"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "Task"
+      },
+      "TaskState": {
+        "type": "string",
+        "enum": [
+          "submitted",
+          "working",
+          "input-required",
+          "auth-required",
+          "policy-required",
+          "completed",
+          "failed",
+          "canceled",
+          "rejected",
+          "expired"
+        ],
+        "title": "TaskState"
+      },
+      "TaskStatus": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Message"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "TaskStatus"
+      },
+      "TextPart": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "text",
+            "title": "Kind",
+            "default": "text"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TextPart"
+      },
+      "UserAttachment": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "file_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Url",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "mime_type",
+          "file_name",
+          "size_bytes"
+        ],
+        "title": "UserAttachment",
+        "description": "A durable room file reference stored alongside a user message."
+      },
+      "UserQuoteCreatePayload": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "source_message_id": {
+            "type": "string",
+            "title": "Source Message Id"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/QuoteSourceKind",
+            "default": "unknown"
+          },
+          "sender_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Display Name"
+          },
+          "source_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "source_message_id"
+        ],
+        "title": "UserQuoteCreatePayload",
+        "description": "Inbound quote payload on send (not stored on user message row)."
       },
       "ValidationError": {
         "properties": {

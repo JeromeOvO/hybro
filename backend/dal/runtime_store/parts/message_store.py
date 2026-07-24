@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from common.a2a_constants import TERMINAL_STATES, CommonTaskState
@@ -19,6 +21,7 @@ from dal.runtime_store.parts.parsing import (
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
+ARTIFACT_MATERIALIZATION_WAIT_SECONDS = 20 * 60 + 60
 
 
 class MessageRuntimeStorePart:
@@ -393,11 +396,370 @@ class MessageRuntimeStorePart:
             logger.error("Failed to update task state on message", exc_info=True)
             return False, resolved_message_text
 
+    async def claim_terminal_finalization(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None,
+        artifacts: list[dict] | None,
+    ) -> tuple[str | None, str | None]:
+        """Claim a recoverable terminal finalizer without making the task terminal."""
+        from common.utils.a2a_helpers import prepare_terminal_agent_content
+
+        message_text, artifacts, _ = prepare_terminal_agent_content(
+            message_text=message_text,
+            artifacts=artifacts,
+        )
+        token = await self.begin_terminal_finalization(message_id, state)
+        if token is None:
+            return None, message_text
+        if not await self.set_terminal_finalization_content(
+            message_id,
+            token,
+            message_text=message_text,
+            artifacts=artifacts,
+        ):
+            return None, message_text
+        return token, message_text
+
+    async def begin_terminal_finalization(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        recovery_source: str = "message",
+        recovery_id: str | None = None,
+    ) -> str | None:
+        """Fence artifact journal writes before terminal projection is assembled."""
+        token = uuid.uuid4().hex
+        now = utcnow()
+        stale_before = now - timedelta(minutes=5)
+        terminal_values = sorted(state.value for state in TERMINAL_STATES)
+        updates: dict[str, Any] = {
+            "terminal_finalization.state": "finalizing",
+            "terminal_finalization.token": token,
+            "terminal_finalization.target_state": state,
+            "terminal_finalization.recovery_source": recovery_source,
+            "terminal_finalization.recovery_id": recovery_id,
+            "terminal_finalization.started_at": now,
+            "terminal_finalization.heartbeat_at": now,
+            "task_updated_at": now,
+        }
+        query = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {
+                    "$nin": terminal_values
+                },
+                "$and": [
+                    {
+                        "$or": [
+                            {"terminal_finalization.state": {"$ne": "finalizing"}},
+                            {
+                                "terminal_finalization.heartbeat_at": {
+                                    "$lt": stale_before
+                                }
+                            },
+                            {
+                                "$and": [
+                                    {
+                                        "terminal_finalization.heartbeat_at": {
+                                            "$exists": False
+                                        }
+                                    },
+                                    {
+                                        "terminal_finalization.started_at": {
+                                            "$lt": stale_before
+                                        }
+                                    },
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {
+                                "artifact_materialization.state": {
+                                    "$ne": "running"
+                                }
+                            },
+                            {
+                                "artifact_materialization.expires_at": {
+                                    "$lte": now
+                                }
+                            },
+                        ]
+                    },
+                ],
+            }
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ARTIFACT_MATERIALIZATION_WAIT_SECONDS
+        while loop.time() < deadline:
+            claimed_at = utcnow()
+            updates.update(
+                {
+                    "terminal_finalization.started_at": claimed_at,
+                    "terminal_finalization.heartbeat_at": claimed_at,
+                    "task_updated_at": claimed_at,
+                }
+            )
+            query["$and"][1]["$or"][1][
+                "artifact_materialization.expires_at"
+            ] = {"$lte": claimed_at}
+            result = await self._room_agent_messages.update_one(
+                query,
+                {"$set": updates},
+            )
+            if _mongo_update_succeeded(result):
+                return token
+            current = await self._room_agent_messages.find_one(
+                {"message_id": message_id},
+                {
+                    "terminal_finalization.state": 1,
+                    "artifact_materialization.state": 1,
+                    "artifact_materialization.expires_at": 1,
+                },
+            )
+            if current is None:
+                return None
+            finalization = current.get("terminal_finalization") or {}
+            if finalization.get("state") == "finalizing":
+                return None
+            artifact_lock = current.get("artifact_materialization") or {}
+            if artifact_lock.get("state") != "running":
+                return None
+            await asyncio.sleep(0.05)
+        return None
+
+    async def terminal_finalization_matches(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        recovery_source: str,
+        recovery_id: str | None,
+    ) -> bool:
+        """Return whether this exact durable recovery already reached terminal."""
+        if recovery_id is None:
+            return False
+        current = await self._room_agent_messages.find_one(
+            {
+                "message_id": message_id,
+                "message_content.message_task.status.state": state,
+                "terminal_finalization.state": "terminal",
+                "terminal_finalization.target_state": state,
+                "terminal_finalization.recovery_source": recovery_source,
+                "terminal_finalization.recovery_id": recovery_id,
+            }
+        )
+        return current is not None
+
+    async def set_terminal_finalization_content(
+        self,
+        message_id: str,
+        token: str,
+        *,
+        message_text: str | None,
+        artifacts: list[dict] | None,
+    ) -> bool:
+        from common.utils.a2a_helpers import prepare_terminal_agent_content
+
+        message_text, artifacts, _ = prepare_terminal_agent_content(
+            message_text=message_text,
+            artifacts=artifacts,
+        )
+        updates: dict[str, Any] = {
+            "terminal_finalization.heartbeat_at": utcnow(),
+            "task_updated_at": utcnow(),
+        }
+        if message_text is not None:
+            updates["message_content.message_text"] = message_text
+        if artifacts is not None:
+            updates["message_content.message_task.artifacts"] = artifacts
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "terminal_finalization.state": "finalizing",
+                "terminal_finalization.token": token,
+            },
+            {"$set": updates},
+        )
+        return _mongo_update_succeeded(result)
+
+    async def heartbeat_terminal_finalization(
+        self, message_id: str, token: str
+    ) -> bool:
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "terminal_finalization.state": "finalizing",
+                "terminal_finalization.token": token,
+            },
+            {
+                "$set": {
+                    "terminal_finalization.heartbeat_at": utcnow(),
+                    "task_updated_at": utcnow(),
+                }
+            },
+        )
+        return _mongo_update_succeeded(result)
+
+    async def claim_terminal_finalization_step(
+        self, message_id: str, token: str, step: str
+    ) -> bool:
+        now = utcnow()
+        stale_before = now - timedelta(minutes=5)
+        prefix = f"terminal_finalization.steps.{step}"
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "terminal_finalization.state": "finalizing",
+                "terminal_finalization.token": token,
+                f"{prefix}.completed": {"$ne": True},
+                "$or": [
+                    {f"{prefix}.state": {"$ne": "running"}},
+                    {f"{prefix}.started_at": {"$lt": stale_before}},
+                ],
+            },
+            {
+                "$set": {
+                    f"{prefix}.state": "running",
+                    f"{prefix}.started_at": now,
+                    "terminal_finalization.heartbeat_at": now,
+                }
+            },
+        )
+        return _mongo_update_succeeded(result)
+
+    async def complete_terminal_finalization_step(
+        self, message_id: str, token: str, step: str
+    ) -> bool:
+        prefix = f"terminal_finalization.steps.{step}"
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "terminal_finalization.state": "finalizing",
+                "terminal_finalization.token": token,
+                f"{prefix}.state": "running",
+            },
+            {
+                "$set": {
+                    f"{prefix}.state": "completed",
+                    f"{prefix}.completed": True,
+                    f"{prefix}.completed_at": utcnow(),
+                    "terminal_finalization.heartbeat_at": utcnow(),
+                }
+            },
+        )
+        return _mongo_update_succeeded(result)
+
+    async def claim_artifact_materialization(
+        self, message_id: str, owner: str
+    ) -> str | None:
+        token = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ARTIFACT_MATERIALIZATION_WAIT_SECONDS
+        terminal_values = sorted(state.value for state in TERMINAL_STATES)
+        while loop.time() < deadline:
+            now = utcnow()
+            result = await self._room_agent_messages.update_one(
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values
+                    },
+                    "terminal_finalization.state": {"$ne": "finalizing"},
+                    "$or": [
+                        {"artifact_materialization.state": {"$ne": "running"}},
+                        {"artifact_materialization.expires_at": {"$lte": now}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "artifact_materialization": {
+                            "state": "running",
+                            "token": token,
+                            "owner": owner,
+                            "started_at": now,
+                            "expires_at": now + timedelta(minutes=2),
+                        }
+                    }
+                },
+            )
+            if _mongo_update_succeeded(result):
+                return token
+            current = await self._room_agent_messages.find_one(
+                {"message_id": message_id},
+                {
+                    "terminal_finalization.state": 1,
+                    "artifact_materialization.state": 1,
+                },
+            )
+            if current is None:
+                return None
+            if (current.get("terminal_finalization") or {}).get(
+                "state"
+            ) == "finalizing":
+                return None
+            await asyncio.sleep(0.05)
+        return None
+
+    async def heartbeat_artifact_materialization(
+        self, message_id: str, token: str
+    ) -> bool:
+        now = utcnow()
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "artifact_materialization.state": "running",
+                "artifact_materialization.token": token,
+            },
+            {
+                "$set": {
+                    "artifact_materialization.expires_at": now
+                    + timedelta(minutes=2)
+                }
+            },
+        )
+        return _mongo_update_succeeded(result)
+
+    async def release_artifact_materialization(
+        self, message_id: str, token: str
+    ) -> None:
+        await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "artifact_materialization.token": token,
+            },
+            {"$unset": {"artifact_materialization": ""}},
+        )
+
+    async def complete_terminal_finalization(
+        self, message_id: str, token: str, state: str
+    ) -> bool:
+        result = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "terminal_finalization.state": "finalizing",
+                "terminal_finalization.token": token,
+            },
+            {
+                "$set": {
+                    "message_content.message_task.status.state": state,
+                    "terminal_finalization.state": "terminal",
+                    "terminal_finalization.completed_at": utcnow(),
+                    "task_updated_at": utcnow(),
+                }
+            },
+        )
+        return _mongo_update_succeeded(result)
+
     async def accumulate_artifact_on_message(
         self,
         message_id: str,
         artifact: dict,
         append: bool = False,
+        update_key: str | None = None,
     ) -> bool:
         """Accumulate A2A artifact chunks with atomic DAL collection updates."""
         try:
@@ -414,14 +776,21 @@ class MessageRuntimeStorePart:
                 return False
 
             artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
+            explicit_index = artifact.get("index")
+            if not artifact_id and explicit_index is not None:
+                artifact_id = f"index:{explicit_index}"
+                artifact = {**artifact, "artifactId": artifact_id}
             artifact_text = _extract_text_from_artifact_parts(clean_parts)
 
             base_filter = {
                 "message_id": message_id,
+                "terminal_finalization.state": {"$ne": "finalizing"},
                 "message_content.message_task.status.state": {
                     "$nin": sorted(state.value for state in TERMINAL_STATES)
                 },
             }
+            if update_key:
+                base_filter["artifact_update_keys"] = {"$ne": update_key}
             if not artifact_id:
                 update: dict[str, Any] = {
                     "$push": {"message_content.message_task.artifacts": artifact},
@@ -432,6 +801,8 @@ class MessageRuntimeStorePart:
                 }
                 if artifact_text:
                     update["$set"]["message_content.message_text"] = artifact_text
+                if update_key:
+                    update["$addToSet"] = {"artifact_update_keys": update_key}
                 result = await self._room_agent_messages.update_one(base_filter, update)
                 return _mongo_update_succeeded(result)
 
@@ -442,16 +813,32 @@ class MessageRuntimeStorePart:
                     artifact,
                     artifact_text,
                     base_filter,
+                    update_key,
                 )
             return await self._replace_or_insert_artifact(
                 artifact_id,
                 artifact,
                 artifact_text,
                 base_filter,
+                update_key,
             )
         except Exception:
             logger.error("Failed to accumulate artifact on message", exc_info=True)
             return False
+
+    async def is_artifact_update_recorded(
+        self, message_id: str, update_key: str
+    ) -> bool:
+        return (
+            await self._room_agent_messages.find_one(
+                {
+                    "message_id": message_id,
+                    "artifact_update_keys": update_key,
+                },
+                {"_id": 1},
+            )
+            is not None
+        )
 
     @staticmethod
     def _artifact_id_match_expr(artifact_id: str) -> dict[str, Any]:
@@ -482,7 +869,10 @@ class MessageRuntimeStorePart:
 
     @classmethod
     def _map_append_parts_expr(
-        cls, artifact_id: str, new_parts: list[dict]
+        cls,
+        artifact_id: str,
+        new_parts: list[dict],
+        artifact_metadata: dict | None,
     ) -> dict[str, Any]:
         return {
             "$map": {
@@ -500,7 +890,12 @@ class MessageRuntimeStorePart:
                                             {"$ifNull": ["$$art.parts", []]},
                                             new_parts,
                                         ]
-                                    }
+                                    },
+                                    **(
+                                        {"metadata": artifact_metadata}
+                                        if artifact_metadata is not None
+                                        else {}
+                                    ),
                                 },
                             ]
                         },
@@ -517,6 +912,7 @@ class MessageRuntimeStorePart:
         artifact: dict,
         artifact_text: str,
         base_filter: dict,
+        update_key: str | None,
     ) -> bool:
         new_parts = artifact.get("parts", [])
         if not new_parts:
@@ -537,6 +933,7 @@ class MessageRuntimeStorePart:
             "message_content.message_task.artifacts": self._map_append_parts_expr(
                 artifact_id,
                 new_parts,
+                artifact.get("metadata"),
             ),
             "message_content.message_task.status.state": "working",
             "task_updated_at": utcnow(),
@@ -546,6 +943,13 @@ class MessageRuntimeStorePart:
                 "$concat": [
                     {"$ifNull": ["$message_content.message_text", ""]},
                     artifact_text,
+                ]
+            }
+        if update_key:
+            set_fields["artifact_update_keys"] = {
+                "$setUnion": [
+                    {"$ifNull": ["$artifact_update_keys", []]},
+                    [update_key],
                 ]
             }
         result = await self._room_agent_messages.update_one(
@@ -569,6 +973,8 @@ class MessageRuntimeStorePart:
         }
         if artifact_text:
             insert_update["$set"]["message_content.message_text"] = artifact_text
+        if update_key:
+            insert_update["$addToSet"] = {"artifact_update_keys": update_key}
         result = await self._room_agent_messages.update_one(base_filter, insert_update)
         return _mongo_update_succeeded(result)
 
@@ -578,6 +984,7 @@ class MessageRuntimeStorePart:
         artifact: dict,
         artifact_text: str,
         base_filter: dict,
+        update_key: str | None,
     ) -> bool:
         filter_with_artifact = {
             **base_filter,
@@ -600,6 +1007,13 @@ class MessageRuntimeStorePart:
         }
         if artifact_text:
             set_fields["message_content.message_text"] = artifact_text
+        if update_key:
+            set_fields["artifact_update_keys"] = {
+                "$setUnion": [
+                    {"$ifNull": ["$artifact_update_keys", []]},
+                    [update_key],
+                ]
+            }
         result = await self._room_agent_messages.update_one(
             filter_with_artifact,
             [{"$set": set_fields}],
@@ -616,6 +1030,8 @@ class MessageRuntimeStorePart:
         }
         if artifact_text:
             insert_update["$set"]["message_content.message_text"] = artifact_text
+        if update_key:
+            insert_update["$addToSet"] = {"artifact_update_keys": update_key}
         result = await self._room_agent_messages.update_one(base_filter, insert_update)
         return _mongo_update_succeeded(result)
 

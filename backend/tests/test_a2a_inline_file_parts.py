@@ -23,14 +23,12 @@ class BytesReader:
 def _attachment(
     *,
     file_id: str = "file-1",
-    key: str = "uploads/room/file/report.pdf",
     name: str = "report.pdf",
     mime_type: str = "application/pdf",
     size_bytes: int = 7,
 ) -> UserAttachment:
     return UserAttachment(
         file_id=file_id,
-        s3_key=key,
         mime_type=mime_type,
         file_name=name,
         size_bytes=size_bytes,
@@ -78,7 +76,7 @@ async def test_build_attachment_file_parts_builds_inline_bytes():
     from room.a2a_file_parts import build_attachment_file_parts
 
     raw = b"pdfdata"
-    reader = BytesReader({"uploads/room/file/report.pdf": raw})
+    reader = BytesReader({"file-1": raw})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment()],
@@ -95,14 +93,14 @@ async def test_build_attachment_file_parts_builds_inline_bytes():
     assert file_data.mimeType == "application/pdf"
     assert file_data.uri is None
     assert base64.b64decode(file_data.bytes.encode("ascii")) == raw
-    assert reader.calls == [("uploads/room/file/report.pdf", 1024)]
+    assert reader.calls == [("file-1", 1024)]
 
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_unsupported_mime_before_read():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": b"pdfdata"})
+    reader = BytesReader({"file-1": b"pdfdata"})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment()],
@@ -125,8 +123,8 @@ async def test_build_attachment_file_parts_rejects_mixed_set_when_any_mime_unsup
 
     reader = BytesReader(
         {
-            "uploads/room/file/report.pdf": b"pdfdata",
-            "uploads/room/file/photo.png": b"pngdata",
+            "file-1": b"pdfdata",
+            "file-2": b"pngdata",
         }
     )
 
@@ -135,7 +133,6 @@ async def test_build_attachment_file_parts_rejects_mixed_set_when_any_mime_unsup
             _attachment(),
             _attachment(
                 file_id="file-2",
-                key="uploads/room/file/photo.png",
                 name="photo.png",
                 mime_type="image/png",
             ),
@@ -158,7 +155,7 @@ async def test_build_attachment_file_parts_rejects_mixed_set_when_any_mime_unsup
 async def test_build_attachment_file_parts_rejects_declared_raw_oversize_before_read():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": b"pdfdata"})
+    reader = BytesReader({"file-1": b"pdfdata"})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment(size_bytes=1025)],
@@ -178,7 +175,7 @@ async def test_build_attachment_file_parts_rejects_declared_raw_oversize_before_
 async def test_build_attachment_file_parts_rejects_declared_aggregate_encoded_oversize():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": b"pdfdata"})
+    reader = BytesReader({"file-1": b"pdfdata"})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment(size_bytes=4)],
@@ -199,7 +196,7 @@ async def test_build_attachment_file_parts_rejects_declared_aggregate_encoded_ov
 async def test_build_attachment_file_parts_rejects_actual_aggregate_encoded_oversize():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": b"pdfdata"})
+    reader = BytesReader({"file-1": b"pdfdata"})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment(size_bytes=1)],
@@ -214,14 +211,14 @@ async def test_build_attachment_file_parts_rejects_actual_aggregate_encoded_over
     assert result.failure.code == "message_too_large"
     assert "aggregate" in result.failure.message.lower()
     assert result.failure.file_names == ("report.pdf",)
-    assert reader.calls == [("uploads/room/file/report.pdf", 1024)]
+    assert reader.calls == [("file-1", 1024)]
 
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_handles_missing_storage_bytes():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": None})
+    reader = BytesReader({"file-1": None})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment()],
@@ -240,7 +237,7 @@ async def test_build_attachment_file_parts_handles_missing_storage_bytes():
 async def test_build_attachment_file_parts_rejects_empty_storage_bytes():
     from room.a2a_file_parts import build_attachment_file_parts
 
-    reader = BytesReader({"uploads/room/file/report.pdf": b""})
+    reader = BytesReader({"file-1": b""})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment()],
@@ -263,7 +260,7 @@ async def test_build_attachment_file_parts_normalizes_storage_exceptions(caplog)
         build_attachment_file_parts,
     )
 
-    reader = BytesReader({"uploads/room/file/report.pdf": RuntimeError("storage down")})
+    reader = BytesReader({"file-1": RuntimeError("storage down")})
 
     with caplog.at_level(logging.ERROR, logger="room.a2a_file_parts"):
         result = await build_attachment_file_parts(
@@ -293,23 +290,12 @@ async def test_build_attachment_file_parts_normalizes_storage_exceptions(caplog)
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_reports_storage_oversize_as_file_too_large():
-    from common.errors import ObjectStorageError
     from room.a2a_file_parts import build_attachment_file_parts
+    from room_files import FileTooLargeError
 
     reader = BytesReader(
         {
-            "uploads/room/file/report.pdf": ObjectStorageError(
-                (
-                    "Object storage get_bytes failed for uploads/room/file/report.pdf: "
-                    "body exceeds max_bytes"
-                ),
-                details={
-                    "operation": "get_bytes",
-                    "key": "uploads/room/file/report.pdf",
-                    "content_length": 1025,
-                    "max_bytes": 1024,
-                },
-            )
+            "file-1": FileTooLargeError("file-1")
         }
     )
 
@@ -325,32 +311,3 @@ async def test_build_attachment_file_parts_reports_storage_oversize_as_file_too_
     assert result.failure is not None
     assert result.failure.code == "file_too_large"
     assert result.failure.file_names == ("report.pdf",)
-
-
-@pytest.mark.asyncio
-async def test_build_uri_file_part_sets_uri_without_bytes():
-    from room.a2a_file_parts import (
-        A2AOutboundFile,
-        AttachmentUriResolver,
-        build_uri_file_part,
-    )
-
-    class UriResolver(AttachmentUriResolver):
-        async def get_uri(self, key: str, *, filename: str | None = None) -> str:
-            return f"https://files.example/{key}?filename={filename}"
-
-    part = await build_uri_file_part(
-        A2AOutboundFile(
-            name="report.pdf",
-            mime_type="application/pdf",
-            storage_key="uploads/room/file/report.pdf",
-            size_bytes=7,
-        ),
-        uri_resolver=UriResolver(),
-    )
-
-    file_data = part.root.file
-    assert file_data.uri == (
-        "https://files.example/uploads/room/file/report.pdf?filename=report.pdf"
-    )
-    assert file_data.bytes is None

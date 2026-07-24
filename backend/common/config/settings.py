@@ -40,7 +40,6 @@ class Settings(BaseSettings):
     llm_gateway_supervisor_json_timeout_seconds: float = 30.0
     llm_gateway_supervisor_text_timeout_seconds: float = 90.0
     llm_gateway_supervisor_stream_timeout_seconds: float = 90.0
-    llm_gateway_bedrock_request_timeout_seconds: float = 45.0
     llm_gateway_default_generation_model: str = "lead_ai_model"
     llm_gateway_default_embedding_model: str = "embedding_model"
     llm_gateway_default_supervisor_model: str = "supervisor_model"
@@ -204,19 +203,13 @@ class Settings(BaseSettings):
     memory_search_max_candidates: int = 1000  # Max keyword candidates to rank
     memory_search_max_snippet_chars: int = 300  # Max chars per snippet
 
-    # AWS S3 (file uploads and binary content storage)
-    s3_bucket_name: str = ""
-    s3_region: str = "us-east-1"
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-    max_file_size_mb: int = 50
+    # Local room file storage
+    hybro_file_dir: str = Field(
+        default="",
+        validation_alias=AliasChoices("HYBRO_FILE_DIR", "hybro_file_dir"),
+    )
     a2a_inline_file_max_raw_bytes: int = 5 * 1024 * 1024
     a2a_inline_message_max_encoded_bytes: int = 0
-
-    # AWS Bedrock Settings (Supervisor LLM)
-    bedrock_region: str = "us-east-1"
-    bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    use_bedrock_supervisor: bool = False
 
     # Graceful Shutdown Settings
     shutdown_drain_seconds: float = (

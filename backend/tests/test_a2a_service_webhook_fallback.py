@@ -856,7 +856,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 AsyncMock(return_value=_message_with_file_facade_response()),
             ),
             patch(
-                "execution.task_tracking.convert_pydantic_artifacts_to_s3",
+                "execution.task_tracking.materialize_artifacts",
                 converter,
             ),
             patch.object(service, "_record_call", new_callable=AsyncMock),
@@ -895,7 +895,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
                 AsyncMock(return_value=_terminal_task_with_file_facade_response()),
             ),
             patch(
-                "execution.task_tracking.convert_pydantic_artifacts_to_s3",
+                "execution.task_tracking.materialize_artifacts",
                 converter,
             ),
             patch.object(service, "_record_call", new_callable=AsyncMock),

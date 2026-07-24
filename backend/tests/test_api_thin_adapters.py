@@ -858,7 +858,6 @@ def test_route_owner_protocols_match_handler_calls():
     )
     from common.protocols import (
         A2ATaskStatusReader,
-        AgentAvatarManager,
         AgentRegistry,
         HealthCheck,
         HubRelayManagement,
@@ -870,9 +869,6 @@ def test_route_owner_protocols_match_handler_calls():
     )
 
     expected_by_protocol = {
-        AgentAvatarManager: {
-            "store_avatar",
-        },
         AgentCapabilityIssueStore: {
             "get_issue_by_id",
             "get_issues_for_agent",
@@ -1024,13 +1020,12 @@ def test_agent_routes_expose_typed_dependency_providers():
         AgentLivenessChecker,
     )
     from api import agent
-    from common.protocols import AgentAvatarManager, AgentRegistry
+    from common.protocols import AgentRegistry
 
     provider_expectations = {
         agent.get_agent_center: AgentCenterCompatibility,
         agent.get_agent_service: AgentRegistry,
         agent.get_capability_issue_service: AgentCapabilityIssueStore,
-        agent.get_agent_avatar_manager: AgentAvatarManager,
         agent.get_agent_liveness_checker: AgentLivenessChecker,
     }
     for provider, expected_type in provider_expectations.items():
@@ -1044,10 +1039,6 @@ def test_agent_routes_expose_typed_dependency_providers():
         },
         agent.update_agent: {
             "center": AgentCenterCompatibility,
-        },
-        agent.upload_agent_avatar: {
-            "agent_lookup": AgentRegistry,
-            "avatar_manager": AgentAvatarManager,
         },
         agent.get_capability_issues: {
             "agent_lookup": AgentRegistry,
@@ -1115,10 +1106,6 @@ def test_agent_route_inventory_records_live_protocol_owners():
         "update_agent": (
             "agent.protocols.AgentCenterCompatibility",
             set(),
-        ),
-        "upload_agent_avatar": (
-            "common.protocols.AgentAvatarManager",
-            {"common.protocols.AgentRegistry"},
         ),
         "get_capability_issues": (
             "agent.protocols.AgentCapabilityIssueStore",

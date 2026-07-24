@@ -1,338 +1,382 @@
-"""A2A artifact storage conversion helpers.
-
-This module owns the storage-aware conversion of inline A2A file bytes and
-external file URIs into durable object-storage references.
-"""
+"""Materialize A2A file parts into durable room files."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
-import io
+import binascii
+import hashlib
 import ipaddress
-import logging
+import json
 import socket
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
-import httpx
+import aiohttp
+from aiohttp.abc import AbstractResolver
 
-from common.file_upload_constants import MAX_INLINE_CONVERSIONS_PER_MESSAGE
-from common.types import FileContent
+from common.types import DataPart, FileContent, Part
 
-logger = logging.getLogger(__name__)
+MAX_FILE_PARTS = 20
+MAX_FILE_RAW_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_RAW_BYTES = 100 * 1024 * 1024
+MAX_TOTAL_ENCODED_BYTES = 139_810_136
+MAX_REDIRECTS = 3
 
-_storage_service: Any | None = None
-_own_bucket_name = ""
-_max_download_bytes = 50 * 1024 * 1024
-
-
-def bind_a2a_storage_dependencies(
-    *,
-    storage_service: Any,
-    s3_bucket_name: str = "",
-    max_file_size_mb: int = 50,
-) -> None:
-    global _storage_service, _own_bucket_name, _max_download_bytes
-
-    _storage_service = storage_service
-    _own_bucket_name = s3_bucket_name
-    _max_download_bytes = max_file_size_mb * 1024 * 1024
+_room_files: Any | None = None
 
 
-def _require_storage_service() -> Any:
-    if _storage_service is None:
-        raise RuntimeError("A2A artifact storage dependency has not been bound")
-    return _storage_service
+def bind_artifact_files(room_files: Any) -> None:
+    global _room_files
+
+    _room_files = room_files
 
 
-def _file_content_mime(file_content: Any) -> str | None:
+def _require_room_files() -> Any:
+    if _room_files is None:
+        raise RuntimeError("Artifact room files dependency has not been bound")
+    return _room_files
+
+
+def _room_file_content_url(file_id: str) -> str:
+    storage = _require_room_files()
+    content_url = getattr(storage, "content_url", None)
+    if callable(content_url):
+        return str(content_url(file_id))
+    return f"/api/v1/files/{file_id}/content"
+
+
+def _declared_mime(file_content: Any) -> str | None:
     return getattr(file_content, "mime_type", None) or getattr(
         file_content, "mimeType", None
     )
 
 
-def _is_own_storage_url(uri: str) -> bool:
-    if not _own_bucket_name:
-        return False
-    parsed = urlparse(uri)
-    host = parsed.hostname or ""
-    return _own_bucket_name in host
+def _mime(file_content: Any) -> str:
+    return _declared_mime(file_content) or "application/octet-stream"
 
 
-def _validate_external_uri(uri: str) -> str | None:
-    parsed = urlparse(uri)
-
-    if parsed.scheme not in ("http", "https"):
-        return f"unsupported scheme: {parsed.scheme}"
-
-    hostname = parsed.hostname
-    if not hostname:
-        return "missing hostname"
-
-    try:
-        resolved = socket.getaddrinfo(
-            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
-        )
-    except socket.gaierror:
-        return f"DNS resolution failed for {hostname}"
-
-    for _family, _type, _proto, _canonname, sockaddr in resolved:
-        ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return f"resolved to private/reserved IP: {ip}"
-
-    return None
-
-
-async def _read_limited_response_body(
-    response: httpx.Response,
-    max_bytes: int,
-) -> bytes | None:
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in response.aiter_bytes():
-        total += len(chunk)
-        if total > max_bytes:
-            return None
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def _response_content_type(response: httpx.Response) -> str:
-    content_type = response.headers.get("content-type", "")
-    return content_type.split(";", 1)[0] or "application/octet-stream"
-
-
-def _response_content_length(response: httpx.Response) -> int | None:
-    raw_length = response.headers.get("content-length")
-    if raw_length is None:
-        return None
-    try:
-        return int(raw_length)
-    except ValueError:
-        return None
-
-
-async def convert_inline_bytes_to_s3(
-    parts: list[dict],
+def _origin_key(
+    *,
     room_id: str,
     message_id: str,
-    *,
-    converted_so_far: int = 0,
-) -> int:
-    converted = converted_so_far
-
-    for part in parts:
-        if part.get("kind") != "file":
-            continue
-        file_info = part.get("file")
-        if not file_info or not isinstance(file_info, dict):
-            continue
-        raw_bytes = file_info.get("bytes")
-        if not raw_bytes:
-            continue
-
-        if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-            logger.warning(
-                "Inline conversion cap (%d) reached: room=%s message=%s - skipping remaining",
-                MAX_INLINE_CONVERSIONS_PER_MESSAGE,
-                room_id,
-                message_id,
-            )
-            break
-
-        try:
-            decoded = base64.b64decode(raw_bytes)
-        except Exception:
-            logger.warning(
-                "Invalid base64 in file part: room=%s message=%s - skipping",
-                room_id,
-                message_id,
-            )
-            continue
-
-        mime = (
-            file_info.get("mime_type")
-            or file_info.get("mimeType")
-            or "application/octet-stream"
-        )
-        ext = mime.split("/")[-1] if "/" in mime else "bin"
-        storage_key = f"artifacts/{room_id}/{message_id}/notify-{converted}.{ext}"
-
-        try:
-            storage = _require_storage_service()
-            await storage.upload_file(
-                file_data=io.BytesIO(decoded),
-                s3_key=storage_key,
-                content_type=mime,
-                content_length=len(decoded),
-            )
-            orig_name = file_info.get("name")
-            presigned_url = await storage.generate_presigned_url(
-                storage_key,
-                filename=orig_name,
-            )
-            file_info["bytes"] = None
-            file_info["uri"] = presigned_url
-            if part.get("metadata") is None:
-                part["metadata"] = {}
-            part["metadata"]["s3_key"] = storage_key
-            converted += 1
-        except Exception:
-            logger.error(
-                "Failed to upload inline file part to storage: room=%s message=%s",
-                room_id,
-                message_id,
-                exc_info=True,
-            )
-
-    return await _download_external_uris_to_s3(
-        parts,
+    artifact_slot: str,
+    part_slot: int,
+    content_sha256: str,
+) -> str:
+    payload = [
+        "v1",
         room_id,
         message_id,
-        converted_so_far=converted,
+        artifact_slot,
+        part_slot,
+        content_sha256,
+    ]
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _decode_base64(value: str) -> bytes:
+    if len(value) > 4 * ((MAX_FILE_RAW_BYTES + 2) // 3):
+        raise ValueError("encoded file exceeds per-file limit")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("invalid base64 file content") from exc
+    if len(decoded) > MAX_FILE_RAW_BYTES:
+        raise ValueError("decoded file exceeds per-file limit")
+    return decoded
+
+
+def _unavailable_dict(file_info: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "kind": "data",
+        "data": {
+            "type": "file_unavailable",
+            "file_name": file_info.get("name") or "file",
+            "mime_type": (
+                file_info.get("mime_type")
+                or file_info.get("mimeType")
+                or "application/octet-stream"
+            ),
+            "reason": reason,
+        },
+    }
+
+
+def _unavailable_part(file_content: Any, reason: str) -> Part:
+    return Part(
+        root=DataPart(
+            data={
+                "type": "file_unavailable",
+                "file_name": getattr(file_content, "name", None) or "file",
+                "mime_type": _mime(file_content),
+                "reason": reason,
+            }
+        )
     )
 
 
-async def _download_external_uris_to_s3(
+def _authoritative_size(record: dict[str, Any]) -> int:
+    try:
+        size = int(record["size_bytes"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("invalid stored file size") from exc
+    if size < 0:
+        raise ValueError("invalid stored file size")
+    return size
+
+
+def _declared_metadata_size(metadata: dict[str, Any]) -> int:
+    try:
+        size = int(metadata.get("size_bytes") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, size)
+
+
+def _canonical_reference_metadata(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "file_id": str(record["file_id"]),
+        "file_name": str(record.get("file_name") or "file"),
+        "mime_type": str(record.get("mime_type") or "application/octet-stream"),
+        "size_bytes": _authoritative_size(record),
+        "sha256": str(record["sha256"]),
+    }
+
+
+def _canonicalize_reference_dict(
+    part: dict[str, Any],
+    file_info: dict[str, Any],
+    record: dict[str, Any],
+) -> None:
+    metadata = _canonical_reference_metadata(record)
+    file_info.clear()
+    file_info.update(
+        {
+            "uri": _room_file_content_url(metadata["file_id"]),
+            "mimeType": metadata["mime_type"],
+            "name": metadata["file_name"],
+        }
+    )
+    part["metadata"] = metadata
+
+
+def _claim_file_attempt(budget: dict[str, Any]) -> bool:
+    attempted = int(budget.get("attempted", budget.get("converted", 0)))
+    if attempted >= MAX_FILE_PARTS:
+        return False
+    budget["attempted"] = attempted + 1
+    return True
+
+
+async def _store(
+    *,
+    data: bytes,
+    room_id: str,
+    message_id: str,
+    artifact_slot: str,
+    part_slot: int,
+    file_name: str,
+    mime_type: str,
+) -> dict[str, Any]:
+    digest = hashlib.sha256(data).hexdigest()
+    return await _require_room_files().store_agent_artifact(
+        room_id=room_id,
+        source_message_id=message_id,
+        origin_key=_origin_key(
+            room_id=room_id,
+            message_id=message_id,
+            artifact_slot=artifact_slot,
+            part_slot=part_slot,
+            content_sha256=digest,
+        ),
+        content=data,
+        file_name=file_name,
+        mime_type=mime_type,
+        max_bytes=MAX_FILE_RAW_BYTES,
+    )
+
+
+async def _consume_precounted_reference(
+    *,
+    part: dict[str, Any],
+    file_info: dict[str, Any],
+    room_id: str,
+    message_id: str,
+    budget: dict[str, Any],
+) -> bool:
+    metadata = part.get("metadata") or {}
+    file_id = str(metadata.get("file_id") or "")
+    precounted = budget.get("precounted_file_ids")
+    if not isinstance(precounted, dict):
+        return False
+    remaining = int(precounted.get(file_id) or 0)
+    if remaining <= 0:
+        return False
+    uri = file_info.get("uri")
+    if uri != _room_file_content_url(file_id):
+        return False
+    valid = await _require_room_files().validate_agent_reference(
+        room_id=room_id,
+        source_message_id=message_id,
+        file_id=file_id,
+        sha256=metadata.get("sha256"),
+    )
+    if not valid:
+        raise ValueError("untrusted internal file reference")
+    authoritative_size = _authoritative_size(valid)
+    budget["raw"] = (
+        max(0, int(budget["raw"]) - _declared_metadata_size(metadata))
+        + authoritative_size
+    )
+    if budget["raw"] > MAX_TOTAL_RAW_BYTES:
+        raise ValueError("aggregate raw limit exceeded")
+    _canonicalize_reference_dict(part, file_info, valid)
+    if remaining == 1:
+        precounted.pop(file_id, None)
+    else:
+        precounted[file_id] = remaining - 1
+    return True
+
+
+async def materialize_inline_file_parts(
     parts: list[dict],
     room_id: str,
     message_id: str,
     *,
     converted_so_far: int = 0,
+    budget: dict[str, Any] | None = None,
+    artifact_slot: str | None = None,
 ) -> int:
-    converted = converted_so_far
-    uri_parts: list[tuple[dict, dict, str]] = []
+    budget = (
+        budget
+        if budget is not None
+        else {
+            "converted": converted_so_far,
+            "attempted": converted_so_far,
+            "raw": 0,
+            "encoded": 0,
+        }
+    )
+    budget.setdefault("attempted", int(budget.get("converted", 0)))
 
-    for part in parts:
+    for part_slot, part in enumerate(parts):
         if part.get("kind") != "file":
             continue
         file_info = part.get("file")
-        if not file_info or not isinstance(file_info, dict):
-            continue
-        if file_info.get("bytes"):
-            continue
-        uri = file_info.get("uri")
-        if not uri or _is_own_storage_url(uri):
-            continue
-        rejection = _validate_external_uri(uri)
-        if rejection:
-            logger.warning(
-                "Skipping unsafe external URI (%s): room=%s message=%s uri=%s",
-                rejection,
-                room_id,
-                message_id,
-                uri[:120],
-            )
-            continue
-        uri_parts.append((part, file_info, uri))
-
-    if not uri_parts:
-        return converted
-
-    async with httpx.AsyncClient(
-        timeout=30,
-        follow_redirects=True,
-        max_redirects=3,
-    ) as client:
-        for part_dict, file_info, uri in uri_parts:
-            if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-                logger.warning(
-                    "Conversion cap (%d) reached during URI download: room=%s message=%s",
-                    MAX_INLINE_CONVERSIONS_PER_MESSAGE,
-                    room_id,
-                    message_id,
-                )
-                break
-
+        if isinstance(file_info, dict):
             try:
-                async with client.stream("GET", uri) as response:
-                    if response.status_code != 200:
-                        logger.warning(
-                            "External URI returned HTTP %d: room=%s message=%s uri=%s",
-                            response.status_code,
-                            room_id,
-                            message_id,
-                            uri[:120],
-                        )
-                        continue
-                    content_length = _response_content_length(response)
-                    if (
-                        content_length is not None
-                        and content_length > _max_download_bytes
-                    ):
-                        logger.warning(
-                            "External URI Content-Length %d exceeds limit %d: room=%s message=%s",
-                            content_length,
-                            _max_download_bytes,
-                            room_id,
-                            message_id,
-                        )
-                        continue
-                    data = await _read_limited_response_body(
-                        response,
-                        _max_download_bytes,
-                    )
-                    if data is None:
-                        logger.warning(
-                            "External URI body exceeds size limit (%d bytes): room=%s message=%s",
-                            _max_download_bytes,
-                            room_id,
-                            message_id,
-                        )
-                        continue
-                    content_type = (
-                        _response_content_type(response)
-                        or file_info.get("mime_type")
-                        or file_info.get("mimeType")
-                        or "application/octet-stream"
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to download external URI: room=%s message=%s uri=%s",
-                    room_id,
-                    message_id,
-                    uri[:120],
-                    exc_info=True,
-                )
+                if await _consume_precounted_reference(
+                    part=part,
+                    file_info=file_info,
+                    room_id=room_id,
+                    message_id=message_id,
+                    budget=budget,
+                ):
+                    continue
+            except Exception as exc:
+                reason = "size_limit" if "limit" in str(exc) else "invalid_content"
+                parts[part_slot] = _unavailable_dict(file_info, reason)
                 continue
-
-            mime = (
-                file_info.get("mime_type") or file_info.get("mimeType") or content_type
+        if not _claim_file_attempt(budget):
+            parts[part_slot] = _unavailable_dict(
+                file_info if isinstance(file_info, dict) else {},
+                "size_limit",
             )
-            ext = mime.split("/")[-1] if "/" in mime else "bin"
-            storage_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
+            continue
+        if not isinstance(file_info, dict):
+            parts[part_slot] = _unavailable_dict({}, "invalid_content")
+            continue
+        try:
+            encoded = file_info.get("bytes")
+            if isinstance(encoded, str) and encoded:
+                budget["encoded"] += len(encoded)
+                if budget["encoded"] > MAX_TOTAL_ENCODED_BYTES:
+                    raise ValueError("aggregate encoded limit exceeded")
+                data = _decode_base64(encoded)
+            else:
+                uri = file_info.get("uri")
+                if not isinstance(uri, str) or not uri:
+                    raise ValueError("missing file content")
+                room_files = _require_room_files()
+                if uri == _room_file_content_url(
+                    str((part.get("metadata") or {}).get("file_id") or "")
+                ):
+                    metadata = part.get("metadata") or {}
+                    file_id = str(metadata.get("file_id") or "")
+                    valid = await room_files.validate_agent_reference(
+                        room_id=room_id,
+                        source_message_id=message_id,
+                        file_id=file_id,
+                        sha256=metadata.get("sha256"),
+                    )
+                    if valid:
+                        authoritative_size = _authoritative_size(valid)
+                        budget["converted"] += 1
+                        budget["raw"] += authoritative_size
+                        if budget["raw"] > MAX_TOTAL_RAW_BYTES:
+                            raise ValueError("aggregate raw limit exceeded")
+                        _canonicalize_reference_dict(part, file_info, valid)
+                        continue
+                    raise ValueError("untrusted internal file reference")
+                data, detected_mime = await fetch_remote_file(uri)
+                file_info.setdefault("mimeType", detected_mime)
+            budget["raw"] += len(data)
+            if budget["raw"] > MAX_TOTAL_RAW_BYTES:
+                raise ValueError("aggregate raw limit exceeded")
+            stored = await _store(
+                data=data,
+                room_id=room_id,
+                message_id=message_id,
+                artifact_slot=artifact_slot or f"message:{budget['converted']}",
+                part_slot=part_slot,
+                file_name=file_info.get("name") or f"artifact-{budget['converted']}",
+                mime_type=(
+                    file_info.get("mime_type")
+                    or file_info.get("mimeType")
+                    or "application/octet-stream"
+                ),
+            )
+        except Exception as exc:
+            reason = "size_limit" if "limit" in str(exc) else "invalid_content"
+            parts[part_slot] = _unavailable_dict(file_info, reason)
+            continue
 
-            try:
-                storage = _require_storage_service()
-                await storage.upload_file(
-                    file_data=io.BytesIO(data),
-                    s3_key=storage_key,
-                    content_type=mime,
-                    content_length=len(data),
-                )
-                orig_name = file_info.get("name")
-                presigned_url = await storage.generate_presigned_url(
-                    storage_key,
-                    filename=orig_name,
-                )
-                file_info["uri"] = presigned_url
-                if part_dict.get("metadata") is None:
-                    part_dict["metadata"] = {}
-                part_dict["metadata"]["s3_key"] = storage_key
-                converted += 1
-            except Exception:
-                logger.error(
-                    "Failed to upload downloaded URI to storage: room=%s message=%s",
-                    room_id,
-                    message_id,
-                    exc_info=True,
-                )
-
-    return converted
+        file_id = str(stored["file_id"])
+        file_info.clear()
+        file_info.update(
+            {
+                "uri": _room_file_content_url(file_id),
+                "mimeType": stored["mime_type"],
+                "name": stored["file_name"],
+            }
+        )
+        part["metadata"] = {
+            "file_id": file_id,
+            "file_name": stored["file_name"],
+            "mime_type": stored["mime_type"],
+            "size_bytes": stored["size_bytes"],
+            "sha256": stored["sha256"],
+        }
+        budget["converted"] += 1
+    return budget["converted"]
 
 
-async def convert_pydantic_artifacts_to_s3(
+async def delete_superseded_agent_artifacts(
+    *,
+    room_id: str,
+    message_id: str,
+    file_ids: set[str],
+) -> int:
+    return await _require_room_files().delete_superseded_agent_artifacts(
+        room_id=room_id,
+        source_message_id=message_id,
+        file_ids=file_ids,
+    )
+
+
+async def materialize_artifacts(
     artifacts: list,
     room_id: str,
     message_id: str,
@@ -340,153 +384,239 @@ async def convert_pydantic_artifacts_to_s3(
     converted_so_far: int = 0,
 ) -> int:
     converted = converted_so_far
+    attempted = converted_so_far
+    total_raw = 0
+    total_encoded = 0
 
-    for artifact in artifacts:
-        if not artifact.parts:
-            continue
-
-        for part in artifact.parts:
+    for artifact_position, artifact in enumerate(artifacts):
+        artifact_id = getattr(artifact, "artifact_id", None)
+        explicit_index = getattr(artifact, "index", None)
+        artifact_slot = (
+            f"id:{artifact_id}"
+            if artifact_id
+            else f"index:{explicit_index}"
+            if explicit_index is not None
+            else f"slot:{artifact_position}"
+        )
+        for part_slot, part in enumerate(list(getattr(artifact, "parts", []) or [])):
             root = getattr(part, "root", part)
             if getattr(root, "kind", None) != "file":
                 continue
-            fc = getattr(root, "file", None)
-            if not fc:
+            file_content = getattr(root, "file", None)
+            if attempted >= MAX_FILE_PARTS:
+                artifact.parts[part_slot] = _unavailable_part(
+                    file_content, "size_limit"
+                )
                 continue
-            raw_bytes = getattr(fc, "bytes", None)
-            if not raw_bytes:
+            attempted += 1
+            if file_content is None:
+                artifact.parts[part_slot] = _unavailable_part(
+                    file_content, "invalid_content"
+                )
                 continue
-            if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-                break
-
             try:
-                decoded = base64.b64decode(raw_bytes)
-            except Exception:
-                continue
-
-            mime = _file_content_mime(fc) or "application/octet-stream"
-            ext = mime.split("/")[-1] if "/" in mime else "bin"
-            storage_key = f"artifacts/{room_id}/{message_id}/inline-{converted}.{ext}"
-
-            try:
-                storage = _require_storage_service()
-                await storage.upload_file(
-                    file_data=io.BytesIO(decoded),
-                    s3_key=storage_key,
-                    content_type=mime,
-                    content_length=len(decoded),
-                )
-                orig_name = getattr(fc, "name", None)
-                presigned_url = await storage.generate_presigned_url(
-                    storage_key,
-                    filename=orig_name,
-                )
-                root.file = FileContent(
-                    uri=presigned_url,
-                    mimeType=_file_content_mime(fc),
-                    name=orig_name,
-                )
-                root.metadata = {**(root.metadata or {}), "s3_key": storage_key}
-                converted += 1
-            except Exception:
-                logger.error(
-                    "Failed to upload inline base64 to storage: room=%s message=%s",
-                    room_id,
-                    message_id,
-                    exc_info=True,
-                )
-
-        uri_items: list[tuple[object, object, str]] = []
-        for part in artifact.parts:
-            root = getattr(part, "root", part)
-            if getattr(root, "kind", None) != "file":
-                continue
-            fc = getattr(root, "file", None)
-            if not fc or getattr(fc, "bytes", None):
-                continue
-            uri = getattr(fc, "uri", None)
-            if not uri or _is_own_storage_url(uri):
-                continue
-            rejection = _validate_external_uri(uri)
-            if rejection:
-                logger.warning(
-                    "Skipping unsafe external URI (%s): room=%s message=%s",
-                    rejection,
-                    room_id,
-                    message_id,
-                )
-                continue
-            uri_items.append((root, fc, uri))
-
-        if not uri_items:
-            continue
-
-        async with httpx.AsyncClient(
-            timeout=30,
-            follow_redirects=True,
-            max_redirects=3,
-        ) as client:
-            for root, fc, uri in uri_items:
-                if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-                    break
-                try:
-                    async with client.stream("GET", uri) as response:
-                        if response.status_code != 200:
-                            continue
-                        content_length = _response_content_length(response)
-                        if (
-                            content_length is not None
-                            and content_length > _max_download_bytes
-                        ):
-                            continue
-                        data = await _read_limited_response_body(
-                            response,
-                            _max_download_bytes,
+                encoded = getattr(file_content, "bytes", None)
+                if encoded:
+                    total_encoded += len(encoded)
+                    if total_encoded > MAX_TOTAL_ENCODED_BYTES:
+                        raise ValueError("aggregate encoded limit exceeded")
+                    data = _decode_base64(encoded)
+                else:
+                    uri = getattr(file_content, "uri", None)
+                    if not uri:
+                        raise ValueError("missing file content")
+                    room_files = _require_room_files()
+                    metadata = getattr(root, "metadata", None) or {}
+                    file_id = str(metadata.get("file_id") or "")
+                    if str(uri) == _room_file_content_url(file_id):
+                        valid = await room_files.validate_agent_reference(
+                            room_id=room_id,
+                            source_message_id=message_id,
+                            file_id=file_id,
+                            sha256=metadata.get("sha256"),
                         )
-                        if data is None:
+                        if valid:
+                            total_raw += _authoritative_size(valid)
+                            if total_raw > MAX_TOTAL_RAW_BYTES:
+                                raise ValueError("aggregate raw limit exceeded")
+                            canonical = _canonical_reference_metadata(valid)
+                            root.file = FileContent(
+                                uri=_room_file_content_url(canonical["file_id"]),
+                                mimeType=canonical["mime_type"],
+                                name=canonical["file_name"],
+                            )
+                            root.metadata = canonical
+                            converted += 1
                             continue
-                        content_type = _response_content_type(response)
-                except Exception:
-                    logger.warning(
-                        "Failed to download external URI: room=%s message=%s",
-                        room_id,
-                        message_id,
-                        exc_info=True,
-                    )
-                    continue
+                        raise ValueError("untrusted internal file reference")
+                    data, detected_mime = await fetch_remote_file(str(uri))
+                    if not _declared_mime(file_content):
+                        file_content.mime_type = detected_mime
+                total_raw += len(data)
+                if total_raw > MAX_TOTAL_RAW_BYTES:
+                    raise ValueError("aggregate raw limit exceeded")
+                stored = await _store(
+                    data=data,
+                    room_id=room_id,
+                    message_id=message_id,
+                    artifact_slot=artifact_slot,
+                    part_slot=part_slot,
+                    file_name=getattr(file_content, "name", None)
+                    or f"artifact-{artifact_position}-{part_slot}",
+                    mime_type=_mime(file_content),
+                )
+            except Exception as exc:
+                reason = "size_limit" if "limit" in str(exc) else "invalid_content"
+                artifact.parts[part_slot] = _unavailable_part(file_content, reason)
+                continue
 
-                mime = _file_content_mime(fc) or content_type
-                ext = mime.split("/")[-1] if "/" in mime else "bin"
-                storage_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
-
-                try:
-                    storage = _require_storage_service()
-                    await storage.upload_file(
-                        file_data=io.BytesIO(data),
-                        s3_key=storage_key,
-                        content_type=mime,
-                        content_length=len(data),
-                    )
-                    orig_name = getattr(fc, "name", None)
-                    presigned_url = await storage.generate_presigned_url(
-                        storage_key,
-                        filename=orig_name,
-                    )
-                    fc.uri = presigned_url
-                    root.metadata = {**(root.metadata or {}), "s3_key": storage_key}
-                    converted += 1
-                except Exception:
-                    logger.error(
-                        "Failed to upload downloaded URI to storage: room=%s message=%s",
-                        room_id,
-                        message_id,
-                        exc_info=True,
-                    )
-
+            file_id = str(stored["file_id"])
+            root.file = FileContent(
+                uri=_room_file_content_url(file_id),
+                mimeType=stored["mime_type"],
+                name=stored["file_name"],
+            )
+            root.metadata = {
+                "file_id": file_id,
+                "file_name": stored["file_name"],
+                "mime_type": stored["mime_type"],
+                "size_bytes": stored["size_bytes"],
+                "sha256": stored["sha256"],
+            }
+            converted += 1
     return converted
 
 
+class _PinnedResolver(AbstractResolver):
+    def __init__(self, hostname: str, addresses: list[tuple[int, str]]) -> None:
+        self._hostname = hostname
+        self._addresses = addresses
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[dict[str, Any]]:
+        if host != self._hostname:
+            raise OSError("unexpected hostname")
+        return [
+            {
+                "hostname": host,
+                "host": address,
+                "port": port,
+                "family": address_family,
+                "proto": 0,
+                "flags": socket.AI_NUMERICHOST,
+            }
+            for address_family, address in self._addresses
+        ]
+
+    async def close(self) -> None:
+        return None
+
+
+def _public_address(value: str) -> bool:
+    address = ipaddress.ip_address(value)
+    return not any(
+        (
+            address.is_private,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_multicast,
+            address.is_reserved,
+            address.is_unspecified,
+        )
+    )
+
+
+async def _resolve_public(hostname: str, port: int) -> list[tuple[int, str]]:
+    infos = await asyncio.get_running_loop().getaddrinfo(
+        hostname,
+        port,
+        type=socket.SOCK_STREAM,
+    )
+    addresses: list[tuple[int, str]] = []
+    for family, _type, _proto, _canonname, sockaddr in infos:
+        address = sockaddr[0]
+        if not _public_address(address):
+            raise ValueError("remote URI resolves to a non-public address")
+        pair = (family, address)
+        if pair not in addresses:
+            addresses.append(pair)
+    if not addresses:
+        raise ValueError("remote URI has no usable address")
+    return addresses
+
+
+async def fetch_remote_file(uri: str) -> tuple[bytes, str]:
+    current = uri
+    timeout = aiohttp.ClientTimeout(total=60, connect=5, sock_read=30)
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        parsed = urlparse(current)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("unsupported remote URI")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addresses = await _resolve_public(parsed.hostname, port)
+        connector = aiohttp.TCPConnector(
+            resolver=_PinnedResolver(parsed.hostname, addresses),
+            use_dns_cache=False,
+        )
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            trust_env=False,
+        ) as session:
+            async with session.get(current, allow_redirects=False) as response:
+                connection = response.connection
+                transport = connection.transport if connection is not None else None
+                peer = transport.get_extra_info("peername") if transport else None
+                peer_address = peer[0] if isinstance(peer, tuple) and peer else None
+                if (
+                    not isinstance(peer_address, str)
+                    or not _public_address(peer_address)
+                    or peer_address not in {address for _, address in addresses}
+                ):
+                    raise ValueError("remote URI peer did not match pinned DNS")
+                if response.status in {301, 302, 303, 307, 308}:
+                    if redirect_count >= MAX_REDIRECTS:
+                        raise ValueError("too many redirects")
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("redirect missing location")
+                    current = urljoin(current, location)
+                    continue
+                if response.status != 200:
+                    raise ValueError(f"remote URI returned {response.status}")
+                declared = response.content_length
+                if declared is not None and declared > MAX_FILE_RAW_BYTES:
+                    raise ValueError("remote file exceeds size limit")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_FILE_RAW_BYTES:
+                        raise ValueError("remote file exceeds size limit")
+                    chunks.append(chunk)
+                mime_type = (
+                    response.headers.get("content-type", "application/octet-stream")
+                    .split(";", 1)[0]
+                    .strip()
+                    or "application/octet-stream"
+                )
+                return b"".join(chunks), mime_type
+    raise ValueError("remote URI could not be fetched")
+
+
 __all__ = [
-    "bind_a2a_storage_dependencies",
-    "convert_inline_bytes_to_s3",
-    "convert_pydantic_artifacts_to_s3",
+    "bind_artifact_files",
+    "delete_superseded_agent_artifacts",
+    "fetch_remote_file",
+    "materialize_artifacts",
+    "materialize_inline_file_parts",
 ]

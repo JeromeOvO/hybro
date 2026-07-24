@@ -1247,9 +1247,6 @@ class TestInquiryRoomMessages:
         facade.get_agent_messages_for_room = AsyncMock(return_value=[])
         runtime = RoomServices()
         runtime.bind_facade(facade)
-        runtime.bind_object_storage(
-            SimpleNamespace(get_presigned_url=AsyncMock(return_value="unused"))
-        )
         center = RoomCenter(room_services=runtime)
 
         response = await inquiry_room_messages(
@@ -1403,9 +1400,6 @@ class TestInquiryRoomMessages:
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)
-        runtime.bind_object_storage(
-            SimpleNamespace(get_presigned_url=AsyncMock(return_value="unused"))
-        )
         runtime.bind_store(
             SimpleNamespace(
                 get_hitl_request=AsyncMock(

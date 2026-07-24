@@ -21,14 +21,12 @@ class StorageType(str, Enum):
     Storage backend type for content references.
 
     MONGODB: Text content stored in MongoDB (current implementation)
-    S3: Binary content stored in S3 (future extension)
     URL: Web content referenced by URL
 
     See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for specification.
     """
 
     MONGODB = "mongodb"
-    S3 = "s3"
     URL = "url"
 
 
@@ -37,8 +35,6 @@ class ContentReference(BaseModel):
     Pointer to full content in storage. Used for compact representation.
 
     Current implementation: MongoDB for text content
-    Future extension: S3 for binary content (images, files, video)
-
     See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for specification.
     """
 
@@ -47,10 +43,6 @@ class ContentReference(BaseModel):
     # MongoDB reference (for text content)
     collection: str | None = None
     document_id: str | None = None
-
-    # S3 reference (FUTURE: for binary content)
-    s3_bucket: str | None = None
-    s3_key: str | None = None
 
     # URL reference (for web content)
     url: str | None = None
@@ -65,8 +57,6 @@ class ContentReference(BaseModel):
         """Generate compact representation for context."""
         if self.storage_type == StorageType.MONGODB:
             return f"[Content stored: db/{self.collection}/{self.document_id}]"
-        elif self.storage_type == StorageType.S3:
-            return f"[Content stored: s3://{self.s3_bucket}/{self.s3_key}]"
         elif self.storage_type == StorageType.URL:
             return f"[Content from: {self.url}]"
         return "[Content reference]"

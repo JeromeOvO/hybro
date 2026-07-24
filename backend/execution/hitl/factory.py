@@ -12,6 +12,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "agent_reply",
         "continuation",
         "task_notifications",
+        "room_files",
     }
     legacy_aliases = {
         "store",
@@ -28,6 +29,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     service = HITLService(
         continuation=kwargs.get("continuation"),
         task_notifications=kwargs.get("task_notifications"),
+        room_files=kwargs.get("room_files"),
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")

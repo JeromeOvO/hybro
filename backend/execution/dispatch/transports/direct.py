@@ -130,8 +130,6 @@ class DirectTransport(AgentTransport):
         message_reader: "DirectMessageReader",
         artifact_store: "DirectArtifactStore",
         task_updater: "DirectTaskUpdatePort",
-        object_storage=None,
-        s3_service=None,
         capability_issue_service=None,
     ) -> None:
         super().__init__(response_handler)
@@ -142,25 +140,7 @@ class DirectTransport(AgentTransport):
         self._message_reader = message_reader
         self._artifact_store = artifact_store
         self._task_updater = task_updater
-        storage_service = object_storage if object_storage is not None else s3_service
-        self._object_storage = storage_service
-        self._s3_service = storage_service
         self.capability_issue_service = capability_issue_service
-
-    @property
-    def object_storage(self):
-        service = getattr(self, "_object_storage", None)
-        if service is None:
-            service = getattr(self, "_s3_service", None)
-        if service is None:
-            raise RuntimeError(
-                "Direct transport object-storage dependency has not been bound"
-            )
-        return service
-
-    @property
-    def s3_service(self):
-        return self.object_storage
 
     # ------------------------------------------------------------------
     # Terminal event emission
@@ -450,36 +430,7 @@ class DirectTransport(AgentTransport):
 
         return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
-    async def _convert_inline_bytes_to_s3(
-        self,
-        artifact,
-        room_id: str,
-        message_id: str,
-        conversion_counter: list[int] | None = None,
-    ) -> None:
-        """Convert inline base64 bytes and external URIs in artifact parts to S3 URIs.
-
-        Delegates to the shared helper in a2a_helpers. ``conversion_counter``
-        is a single-element list ``[count]`` shared across calls for the same
-        message so the per-message cap is enforced.
-        """
-        from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
-
-        if not artifact.parts:
-            return
-
-        if conversion_counter is None:
-            conversion_counter = [0]
-
-        new_total = await convert_pydantic_artifacts_to_s3(
-            [artifact],
-            room_id,
-            message_id,
-            converted_so_far=conversion_counter[0],
-        )
-        conversion_counter[0] = new_total
-
-    async def _convert_streaming_parts_to_s3(
+    async def _materialize_streaming_file_parts(
         self,
         non_text_parts: list[dict],
         room_id: str,
@@ -487,14 +438,14 @@ class DirectTransport(AgentTransport):
         *,
         converted_so_far: int = 0,
     ) -> int:
-        """Convert inline base64 bytes in accumulated streaming file parts to S3 URIs.
+        """Materialize accumulated streaming file parts as durable room files.
 
         Delegates to the shared helper in a2a_helpers.  Returns the updated
         running total so callers can keep the per-message cap accurate.
         """
-        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+        from common.utils.a2a_helpers import materialize_inline_file_parts
 
-        return await convert_inline_bytes_to_s3(
+        return await materialize_inline_file_parts(
             non_text_parts,
             room_id,
             message_id,
@@ -1322,12 +1273,12 @@ class DirectTransport(AgentTransport):
             )
         already_terminal = task and task.status and is_terminal_state(task.status.state)
 
-        # Convert inline base64 file parts to S3 URIs and materialize them
-        # as a task artifact *before* persisting / notifying, so that the DB
+        # Materialize inline file parts as a task artifact before public
+        # projection and persistence / notification, so that the DB
         # always contains the multimodal data and clients that reconnect
         # after missing the real-time SSE can still hydrate them.
         if streaming_state.non_text_parts:
-            new_total = await self._convert_streaming_parts_to_s3(
+            new_total = await self._materialize_streaming_file_parts(
                 streaming_state.non_text_parts,
                 ctx.room_id,
                 ctx.current_message.message_id,
@@ -1917,9 +1868,9 @@ class DirectTransport(AgentTransport):
             elif public_error_text:
                 current_message.message_content.message_text = public_error_text
 
-            # Convert inline base64 file parts to S3 URIs
+            # Materialize inline file parts before persistence.
             if non_text_parts:
-                await self._convert_streaming_parts_to_s3(
+                await self._materialize_streaming_file_parts(
                     non_text_parts,
                     room_id,
                     message_id,
@@ -2155,14 +2106,13 @@ class DirectTransport(AgentTransport):
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
         if completed_task.artifacts:
-            conversion_counter: list[int] = [0]
-            for artifact in completed_task.artifacts:
-                await self._convert_inline_bytes_to_s3(
-                    artifact,
-                    room_id,
-                    message_id,
-                    conversion_counter=conversion_counter,
-                )
+            from common.utils.a2a_helpers import materialize_artifacts
+
+            await materialize_artifacts(
+                completed_task.artifacts,
+                room_id,
+                message_id,
+            )
 
         public_message_text = extract_public_completed_status_text(completed_task)
         projected_task_data = public_persisted_task_data(completed_task)

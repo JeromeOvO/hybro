@@ -69,7 +69,7 @@ class TestUploadToSendFlow:
         assert len(result.attachments) == 1
         att = result.attachments[0]
         assert att.file_id == "f1"
-        assert att.s3_key == "uploads/room1/f1/photo.png"
+        assert att.file_id == "f1"
         assert att.mime_type == "image/png"
 
     async def test_content_summary_has_images(self, room_svc):
@@ -135,7 +135,7 @@ class TestBuildMessageParts:
         assert parts[1].root.file.uri is None
         assert parts[1].root.file.bytes is not None
         room_svc._attachment_content_reader.get_bytes.assert_awaited_once_with(
-            "uploads/r/f1/photo.png",
+            "f1",
             max_bytes=1024 * 1024,
         )
         room_svc._s3_service.get_presigned_url.assert_not_called()
@@ -407,7 +407,7 @@ class TestProcessAgentMessageAttachmentPreflight:
             agent_profiles=None,
         )
         reader.get_bytes.assert_awaited_once_with(
-            "uploads/r/f2/report.pdf",
+            "f2",
             max_bytes=1024,
         )
 
@@ -497,7 +497,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert result.a2a_message.parts[1].root.file.bytes is not None
         assert result.a2a_message.parts[1].root.file.uri is None
         reader.get_bytes.assert_awaited_once_with(
-            "uploads/r/f2/report.pdf",
+            "f2",
             max_bytes=1024,
         )
 
@@ -683,6 +683,6 @@ class TestProcessAgentMessageAttachmentPreflight:
             "empty_file"
         )
         reader.get_bytes.assert_awaited_once_with(
-            "uploads/r/f2/report.pdf",
+            "f2",
             max_bytes=1024,
         )

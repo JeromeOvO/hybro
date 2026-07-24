@@ -99,11 +99,6 @@ def compact_pointer(content_ref: dict[str, Any]) -> str:
             "[Content stored: db/"
             f"{content_ref.get('collection')}/{content_ref.get('document_id')}]"
         )
-    if storage_type == "s3":
-        return (
-            "[Content stored: s3://"
-            f"{content_ref.get('s3_bucket')}/{content_ref.get('s3_key')}]"
-        )
     if storage_type == "url":
         return f"[Content from: {content_ref.get('url')}]"
     return "[Content reference]"

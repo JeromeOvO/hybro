@@ -3,6 +3,8 @@
 Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 """
 
+import json
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from api_gateway.dependencies import get_webhook_receiver
@@ -13,6 +15,31 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+MAX_A2A_WEBHOOK_BODY_BYTES = 139_810_136 + 2 * 1024 * 1024
+
+
+async def _bounded_json_object(request: Request) -> JsonMap:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_A2A_WEBHOOK_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="Payload too large")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_A2A_WEBHOOK_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="Payload too large")
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400, detail="Invalid payload: expected JSON object"
+        )
+    return payload
 
 
 @router.post("/webhooks/a2a/{message_id}", response_model=None)
@@ -35,14 +62,7 @@ async def handle_a2a_webhook(
         authorization.replace("Bearer ", "") if authorization else ""
     )
 
-    try:
-        payload = await request.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}") from e
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=400, detail="Invalid payload: expected JSON object"
-        )
+    payload = await _bounded_json_object(request)
     assert isinstance(transport, WebhookReceiver)
     return await transport.handle_webhook(message_id, payload, token)
 

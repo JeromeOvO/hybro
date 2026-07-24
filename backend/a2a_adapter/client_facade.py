@@ -23,6 +23,7 @@ from a2a.types import (
     TaskIdParams,
 )
 
+from .bounded_http import bounded_client, event_bounded_client
 from .card_data import sdk_agent_card_data
 from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
 from .docker_host_fallback import (
@@ -48,7 +49,7 @@ async def fetch_agent_card_with_fallback(
     *,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with bounded_client(timeout=timeout) as client:
         return await with_docker_host_url_fallback(
             str(agent_url),
             lambda candidate_url: _fetch_agent_card_from_url(client, candidate_url),
@@ -85,7 +86,7 @@ async def send_message(
             ),
         ),
     )
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with bounded_client(timeout=timeout) as client:
         response = await with_docker_host_fallback(
             card,
             lambda candidate: A2AClient(client, agent_card=candidate).send_message(
@@ -114,7 +115,7 @@ async def stream_message(
             ),
         ),
     )
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with event_bounded_client(timeout=timeout) as client:
         async for response in stream_with_docker_host_fallback(
             card,
             lambda candidate: A2AClient(
@@ -133,7 +134,7 @@ async def cancel_remote_task(
 ) -> bool:
     try:
         card = AgentCard(**sdk_agent_card_data(agent_card_data))
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with bounded_client(timeout=timeout) as client:
             request = CancelTaskRequest(
                 id=str(uuid4()), params=TaskIdParams(id=task_id)
             )
@@ -174,7 +175,7 @@ async def send_hitl_reply(
             ),
         ),
     )
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with bounded_client(timeout=timeout) as client:
         response = await with_docker_host_url_fallback(
             agent_url,
             lambda candidate_url: A2AClient(

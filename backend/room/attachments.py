@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,7 +8,7 @@ from common.types import Part, TextPart
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
-from models.room import RoomAgentMessage, RoomUserMessage, UserAttachment
+from models.room import RoomUserMessage, UserAttachment
 from room.a2a_file_parts import (
     AttachmentDispatchContext,
     AttachmentPreflightFailure,
@@ -60,10 +59,11 @@ async def resolve_room_attachments(
         attachments.append(
             UserAttachment(
                 file_id=file_id,
-                s3_key=file_meta["s3_key"],
                 mime_type=file_meta["mime_type"],
                 file_name=file_meta["file_name"],
                 size_bytes=file_meta["size_bytes"],
+                sha256=file_meta.get("sha256"),
+                file_url=file_meta.get("content_url"),
             )
         )
 
@@ -157,54 +157,3 @@ async def build_message_parts(
         return result.failure
     parts.extend(result.parts)
     return parts
-
-
-async def refresh_artifact_presigned_urls(  # noqa: C901
-    *,
-    messages: list[RoomAgentMessage],
-    object_storage,
-) -> None:
-    key_refs: list[tuple[object, str]] = []
-    key_filenames: dict[str, str] = {}
-
-    for message in messages:
-        task = message.message_content.message_task if message.message_content else None
-        if not task or not task.artifacts:
-            continue
-        for artifact in task.artifacts:
-            if not artifact.parts:
-                continue
-            for part in artifact.parts:
-                root = getattr(part, "root", part)
-                if getattr(root, "kind", None) != "file":
-                    continue
-                metadata = getattr(root, "metadata", None)
-                s3_key = metadata.get("s3_key") if isinstance(metadata, dict) else None
-                if not s3_key:
-                    continue
-                file_content = getattr(root, "file", None)
-                if file_content is None:
-                    continue
-                key_refs.append((file_content, s3_key))
-                filename = getattr(file_content, "name", None)
-                if filename:
-                    key_filenames[s3_key] = filename
-
-    if not key_refs:
-        return
-
-    unique_key_filenames: dict[str, str | None] = {}
-    for _, s3_key in key_refs:
-        unique_key_filenames.setdefault(s3_key, key_filenames.get(s3_key))
-
-    urls = await asyncio.gather(
-        *(
-            object_storage.get_presigned_url(s3_key, filename=filename)
-            for s3_key, filename in unique_key_filenames.items()
-        )
-    )
-    url_map = dict(zip(unique_key_filenames, urls, strict=True))
-    for file_content, s3_key in key_refs:
-        new_url = url_map.get(s3_key)
-        if new_url:
-            file_content.uri = new_url

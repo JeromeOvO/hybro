@@ -30,13 +30,8 @@ LEGACY_RUNTIME_FILES = (
 OBJECT_STORAGE_SHIM_IMPORT_PREFIX = f"{REMOVED_RUNTIME_PACKAGE}.s3_service"
 OBJECT_STORAGE_SHIM_EXEMPT_FILES = {f"{REMOVED_RUNTIME_PACKAGE}/s3_service.py"}
 AWS_SDK_IMPORT_PREFIXES = {"aioboto3", "botocore"}
-AWS_SDK_ALLOWED_PREFIXES = ("dal/s3/",)
-AWS_SDK_TEMPORARY_ALLOWLIST = {
-    ("llm_gateway/providers/bedrock_provider.py", "aioboto3"): {
-        "reason": "Bedrock remains an LLM Gateway provider with direct Bedrock SDK ownership during the broader provider-adapter migration.",
-        "deletion_condition": "Remove when Bedrock SDK access is moved behind a dedicated provider transport or no longer imports aioboto3 directly.",
-    },
-}
+AWS_SDK_ALLOWED_PREFIXES = ()
+AWS_SDK_TEMPORARY_ALLOWLIST = {}
 
 
 @dataclass(frozen=True)
@@ -663,12 +658,4 @@ def test_aws_sdk_imports_are_confined_to_dal_s3_with_exact_bedrock_allowlist():
 
 
 def test_aws_sdk_temporary_allowlist_is_exact_and_documented():
-    expected = {("llm_gateway/providers/bedrock_provider.py", "aioboto3")}
-
-    assert set(AWS_SDK_TEMPORARY_ALLOWLIST) == expected
-    for path, symbol in AWS_SDK_TEMPORARY_ALLOWLIST:
-        assert (ROOT / path).is_file()
-        assert symbol == "aioboto3"
-        metadata = AWS_SDK_TEMPORARY_ALLOWLIST[(path, symbol)]
-        assert metadata["reason"]
-        assert metadata["deletion_condition"]
+    assert AWS_SDK_TEMPORARY_ALLOWLIST == {}

@@ -9,7 +9,6 @@ from common.protocols.a2a_protocols import (
     SSEUserMessageRecord,
 )
 from common.protocols.agent_protocols import (
-    AgentAvatarManager,
     AgentCallCounter,
     AgentExclusionReader,
     AgentManagement,
@@ -32,7 +31,6 @@ from common.protocols.dal_protocols import (
     MongoChangeStream,
     MongoCollection,
     MongoDAL,
-    ObjectStorageDAL,
     RedisKV,
     RedisPubSub,
     RedisStreams,
@@ -142,7 +140,6 @@ from common.protocols.viewset_protocols import (
 
 __all__ = [
     "AgentCallCounter",
-    "AgentAvatarManager",
     "AgentCardResolver",
     "AgentExclusionReader",
     "AgentManagement",
@@ -214,7 +211,6 @@ __all__ = [
     "ModelSelectableEmbeddingServiceProtocol",
     "MongoCollection",
     "MongoDAL",
-    "ObjectStorageDAL",
     "OfflineHubFailurePort",
     "RateLimiter",
     "RedisKV",

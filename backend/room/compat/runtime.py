@@ -1,8 +1,8 @@
-import asyncio
 import inspect
 import json
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -100,7 +100,6 @@ from room.attachments import (
     build_message_parts as platform_build_message_parts,
 )
 from room.attachments import (
-    refresh_artifact_presigned_urls,
     resolve_and_apply_room_attachments,
     resolve_room_attachments,
 )
@@ -222,8 +221,7 @@ class RoomServices:
         self.a2a_service = UNBOUND_A2A_SERVICE
         self.delivery = UNBOUND_DELIVERY
         self.remote_task_reader = UNBOUND_TASK_SERVICE
-        self._object_storage = None
-        self._s3_service = None
+        self._room_files = None
         self._facade = None
         self._bound = False
         self._context_memory_manager = None
@@ -237,12 +235,8 @@ class RoomServices:
         self._quote_writer = None
         self._capability_issue_reader = None
 
-    def bind_object_storage(self, service) -> None:
-        """Inject object-storage service (avoids lazy singleton import)."""
-        self._object_storage = service
-        self._s3_service = service
-
-    bind_s3_service = bind_object_storage
+    def bind_room_files(self, room_files) -> None:
+        self._room_files = room_files
 
     def bind_store(self, store) -> None:
         """Inject the room runtime persistence store explicitly at startup."""
@@ -264,19 +258,13 @@ class RoomServices:
         self.remote_task_reader = remote_task_reader
 
     @property
-    def object_storage(self):
-        service = getattr(self, "_object_storage", None)
-        if service is None:
-            service = getattr(self, "_s3_service", None)
-        if service is None:
+    def room_files(self):
+        files = getattr(self, "_room_files", None)
+        if files is None:
             raise RuntimeError(
-                "RoomServices.bind_object_storage() not called - startup incomplete"
+                "RoomServices.bind_room_files() not called - startup incomplete"
             )
-        return service
-
-    @property
-    def s3_service(self):
-        return self.object_storage
+        return files
 
     def bind_facade(self, facade) -> None:
         self._facade = facade
@@ -1067,21 +1055,62 @@ class RoomServices:
                 error="Forbidden",
                 status_code=403,
             )
+        if getattr(self, "_room_files", None) is None:
+            success = await facade.delete_room(room_id, actual_owner_id)
+            if success:
+                await self._cleanup_context_memory_for_room(room_id)
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=bool(success),
+                error=None if success else "Failed to delete room",
+                status_code=200 if success else 500,
+            )
+        deletion_id = await self.room_files.begin_room_deletion(
+            room_id, actual_owner_id
+        )
+        if deletion_id is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Room deletion could not be started",
+                status_code=409,
+            )
+        if not await self.room_files.wait_for_room_writes(room_id):
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Room still has active writes",
+                status_code=409,
+            )
+        await self.room_files.set_deletion_phase(
+            room_id, deletion_id, "cleaning"
+        )
+        cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
+        owned_cleanup_ok = await self._delete_room_owned_data(
+            room_id, deletion_id=deletion_id
+        )
+        if not cleanup_ok or not owned_cleanup_ok:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Room cleanup is incomplete and will be retried",
+                status_code=500,
+            )
+        await self.room_files.set_deletion_phase(
+            room_id, deletion_id, "finalizing"
+        )
         success = await facade.delete_room(room_id, actual_owner_id)
         if not success:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id,
                 room=None,
                 success=False,
-                error="Failed to delete room",
+                error="Failed to finalize room deletion",
                 status_code=500,
-            )
-        cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
-        await self._delete_legacy_non_room_data(room_id)
-        if not cleanup_ok:
-            logger.warning(
-                "Context & Memory cleanup failed after room deletion for room %s",
-                room_id,
             )
         return RoomCenterRoomSettingResponse(
             room_id=room_id, room=None, success=True, error=None, status_code=200
@@ -1113,28 +1142,23 @@ class RoomServices:
             )
             return False
 
-    async def _delete_legacy_non_room_data(self, room_id: str) -> None:
-        s3_cleanup_ok = True
+    async def _delete_room_owned_data(
+        self, room_id: str, *, deletion_id: str
+    ) -> bool:
+        ok = True
         try:
-            await self.object_storage.delete_prefix(f"uploads/{room_id}/")
-            await self.object_storage.delete_prefix(f"artifacts/{room_id}/")
-        except Exception:
-            s3_cleanup_ok = False
-            logger.warning(
-                "S3 cleanup failed for room %s; orphan job will retry", room_id
+            await self.room_files.delete_for_room(
+                room_id, deletion_id=deletion_id
             )
-
-        if s3_cleanup_ok:
-            try:
-                attachment_cleanup = getattr(self, "_attachment_cleanup", None)
-                if attachment_cleanup is not None:
-                    await attachment_cleanup.delete_for_room(room_id)
-            except Exception:
-                logger.warning(
-                    "Legacy file upload cleanup failed for room %s",
-                    room_id,
-                    exc_info=True,
-                )
+            if not await self.room_files.delete_room_state(room_id):
+                ok = False
+        except Exception:
+            ok = False
+            logger.warning(
+                "Room file cleanup failed for room %s; recovery will retry",
+                room_id,
+                exc_info=True,
+            )
 
         try:
             facade = self._facade
@@ -1143,11 +1167,13 @@ class RoomServices:
             elif facade is not None and hasattr(facade, "delete_room_owned_messages"):
                 await facade.delete_room_owned_messages(room_id)
         except Exception:
+            ok = False
             logger.warning(
                 "Room quotes cleanup failed for room %s",
                 room_id,
                 exc_info=True,
             )
+        return ok
 
     # --- Attachment resolution helpers ---
 
@@ -3031,9 +3057,69 @@ class RoomServices:
         *,
         room_agent_set: dict[str, str] | None = None,
     ) -> bool:
+        async with self._hold_room_write(user_message.room_id, "user-message"):
+            return await self._persist_user_message_with_lease(
+                user_message,
+                room_agent_set=room_agent_set,
+            )
+
+    @asynccontextmanager
+    async def _hold_room_write(self, room_id: str, owner: str):
+        files = getattr(self, "_room_files", None)
+        if files is None:
+            yield None
+            return
+        async with files.write_lease(room_id, owner) as lease_id:
+            yield lease_id
+
+    async def _persist_user_message_with_lease(
+        self,
+        user_message: RoomUserMessage,
+        *,
+        room_agent_set: dict[str, str] | None = None,
+    ) -> bool:
         """Persist user message to the database and publish its commit event."""
+        attachments = (
+            user_message.message_content.attachments
+            if user_message.message_content
+            else None
+        )
+        file_ids = [attachment.file_id for attachment in attachments or []]
+        if file_ids:
+            try:
+                await self.room_files.claim_references(
+                    room_id=user_message.room_id,
+                    owner_id=user_message.user_id or "",
+                    message_id=user_message.message_id,
+                    file_ids=file_ids,
+                )
+            except Exception:
+                logger.warning(
+                    "Could not claim room file references for message %s",
+                    user_message.message_id,
+                    exc_info=True,
+                )
+                return False
+
         persisted = await self._require_facade().persist_user_message(user_message)
+        if not persisted and file_ids:
+            await self.room_files.release_references(
+                message_id=user_message.message_id,
+                file_ids=file_ids,
+            )
         if persisted:
+            if file_ids:
+                try:
+                    await self.room_files.commit_references(
+                        message_id=user_message.message_id,
+                        file_ids=file_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Room file references remain pending for recovery: %s",
+                        user_message.message_id,
+                        exc_info=True,
+                    )
             event_publisher = getattr(self, "_message_event_publisher", None)
             if event_publisher is None:
                 raise RuntimeError(
@@ -4175,47 +4261,23 @@ class RoomServices:
         room_id = request.room_id
         messages = await self._require_facade().get_user_messages_for_room(room_id)
 
-        # Inject presigned URLs for attachments
-        key_filenames: dict[str, str | None] = {}
         for msg in messages:
             if msg.message_content and msg.message_content.attachments:
                 for att in msg.message_content.attachments:
-                    key_filenames.setdefault(att.s3_key, att.file_name)
-
-        if key_filenames:
-            try:
-                urls = await asyncio.gather(
-                    *(
-                        self.object_storage.get_presigned_url(
-                            s3_key,
-                            filename=filename,
-                        )
-                        for s3_key, filename in key_filenames.items()
+                    try:
+                        room_files = self.room_files
+                    except RuntimeError:
+                        room_files = None
+                    att.file_url = (
+                        await room_files.get_url(att.file_id)
+                        if room_files is not None
+                        else att.file_url
+                        or f"/api/v1/files/{att.file_id}/content"
                     )
-                )
-                url_map = dict(zip(key_filenames, urls, strict=True))
-                for msg in messages:
-                    if msg.message_content and msg.message_content.attachments:
-                        for att in msg.message_content.attachments:
-                            att.file_url = url_map.get(att.s3_key, "")
-            except Exception:
-                logger.warning("Failed to generate presigned URLs for room %s", room_id)
 
         return RoomCenterUserMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
         )
-
-    async def _refresh_artifact_presigned_urls(
-        self,
-        messages: list[RoomAgentMessage],
-    ) -> None:
-        try:
-            await refresh_artifact_presigned_urls(
-                messages=messages,
-                object_storage=self.object_storage,
-            )
-        except Exception:
-            logger.warning("Failed to refresh artifact presigned URLs")
 
     async def inquiry_agent_messages_by_room_id(
         self, request: RoomCenterAgentMessageRequest
@@ -4230,8 +4292,6 @@ class RoomServices:
 
         room_id = request.room_id
         messages = await self._require_facade().get_agent_messages_for_room(room_id)
-
-        await self._refresh_artifact_presigned_urls(messages)
 
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
@@ -4250,8 +4310,6 @@ class RoomServices:
 
         message_id = request.message_id
         message = await self._require_facade().get_agent_message_model(message_id)
-        if message:
-            await self._refresh_artifact_presigned_urls([message])
         return RoomCenterAgentMessageResponse(
             message=message, success=True, error=None, status_code=200
         )

@@ -9,23 +9,16 @@ const nextConfig: NextConfig = {
       exclude: ['error', 'warn'],
     },
   },
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: '*.s3.*.amazonaws.com',
-        pathname: '/**',
-      },
-    ],
-  },
   async rewrites() {
     // Allows seamless API proxying without CORS issues.
     // Defaults to localhost for direct development, but uses the container name for docker-compose.
     const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8000';
+    const configuredPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1';
+    const apiPrefix = `/${configuredPrefix.replace(/^\/+|\/+$/g, '')}`;
     return [
       {
-        source: '/api/:path*',
-        destination: `${backendUrl}/api/:path*`,
+        source: `${apiPrefix}/:path*`,
+        destination: `${backendUrl}${apiPrefix}/:path*`,
       },
     ];
   },

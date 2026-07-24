@@ -61,6 +61,8 @@ def create_room_doc(
         "source_group_id": source_group_id,
         "source_group_name": source_group_name,
         "processing_message_id": processing_message_id,
+        "lifecycle_state": "active",
+        "write_leases": [],
     }
     if extend_info is not None:
         doc["extend_info"] = dict(extend_info)

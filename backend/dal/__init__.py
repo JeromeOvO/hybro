@@ -7,7 +7,6 @@ from dal.redis import (
     RedisPubSubImpl,
     RedisStreamsImpl,
 )
-from dal.s3 import ObjectStorageDALImpl
 
 __all__ = [
     "DistributedLockImpl",
@@ -15,7 +14,6 @@ __all__ = [
     "LeaderElectorImpl",
     "MongoCollectionAdapter",
     "MongoDALImpl",
-    "ObjectStorageDALImpl",
     "RedisKVImpl",
     "RedisPubSubImpl",
     "RedisStreamsImpl",

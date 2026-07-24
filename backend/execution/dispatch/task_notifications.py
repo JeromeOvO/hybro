@@ -5,7 +5,7 @@ and safety-net paths.  ``AgentResponseHandler.notify_task_update`` is the
 preferred entry point when a handler instance is available.
 
 Both delegate to ``_notify_task_update_impl`` — the shared core that
-performs idempotency checks, DB reads, artifact backfill, S3 conversion,
+performs idempotency checks, DB reads, and durable artifact materialization,
 and SSE emission.
 
 Idempotency is provided by ``db.update_last_notified_state``:
@@ -432,11 +432,11 @@ async def _notify_task_update_impl(
         agent_name or agent_id or "agent",
     )
 
-    # Convert any inline base64 file bytes to S3 URIs before broadcasting
+    # Materialize inline file bytes before broadcasting.
     if parts:
-        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+        from common.utils.a2a_helpers import materialize_inline_file_parts
 
-        await convert_inline_bytes_to_s3(parts, room_id, message_id)
+        await materialize_inline_file_parts(parts, room_id, message_id)
 
     await notification_svc.send_task_update(
         room_id=room_id,

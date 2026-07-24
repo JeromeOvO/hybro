@@ -77,6 +77,8 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
         "source_group_id": "g1",
         "source_group_name": "Group",
         "processing_message_id": None,
+        "lifecycle_state": "active",
+        "write_leases": [],
     }
 
 

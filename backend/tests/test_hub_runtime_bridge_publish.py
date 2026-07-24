@@ -284,7 +284,7 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
         task_notification_store=MagicMock(),
     )
 
-    async def fake_convert_inline_bytes_to_s3(
+    async def fake_materialize_inline_file_parts(
         parts: list[dict],
         room_id: str,
         message_id: str,
@@ -293,30 +293,37 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
     ) -> int:
         assert room_id == "room-1"
         assert message_id == "msg-1"
-        for part in parts:
+        for index, part in enumerate(parts):
             assert "raw" not in part
             assert "url" not in part
             if part.get("kind") != "file":
                 continue
             file_info = part.get("file")
             assert isinstance(file_info, dict)
-            if file_info.get("bytes") == private_bytes:
-                file_info.pop("bytes")
-                file_info["uri"] = converted_uri
+            file_info.pop("bytes", None)
+            file_info["uri"] = converted_uri
+            part["metadata"] = {
+                "file_id": f"{index + 1:032x}",
+                "file_name": file_info.get("name"),
+                "mime_type": file_info.get("mimeType"),
+                "size_bytes": 1,
+                "sha256": f"hash-{index}",
+            }
         return converted_so_far + 1
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
-            "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
-            fake_convert_inline_bytes_to_s3,
+            "common.utils.a2a_helpers.materialize_inline_file_parts",
+            fake_materialize_inline_file_parts,
         )
         await handler.handle(event)
 
     delivered_parts = notification_impl.await_args.kwargs["parts"]
     delivered_json = json.dumps(delivered_parts, sort_keys=True)
-    assert converted_uri in delivered_json
-    assert existing_uri in delivered_json
-    assert legacy_file_uri in delivered_json
+    assert converted_uri not in delivered_json
+    assert existing_uri not in delivered_json
+    assert legacy_file_uri not in delivered_json
+    assert '"file_id"' in delivered_json
     assert private_bytes not in delivered_json
     assert private_metadata not in delivered_json
     assert '"raw"' not in delivered_json
@@ -674,6 +681,137 @@ async def test_response_replay_worker_dispatches_claimed_journal_and_marks_proce
     assert len(sink.events) == 1
     assert sink.events[0].claim_token
     assert await journal.claim_for_processing(record["journal_id"], "worker-1") is None
+
+
+@pytest.mark.asyncio
+async def test_response_replay_worker_isolates_failed_record_from_later_records():
+    journal = InMemoryHubResponseJournal()
+    first = await journal.create_or_get(
+        {
+            "hub_id": "hub-1",
+            "room_id": "room-1",
+            "agent_message_id": "msg-1",
+            "task_id": "task-1",
+            "event_type": "agent_response",
+            "payload": {"kind": "response", "message_id": "msg-1"},
+        }
+    )
+    second = await journal.create_or_get(
+        {
+            "hub_id": "hub-1",
+            "room_id": "room-1",
+            "agent_message_id": "msg-2",
+            "task_id": "task-2",
+            "event_type": "agent_response",
+            "payload": {"kind": "response", "message_id": "msg-2"},
+        }
+    )
+
+    class SelectiveSink:
+        def __init__(self):
+            self.message_ids = []
+
+        async def handle_hub_agent_response(self, event):
+            message_id = event.payload["message_id"]
+            self.message_ids.append(message_id)
+            if message_id == "msg-1":
+                raise RuntimeError("transient")
+
+    sink = SelectiveSink()
+    worker = HubResponseReplayWorker(
+        journal=journal,
+        dispatcher=HubInternalResponseRouter(
+            sink=sink,
+            journal=journal,
+            worker_id="worker-1",
+        ),
+        worker_id="worker-1",
+    )
+
+    assert await worker.replay_once() == 1
+    assert sink.message_ids == ["msg-1", "msg-2"]
+    assert await journal.claim_for_processing(first["journal_id"], "worker-1")
+    assert await journal.claim_for_processing(second["journal_id"], "worker-1") is None
+
+
+@pytest.mark.asyncio
+async def test_response_replay_worker_isolates_ownership_failure():
+    journal = InMemoryHubResponseJournal()
+    first = await journal.create_or_get(
+        {
+            "room_id": "room-1",
+            "agent_message_id": "msg-1",
+            "task_id": "task-1",
+            "payload": {"kind": "response", "message_id": "msg-1"},
+        }
+    )
+    second = await journal.create_or_get(
+        {
+            "room_id": "room-1",
+            "agent_message_id": "msg-2",
+            "task_id": "task-2",
+            "payload": {"kind": "response", "message_id": "msg-2"},
+        }
+    )
+
+    class SelectiveOwnership:
+        async def resolve_owner(self, alias):
+            if alias == "task-1":
+                raise RuntimeError("ownership unavailable")
+            return None
+
+    dispatcher = Dispatcher()
+    worker = HubResponseReplayWorker(
+        journal=journal,
+        dispatcher=dispatcher,
+        worker_id="worker-1",
+        ownership_store=SelectiveOwnership(),
+    )
+
+    assert await worker.replay_once() == 1
+    assert [event.task_id for event in dispatcher.events] == ["task-2"]
+    assert await journal.claim_for_processing(first["journal_id"], "worker-1")
+    assert await journal.claim_for_processing(second["journal_id"], "worker-1") is None
+
+
+@pytest.mark.asyncio
+async def test_response_replay_worker_isolates_claim_failure():
+    journal = InMemoryHubResponseJournal()
+    first = await journal.create_or_get(
+        {
+            "room_id": "room-1",
+            "agent_message_id": "msg-1",
+            "task_id": "task-1",
+            "payload": {"kind": "response", "message_id": "msg-1"},
+        }
+    )
+    second = await journal.create_or_get(
+        {
+            "room_id": "room-1",
+            "agent_message_id": "msg-2",
+            "task_id": "task-2",
+            "payload": {"kind": "response", "message_id": "msg-2"},
+        }
+    )
+    original_claim = journal.claim_for_processing
+
+    async def selective_claim(journal_id, owner_id):
+        if journal_id == first["journal_id"]:
+            raise RuntimeError("journal unavailable")
+        return await original_claim(journal_id, owner_id)
+
+    journal.claim_for_processing = selective_claim
+    dispatcher = Dispatcher()
+    worker = HubResponseReplayWorker(
+        journal=journal,
+        dispatcher=dispatcher,
+        worker_id="worker-1",
+    )
+
+    assert await worker.replay_once() == 1
+    assert [event.task_id for event in dispatcher.events] == ["task-2"]
+    assert await original_claim(first["journal_id"], "worker-1")
+    assert await original_claim(second["journal_id"], "worker-1") is None
 
 
 @pytest.mark.asyncio

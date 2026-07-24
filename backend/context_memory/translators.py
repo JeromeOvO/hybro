@@ -100,8 +100,6 @@ def content_ref_from_dict(doc: dict[str, Any] | None) -> ContentReferenceData | 
         document_id=doc.get("document_id"),
         content_hash=doc.get("content_hash"),
         created_at=doc.get("created_at"),
-        s3_bucket=doc.get("s3_bucket"),
-        s3_key=doc.get("s3_key"),
         url=doc.get("url"),
     )
 

@@ -439,9 +439,10 @@ Backend queue/resume completion paths set `turn_completion_kind` from `_emit_uni
 
 SSE artifact conversion is defensive at the client boundary. `task_update`
 `parts` and `artifact_update` payloads drop legacy inline `file.bytes`; file
-parts are renderable only when they carry a URI. `PartRenderer` does not create
-`data:` URLs from inline bytes, so stale or malicious legacy SSE cannot surface
-private file content in message state or rendered media.
+parts are renderable when they carry a durable `file_id` or a URI.
+`PartRenderer` does not create `data:` URLs from inline bytes, so stale or
+malicious legacy SSE cannot surface private file content in message state or
+rendered media.
 
 Room DB synchronization lives under `src/lib/room-sync/`:
 
@@ -527,7 +528,10 @@ Other library modules:
 - `consumer-nav.ts`, `developer-nav.ts`, `nav-items.ts`: navigation configuration.
 - `system-agents.ts`: system/supervisor agent classification.
 - `agent-avatar.ts`, `agent-icon-utils.ts`, `file-icon-utils.ts`: display helpers.
-- `presigned-url.ts`: attachment URL helpers.
+- `api/files.ts` and `hooks/useRoomFile.ts`: authenticated room-file upload,
+  download, and preview blob lifecycle. The authenticated same-origin download
+  path normalizes `NEXT_PUBLIC_API_PREFIX` to the same leading/trailing-slash
+  form used by the Next rewrite.
 - `selection-plain-text.ts`: quote/selection text extraction.
 - `streaming/display.ts`: streaming display helpers.
 
@@ -581,7 +585,6 @@ Primary shell:
 - `src/components/developer/developer-sidebar.tsx`
 - `src/components/developer/developer-header.tsx`
 - `src/components/developer/agent-settings-card.tsx`
-- `src/components/developer/agent-avatar-upload.tsx`
 
 ## 14. Testing Layout
 

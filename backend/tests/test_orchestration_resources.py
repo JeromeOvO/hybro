@@ -21,7 +21,6 @@ from models.room import UserAttachment
 def _pdf_attachment(file_id: str = "file-1") -> UserAttachment:
     return UserAttachment(
         file_id=file_id,
-        s3_key=f"uploads/room-1/{file_id}/submission.pdf",
         mime_type="application/pdf",
         file_name="submission.pdf",
         size_bytes=128,
@@ -85,9 +84,9 @@ async def test_resource_provider_lists_pdf_attachment_with_text_projection_ref()
     assert resource.content_fingerprint == canonical_content_fingerprint(
         {
             "file_id": "file-1",
-            "s3_key": "uploads/room-1/file-1/submission.pdf",
             "size_bytes": 128,
             "mime_type": "application/pdf",
+            "sha256": None,
         }
     )
     assert resource.file_name == "submission.pdf"
@@ -123,9 +122,9 @@ async def test_resource_provider_resolves_raw_attachment_metadata_payload():
         content_fingerprint=canonical_content_fingerprint(
             {
                 "file_id": "file-1",
-                "s3_key": "uploads/room-1/file-1/submission.pdf",
                 "size_bytes": 128,
                 "mime_type": "application/pdf",
+                "sha256": None,
             }
         ),
         summary="submission.pdf (application/pdf, 128 bytes)",
@@ -201,7 +200,7 @@ async def test_pdf_projection_failure_for_empty_text_pdf():
     assert projection.status == "failed"
     assert projection.failure_reason == "pdf_text_empty"
     content_reader.get_bytes.assert_awaited_once_with(
-        "uploads/room-1/file-1/submission.pdf",
+        "file-1",
         max_bytes=10485760,
     )
 

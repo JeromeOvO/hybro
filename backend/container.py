@@ -17,7 +17,6 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
-from api_gateway.file_storage import ObjectStorageFileStorage
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
 from common.health_check import RuntimeHealthCheck
@@ -51,7 +50,6 @@ from common.protocols import (
     MemoryRepository,
     MongoCollection,
     MongoDAL,
-    ObjectStorageDAL,
     RedisKV,
     RedisPubSub,
     RedisStreams,
@@ -95,6 +93,7 @@ from models.request import RoomCenterAgentMessageRequest
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
+from room_files import LocalFileContentStore, RoomFiles
 
 if TYPE_CHECKING:
     from dal.runtime_store import RuntimeRepositoryStore
@@ -278,10 +277,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
-            from common.enterprise_injection import (
-                NoOpAgentAvatarManager,
-            )
-            from common.utils.a2a_helpers import bind_a2a_artifact_storage
+            from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.compat.runtime import (
                 ContextMemoryChatAdapter,
                 ContextMemoryRoomMemoryAdapter,
@@ -314,20 +310,36 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from room.route_adapter import RoomRouteAdapter
 
-            object_storage = create_object_storage_dal()
-            file_uploads_collection = mongo_dal.collection("file_uploads")
+            room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
-                object_storage=object_storage,
-                file_uploads_collection=file_uploads_collection,
-                max_upload_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
+                room_files_collection=room_files_collection,
+                rooms_collection=mongo_dal.collection("rooms"),
+                room_messages_collection=mongo_dal.collection("room_user_messages"),
+                room_agent_messages_collection=mongo_dal.collection(
+                    "room_agent_messages"
+                ),
+                room_owned_collections=[
+                    mongo_dal.collection(name)
+                    for name in (
+                        "room_user_messages",
+                        "room_agent_messages",
+                        "room_quotes",
+                        "room_memories",
+                        "conversation_content",
+                        "runs",
+                        "run_events",
+                        "orchestration_runs",
+                        "orchestration_run_events",
+                        "hitl_requests",
+                        "cancelled_messages",
+                    )
+                ],
+                file_dir=runtime.settings.hybro_file_dir,
+                content_url_prefix=f"{runtime.settings.api_prefix.rstrip('/')}/files",
             )
 
-            a2a_artifact_storage.bind_a2a_storage_dependencies(
-                storage_service=object_storage,
-                s3_bucket_name=runtime.settings.s3_bucket_name,
-                max_file_size_mb=runtime.settings.max_file_size_mb,
-            )
-            bind_a2a_artifact_storage(a2a_artifact_storage)
+            a2a_artifact_storage.bind_artifact_files(file_storage)
+            bind_a2a_artifact_files(a2a_artifact_storage)
             index_readiness = await ensure_runtime_indexes(mongo=mongo_dal)
             app.state.agent_search_index_ready = index_readiness[
                 "agent_search_index_ready"
@@ -439,6 +451,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             run_command_handler = RunCommandHandler(
                 run_repository=_execution_repos["run_repository"],
                 run_event_repository=_execution_repos["run_event_repository"],
+                room_files=file_storage,
             )
             bind_run_lifecycle_service(run_command_handler)
 
@@ -755,6 +768,42 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
                 ),
+                claim_terminal_finalization=(
+                    message_store.claim_terminal_finalization
+                ),
+                begin_terminal_finalization=(
+                    message_store.begin_terminal_finalization
+                ),
+                terminal_finalization_matches=(
+                    message_store.terminal_finalization_matches
+                ),
+                claim_terminal_finalization_step=(
+                    message_store.claim_terminal_finalization_step
+                ),
+                claim_artifact_materialization=(
+                    message_store.claim_artifact_materialization
+                ),
+                complete_terminal_finalization=(
+                    message_store.complete_terminal_finalization
+                ),
+                complete_terminal_finalization_step=(
+                    message_store.complete_terminal_finalization_step
+                ),
+                heartbeat_terminal_finalization=(
+                    message_store.heartbeat_terminal_finalization
+                ),
+                heartbeat_artifact_materialization=(
+                    message_store.heartbeat_artifact_materialization
+                ),
+                is_artifact_update_recorded=(
+                    message_store.is_artifact_update_recorded
+                ),
+                set_terminal_finalization_content=(
+                    message_store.set_terminal_finalization_content
+                ),
+                release_artifact_materialization=(
+                    message_store.release_artifact_materialization
+                ),
                 add_room_agent_message=message_store.add_room_agent_message,
                 cancel_agent_messages_by_ids=(
                     message_store.cancel_agent_messages_by_ids
@@ -901,7 +950,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
             )
-            orchestration_run_store = MongoOrchestrationRunStore(mongo_dal)
+            orchestration_run_store = MongoOrchestrationRunStore(
+                mongo_dal,
+                room_files=file_storage,
+            )
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
@@ -916,6 +968,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 task_notifications=HITLTaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
+                room_files=file_storage,
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -945,7 +998,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
-            room_runtime.bind_object_storage(object_storage)
+            room_runtime.bind_room_files(file_storage)
             room_runtime.bind_attachment_metadata_reader(file_storage)
             room_runtime.bind_attachment_content_reader(file_storage)
             room_runtime.bind_a2a_inline_file_limits(
@@ -1043,7 +1096,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 task_notification_impl=_notify_task_update_impl,
                 agent_health_service=agent_health_service,
-                object_storage=object_storage,
+                room_files=file_storage,
                 capability_issue_service=agent_capability_issue_service,
                 context_memory_runtime=_context_memory_deps.context_memory_runtime,
                 context_compaction=context_memory_facade,
@@ -1056,8 +1109,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             execution_room_message_center.bind(room_message_center_impl)
             execution_room_message_center.bind_facade(_room_facade)
+            stale_task_checker.set_terminal_event_handler(
+                execution_room_message_center.agent_response_handler.handle
+            )
 
             def create_webhook_transport():
+                async def fetch_terminal_webhook_task(agent_url: str, task_id: str):
+                    agent_card = await a2a_service.get_agent_card_from_url(agent_url)
+                    return await remote_task_reader.get_task_from_agent(
+                        agent_card, task_id
+                    )
+
                 handler = AgentResponseHandler(
                     message_writer=message_store,
                     task_writer=message_store,
@@ -1071,6 +1133,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_notifier=task_notifier,
                     task_notification_store=task_notification_store,
                     task_notification_impl=_notify_task_update_impl,
+                    room_files=file_storage,
                 )
                 handler.bind_execution_event_deps(emit_room_processing_status)
                 return WebhookTransport(
@@ -1079,6 +1142,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_reader=message_store,
                     cancellation_reader=task_store,
                     task_notifier=notify_task_update_with_string_state,
+                    terminal_task_fetcher=fetch_terminal_webhook_task,
                 )
 
             execution_facade = create_execution_facade(
@@ -1304,11 +1368,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         orphaned_upload_cleaner.set_leader_election(_leader)
         orphaned_upload_cleaner.set_cleanup_deps(
             OrphanedUploadCleanerDeps(
-                file_uploads_collection=file_uploads_collection,
-                room_user_messages_collection=mongo_dal.collection(
-                    "room_user_messages"
-                ),
-                object_storage=object_storage,
+                room_files=file_storage,
             )
         )
 
@@ -1409,7 +1469,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_center=route_agent_center,
                 agent_service=_agent_deps.agent_registry,
                 capability_issue_service=agent_capability_issue_service,
-                agent_avatar_manager=NoOpAgentAvatarManager(),
                 agent_liveness_checker=agent_liveness_checker,
                 agent_group_store=agent_room_store,
                 api_key_store=None,
@@ -1678,6 +1737,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
+    await _ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
         "memory_search_index_ready": memory_search_index_ready,
@@ -2051,6 +2111,61 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
     )
 
 
+async def _ensure_room_file_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "room_files",
+        [("file_id", 1)],
+        name="room_file_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [("room_id", 1), ("created_at", -1)],
+        name="room_file_room_created",
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [("source_message_id", 1)],
+        name="room_file_source_message",
+        sparse=True,
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [("origin_key", 1)],
+        name="room_file_origin_unique",
+        unique=True,
+        partialFilterExpression={"origin_key": {"$type": "string"}},
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [("status", 1), ("updated_at", 1)],
+        name="room_file_status_updated",
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [
+            ("source", 1),
+            ("status", 1),
+            ("last_referenced_at", 1),
+            ("created_at", 1),
+        ],
+        name="room_file_retention",
+    )
+    await _create_index(
+        mongo,
+        "room_files",
+        [("reference_claims.message_id", 1)],
+        name="room_file_reference_message",
+    )
+
+
 def create_agent_capability_issue_repository(mongo: MongoDAL) -> Any:
     from agent.repository.capability_issue_mongo import (
         AgentCapabilityIssueMongoRepository,
@@ -2065,22 +2180,30 @@ def create_agent_capability_issue_service(*, repository: Any) -> Any:
     return AgentCapabilityIssueService(repository=repository)
 
 
-def create_object_storage_dal() -> ObjectStorageDAL:
-    from dal.s3 import ObjectStorageDALImpl
-
-    return ObjectStorageDALImpl()
-
-
 def create_file_storage(
     *,
-    object_storage: ObjectStorageDAL,
-    file_uploads_collection: MongoCollection,
-    max_upload_bytes: int | None = settings.a2a_inline_file_max_raw_bytes,
+    room_files_collection: MongoCollection,
+    rooms_collection: MongoCollection,
+    room_messages_collection: MongoCollection,
+    room_agent_messages_collection: MongoCollection,
+    room_owned_collections: list[MongoCollection],
+    file_dir: str = "",
+    max_upload_bytes: int = 5 * 1024 * 1024,
+    content_url_prefix: str = "/api/v1/files",
 ) -> FileStorage:
-    return ObjectStorageFileStorage(
-        object_storage=object_storage,
-        file_uploads_collection=file_uploads_collection,
+    from platformdirs import user_data_path
+
+    root = file_dir or str(user_data_path("hybro", appauthor=False) / "files")
+    return RoomFiles(
+        metadata=room_files_collection,
+        content=LocalFileContentStore(root),
+        rooms=rooms_collection,
+        messages=room_messages_collection,
+        agent_messages=room_agent_messages_collection,
+        room_owned_collections=room_owned_collections,
+        lease_writes=True,
         max_upload_bytes=max_upload_bytes,
+        content_url_prefix=content_url_prefix,
     )
 
 

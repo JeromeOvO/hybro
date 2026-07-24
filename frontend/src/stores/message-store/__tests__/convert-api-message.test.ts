@@ -137,7 +137,7 @@ describe('convertApiMessageToIncoming', () => {
             kind: 'task',
             contextId: 'ctx-1',
             id: 'task-1',
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(
@@ -526,8 +526,7 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
-    it('drops inline file bytes from completed artifacts while keeping safe file fields', async () => {
-      const privateSentinel = 'PRIVATE_SENTINEL_completed_file_bytes'
+    it('normalizes metadata-only room file artifacts', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: 'agent-1',
@@ -540,26 +539,29 @@ describe('convertApiMessageToIncoming', () => {
               name: 'result-file',
               parts: [{
                 kind: 'file',
-                file: {
-                  uri: 'https://storage.example/result.csv',
-                  bytes: privateSentinel,
-                  mimeType: 'text/csv',
-                  name: 'result.csv',
+                metadata: {
+                  file_id: 'a'.repeat(32),
+                  file_name: 'result.csv',
+                  mime_type: 'text/csv',
+                  size_bytes: 12,
+                  sha256: 'hash',
                 },
               }],
             }],
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
       expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
       expect(result.artifacts?.[0]?.parts[0]?.file).toEqual({
-        uri: 'https://storage.example/result.csv',
+        uri: undefined,
+        fileId: 'a'.repeat(32),
         mime_type: 'text/csv',
         name: 'result.csv',
+        sizeBytes: 12,
+        sha256: 'hash',
       })
-      expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
     it('has no taskStatus when message_task is absent', async () => {

@@ -166,8 +166,7 @@ class RoomMessageCenter:
         summary_service=None,
         task_notification_impl=None,
         agent_health_service=None,
-        object_storage=None,
-        s3_service=None,
+        room_files=None,
         capability_issue_service=None,
         context_memory_runtime: ContextMemoryRuntime | None = None,
         context_compaction: ContextMemoryCompactionPort | None = None,
@@ -235,8 +234,6 @@ class RoomMessageCenter:
             agent_lookup=self.agent_lookup,
             agent_group_reader=self.agent_group_reader,
         )
-        storage_service = object_storage if object_storage is not None else s3_service
-
         # Shared result handler used by all transports
         client_request_resolver = SimpleNamespace(
             resolve_client_request_id_for_message_id=(
@@ -262,6 +259,7 @@ class RoomMessageCenter:
             task_notifier=task_notifier,
             task_notification_store=self.task_notification_store,
             task_notification_impl=task_notification_impl,
+            room_files=room_files,
         )
 
         # DirectTransport contains all streaming/sync response processing
@@ -274,7 +272,6 @@ class RoomMessageCenter:
             message_reader=self.message_reader,
             artifact_store=self.message_writer,
             task_updater=self.task_state_store,
-            object_storage=storage_service,
             capability_issue_service=capability_issue_service,
         )
 

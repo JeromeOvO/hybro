@@ -138,6 +138,10 @@ def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
 
 def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> Task:
     """Parse A2A StreamResponse variants into an SDK Task."""
+    result = payload.get("result")
+    if isinstance(result, dict):
+        payload = result
+
     if "task" in payload:
         task_data = payload["task"]
         if _is_proto_format(task_data):

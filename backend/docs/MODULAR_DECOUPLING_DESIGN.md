@@ -1,6 +1,6 @@
 # Modular Decoupling Design Document
 
-> **Status**: Updated after removal of the runtime vector database
+> **Status**: Historical architecture record; storage/provider details are superseded by `System-Architecture.md`
 > **Date**: 2026-06-26
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)
@@ -2146,33 +2146,17 @@ the former application-shell database service for compatibility.
 #### Phase 2: Adapter Layer (2.5 weeks)
 
 - `a2a_adapter/` with all translators (InternalAgentMessage ↔ a2a.Message, etc.)
-- `llm_gateway/` with OpenAI/Gemini/Bedrock providers + ModelRegistry + retry/fallback
-- Verify: no business module imports `a2a`, `openai`, `google.genai`, `aioboto3`
+- `llm_gateway/` with OpenAI/Gemini providers + ModelRegistry + retry/fallback
+- Verify: no business module imports `a2a`, `openai`, or `google.genai`
 
-**Implemented object-storage platform adapter note (2026-06-19):**
-`platform_module.PlatformObjectStorage` provides the legacy-compatible upload,
-presigned URL, metadata, public URL, text download, and prefix cleanup surface
-over `ObjectStorageDAL` operations: `put`, `put_file`, `get_text`,
-`get_presigned_url`, `delete`, `delete_prefix`, `get_public_url`, and `head`.
-`platform_module.PlatformAgentAvatarManager` owns agent avatar upload/public URL
-persistence through that adapter. Platform file/content/avatar services now use
-DAL-shaped object storage dependencies; SDK ownership stays in `dal/s3/`.
-Production startup passes `PlatformObjectStorage` directly into runtime
-consumers that still need the legacy upload/presign methods through
-object-storage-named injection points.
-The startup wiring also configures `a2a_adapter.artifact_storage` once with the
-platform object-storage adapter, bucket name, and file-size limit. Execution
-transports must call the shared A2A helper without rebinding artifact storage so
-those startup settings remain intact during inline artifact conversion.
-Tracked terminal A2A message/task responses also keep artifact conversion
-best-effort: object-storage conversion failures are logged, but
-`update_task_on_message()` still persists the terminal task state.
+**Current file-content ownership note (2026-07-24):**
+The former object-storage, avatar-upload, presigned-URL, and Bedrock wiring has
+been removed. `room_files.RoomFiles` owns Mongo metadata and delegates bytes to
+the `FileContentStore` protocol, whose default implementation persists files on
+the local filesystem. A future remote adapter can replace that implementation
+through composition without changing room, A2A, or frontend contracts.
 Boundary gates scan static and dynamic production imports, including `main.py`,
-so new object-storage compatibility dependencies outside
-`platform_module.object_storage` fail. AWS SDK imports are confined to `dal/s3/`, with a single
-documented provider-specific exception for `llm_gateway/providers/bedrock_provider.py`
-importing `aioboto3` until Bedrock SDK access is moved behind a dedicated
-provider transport.
+so removed AWS storage/provider dependencies cannot be reintroduced.
 
 **Implemented LLM migration note (2026-06-25):** `LLMGatewayImpl` owns logical
 model routing, retry/timeout behavior, structured JSON-object mode, and
@@ -2364,10 +2348,8 @@ class AgentService:
 | **Platform** | | | |
 | Gateway API | `platform_module/` | Platform | `gateway/gateway_service.py` |
 | Rate limiting | `platform_module/rate_limit.py` | Platform | `rate_limit/rate_limiter.py` |
-| File uploads | `platform_module/` | Platform | `files/upload_service.py` |
-| Content storage | `platform_module/` | Platform | `files/content_storage.py` |
-| Agent avatar uploads | `platform_module/agent_avatar.py` | Platform over DAL | `api/agent.py` avatar route |
-| Object storage compatibility | `platform_module/object_storage.py` | Platform over DAL | `object_storage.py` |
+| File uploads | `room_files/` | RoomFiles | `room_files/service.py` |
+| Content storage | `room_files/` | RoomFiles | `room_files/content_store.py` |
 | **HubRuntimeBridge** | | | |
 | Hub relay | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_relay.py` |
 | Hub liveness | `hub_runtime_bridge/compat/relay_service.py` | HubRuntimeBridge | `service/hub_liveness.py` |
@@ -2380,7 +2362,6 @@ class AgentService:
 | **LLM Gateway** | | | |
 | OpenAI SDK calls | deleted provider facade | LLM Gateway | `providers/openai_provider.py` |
 | Gemini SDK calls | deleted provider facade | LLM Gateway | `providers/gemini_provider.py` |
-| Bedrock SDK calls | deleted provider facade | LLM Gateway | `providers/bedrock_provider.py` |
 | Embedding generation | optional future feature adapters | LLM Gateway | `EmbeddingLLMService` + `gateway.py` |
 | Supervisor, summary, parsing, memory prompts | focused service consumers | LLM Gateway services | `llm_gateway/services/` |
 | **A2A Adapter** | | | |
@@ -2394,7 +2375,6 @@ class AgentService:
 | Redis KV | `dal/redis/kv.py` | DAL | `redis/kv.py` |
 | Redis Pub/Sub | `delivery/` | DAL | `redis/pubsub.py` |
 | Redis Streams | `dal/redis/streams.py` | DAL | `redis/streams.py` |
-| S3 SDK calls | `PlatformObjectStorage` compatibility adapter | DAL | `s3/client.py` |
 | Leader election | `dal/redis/lock.py` | DAL | `redis/leader.py` |
 | **Jobs** | | | |
 | Health check | `jobs/agent_health_service.py` | Jobs | `agent_health_job.py` |

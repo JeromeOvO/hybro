@@ -258,7 +258,7 @@ class TestStreamRoomMessages:
 
         await anext(response.body_iterator)
         with patch(
-            "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+            "common.utils.a2a_helpers.materialize_inline_file_parts",
             new_callable=AsyncMock,
         ):
             await _notify_task_update_impl(
@@ -278,6 +278,13 @@ class TestStreamRoomMessages:
                             "mimeType": "text/plain",
                             "name": "result.txt",
                         },
+                        "metadata": {
+                            "file_id": "a" * 32,
+                            "file_name": "result.txt",
+                            "mime_type": "text/plain",
+                            "size_bytes": 4,
+                            "sha256": "hash",
+                        },
                     }
                 ],
             )
@@ -286,11 +293,14 @@ class TestStreamRoomMessages:
         await response.body_iterator.aclose()
 
         assert frame["type"] == "task_update"
-        file_payload = frame["data"]["parts"][0]["file"]
-        assert file_payload == {
-            "uri": "https://storage.example/result.txt",
-            "mimeType": "text/plain",
-            "name": "result.txt",
+        file_part = frame["data"]["parts"][0]
+        assert "file" not in file_part
+        assert file_part["metadata"] == {
+            "file_id": "a" * 32,
+            "file_name": "result.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 4,
+            "sha256": "hash",
         }
         assert private_bytes not in second_event
 

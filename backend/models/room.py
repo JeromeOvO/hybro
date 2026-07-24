@@ -57,6 +57,11 @@ class Room(BaseModel):
 
     extend_info: Any | None = None
     processing_message_id: str | None = None
+    lifecycle_state: str = "active"
+    deletion_id: str | None = None
+    deletion_started_at: datetime | None = None
+    deletion_phase: str | None = None
+    write_leases: list[dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("extend_info", mode="before")
     @classmethod
@@ -76,17 +81,13 @@ class Message(BaseModel):
 
 
 class UserAttachment(BaseModel):
-    """A file attached to a user message. Stored alongside message in MongoDB.
-
-    file_url is ephemeral -- generated from s3_key at read time via presigned
-    URL, never persisted.
-    """
+    """A durable room file reference stored alongside a user message."""
 
     file_id: str
-    s3_key: str
     mime_type: str
     file_name: str
     size_bytes: int
+    sha256: str | None = None
     file_url: str | None = Field(default=None, json_schema_extra={"readOnly": True})
 
 
@@ -190,3 +191,4 @@ class RoomAgentMessage(RoomMessage):
     turn_id: str | None = (
         None  # Root user message_id that triggered this processing chain
     )
+    terminal_finalization: dict | None = None

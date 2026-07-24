@@ -266,28 +266,24 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_agent_avatar_manager",
-      "get_agent_service",
-      "get_current_user"
+      "get_current_user",
+      "get_file_storage"
     ],
     "methods": [
-      "POST"
+      "GET"
     ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "upload_agent_avatar",
+    "module": "api_gateway.routes.files_routes",
+    "name": "download_file",
     "openapi_response_codes": [
       "200",
       "422"
     ],
-    "owning_protocol": "common.protocols.AgentAvatarManager",
-    "path": "/api/v1/agent/{agent_id}/avatar",
+    "owning_protocol": "common.protocols.FileStorage",
+    "path": "/api/v1/files/{file_id}/content",
     "response_class": null,
     "response_model": null,
     "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.AgentRegistry"
-    ]
+    "streaming_response": null
   },
   {
     "auth_dependencies": [

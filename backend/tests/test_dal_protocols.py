@@ -11,7 +11,6 @@ from common.protocols import (
     MongoChangeStream,
     MongoCollection,
     MongoDAL,
-    ObjectStorageDAL,
     RedisKV,
     RedisPubSub,
     RedisStreams,
@@ -25,7 +24,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
         LeaderElectorImpl,
         MongoCollectionAdapter,
         MongoDALImpl,
-        ObjectStorageDALImpl,
         RedisKVImpl,
         RedisPubSubImpl,
         RedisStreamsImpl,
@@ -36,10 +34,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(RedisKVImpl(client=MagicMock()), RedisKV)
     assert isinstance(RedisPubSubImpl(client=MagicMock()), RedisPubSub)
     assert isinstance(RedisStreamsImpl(client=MagicMock()), RedisStreams)
-    assert isinstance(
-        ObjectStorageDALImpl(session=MagicMock(), bucket="bucket"),
-        ObjectStorageDAL,
-    )
     assert isinstance(DistributedLockImpl(client=MagicMock()), DistributedLock)
     assert isinstance(
         LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
@@ -106,7 +100,6 @@ def test_dal_top_level_exports_are_explicit():
         "LeaderElectorImpl",
         "MongoCollectionAdapter",
         "MongoDALImpl",
-        "ObjectStorageDALImpl",
         "RedisKVImpl",
         "RedisPubSubImpl",
         "RedisStreamsImpl",
@@ -121,7 +114,6 @@ def test_dal_subpackages_are_packaged():
         "dal",
         "dal.mongo",
         "dal.redis",
-        "dal.s3",
     }.issubset(packages)
 
 

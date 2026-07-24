@@ -52,7 +52,7 @@ flowchart TD
     ResponseHandler --> Delivery[delivery facade / SSE]
     RoomServices --> ContextMemory[context_memory facade]
     Platform --> Mongo
-    Platform --> S3[(S3)]
+    Platform --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
@@ -72,7 +72,7 @@ Startup has three practical phases:
 
 1. Infrastructure setup:
    - Load settings and auth configuration.
-   - `container.py` builds `MongoDAL`, Redis, object-storage
+   - `container.py` builds `MongoDAL`, Redis, local file-content
      adapters, facades, repositories, route dependencies, and owner-module
      runtime adapters.
 
@@ -153,7 +153,7 @@ bound dependencies.
 Important route groups:
 
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
-- `agent_routes.py`: agent registration, lookup, update, visibility, avatar.
+- `agent_routes.py`: agent registration, lookup, update, and visibility.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
@@ -209,9 +209,9 @@ configuration.
 #### A2A Inline File Dispatch Policy
 
 Under the active attachment policy, user-uploaded files sent to agents are
-dispatched as A2A `FileContent.bytes`. Presigned/platform storage URIs remain
-internal to Hybro for storage, retrieval, and artifact refresh behavior; they
-are not sent to agents for user-upload dispatch.
+read from the room file store and dispatched as A2A `FileContent.bytes`.
+Local filesystem paths and authenticated room-file URLs remain internal to
+Hybro and are never sent to agents.
 
 `A2A_INLINE_FILE_MAX_RAW_BYTES` limits one raw file before base64 encoding.
 `A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in
@@ -224,7 +224,7 @@ relay transport.
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
 adapters under `llm_gateway/providers/` are the only LLM code that imports
-OpenAI, Google GenAI, or Bedrock runtime SDKs. The public gateway layer resolves
+OpenAI or Google GenAI SDKs. The public gateway layer resolves
 logical model names through `ModelRegistryImpl`, applies centralized retry and
 timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
 embedding, and streaming operations through protocols in `common.protocols`.
@@ -236,8 +236,7 @@ Focused workflow services under `llm_gateway/services/` wrap prompt workflows
 without importing domain models:
 
 - `SupervisorLLMService`: supervisor JSON/text/stream calls through the
-  `supervisor_model` logical route, or Bedrock through the configured Bedrock
-  supervisor route.
+  `supervisor_model` logical route.
 - `EmbeddingLLMService`: an independent, optional embedding gateway capability
   through `embedding_model`. Agent matching and Context Memory have no runtime
   embedding consumers; future features must opt in explicitly.
@@ -566,15 +565,9 @@ emitted.
 - `PlatformGateway`: API-key agent discovery, card masking, synchronous calls,
   and streaming calls.
 - `PlatformDiscovery`: discovery service abstraction.
-- `PlatformFileStorage`: file uploads and presigned URLs.
+- `PlatformFileStorage`: compatibility facade over room-owned file uploads and
+  stable authenticated content URLs.
 - `PlatformContentStorage`: binary/full-content storage used by context memory.
-- `PlatformObjectStorage`: SDK-free compatibility adapter over
-  `ObjectStorageDAL` for uploaded-object reads, writes, presigned URLs, public
-  URLs, metadata, and prefix cleanup. Its presigned URL cache is bounded and
-  TTL-swept so alternate object-storage DALs do not need to implement their own
-  cache to avoid duplicate signing work safely.
-- `PlatformAgentAvatarManager`: avatar upload/public URL persistence for the
-  agent avatar route, backed by the same `PlatformObjectStorage` adapter.
 - Gateway/discovery/agent rate limiters backed by Mongo collections.
 
 This module is used by:
@@ -645,11 +638,12 @@ in-memory/offline queues for single-process/degraded operation.
 - Inbound A2A streaming `artifact-update` control flags treat explicit `null`
   for `append` and `lastChunk` the same as omitted values at the shared
   `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
-  strictly validated.
+  strictly validated. JSON-RPC webhook request IDs provide the durable
+  idempotency key when the update metadata does not provide one.
 - Parse webhook stream response payloads.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
-- Convert inline binary artifacts to S3-backed references through bound storage.
+- Materialize inline or remote file artifacts into room-owned storage.
 - Own Docker host fallback for backend-initiated agent endpoint calls. Owner
   modules such as `agent.health`, `agent.resolver`, Execution jobs, and legacy
   transport compatibility paths must call adapter helpers instead of opening
@@ -667,39 +661,32 @@ failing on direct A2A SDK imports and SDK-shaped adapter helper usage outside
 
 ### `dal` and `database`
 
-`dal` owns production database, object-storage, and Redis adapter access.
-Business modules use module-scoped repositories built from `MongoDAL` and
-`ObjectStorageDAL`. Adapters:
+`dal` owns production database and Redis adapter access. Business modules use
+module-scoped repositories built from `MongoDAL`. Adapters:
 
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
   distributed locking support.
-- `dal.s3`: object storage adapter and the sole runtime owner of S3-compatible
-  SDK calls.
 - `dal.index_registry`: startup index registration across modules.
 
-Platform-facing file/content services depend on `ObjectStorageDAL` or the
-`PlatformObjectStorage` compatibility adapter instead of importing SDK clients.
-`PlatformAgentAvatarManager` also uses the platform object-storage adapter for
-avatar bytes and persists the resulting public URL through the agent repository.
-Production startup passes `PlatformObjectStorage` directly into runtime
-consumers through object-storage-named injection points where they still
-require the legacy upload/presign surface.
-`PlatformObjectStorage` in `platform_module.object_storage` is the only
-SDK-free object-storage compatibility adapter used by runtime code and tests.
-AWS SDK imports are confined to `dal/s3/`;
-the only provider-specific exception is `llm_gateway/providers/bedrock_provider.py`
-importing `aioboto3` for Bedrock until that provider's SDK access moves behind
-a dedicated transport.
-Startup also configures A2A artifact storage once with the platform object
-storage adapter, S3 bucket name, and maximum file size. Direct execution
-transports call the shared A2A conversion helper and must not partially rebind
-artifact storage at runtime, because doing so would discard bucket and size
-settings from startup.
-Tracked A2A terminal message/task persistence treats artifact upload conversion
-as best-effort: conversion failures are logged, but the terminal task update is
-still written so remote agent completion is not lost due to object-storage
-transient failures.
+`room_files` owns file metadata, content, references, download authorization,
+artifact materialization, recovery, and room-deletion coordination. MongoDB
+stores metadata while `LocalFileContentStore` stores bytes beneath
+`HYBRO_FILE_DIR` (or the platform user-data directory). Other modules consume
+the `FileContentStore`/`FileStorage` contracts and do not construct filesystem
+paths. A future remote object-store adapter can replace the content store at
+composition time without changing room, API, or A2A contracts.
+
+Agent artifact replacement is also owned by this boundary. After an
+`append=false` journal replacement commits, superseded file IDs are claimed and
+deleted only after the complete committed journal confirms that no artifact
+still references them, followed by source-message and version checks. Recovery
+reconciles older `agent_artifact` records against the durable agent-message
+projection so a crash between journal commit and cleanup does not leave
+permanent file orphans. Terminal replay budgets consume per-file credits for
+durable journal references before applying the file-count guard, preventing
+recovery from charging or rejecting already-materialized bytes a second time
+while still limiting genuinely new parts.
 
 The legacy runtime database files `database/mongodb.py`,
 the former vector database module, `database/repository.py`, the retired
@@ -720,7 +707,7 @@ Important Mongo collections include:
 - `agent_memories`
 - `cancelled_messages`
 - `runs`
-- `file_uploads`
+- `room_files`
 - `api_keys`
 - `hubs`
 - `runs`
@@ -732,7 +719,8 @@ Important Mongo collections include:
 - `agent_capability_issues`
 
 Mongo text indexes support Agent lexical matching and Context Memory keyword
-retrieval. S3 is used for file uploads and converted binary artifacts.
+retrieval. Room file metadata lives in MongoDB and file bytes live in the local
+file directory.
 
 At startup, each search index is compared with its required keys and weights.
 Because MongoDB permits only one text index per collection, a mismatched index
@@ -1184,7 +1172,7 @@ election setup.
 - `stale_task_checker`: expires stale task messages, recovers orphaned
   processing, handles stale HITL, and emits watchdog run events.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
-- `orphaned_upload_cleaner`: deletes unused uploaded files from object storage.
+- `orphaned_upload_cleaner`: deletes unused uploads from the local content store.
 
 In multi-worker deployments, leader election is used to avoid duplicate job
 execution.

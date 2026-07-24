@@ -246,6 +246,7 @@ async def test_update_agent_card_in_db_preserves_blocklisted_fields():
             "agent-1",
             {
                 "agent_card.name": "Live Agent",
+                "agent_card.iconUrl": "https://live.example/icon.png",
             },
         )
     ]

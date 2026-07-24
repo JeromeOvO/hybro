@@ -16,6 +16,7 @@ import hashlib
 import inspect
 import re
 from datetime import timedelta
+from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from common.dto import HITLRequestEvent, HITLResolvedEvent
@@ -53,6 +54,19 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+
+
+def _room_write_fenced(method):
+    @wraps(method)
+    async def fenced(self, room_id: str, *args, **kwargs):
+        if self._room_files is None:
+            return await method(self, room_id, *args, **kwargs)
+        async with self._room_files.write_lease(
+            room_id, f"hitl:{method.__name__}"
+        ):
+            return await method(self, room_id, *args, **kwargs)
+
+    return fenced
 
 
 def _short_prompt_hash(prompt: str | None) -> str:
@@ -125,12 +139,14 @@ class HITLService:
         *,
         continuation=None,
         task_notifications=None,
+        room_files=None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
         self._agent_reply: HITLAgentReplyPort | None = None
         self._continuation: HITLContinuationPort | None = continuation
         self._task_notifications: HITLTaskNotificationPort | None = task_notifications
+        self._room_files = room_files
 
     @property
     def persistence(self):
@@ -166,6 +182,7 @@ class HITLService:
     # Create HITL request
     # ------------------------------------------------------------------
 
+    @_room_write_fenced
     async def request_input(
         self,
         room_id: str,
@@ -773,6 +790,7 @@ class HITLService:
     # Handle user response
     # ------------------------------------------------------------------
 
+    @_room_write_fenced
     async def handle_response(
         self,
         room_id: str,

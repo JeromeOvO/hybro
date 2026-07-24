@@ -660,11 +660,6 @@ def make_api_gateway_deps(
         capability_issue_service.resolve_all_for_agent = AsyncMock(return_value=0)
         capability_issue_service.resolve_issue = AsyncMock(return_value=None)
 
-        agent_avatar_manager = MagicMock()
-        agent_avatar_manager.store_avatar = AsyncMock(
-            return_value="https://avatar.test/a.png"
-        )
-
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(return_value=None)
 
@@ -685,7 +680,6 @@ def make_api_gateway_deps(
             "agent_center": mock_agent_center,
             "agent_service": agent_service,
             "capability_issue_service": capability_issue_service,
-            "agent_avatar_manager": agent_avatar_manager,
             "agent_liveness_checker": AsyncMock(side_effect=lambda agent: agent),
             "agent_group_store": mock_db_service,
             "api_key_store": MagicMock(),

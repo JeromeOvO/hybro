@@ -111,7 +111,7 @@ class AttachmentProjectionService:
 
         try:
             data = await self._content_reader.get_bytes(
-                attachment.s3_key,
+                attachment.file_id,
                 max_bytes=self._max_pdf_bytes,
             )
             if not data:
@@ -245,9 +245,9 @@ def _attachment_fingerprint(attachment: UserAttachment) -> str:
     return canonical_content_fingerprint(
         {
             "file_id": attachment.file_id,
-            "s3_key": attachment.s3_key,
             "size_bytes": attachment.size_bytes,
             "mime_type": attachment.mime_type,
+            "sha256": attachment.sha256,
         }
     )
 
