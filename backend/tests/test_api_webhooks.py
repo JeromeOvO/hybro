@@ -461,7 +461,7 @@ class TestWebhookRouteAdapter:
         assert transport_hints["return"] == protocol_hints["return"]
 
 
-def _make_webhook_transport(*, db=None, handler=None):
+def _make_webhook_transport(*, db=None, handler=None, terminal_task_fetcher=None):
     if handler is None:
         handler = MagicMock(spec=AgentResponseHandler)
         handler.handle = AsyncMock()
@@ -475,6 +475,7 @@ def _make_webhook_transport(*, db=None, handler=None):
         webhook_auth=db,
         message_reader=db,
         cancellation_reader=db,
+        terminal_task_fetcher=terminal_task_fetcher,
     )
 
 
@@ -546,7 +547,9 @@ class TestWebhookTransportFlow:
     async def test_accepts_valid_webhook(self, monkeypatch):
         db = MagicMock()
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
-        msg = _make_tracked_message()
+        msg = _make_tracked_message(state=TaskState.working)
+        msg.message_content.message_task.id = "task-001"
+        msg.agent_url = "https://agent.example.com"
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
         db.is_message_cancelled = AsyncMock(return_value=False)
 
@@ -578,6 +581,37 @@ class TestWebhookTransportFlow:
         assert isinstance(event, AgentEvent)
         assert event.kind == "response"
         assert offloaded == ["parse_stream_response", "_task_to_event"]
+
+    @pytest.mark.asyncio
+    async def test_terminal_webhook_ignores_stale_nonterminal_task_fetch(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        msg = _make_tracked_message(state=TaskState.working)
+        msg.message_content.message_task.id = "task-001"
+        msg.agent_url = "https://agent.example.com"
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        stale_task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(state=TaskState.working),
+        )
+        fetcher = AsyncMock(return_value=stale_task)
+        wt = _make_webhook_transport(db=db, terminal_task_fetcher=fetcher)
+        payload = {
+            "task": {
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {"state": "completed"},
+            }
+        }
+
+        result = await wt.handle_webhook("msg-001", payload, "valid-token")
+
+        assert result["status"] == "accepted"
+        event = wt.response_handler.handle.await_args.args[0]
+        assert event.kind == "response"
+        assert event.state == "completed"
 
     @pytest.mark.asyncio
     async def test_skips_already_terminal_task(self):

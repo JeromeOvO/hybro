@@ -158,7 +158,9 @@ class RoomFiles:
                     {"message": "Artifact could not be finalized"},
                 )
         except Exception:
-            await self._compensate_upload(file_id)
+            finalized = await self._resolve_or_compensate_upload(file_id, digest)
+            if finalized is not None:
+                return finalized
             existing = await self._wait_for_ready_origin(origin_key, digest)
             if existing is not None:
                 return dict(existing)
@@ -264,7 +266,12 @@ class RoomFiles:
                     {"message": "File upload could not be finalized"},
                 )
         except Exception as exc:
-            await self._compensate_upload(file_id)
+            finalized = await self._resolve_or_compensate_upload(
+                file_id,
+                str(pending["sha256"]),
+            )
+            if finalized is not None:
+                return self._file_info(finalized)
             if isinstance(exc, FileStoragePlatformError):
                 raise
             if isinstance(exc, FileStorageError):
@@ -896,12 +903,35 @@ class RoomFiles:
             is not None
         )
 
-    async def _compensate_upload(self, file_id: str) -> None:
-        try:
-            await self._content.delete(file_id)
-        except Exception:
-            await self._metadata.update_one(
-                {"file_id": file_id, "status": "pending"},
+    async def _resolve_or_compensate_upload(
+        self,
+        file_id: str,
+        digest: str,
+    ) -> dict[str, Any] | None:
+        for _attempt in range(2):
+            doc = await self._metadata.find_one({"file_id": file_id})
+            if doc is None:
+                await self._content.delete(file_id)
+                return None
+            if doc.get("status") == "ready":
+                if doc.get("sha256") != digest:
+                    return None
+                if await self._content.exists(
+                    file_id,
+                    expected_size=int(doc.get("size_bytes") or 0),
+                    expected_sha256=digest,
+                ):
+                    return dict(doc)
+                return None
+            if doc.get("status") != "pending":
+                return None
+            version = int(doc.get("version", 1))
+            claimed = await self._metadata.update_one(
+                {
+                    "file_id": file_id,
+                    "status": "pending",
+                    "version": version,
+                },
                 {
                     "$set": {
                         "status": "delete_pending",
@@ -912,11 +942,10 @@ class RoomFiles:
                     "$inc": {"version": 1},
                 },
             )
-            return
-        try:
-            await self._metadata.delete_one({"file_id": file_id, "status": "pending"})
-        except Exception:
-            pass
+            if _changed(claimed):
+                await self._delete_claimed(file_id, version + 1)
+                return None
+        return None
 
     async def _mark_unavailable(self, file_id: str, version: int) -> bool:
         result = await self._metadata.update_one(

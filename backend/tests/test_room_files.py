@@ -46,6 +46,23 @@ class InMemoryCollection:
         return AsyncCursor([deepcopy(doc) for doc in self.docs if _matches(doc, query)])
 
 
+class UncertainFinalizeCollection(InMemoryCollection):
+    def __init__(self):
+        super().__init__()
+        self._raise_after_ready = True
+
+    async def update_one(self, query, update):
+        result = await super().update_one(query, update)
+        if (
+            self._raise_after_ready
+            and query.get("status") == "pending"
+            and update.get("$set", {}).get("status") == "ready"
+        ):
+            self._raise_after_ready = False
+            raise RuntimeError("simulated lost finalize acknowledgement")
+        return result
+
+
 class AsyncCursor:
     def __init__(self, docs):
         self._docs = iter(docs)
@@ -114,6 +131,56 @@ async def test_room_files_upload_persists_ready_metadata_and_content():
             "updated_at": now,
         }
     ]
+
+
+async def test_user_upload_survives_lost_finalize_acknowledgement():
+    file_id = uuid4().hex
+    collection = UncertainFinalizeCollection()
+    content_store = MemoryFileContentStore()
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        file_id_factory=lambda: file_id,
+    )
+
+    uploaded = await files.upload(
+        file_bytes=b"hello",
+        filename="report.txt",
+        owner_id="user-1",
+        room_id="room-1",
+        content_type="text/plain",
+    )
+
+    assert uploaded.file_id == file_id
+    assert collection.docs[0]["status"] == "ready"
+    assert await files.get_bytes(file_id, max_bytes=5) == b"hello"
+
+
+async def test_agent_artifact_survives_lost_finalize_acknowledgement():
+    file_id = uuid4().hex
+    collection = UncertainFinalizeCollection()
+    rooms = InMemoryCollection()
+    rooms.docs.append({"room_id": "room-1", "room_owner_id": "user-1"})
+    content_store = MemoryFileContentStore()
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        rooms=rooms,
+        file_id_factory=lambda: file_id,
+    )
+
+    stored = await files.store_agent_artifact(
+        room_id="room-1",
+        source_message_id="message-1",
+        origin_key="origin-1",
+        content=b"result",
+        file_name="result.txt",
+        mime_type="text/plain",
+    )
+
+    assert stored["file_id"] == file_id
+    assert stored["status"] == "ready"
+    assert await files.get_bytes(file_id, max_bytes=6) == b"result"
 
 
 async def test_room_files_normalizes_mime_types_before_persistence():

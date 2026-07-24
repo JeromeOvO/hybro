@@ -855,7 +855,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - treats Hub terminal `processing_status` close-out as a terminal agent
       result only after the same state-aware projection used by response/error
       events; raw details are not persisted, emitted, or ingested,
-    - broadcasts nonterminal artifact updates without persisting them,
+    - persists nonterminal artifact updates into a private durable journal for
+      terminal recovery without broadcasting them publicly,
     - updates task state on `room_agent_messages`,
     - handles final responses, errors, cancellations, and HITL states,
     - emits SSE updates through Delivery,
@@ -894,9 +895,11 @@ The route:
 
 1. Extracts the notification token from `X-A2A-Notification-Token` or Bearer
    authorization.
-2. Parses the request JSON.
-3. Delegates to `WebhookTransport.handle_webhook`.
-4. The transport validates the token, parses A2A stream response payloads, and
+2. Authenticates the token before reading the request body.
+3. Reads and parses the request JSON under the configured body limit.
+4. Delegates to `WebhookTransport.handle_webhook`.
+5. The transport revalidates the token at the business boundary, parses A2A
+   stream response payloads, and
    sends normalized `AgentEvent` objects into `AgentResponseHandler`.
 
 This keeps all final task state, artifact persistence, and SSE emission logic

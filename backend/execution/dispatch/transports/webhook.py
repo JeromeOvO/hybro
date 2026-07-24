@@ -224,7 +224,7 @@ class WebhookTransport(AgentTransport):
             fetched = await self._terminal_task_fetcher(
                 current_msg.agent_url, current_task.id
             )
-            if fetched is not None:
+            if fetched is not None and is_terminal_state(fetched.status.state):
                 updated_task = fetched
 
         # 4. Normalize Task -> AgentEvent and delegate
