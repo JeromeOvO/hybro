@@ -23,6 +23,9 @@ import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
+import { UseCaseCard } from "@/components/use-case-card"
+import { useCaseTemplates } from "@/lib/use-case-templates"
+import type { UseCaseTemplate } from "@/lib/use-case-templates"
 import { isMentionDispatchInput, type MessageDispatchInput } from "@/lib/types/agent-group"
 
 export default function ChatPage() {
@@ -107,6 +110,7 @@ function ChatPageContent() {
     const {
         creating,
         createAndNavigate,
+        createFromTemplate,
     } = useChatRoomCreation({
         userId: user?.id,
         userName: user?.firstName || user?.username || 'User',
@@ -177,6 +181,22 @@ function ChatPageContent() {
                 }
             }
         }
+    }
+
+    // Cards disabled only for logged-in users while catalog loads
+    const catalogLoading = !!user && (
+      gm.loadingAgents ||
+      (!gm.loadingAgents && gm.availableAgents.length === 0 && !gm.agentsError)
+    )
+
+    const handleTemplateClick = async (template: UseCaseTemplate) => {
+      try {
+        setHasError(false)
+        await createFromTemplate(template, gm.availableAgents)
+      } catch (error) {
+        console.error("Failed to create room from template:", error)
+        setHasError(true)
+      }
     }
 
     const handlePromptPrefillConsumed = () => {
@@ -299,6 +319,38 @@ function ChatPageContent() {
                             chatMode={localChatMode}
                             onChatModeChange={setLocalChatMode}
                         />
+                    </div>
+
+                    {/* Use Case Cards */}
+                    <div className="w-full max-w-5xl mx-auto">
+                        {/* Separator */}
+                        <div className="flex items-center gap-3 px-4 mb-6">
+                            <div className="flex-1 h-px bg-border/60" />
+                            <span className="text-xs font-medium text-muted-foreground tracking-wide uppercase">
+                                Featured Use Cases
+                            </span>
+                            <div className="flex-1 h-px bg-border/60" />
+                        </div>
+
+                        {gm.agentsError && gm.availableAgents.length === 0 ? (
+                            <div className="flex items-center justify-center py-8">
+                                <p className="text-sm text-muted-foreground">
+                                    To Be Continued
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-2">
+                                {useCaseTemplates.map((template) => (
+                                    <UseCaseCard
+                                        key={template.id}
+                                        template={template}
+                                        catalog={gm.availableAgents}
+                                        onClick={() => handleTemplateClick(template)}
+                                        disabled={creating || catalogLoading}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {/* Tip — only shown for pre-configured single-agent chat */}
