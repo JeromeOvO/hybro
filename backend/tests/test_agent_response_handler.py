@@ -565,6 +565,79 @@ class TestArtifactUpdateEvent:
         assert budget["precounted_file_ids"] == {}
 
     @pytest.mark.asyncio
+    async def test_terminal_top_level_parts_share_durable_journal_budget(self):
+        existing = [
+            {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "file",
+                        "file": {
+                            "uri": f"/api/v1/files/file-{index}/content",
+                            "name": f"{index}.bin",
+                            "mimeType": "application/octet-stream",
+                        },
+                        "metadata": {
+                            "file_id": f"file-{index}",
+                            "size_bytes": 1,
+                            "sha256": f"sha-{index}",
+                        },
+                    }
+                    for index in range(20)
+                ],
+            }
+        ]
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(
+                message_content=SimpleNamespace(
+                    message_task=SimpleNamespace(artifacts=existing)
+                )
+            )
+        )
+        handler = _make_handler(db=db)
+        storage = MagicMock()
+        storage.content_url.side_effect = lambda file_id: (
+            f"/api/v1/files/{file_id}/content"
+        )
+        storage.store_agent_artifact = AsyncMock(
+            return_value={
+                "file_id": "new-file",
+                "file_name": "new.bin",
+                "mime_type": "application/octet-stream",
+                "size_bytes": 3,
+                "sha256": "new-sha",
+            }
+        )
+
+        from a2a_adapter import artifact_storage
+        from common.utils.a2a_helpers import bind_a2a_artifact_files
+
+        artifact_storage.bind_artifact_files(storage)
+        bind_a2a_artifact_files(artifact_storage)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            parts=[
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": "bmV3",
+                        "name": "new.bin",
+                        "mimeType": "application/octet-stream",
+                    },
+                }
+            ],
+        )
+
+        _text, artifacts = await handler._project_completed_output(event)
+
+        storage.store_agent_artifact.assert_not_awaited()
+        assert artifacts is not None
+        assert artifacts[-1]["parts"][0]["kind"] == "data"
+        assert artifacts[-1]["parts"][0]["data"]["reason"] == "size_limit"
+
+    @pytest.mark.asyncio
     async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(
         self,
     ):

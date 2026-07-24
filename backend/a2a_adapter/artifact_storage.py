@@ -217,6 +217,10 @@ async def _consume_precounted_reference(
     uri = file_info.get("uri")
     if uri != _room_file_content_url(file_id):
         return False
+    if remaining == 1:
+        precounted.pop(file_id, None)
+    else:
+        precounted[file_id] = remaining - 1
     valid = await _require_room_files().validate_agent_reference(
         room_id=room_id,
         source_message_id=message_id,
@@ -233,10 +237,6 @@ async def _consume_precounted_reference(
     if budget["raw"] > MAX_TOTAL_RAW_BYTES:
         raise ValueError("aggregate raw limit exceeded")
     _canonicalize_reference_dict(part, file_info, valid)
-    if remaining == 1:
-        precounted.pop(file_id, None)
-    else:
-        precounted[file_id] = remaining - 1
     return True
 
 
@@ -517,17 +517,7 @@ class _PinnedResolver(AbstractResolver):
 
 
 def _public_address(value: str) -> bool:
-    address = ipaddress.ip_address(value)
-    return not any(
-        (
-            address.is_private,
-            address.is_loopback,
-            address.is_link_local,
-            address.is_multicast,
-            address.is_reserved,
-            address.is_unspecified,
-        )
-    )
+    return ipaddress.ip_address(value).is_global
 
 
 async def _resolve_public(hostname: str, port: int) -> list[tuple[int, str]]:

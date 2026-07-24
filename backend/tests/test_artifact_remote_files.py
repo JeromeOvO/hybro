@@ -36,7 +36,15 @@ async def test_remote_file_still_rejects_relative_internal_content_endpoint(
 
 @pytest.mark.parametrize(
     "address",
-    ["127.0.0.1", "10.0.0.1", "169.254.1.1", "::1", "fc00::1", "fe80::1"],
+    [
+        "127.0.0.1",
+        "10.0.0.1",
+        "100.64.0.1",
+        "169.254.1.1",
+        "::1",
+        "fc00::1",
+        "fe80::1",
+    ],
 )
 async def test_remote_file_rejects_non_public_dns_results(monkeypatch, address):
     family = socket.AF_INET6 if ":" in address else socket.AF_INET
@@ -51,6 +59,48 @@ async def test_remote_file_rejects_non_public_dns_results(monkeypatch, address):
 
     with pytest.raises(ValueError, match="non-public"):
         await fetch_remote_file("https://example.com/file")
+
+
+async def test_invalid_precounted_references_still_consume_file_part_limit():
+    storage = MagicMock()
+    storage.content_url.return_value = "/api/v1/files/file-1/content"
+    storage.validate_agent_reference = AsyncMock(return_value=None)
+    bind_artifact_files(storage)
+    parts = [
+        {
+            "kind": "file",
+            "file": {
+                "uri": "/api/v1/files/file-1/content",
+                "name": f"forged-{index}.bin",
+            },
+            "metadata": {
+                "file_id": "file-1",
+                "size_bytes": 1,
+                "sha256": "forged-sha",
+            },
+        }
+        for index in range(MAX_FILE_PARTS + 1)
+    ]
+    budget = {
+        "converted": 1,
+        "attempted": 1,
+        "raw": 1,
+        "encoded": 0,
+        "precounted_file_ids": {"file-1": 1},
+    }
+
+    await materialize_inline_file_parts(
+        parts,
+        "room-1",
+        "message-1",
+        budget=budget,
+    )
+
+    assert storage.validate_agent_reference.await_count == MAX_FILE_PARTS
+    assert parts[-1]["kind"] == "data"
+    assert parts[-1]["data"]["reason"] == "size_limit"
+    assert budget["attempted"] == MAX_FILE_PARTS
+    assert budget["precounted_file_ids"] == {}
 
 
 async def test_internal_reference_uses_authoritative_size_for_limit():

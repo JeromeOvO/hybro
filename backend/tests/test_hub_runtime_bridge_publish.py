@@ -290,9 +290,13 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
         message_id: str,
         *,
         converted_so_far: int = 0,
+        budget: dict | None = None,
+        artifact_slot: str | None = None,
     ) -> int:
         assert room_id == "room-1"
         assert message_id == "msg-1"
+        assert budget is not None
+        assert artifact_slot == "id:msg-1-response"
         for index, part in enumerate(parts):
             assert "raw" not in part
             assert "url" not in part

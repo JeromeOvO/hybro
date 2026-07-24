@@ -608,13 +608,14 @@ class AgentResponseHandler:
         e: AgentEvent,
     ) -> tuple[str | None, list[dict] | None]:
         had_structured_output = bool(e.parts or e.artifacts)
+        existing_artifacts = await self._existing_artifact_journal(e.message_id)
         # Materialize inline file parts before public projection.
         if had_structured_output:
             from common.utils.a2a_helpers import materialize_inline_file_parts
 
             try:
+                budget = self._artifact_budget(existing_artifacts)
                 if e.artifacts:
-                    budget = await self._artifact_budget_from_journal(e.message_id)
                     for artifact_position, artifact in enumerate(e.artifacts):
                         artifact = _with_durable_artifact_identity(
                             artifact, artifact_position
@@ -642,7 +643,11 @@ class AgentResponseHandler:
                             )
                 elif e.parts:
                     await materialize_inline_file_parts(
-                        e.parts, e.room_id, e.message_id
+                        e.parts,
+                        e.room_id,
+                        e.message_id,
+                        budget=budget,
+                        artifact_slot=f"id:{e.message_id}-response",
                     )
             except Exception:
                 logger.warning(
@@ -653,7 +658,6 @@ class AgentResponseHandler:
                 )
 
         artifacts_for_db: list[dict] | None = None
-        existing_artifacts = await self._existing_artifact_journal(e.message_id)
         if e.artifacts:
             incoming = _sanitize_public_artifacts(e.artifacts)
             artifacts_for_db = (
