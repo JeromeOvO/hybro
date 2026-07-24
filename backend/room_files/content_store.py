@@ -151,8 +151,11 @@ class MemoryFileContentStore:
         prepared = await self.prepare_stream(file_id, chunk_size)
         if prepared is None:
             return
-        async for chunk in prepared:
-            yield chunk
+        try:
+            async for chunk in prepared:
+                yield chunk
+        finally:
+            await prepared.aclose()
 
     async def prepare_stream(
         self,
@@ -286,8 +289,11 @@ class LocalFileContentStore:
         prepared = await self.prepare_stream(file_id, chunk_size)
         if prepared is None:
             return
-        async for chunk in prepared:
-            yield chunk
+        try:
+            async for chunk in prepared:
+                yield chunk
+        finally:
+            await prepared.aclose()
 
     async def prepare_stream(
         self,
