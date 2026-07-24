@@ -921,7 +921,7 @@ def test_route_owner_protocols_match_handler_calls():
             "patch",
             "update",
         },
-        WebhookReceiver: {"handle_webhook"},
+        WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         HealthCheck: {"check"},
         HubStatusReader: {
             "get_hub_status",

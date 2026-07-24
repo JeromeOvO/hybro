@@ -204,6 +204,25 @@ def _superseded_artifact_file_ids(
     return set()
 
 
+def _retained_artifacts_for_update(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    append: bool,
+) -> list[dict]:
+    if append:
+        return existing
+    replaced_identities = {
+        _artifact_identity(artifact, position)
+        for position, artifact in enumerate(incoming)
+    }
+    return [
+        artifact
+        for position, artifact in enumerate(existing)
+        if _artifact_identity(artifact, position) not in replaced_identities
+    ]
+
+
 def _merge_artifact_journal(
     existing: list[dict],
     incoming: list[dict],
@@ -423,7 +442,13 @@ class AgentResponseHandler:
         from common.utils.a2a_helpers import materialize_inline_file_parts
 
         existing_artifacts = await self._existing_artifact_journal(e.message_id)
-        budget = self._artifact_budget(existing_artifacts)
+        budget = self._artifact_budget(
+            _retained_artifacts_for_update(
+                existing_artifacts,
+                artifacts,
+                append=e.append,
+            )
+        )
         for artifact_position, artifact in enumerate(artifacts):
             update_key = (
                 hashlib.sha256(
@@ -614,7 +639,19 @@ class AgentResponseHandler:
             from common.utils.a2a_helpers import materialize_inline_file_parts
 
             try:
-                budget = self._artifact_budget(existing_artifacts)
+                incoming_for_budget = e.artifacts or [
+                    {
+                        "artifactId": f"{e.message_id}-response",
+                        "parts": e.parts or [],
+                    }
+                ]
+                budget = self._artifact_budget(
+                    _retained_artifacts_for_update(
+                        existing_artifacts,
+                        incoming_for_budget,
+                        append=e.append,
+                    )
+                )
                 if e.artifacts:
                     for artifact_position, artifact in enumerate(e.artifacts):
                         artifact = _with_durable_artifact_identity(

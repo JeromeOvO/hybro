@@ -62,8 +62,9 @@ async def handle_a2a_webhook(
         authorization.replace("Bearer ", "") if authorization else ""
     )
 
-    payload = await _bounded_json_object(request)
     assert isinstance(transport, WebhookReceiver)
+    await transport.authenticate_webhook(message_id, token)
+    payload = await _bounded_json_object(request)
     return await transport.handle_webhook(message_id, payload, token)
 
 

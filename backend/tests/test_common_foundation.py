@@ -969,7 +969,7 @@ def test_protocol_methods_match_design_doc():
             "remove_connection",
             "get_room_status",
         },
-        protocols.WebhookReceiver: {"handle_webhook"},
+        protocols.WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         protocols.RoomDistributedLock: {"acquire", "release"},
         protocols.RoomMembershipSeedSource: {
             "get_saved_group",
@@ -1449,6 +1449,10 @@ def test_protocol_methods_match_design_doc():
     _assert_params(
         protocols.SSERouteTransport.get_room_status,
         ["self", "room_id"],
+    )
+    _assert_params(
+        protocols.WebhookReceiver.authenticate_webhook,
+        ["self", "message_id", "token"],
     )
     _assert_params(
         protocols.WebhookReceiver.handle_webhook,

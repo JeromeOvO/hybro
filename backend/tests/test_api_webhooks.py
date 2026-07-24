@@ -320,6 +320,7 @@ class TestWebhookRouteAdapter:
                 yield b'{"task":{"id":"task-001"}}'
 
         transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
         transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
 
         result = await webhooks.handle_a2a_webhook(
@@ -331,6 +332,9 @@ class TestWebhookRouteAdapter:
         )
 
         assert result == {"status": "accepted"}
+        transport.authenticate_webhook.assert_awaited_once_with(
+            "msg-001", "header-token"
+        )
         transport.handle_webhook.assert_awaited_once_with(
             "msg-001",
             {"task": {"id": "task-001"}},
@@ -346,6 +350,7 @@ class TestWebhookRouteAdapter:
                 yield b'["not","an","object"]'
 
         transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
         transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
 
         with pytest.raises(HTTPException) as exc:
@@ -370,15 +375,50 @@ class TestWebhookRouteAdapter:
                 yield b""
 
         with pytest.raises(HTTPException) as exc:
+            transport = MagicMock()
+            transport.authenticate_webhook = AsyncMock(return_value=None)
+            transport.handle_webhook = AsyncMock()
             await webhooks.handle_a2a_webhook(
                 request=FakeRequest(),
                 message_id="msg-001",
                 authorization="",
                 x_a2a_notification_token="token",
-                transport=MagicMock(),
+                transport=transport,
             )
 
         assert exc.value.status_code == 413
+        transport.authenticate_webhook.assert_awaited_once_with("msg-001", "token")
+        transport.handle_webhook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_rejects_invalid_token_before_reading_body(self):
+        class FakeRequest:
+            headers = {}
+
+            async def stream(self):
+                raise AssertionError("body must not be read before authentication")
+                yield b""
+
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(
+            side_effect=HTTPException(status_code=401, detail="Invalid token")
+        )
+        transport.handle_webhook = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="msg-001",
+                authorization="Bearer invalid-token",
+                x_a2a_notification_token="",
+                transport=transport,
+            )
+
+        assert exc.value.status_code == 401
+        transport.authenticate_webhook.assert_awaited_once_with(
+            "msg-001", "invalid-token"
+        )
+        transport.handle_webhook.assert_not_awaited()
 
     def test_webhook_transport_signature_matches_route_protocol(self):
         protocol_hints = get_type_hints(WebhookReceiver.handle_webhook)

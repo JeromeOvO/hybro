@@ -111,14 +111,8 @@ class WebhookTransport(AgentTransport):
     ) -> Any:
         raise NotImplementedError("Webhooks are inbound-only")
 
-    async def handle_webhook(
-        self,
-        message_id: str,
-        payload: JsonMap,
-        token: str,
-    ) -> JsonMap:
-        """Called by the FastAPI route. Validate, parse, delegate."""
-        # 1. Validate webhook token (hash-based)
+    async def authenticate_webhook(self, message_id: str, token: str) -> None:
+        """Reject unauthorized webhook requests before their body is read."""
         if not token:
             logger.warning(
                 "Webhook for task %s: Missing authorization token", message_id
@@ -148,6 +142,16 @@ class WebhookTransport(AgentTransport):
                     error_reason,
                 )
                 raise HTTPException(status_code=500, detail="Token verification failed")
+
+    async def handle_webhook(
+        self,
+        message_id: str,
+        payload: JsonMap,
+        token: str,
+    ) -> JsonMap:
+        """Called by the FastAPI route. Validate, parse, delegate."""
+        # Revalidate at the business boundary so non-HTTP callers cannot bypass auth.
+        await self.authenticate_webhook(message_id, token)
 
         # 2. Parse StreamResponse
         updated_task = parse_stream_response(payload, message_id)
