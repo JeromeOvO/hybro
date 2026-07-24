@@ -1191,6 +1191,7 @@ def test_protocol_methods_match_design_doc():
             "prepare_download",
             "stream",
         },
+        protocols.PreparedFileStream: {"aclose"},
         protocols.AgentTransport: {"send_message", "stream_message"},
         protocols.APIKeyPrincipal: set(),
         protocols.APIKeyAuthenticator: {"validate_api_key"},

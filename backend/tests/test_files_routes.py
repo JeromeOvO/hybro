@@ -37,6 +37,7 @@ class FilesStub:
         self.uploaded = None
         self.mime_type = mime_type
         self.content = content
+        self.prepared = None
 
     async def upload(self, **kwargs):
         self.uploaded = kwargs
@@ -69,11 +70,29 @@ class FilesStub:
         if metadata is None or self.content is None:
             return None
 
-        async def prepared():
-            for offset in range(0, len(self.content), chunk_size):
-                yield self.content[offset : offset + chunk_size]
+        self.prepared = PreparedStub(self.content, chunk_size)
+        return metadata, self.prepared
 
-        return metadata, prepared()
+
+class PreparedStub:
+    def __init__(self, content: bytes, chunk_size: int):
+        self.content = content
+        self.chunk_size = chunk_size
+        self.offset = 0
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.closed or self.offset >= len(self.content):
+            raise StopAsyncIteration
+        chunk = self.content[self.offset : self.offset + self.chunk_size]
+        self.offset += len(chunk)
+        return chunk
+
+    async def aclose(self):
+        self.closed = True
 
 
 def _user():
@@ -151,3 +170,28 @@ async def test_download_route_returns_404_when_content_cannot_be_prepared():
         )
 
     assert exc_info.value.status_code == 404
+
+
+async def test_download_response_closes_prepared_stream_when_start_fails():
+    storage = FilesStub()
+    response = await download_file(
+        file_id="a" * 32,
+        user=_user(),
+        storage=storage,
+    )
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        raise RuntimeError("response start failed")
+
+    with pytest.raises(RuntimeError, match="response start failed"):
+        await response(
+            {"type": "http", "asgi": {"spec_version": "2.4"}},
+            receive,
+            send,
+        )
+
+    assert storage.prepared is not None
+    assert storage.prepared.closed is True

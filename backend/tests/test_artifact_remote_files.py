@@ -148,6 +148,48 @@ async def test_internal_reference_uses_authoritative_size_for_limit():
     assert parts[0]["data"]["reason"] == "size_limit"
 
 
+async def test_inline_decode_and_digest_are_offloaded(monkeypatch):
+    storage = MagicMock()
+    storage.content_url.return_value = "/api/v1/files/file-1/content"
+    storage.store_agent_artifact = AsyncMock(
+        return_value={
+            "file_id": "file-1",
+            "file_name": "file.bin",
+            "mime_type": "application/octet-stream",
+            "size_bytes": 3,
+            "sha256": "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437",
+        }
+    )
+    bind_artifact_files(storage)
+    offloaded = []
+
+    async def to_thread(function, *args):
+        offloaded.append(function.__name__)
+        return function(*args)
+
+    monkeypatch.setattr(
+        "a2a_adapter.artifact_storage.asyncio.to_thread",
+        to_thread,
+    )
+    parts = [
+        {
+            "kind": "file",
+            "file": {
+                "bytes": "bmV3",
+                "name": "file.bin",
+                "mimeType": "application/octet-stream",
+            },
+        }
+    ]
+
+    await materialize_inline_file_parts(parts, "room-1", "message-1")
+
+    assert "_decode_base64_with_digest" in offloaded
+    assert storage.store_agent_artifact.await_args.kwargs["content_sha256"] == (
+        "11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
+    )
+
+
 async def test_internal_reference_canonicalizes_authoritative_metadata():
     storage = MagicMock()
     storage.content_url.return_value = "/api/v1/files/file-1/content"

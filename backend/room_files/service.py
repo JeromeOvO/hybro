@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from common.dto import FileInfo
 from common.errors import FileStoragePlatformError
+from common.protocols import PreparedFileStream
 from common.utils.time import utcnow
 from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileStorageError
@@ -64,6 +65,7 @@ class RoomFiles:
         file_name: str,
         mime_type: str,
         max_bytes: int = 50 * 1024 * 1024,
+        content_sha256: str | None = None,
     ) -> dict[str, Any]:
         try:
             async with self.write_lease(room_id, "agent-artifact") as lease_id:
@@ -75,6 +77,7 @@ class RoomFiles:
                     file_name=file_name,
                     mime_type=mime_type,
                     max_bytes=max_bytes,
+                    content_sha256=content_sha256,
                     lease_id=lease_id,
                 )
         except FileConflictError as exc:
@@ -92,12 +95,15 @@ class RoomFiles:
         file_name: str,
         mime_type: str,
         max_bytes: int,
+        content_sha256: str | None,
         lease_id: str | None,
     ) -> dict[str, Any]:
         if len(content) > max_bytes:
             raise FileStoragePlatformError(413, "Agent artifact exceeds size limit")
         mime_type = normalize_mime_type(mime_type)
-        digest = hashlib.sha256(content).hexdigest()
+        digest = content_sha256 or await asyncio.to_thread(
+            lambda: hashlib.sha256(content).hexdigest()
+        )
         existing = await self._metadata.find_one(
             {
                 "origin_key": origin_key,
@@ -355,7 +361,7 @@ class RoomFiles:
         *,
         owner_id: str,
         chunk_size: int,
-    ) -> tuple[FileInfo, AsyncIterator[bytes]] | None:
+    ) -> tuple[FileInfo, PreparedFileStream] | None:
         doc = await self._metadata.find_one(
             {
                 "file_id": file_id,

@@ -88,6 +88,15 @@ def _decode_base64(value: str) -> bytes:
     return decoded
 
 
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _decode_base64_with_digest(value: str) -> tuple[bytes, str]:
+    data = _decode_base64(value)
+    return data, _digest(data)
+
+
 def _unavailable_dict(file_info: dict[str, Any], reason: str) -> dict[str, Any]:
     return {
         "kind": "data",
@@ -179,8 +188,8 @@ async def _store(
     part_slot: int,
     file_name: str,
     mime_type: str,
+    content_sha256: str,
 ) -> dict[str, Any]:
-    digest = hashlib.sha256(data).hexdigest()
     return await _require_room_files().store_agent_artifact(
         room_id=room_id,
         source_message_id=message_id,
@@ -189,9 +198,10 @@ async def _store(
             message_id=message_id,
             artifact_slot=artifact_slot,
             part_slot=part_slot,
-            content_sha256=digest,
+            content_sha256=content_sha256,
         ),
         content=data,
+        content_sha256=content_sha256,
         file_name=file_name,
         mime_type=mime_type,
         max_bytes=MAX_FILE_RAW_BYTES,
@@ -294,7 +304,9 @@ async def materialize_inline_file_parts(
                 budget["encoded"] += len(encoded)
                 if budget["encoded"] > MAX_TOTAL_ENCODED_BYTES:
                     raise ValueError("aggregate encoded limit exceeded")
-                data = _decode_base64(encoded)
+                data, content_sha256 = await asyncio.to_thread(
+                    _decode_base64_with_digest, encoded
+                )
             else:
                 uri = file_info.get("uri")
                 if not isinstance(uri, str) or not uri:
@@ -321,6 +333,7 @@ async def materialize_inline_file_parts(
                         continue
                     raise ValueError("untrusted internal file reference")
                 data, detected_mime = await fetch_remote_file(uri)
+                content_sha256 = await asyncio.to_thread(_digest, data)
                 file_info.setdefault("mimeType", detected_mime)
             budget["raw"] += len(data)
             if budget["raw"] > MAX_TOTAL_RAW_BYTES:
@@ -337,6 +350,7 @@ async def materialize_inline_file_parts(
                     or file_info.get("mimeType")
                     or "application/octet-stream"
                 ),
+                content_sha256=content_sha256,
             )
         except Exception as exc:
             reason = "size_limit" if "limit" in str(exc) else "invalid_content"
@@ -420,7 +434,9 @@ async def materialize_artifacts(
                     total_encoded += len(encoded)
                     if total_encoded > MAX_TOTAL_ENCODED_BYTES:
                         raise ValueError("aggregate encoded limit exceeded")
-                    data = _decode_base64(encoded)
+                    data, content_sha256 = await asyncio.to_thread(
+                        _decode_base64_with_digest, encoded
+                    )
                 else:
                     uri = getattr(file_content, "uri", None)
                     if not uri:
@@ -450,6 +466,7 @@ async def materialize_artifacts(
                             continue
                         raise ValueError("untrusted internal file reference")
                     data, detected_mime = await fetch_remote_file(str(uri))
+                    content_sha256 = await asyncio.to_thread(_digest, data)
                     if not _declared_mime(file_content):
                         file_content.mime_type = detected_mime
                 total_raw += len(data)
@@ -464,6 +481,7 @@ async def materialize_artifacts(
                     file_name=getattr(file_content, "name", None)
                     or f"artifact-{artifact_position}-{part_slot}",
                     mime_type=_mime(file_content),
+                    content_sha256=content_sha256,
                 )
             except Exception as exc:
                 reason = "size_limit" if "limit" in str(exc) else "invalid_content"

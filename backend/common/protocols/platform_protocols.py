@@ -93,6 +93,13 @@ class APIKeyRateLimiter(RateLimiter, Protocol):
 
 
 @runtime_checkable
+class PreparedFileStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+    async def __anext__(self) -> bytes: ...
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
 class FileStorage(Protocol):
     async def upload(
         self,
@@ -117,7 +124,7 @@ class FileStorage(Protocol):
         *,
         owner_id: str,
         chunk_size: int,
-    ) -> tuple[FileInfo, AsyncIterator[bytes]] | None: ...
+    ) -> tuple[FileInfo, PreparedFileStream] | None: ...
     def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]: ...
 
 
@@ -144,6 +151,7 @@ __all__ = [
     "APIKeyStore",
     "APIKeyValidationStore",
     "FileStorage",
+    "PreparedFileStream",
     "GatewayDiscoveryProvider",
     "HealthCheck",
     "AttachmentCleanupPort",

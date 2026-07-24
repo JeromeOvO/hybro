@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
+from common.protocols.platform_protocols import PreparedFileStream
 from room_files.errors import (
     FileConflictError,
     FileOperationError,
@@ -37,7 +38,7 @@ class FileContentStore(Protocol):
         chunk_size: int,
         *,
         expected_size: int | None = None,
-    ) -> AsyncIterator[bytes] | None: ...
+    ) -> PreparedFileStream | None: ...
 
     async def delete(self, file_id: str) -> bool: ...
 
@@ -57,6 +58,63 @@ def normalize_file_id(file_id: str) -> str:
     if file_id != parsed.hex:
         raise ValueError("file_id must be a lowercase UUID hex string")
     return parsed.hex
+
+
+class _MemoryPreparedStream:
+    def __init__(self, content: bytes, chunk_size: int) -> None:
+        self._content = content
+        self._chunk_size = chunk_size
+        self._offset = 0
+        self._closed = False
+
+    def __aiter__(self) -> _MemoryPreparedStream:
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._closed or self._offset >= len(self._content):
+            await self.aclose()
+            raise StopAsyncIteration
+        chunk = self._content[self._offset : self._offset + self._chunk_size]
+        self._offset += len(chunk)
+        return chunk
+
+    async def aclose(self) -> None:
+        self._closed = True
+
+
+class _LocalPreparedStream:
+    def __init__(self, handle, chunk_size: int) -> None:
+        self._handle = handle
+        self._chunk_size = chunk_size
+
+    def __aiter__(self) -> _LocalPreparedStream:
+        return self
+
+    async def __anext__(self) -> bytes:
+        handle = self._handle
+        if handle is None:
+            raise StopAsyncIteration
+        try:
+            chunk = await asyncio.to_thread(handle.read, self._chunk_size)
+        except BaseException:
+            await self.aclose()
+            raise
+        if not chunk:
+            await self.aclose()
+            raise StopAsyncIteration
+        return chunk
+
+    async def aclose(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        await asyncio.to_thread(handle.close)
+
+    def __del__(self) -> None:
+        handle = self._handle
+        if handle is not None:
+            handle.close()
 
 
 class MemoryFileContentStore:
@@ -102,7 +160,7 @@ class MemoryFileContentStore:
         chunk_size: int,
         *,
         expected_size: int | None = None,
-    ) -> AsyncIterator[bytes] | None:
+    ) -> PreparedFileStream | None:
         normalized = normalize_file_id(file_id)
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
@@ -113,11 +171,7 @@ class MemoryFileContentStore:
         ):
             return None
 
-        async def prepared() -> AsyncIterator[bytes]:
-            for offset in range(0, len(content), chunk_size):
-                yield content[offset : offset + chunk_size]
-
-        return prepared()
+        return _MemoryPreparedStream(content, chunk_size)
 
     async def delete(self, file_id: str) -> bool:
         normalized = normalize_file_id(file_id)
@@ -241,7 +295,7 @@ class LocalFileContentStore:
         chunk_size: int,
         *,
         expected_size: int | None = None,
-    ) -> AsyncIterator[bytes] | None:
+    ) -> PreparedFileStream | None:
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         path = self._path(file_id)
@@ -252,19 +306,7 @@ class LocalFileContentStore:
         if expected_size is not None and os.fstat(fd).st_size != expected_size:
             os.close(fd)
             return None
-        handle = os.fdopen(fd, "rb", closefd=True)
-
-        async def prepared() -> AsyncIterator[bytes]:
-            try:
-                while True:
-                    chunk = await asyncio.to_thread(handle.read, chunk_size)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                await asyncio.to_thread(handle.close)
-
-        return prepared()
+        return _LocalPreparedStream(os.fdopen(fd, "rb", closefd=True), chunk_size)
 
     async def delete(self, file_id: str) -> bool:
         path = self._path(file_id)

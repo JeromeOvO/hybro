@@ -87,6 +87,7 @@ from common.protocols.platform_protocols import (
     GatewayDiscoveryProvider,
     GatewayService,
     HealthCheck,
+    PreparedFileStream,
     RateLimiter,
 )
 from common.protocols.repository_protocols import (
@@ -166,6 +167,7 @@ __all__ = [
     "EventPublisher",
     "ExecutionEngine",
     "FileStorage",
+    "PreparedFileStream",
     "GatewayDiscoveryProvider",
     "GatewayService",
     "HealthCheck",

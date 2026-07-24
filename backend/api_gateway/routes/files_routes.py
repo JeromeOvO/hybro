@@ -7,13 +7,25 @@ from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.errors import FileStoragePlatformError
-from common.protocols import FileStorage, RoomOwnershipReader
+from common.protocols import FileStorage, PreparedFileStream, RoomOwnershipReader
 from models.file_upload import FileUploadResponse
 from room_files import normalize_file_id, normalize_mime_type
 
 router = APIRouter(prefix="/files", tags=["files"])
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
+
+
+class _PreparedStreamingResponse(StreamingResponse):
+    def __init__(self, content: PreparedFileStream, **kwargs) -> None:
+        super().__init__(content, **kwargs)
+        self._prepared_content = content
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._prepared_content.aclose()
 
 
 @router.post("/upload")
@@ -93,7 +105,7 @@ async def download_file(
     mime_type = normalize_mime_type(metadata.mime_type)
     size_bytes = metadata.size_bytes
     encoded_name = quote(filename, safe="")
-    return StreamingResponse(
+    return _PreparedStreamingResponse(
         content,
         media_type=mime_type,
         headers={

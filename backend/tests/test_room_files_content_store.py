@@ -73,6 +73,23 @@ async def test_prepared_stream_survives_concurrent_delete(content_store):
     assert b"".join([chunk async for chunk in prepared]) == b"durable"
 
 
+async def test_prepared_stream_can_close_before_first_iteration(content_store):
+    file_id = uuid4().hex
+    await content_store.write(file_id, b"durable", "application/octet-stream")
+
+    prepared = await content_store.prepare_stream(
+        file_id,
+        3,
+        expected_size=7,
+    )
+    assert prepared is not None
+
+    await prepared.aclose()
+    await prepared.aclose()
+
+    assert b"".join([chunk async for chunk in prepared]) == b""
+
+
 async def test_content_store_rejects_noncanonical_file_ids(content_store):
     with pytest.raises(ValueError):
         await content_store.write("../escape", b"x", "text/plain")
