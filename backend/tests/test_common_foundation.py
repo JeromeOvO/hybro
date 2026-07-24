@@ -1188,6 +1188,7 @@ def test_protocol_methods_match_design_doc():
             "delete",
             "list_for_room",
             "get_ready_file",
+            "prepare_download",
             "stream",
         },
         protocols.AgentTransport: {"send_message", "stream_message"},

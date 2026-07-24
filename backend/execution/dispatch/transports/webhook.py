@@ -9,6 +9,7 @@ Task -> AgentEvent normalization.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -154,7 +155,9 @@ class WebhookTransport(AgentTransport):
         await self.authenticate_webhook(message_id, token)
 
         # 2. Parse StreamResponse
-        updated_task = parse_stream_response(payload, message_id)
+        updated_task = await asyncio.to_thread(
+            parse_stream_response, payload, message_id
+        )
         logger.info(
             "Webhook for task %s: Parsed task state=%s, artifacts=%d",
             message_id,
@@ -225,10 +228,16 @@ class WebhookTransport(AgentTransport):
                 updated_task = fetched
 
         # 4. Normalize Task -> AgentEvent and delegate
-        event = (
-            self._artifact_update_event(payload, updated_task, current_msg)
-            if _artifact_update_payload(payload)
-            else self._task_to_event(updated_task, current_msg)
+        is_artifact_update = _artifact_update_payload(payload)
+        event = await asyncio.to_thread(
+            self._artifact_update_event
+            if is_artifact_update
+            else self._task_to_event,
+            *(
+                (payload, updated_task, current_msg)
+                if is_artifact_update
+                else (updated_task, current_msg)
+            ),
         )
         await self.response_handler.handle(event)
 

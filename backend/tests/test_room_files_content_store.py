@@ -58,6 +58,21 @@ async def test_content_store_delete_is_idempotent(content_store):
     assert await content_store.read(file_id, max_bytes=1) is None
 
 
+async def test_prepared_stream_survives_concurrent_delete(content_store):
+    file_id = uuid4().hex
+    await content_store.write(file_id, b"durable", "application/octet-stream")
+
+    prepared = await content_store.prepare_stream(
+        file_id,
+        3,
+        expected_size=7,
+    )
+    assert prepared is not None
+    assert await content_store.delete(file_id) is True
+
+    assert b"".join([chunk async for chunk in prepared]) == b"durable"
+
+
 async def test_content_store_rejects_noncanonical_file_ids(content_store):
     with pytest.raises(ValueError):
         await content_store.write("../escape", b"x", "text/plain")

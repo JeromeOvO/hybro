@@ -31,6 +31,14 @@ class FileContentStore(Protocol):
 
     def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]: ...
 
+    async def prepare_stream(
+        self,
+        file_id: str,
+        chunk_size: int,
+        *,
+        expected_size: int | None = None,
+    ) -> AsyncIterator[bytes] | None: ...
+
     async def delete(self, file_id: str) -> bool: ...
 
     async def exists(
@@ -82,15 +90,34 @@ class MemoryFileContentStore:
         return content
 
     async def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]:
+        prepared = await self.prepare_stream(file_id, chunk_size)
+        if prepared is None:
+            return
+        async for chunk in prepared:
+            yield chunk
+
+    async def prepare_stream(
+        self,
+        file_id: str,
+        chunk_size: int,
+        *,
+        expected_size: int | None = None,
+    ) -> AsyncIterator[bytes] | None:
         normalized = normalize_file_id(file_id)
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         async with self._lock:
             content = self._contents.get(normalized)
-        if content is None:
-            return
-        for offset in range(0, len(content), chunk_size):
-            yield content[offset : offset + chunk_size]
+        if content is None or (
+            expected_size is not None and len(content) != expected_size
+        ):
+            return None
+
+        async def prepared() -> AsyncIterator[bytes]:
+            for offset in range(0, len(content), chunk_size):
+                yield content[offset : offset + chunk_size]
+
+        return prepared()
 
     async def delete(self, file_id: str) -> bool:
         normalized = normalize_file_id(file_id)
@@ -202,22 +229,42 @@ class LocalFileContentStore:
         return content
 
     async def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]:
+        prepared = await self.prepare_stream(file_id, chunk_size)
+        if prepared is None:
+            return
+        async for chunk in prepared:
+            yield chunk
+
+    async def prepare_stream(
+        self,
+        file_id: str,
+        chunk_size: int,
+        *,
+        expected_size: int | None = None,
+    ) -> AsyncIterator[bytes] | None:
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         path = self._path(file_id)
         try:
             fd = await asyncio.to_thread(self._open_regular, path)
         except FileNotFoundError:
-            return
+            return None
+        if expected_size is not None and os.fstat(fd).st_size != expected_size:
+            os.close(fd)
+            return None
         handle = os.fdopen(fd, "rb", closefd=True)
-        try:
-            while True:
-                chunk = await asyncio.to_thread(handle.read, chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            await asyncio.to_thread(handle.close)
+
+        async def prepared() -> AsyncIterator[bytes]:
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(handle.read, chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                await asyncio.to_thread(handle.close)
+
+        return prepared()
 
     async def delete(self, file_id: str) -> bool:
         path = self._path(file_id)

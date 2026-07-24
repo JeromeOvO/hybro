@@ -9,6 +9,7 @@ Tests cover:
 - Error handling
 """
 
+import json
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
@@ -420,6 +421,38 @@ class TestWebhookRouteAdapter:
         )
         transport.handle_webhook.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_route_offloads_json_parsing(self, monkeypatch):
+        class FakeRequest:
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+        offloaded = []
+
+        async def to_thread(function, *args):
+            offloaded.append(function)
+            return function(*args)
+
+        monkeypatch.setattr(
+            "api_gateway.routes.webhook_routes.asyncio.to_thread",
+            to_thread,
+        )
+
+        await webhooks.handle_a2a_webhook(
+            request=FakeRequest(),
+            message_id="msg-001",
+            authorization="Bearer valid-token",
+            x_a2a_notification_token="",
+            transport=transport,
+        )
+
+        assert json.loads in offloaded
+
     def test_webhook_transport_signature_matches_route_protocol(self):
         protocol_hints = get_type_hints(WebhookReceiver.handle_webhook)
         transport_hints = get_type_hints(WebhookTransport.handle_webhook)
@@ -510,7 +543,7 @@ class TestWebhookTransportFlow:
     """Tests for webhook processing flow after auth."""
 
     @pytest.mark.asyncio
-    async def test_accepts_valid_webhook(self):
+    async def test_accepts_valid_webhook(self, monkeypatch):
         db = MagicMock()
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
         msg = _make_tracked_message()
@@ -518,6 +551,16 @@ class TestWebhookTransportFlow:
         db.is_message_cancelled = AsyncMock(return_value=False)
 
         wt = _make_webhook_transport(db=db)
+        offloaded = []
+
+        async def to_thread(function, *args):
+            offloaded.append(function.__name__)
+            return function(*args)
+
+        monkeypatch.setattr(
+            "execution.dispatch.transports.webhook.asyncio.to_thread",
+            to_thread,
+        )
         payload = {
             "task": {
                 "id": "task-001",
@@ -534,6 +577,7 @@ class TestWebhookTransportFlow:
         event = wt.response_handler.handle.call_args[0][0]
         assert isinstance(event, AgentEvent)
         assert event.kind == "response"
+        assert offloaded == ["parse_stream_response", "_task_to_event"]
 
     @pytest.mark.asyncio
     async def test_skips_already_terminal_task(self):

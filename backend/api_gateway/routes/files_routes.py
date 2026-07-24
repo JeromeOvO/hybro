@@ -80,16 +80,21 @@ async def download_file(
         normalized = normalize_file_id(file_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="File not found") from exc
-    metadata = await storage.get_ready_file(normalized, owner_id=user.user_id)
-    if metadata is None:
+    prepared = await storage.prepare_download(
+        normalized,
+        owner_id=user.user_id,
+        chunk_size=DOWNLOAD_CHUNK_SIZE,
+    )
+    if prepared is None:
         raise HTTPException(status_code=404, detail="File not found")
+    metadata, content = prepared
 
     filename = metadata.file_name
     mime_type = normalize_mime_type(metadata.mime_type)
     size_bytes = metadata.size_bytes
     encoded_name = quote(filename, safe="")
     return StreamingResponse(
-        storage.stream(normalized, DOWNLOAD_CHUNK_SIZE),
+        content,
         media_type=mime_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}",

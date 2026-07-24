@@ -111,6 +111,13 @@ class FileStorage(Protocol):
         *,
         owner_id: str | None = None,
     ) -> FileInfo | None: ...
+    async def prepare_download(
+        self,
+        file_id: str,
+        *,
+        owner_id: str,
+        chunk_size: int,
+    ) -> tuple[FileInfo, AsyncIterator[bytes]] | None: ...
     def stream(self, file_id: str, chunk_size: int) -> AsyncIterator[bytes]: ...
 
 

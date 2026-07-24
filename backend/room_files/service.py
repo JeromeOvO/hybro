@@ -349,6 +349,42 @@ class RoomFiles:
             url=self.content_url(str(doc["file_id"])),
         )
 
+    async def prepare_download(
+        self,
+        file_id: str,
+        *,
+        owner_id: str,
+        chunk_size: int,
+    ) -> tuple[FileInfo, AsyncIterator[bytes]] | None:
+        doc = await self._metadata.find_one(
+            {
+                "file_id": file_id,
+                "owner_id": owner_id,
+                "status": "ready",
+            }
+        )
+        if doc is None:
+            return None
+        size_bytes = int(doc.get("size_bytes") or 0)
+        stream = await self._content.prepare_stream(
+            file_id,
+            chunk_size,
+            expected_size=size_bytes,
+        )
+        if stream is None:
+            await self._mark_unavailable(file_id, int(doc.get("version", 1)))
+            return None
+        return (
+            FileInfo(
+                file_id=str(doc["file_id"]),
+                file_name=str(doc.get("file_name") or "download"),
+                mime_type=str(doc.get("mime_type") or "application/octet-stream"),
+                size_bytes=size_bytes,
+                url=self.content_url(str(doc["file_id"])),
+            ),
+            stream,
+        )
+
     async def get_bytes(self, file_id: str, *, max_bytes: int) -> bytes | None:
         doc = await self._metadata.find_one({"file_id": file_id, "status": "ready"})
         if doc is None:

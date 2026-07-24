@@ -28,9 +28,15 @@ class OwnershipStub:
 
 
 class FilesStub:
-    def __init__(self, *, mime_type="text/plain; charset=utf-8"):
+    def __init__(
+        self,
+        *,
+        mime_type="text/plain; charset=utf-8",
+        content: bytes | None = b"hello",
+    ):
         self.uploaded = None
         self.mime_type = mime_type
+        self.content = content
 
     async def upload(self, **kwargs):
         self.uploaded = kwargs
@@ -57,6 +63,17 @@ class FilesStub:
         assert chunk_size > 0
         yield b"he"
         yield b"llo"
+
+    async def prepare_download(self, file_id, *, owner_id, chunk_size):
+        metadata = await self.get_ready_file(file_id, owner_id=owner_id)
+        if metadata is None or self.content is None:
+            return None
+
+        async def prepared():
+            for offset in range(0, len(self.content), chunk_size):
+                yield self.content[offset : offset + chunk_size]
+
+        return metadata, prepared()
 
 
 def _user():
@@ -123,3 +140,14 @@ async def test_download_route_replaces_unsafe_stored_mime_type():
     assert response.headers["content-type"] == "application/octet-stream"
     assert b"\r" not in dict(response.raw_headers)[b"content-type"]
     assert b"\n" not in dict(response.raw_headers)[b"content-type"]
+
+
+async def test_download_route_returns_404_when_content_cannot_be_prepared():
+    with pytest.raises(HTTPException) as exc_info:
+        await download_file(
+            file_id="a" * 32,
+            user=_user(),
+            storage=FilesStub(content=None),
+        )
+
+    assert exc_info.value.status_code == 404

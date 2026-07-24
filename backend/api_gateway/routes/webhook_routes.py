@@ -3,6 +3,7 @@
 Delegates all business logic to ``WebhookTransport.handle_webhook()``.
 """
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -32,7 +33,7 @@ async def _bounded_json_object(request: Request) -> JsonMap:
         if len(body) > MAX_A2A_WEBHOOK_BODY_BYTES:
             raise HTTPException(status_code=413, detail="Payload too large")
     try:
-        payload = json.loads(body)
+        payload = await asyncio.to_thread(json.loads, body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
     if not isinstance(payload, dict):
