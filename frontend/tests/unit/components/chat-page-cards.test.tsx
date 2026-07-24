@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react"
+import { render, screen, cleanup } from "@testing-library/react"
 import type { Agent } from "@/lib/types/agent"
 
 // --- Mocks ---
 
-const mockCreateFromTemplate = vi.fn().mockResolvedValue(true)
 const mockCreateAndNavigate = vi.fn().mockResolvedValue(true)
 const mockLoadAvailableAgents = vi.fn()
 
@@ -32,7 +31,6 @@ vi.mock("@/hooks/useChatRoomCreation", () => ({
   useChatRoomCreation: () => ({
     creating: false,
     createAndNavigate: mockCreateAndNavigate,
-    createFromTemplate: mockCreateFromTemplate,
     loadDefaultAgents: vi.fn(),
     getAgentSuggestions: vi.fn(),
     createRoomWithMessage: vi.fn(),
@@ -92,44 +90,11 @@ beforeEach(async () => {
 })
 
 describe("Chat page — Use Case Cards integration", () => {
-  it("renders use case card titles", async () => {
+  it("hides the featured use case section", () => {
     render(<ChatPage />)
-    await waitFor(() => {
-      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
-      expect(screen.getByText("Travel Planner")).toBeDefined()
-      expect(screen.getByText("Story & Image Creator")).toBeDefined()
-    })
-  })
-
-  it("calls createFromTemplate with catalog on card click", async () => {
-    render(<ChatPage />)
-    await waitFor(() => {
-      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
-    })
-    fireEvent.click(screen.getByText("Creator Discovery & Export").closest("button")!)
-    await waitFor(() => {
-      expect(mockCreateFromTemplate).toHaveBeenCalledOnce()
-      expect(mockCreateFromTemplate.mock.calls[0][1]).toEqual(agents)
-    })
-  })
-
-  it("disables cards when catalog is loading", async () => {
-    gmState = { ...gmState, loadingAgents: true, availableAgents: [] }
-    const { container } = render(<ChatPage />)
-    await waitFor(() => {
-      const cards = container.querySelectorAll("button[disabled]")
-      expect(cards.length).toBeGreaterThanOrEqual(3)
-    })
-  })
-
-  it("shows To Be Continued when catalog load fails", async () => {
-    gmState = { ...gmState, agentsError: "Network error", availableAgents: [] }
-    render(<ChatPage />)
-    await waitFor(() => {
-      expect(screen.getByText("To Be Continued")).toBeDefined()
-    })
-    expect(screen.queryByText("Failed to load agents")).toBeNull()
-    expect(screen.queryByText("Retry")).toBeNull()
-    expect(mockLoadAvailableAgents).not.toHaveBeenCalled()
+    expect(screen.queryByText("Featured Use Cases")).toBeNull()
+    expect(screen.queryByText("Creator Discovery & Export")).toBeNull()
+    expect(screen.queryByText("Travel Planner")).toBeNull()
+    expect(screen.queryByText("Story & Image Creator")).toBeNull()
   })
 })
