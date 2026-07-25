@@ -108,7 +108,7 @@ describe('AgentCard', () => {
       />
     )
 
-    const link = container.querySelector('a[href="/c/agents/agent-abc"]')
+    const link = container.querySelector('a[href="/agents/agent-abc"]')
     expect(link).not.toBeNull()
     expect(link).toHaveTextContent('Planner')
   })

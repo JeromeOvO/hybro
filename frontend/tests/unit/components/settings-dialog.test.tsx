@@ -37,11 +37,6 @@ vi.mock('next/link', () => ({
   ),
 }))
 
-const mockPathname = vi.fn(() => '/c')
-vi.mock('next/navigation', () => ({
-  usePathname: () => mockPathname(),
-}))
-
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return function Wrapper({ children }: { children: React.ReactNode }) {
@@ -103,8 +98,7 @@ describe('SettingsDialog - HubStatusLine', () => {
     })
   })
 
-  it('includes a link to /c/hub when on consumer portal', async () => {
-    mockPathname.mockReturnValue('/c/settings')
+  it('links to the unified Hub page', async () => {
     mockUseHubStatus.mockReturnValue({ hasHub: true, isOnline: true, isLoading: false })
 
     render(<SettingsDialog open={true} onOpenChange={vi.fn()} />, { wrapper: createWrapper() })
@@ -113,20 +107,7 @@ describe('SettingsDialog - HubStatusLine', () => {
       expect(screen.getByText('Connected')).toBeInTheDocument()
     })
     const link = screen.getByText('Connected').closest('a')
-    expect(link?.getAttribute('href')).toBe('/c/hub')
-  })
-
-  it('includes a link to /d/hub when on developer portal', async () => {
-    mockPathname.mockReturnValue('/d/agents')
-    mockUseHubStatus.mockReturnValue({ hasHub: true, isOnline: true, isLoading: false })
-
-    render(<SettingsDialog open={true} onOpenChange={vi.fn()} />, { wrapper: createWrapper() })
-
-    await waitFor(() => {
-      expect(screen.getByText('Connected')).toBeInTheDocument()
-    })
-    const link = screen.getByText('Connected').closest('a')
-    expect(link?.getAttribute('href')).toBe('/d/hub')
+    expect(link?.getAttribute('href')).toBe('/hub')
   })
 
   it('calls onOpenChange(false) when hub link is clicked', async () => {

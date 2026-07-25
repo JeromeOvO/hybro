@@ -33,13 +33,13 @@ cd hybro
 docker compose up -d --build
 ```
 
-- **Developer Portal**: http://localhost:3000
+- **Hybro App**: http://localhost:3000
 - **API Server**: http://localhost:8000
 
 ## Architecture
 The repository is split into two primary components:
 - `backend/`: A FastAPI application that serves as the orchestration engine, utilizing Redis for real-time pub/sub and MongoDB for persistence.
-- `frontend/`: A Next.js 16 (Turbopack) application that provides the Developer Portal and Inspector UI.
+- `frontend/`: A Next.js 16 (Turbopack) application for chat, agent discovery, agent management, Hub status, and inspection.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.
@@ -52,4 +52,3 @@ We welcome contributions from the community! Whether you are fixing a bug, addin
 
 ## License
 Apache License 2.0
-

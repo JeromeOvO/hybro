@@ -25,7 +25,7 @@ function makeLifecycle(): ProcessingLifecycle {
     dismissPlaceholder: () => {},
     disarmCancelTimeout: () => {},
     hasCancelTimedOut: () => false,
-  } as ProcessingLifecycle
+  } as unknown as ProcessingLifecycle
 }
 
 describe('handleTaskUpdate terminal recovery', () => {
@@ -43,6 +43,8 @@ describe('handleTaskUpdate terminal recovery', () => {
         getAgentSource: () => undefined,
         setCancelling: () => {},
         getToken: async () => 'token',
+        reconcileWithDb: vi.fn(),
+        hitlRequestIndex: { current: new Map() },
       },
       {
         type: 'task_update',
@@ -106,7 +108,7 @@ describe('handleTaskUpdate terminal recovery', () => {
         taskStatus: 'completed',
         timestamp: '2026-01-01T00:00:02.000Z',
       },
-    ])
+    ], 'db')
 
     await handleTaskUpdate(
       {
@@ -116,6 +118,8 @@ describe('handleTaskUpdate terminal recovery', () => {
         getAgentSource: () => undefined,
         setCancelling: () => {},
         getToken: async () => 'token',
+        reconcileWithDb: vi.fn(),
+        hitlRequestIndex: { current: new Map() },
       },
       {
         type: 'task_update',

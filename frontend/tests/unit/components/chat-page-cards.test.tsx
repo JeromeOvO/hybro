@@ -87,7 +87,7 @@ beforeEach(async () => {
     loadAvailableAgents: mockLoadAvailableAgents,
     setAvailableAgents: vi.fn(),
   }
-  const mod = await import("@/app/c/chat/page")
+  const mod = await import("@/app/(portal)/chat/page")
   ChatPage = mod.default
 })
 

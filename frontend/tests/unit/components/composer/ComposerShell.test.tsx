@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import { ComposerShell } from '@/components/composer/ComposerShell'
+import {
+  ComposerShell,
+  type ComposerShellAdapter,
+} from '@/components/composer/ComposerShell'
 import { useMessageStore } from '@/stores/message-store'
 
 vi.mock('@/components/room-chat-input', () => ({
@@ -16,7 +19,7 @@ vi.mock('@/components/room-chat-input', () => ({
   ),
 }))
 
-const mockAdapter = {
+const mockAdapter: ComposerShellAdapter = {
   roomId: 'test-room',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
@@ -39,8 +42,8 @@ const mockAdapter = {
     handleDeleteGroup: vi.fn(),
     onEditRoomAgents: vi.fn(),
   },
-  quoteState: { quote: null, setQuote: vi.fn(), clearQuote: vi.fn() },
-  chatMode: 'direct',
+  quoteState: { quote: null, clearQuote: vi.fn() },
+  chatMode: 'ultimate',
 }
 
 describe('ComposerShell', () => {

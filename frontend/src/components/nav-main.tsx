@@ -42,7 +42,7 @@ export function NavMain({
   const pathname = usePathname()
 
   const getIconClass = (title: string) => {
-    if (title === "History") return "text-foreground dark:text-icon-navigation"
+    if (title === "Chat History") return "text-foreground dark:text-icon-navigation"
     if (title === "My Agents") return "text-icon-network"
     return "text-icon-navigation"
   }
@@ -56,7 +56,7 @@ export function NavMain({
     <SidebarGroup className="min-h-0 flex-1 flex flex-col overflow-hidden pt-0">
       <SidebarMenu className="gap-2 flex-1 flex flex-col min-h-0 overflow-hidden">
         {items.map((item) => {
-          if (item.title === "History" && state === "collapsed") {
+          if (item.title === "Chat History" && state === "collapsed") {
             return null
           }
 
@@ -76,10 +76,10 @@ export function NavMain({
                       tooltip={item.title}
                       size="default"
                       className={cn(
-                        // History section header doesn't need hover highlight
-                        item.title !== "History" && "hover:bg-black/10 dark:hover:bg-white/15",
+                        // Chat History section header doesn't need hover highlight
+                        item.title !== "Chat History" && "hover:bg-black/10 dark:hover:bg-white/15",
                         "active:scale-[0.98]",
-                        hasActiveChild && item.title !== "History" && "bg-black/15 dark:bg-white/15 font-medium"
+                        hasActiveChild && item.title !== "Chat History" && "bg-black/15 dark:bg-white/15 font-medium"
                       )}
                     >
                       {item.icon && (
@@ -105,8 +105,10 @@ export function NavMain({
                       ) : (
                         <ChevronRight className={cn(
                           "ml-auto h-4 w-4 shrink-0 text-icon-neutral",
-                          "opacity-0 transition-opacity duration-200",
-                          "group-hover/menu-item:opacity-100 group-data-[state=open]/collapsible:opacity-100",
+                          item.title === "Chat History"
+                            ? "opacity-100"
+                            : "opacity-0 group-hover/menu-item:opacity-100 group-data-[state=open]/collapsible:opacity-100",
+                          "transition-opacity duration-200",
                           "transition-transform duration-300 ease-out",
                           "group-data-[state=open]/collapsible:rotate-90",
                           SIDEBAR_ICON_HIDDEN

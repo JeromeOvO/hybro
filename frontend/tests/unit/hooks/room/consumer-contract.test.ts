@@ -2,7 +2,7 @@
  * Phase 13: Consumer contract test.
  *
  * Verifies that the public API surface of useRoomWebhook hasn't drifted
- * from what the consumer (src/app/c/room/[id]/page.tsx) expects. An exact
+ * from what the consumer (src/app/(portal)/room/[id]/page.tsx) expects. An exact
  * key set snapshot catches accidental additions/removals.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'

@@ -42,6 +42,7 @@ function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
     agentResults: [],
     activeAgentIds: [],
     isSupervisorTurn: true,
+    processingStatusLogs: [],
     displayMode: 'working',
     finalAnswer: { kind: 'pending', label: 'Working' },
     ...overrides,

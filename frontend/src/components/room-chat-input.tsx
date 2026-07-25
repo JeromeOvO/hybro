@@ -31,7 +31,7 @@ const COUNTER_VISIBLE_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.95)
 const WARNING_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.99)
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
 
-interface Agent {
+export interface RoomChatInputAgent {
   id: string
   name: string
   iconUrl?: string | null
@@ -64,7 +64,7 @@ interface RoomChatInputProps {
    * Callback when user clicks Stop button to cancel ongoing processing
    */
   onCancel?: () => void
-  agents: Agent[]
+  agents: RoomChatInputAgent[]
   /** Agent IDs belonging to the current room (for filtering mentions when room_team is selected). */
   roomAgentIds?: string[]
   // Group selector props
@@ -677,7 +677,7 @@ export function RoomChatInput({
     selection.deleteFromDocument()
     handleInput()
   }
-  const insertMention = (agent: Agent) => {
+  const insertMention = (agent: RoomChatInputAgent) => {
     if (!editorRef.current) return
 
     // Get current storage format

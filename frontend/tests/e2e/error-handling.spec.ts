@@ -30,7 +30,7 @@ test.describe('Loading States', () => {
 
 test.describe('Accessibility', () => {
   test('should have at least one h1 heading on about page', async ({ page }) => {
-    await page.goto('/c/about')
+    await page.goto('/about')
 
     const h1 = page.locator('h1')
     const h1Count = await h1.count()
@@ -39,7 +39,7 @@ test.describe('Accessibility', () => {
   })
 
   test('should have alt text on images', async ({ page }) => {
-    await page.goto('/c/about')
+    await page.goto('/about')
 
     const images = page.locator('img')
     const imageCount = await images.count()

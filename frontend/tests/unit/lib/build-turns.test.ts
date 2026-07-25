@@ -1025,12 +1025,12 @@ describe('buildTurns – V2 data model', () => {
             hitl_group_total: 2,
             hitl_group_index: 0,
           },
-        } as RoomMessage['message_content']['message_task'],
+        } as unknown as RoomMessage['message_content']['message_task'],
       },
     } as RoomMessage, {
       getAgentName: async () => 'Test Agent',
     })
-    const agent = makeEntity({ ...incoming })
+    const agent = makeEntity(incoming as unknown as Partial<MessageEntity>)
 
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     const serialized = JSON.stringify(turns[0])
@@ -1062,12 +1062,12 @@ describe('buildTurns – V2 data model', () => {
             hitl_prompt_type: 'choice',
             hitl_choices: ['Enterprise', 'Personal'],
           },
-        } as RoomMessage['message_content']['message_task'],
+        } as unknown as RoomMessage['message_content']['message_task'],
       },
     } as RoomMessage, {
       getAgentName: async () => 'Test Agent',
     })
-    const agent = makeEntity({ ...incoming })
+    const agent = makeEntity(incoming as unknown as Partial<MessageEntity>)
 
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
 
@@ -1850,14 +1850,12 @@ describe('primaryStreamMessageId', () => {
             hitl_choices: [privateSentinel],
             choices: [privateSentinel],
           },
-        } as RoomMessage['message_content']['message_task'],
+        } as unknown as RoomMessage['message_content']['message_task'],
       },
     } as RoomMessage, {
       getAgentName: async () => 'HYBRO AI',
     })
-    const agent = makeEntity({
-      ...incoming,
-    })
+    const agent = makeEntity(incoming as unknown as Partial<MessageEntity>)
 
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     const serializedEntity = JSON.stringify(agent)

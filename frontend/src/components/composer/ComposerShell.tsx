@@ -5,12 +5,14 @@ import { useMessageStore } from '@/stores/message-store'
 import { selectComposerState } from '@/lib/selectors'
 import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
 import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
-import { RoomChatInput } from '@/components/room-chat-input'
+import {
+  RoomChatInput,
+  type RoomChatInputAgent,
+} from '@/components/room-chat-input'
 import type { AgentGroup, MessageDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
-import type { Agent } from '@/lib/types/agent'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
@@ -37,7 +39,7 @@ export interface ComposerShellAdapter {
   isSending: boolean
   isProcessing: boolean
   isCancelling: boolean
-  agents: Agent[]
+  agents: RoomChatInputAgent[]
   roomAgentIds: string[]
   groupManagement: {
     groups: AgentGroup[]
@@ -53,7 +55,6 @@ export interface ComposerShellAdapter {
   }
   quoteState: {
     quote: QuoteData | null
-    setQuote: (data: QuoteData | null) => void
     clearQuote: () => void
   }
   chatMode: ChatMode

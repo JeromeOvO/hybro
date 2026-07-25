@@ -16,7 +16,7 @@ function makeDeps(): SSEHandlerDeps {
     roomId: 'room-1',
     lifecycle,
     getAgentName: vi.fn().mockResolvedValue('Agent One'),
-    getAgentSource: vi.fn(() => 'cloud'),
+    getAgentSource: vi.fn(() => 'cloud' as const),
     reconcileWithDb: vi.fn(),
     hitlRequestIndex: { current: new Map() },
     setCancelling: vi.fn(),

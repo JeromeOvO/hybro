@@ -13,9 +13,7 @@ from loguru import logger
 clerk_secret_key: str | None = None
 clerk_authorized_parties: tuple[str, ...] = (
     "https://hybro.ai",
-    "https://developer.hybro.ai",
     "http://localhost:3000",
-    "http://dev.localhost:3000",
 )
 
 

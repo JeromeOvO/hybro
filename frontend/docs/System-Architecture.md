@@ -96,38 +96,31 @@ src/app/
 |   |-- layout.tsx
 |   |-- sign-in/[[...sign-in]]/page.tsx
 |   `-- sign-up/[[...sign-up]]/page.tsx
-|-- c/
-|   |-- layout.tsx
-|   |-- page.tsx
-|   |-- about/page.tsx
-|   |-- about/about-cta-button.tsx
-|   |-- agents/page.tsx
-|   |-- agents/[id]/page.tsx
-|   |-- chat/page.tsx
-|   |-- hub/page.tsx
-|   |-- pricing/page.tsx
-|   `-- room/[id]/page.tsx
-`-- d/
+`-- (portal)/
     |-- layout.tsx
     |-- page.tsx
+    |-- about/page.tsx
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
-    |-- discovery-api-keys/page.tsx
-    |-- docs/page.tsx
+    |-- chat/page.tsx
     |-- hub/page.tsx
-    |-- inspector/page.tsx
-    `-- register/page.tsx
+    |-- pricing/page.tsx
+    |-- room/[id]/page.tsx
+    `-- manage/
+        |-- page.tsx
+        |-- agents/page.tsx
+        |-- agents/[id]/page.tsx
+        |-- agents/new/page.tsx
+        |-- api-keys/page.tsx
+        `-- inspector/page.tsx
 ```
 
-### Subdomain routing
+### Unified routing
 
-`src/proxy.ts` owns subdomain routing. It runs Clerk middleware and rewrites incoming requests:
-
-- `developer.*` and `dev.*` hosts rewrite to `/d/*`.
-- Consumer hosts rewrite to `/c/*`.
-- Shared paths are not rewritten: `/api/*`, `/_next/*`, `/sign-in`, `/sign-up`, `/privacy`, `/robots.txt`, and `/sitemap.xml`.
-- Static assets are skipped.
-- Local development supports `?_subdomain=developer` as a developer-portal fallback.
+The application exposes one unprefixed route tree. Public discovery and chat
+routes live at `/agents`, `/chat`, and `/room/[id]`; management tools live
+under `/manage`. There is no host-based route rewrite. `/manage` redirects to
+`/manage/agents`.
 
 ### Provider hierarchy
 
@@ -140,10 +133,8 @@ src/app/
 5. `Toaster`
 6. `CookieBanner`
 
-Portal layouts add shell providers and chrome:
-
-- `src/app/c/layout.tsx`: `BannerHost`, `SidebarProvider`, `SettingsDialogProvider`, `ConsumerSidebar`, `ConsumerHeader`.
-- `src/app/d/layout.tsx`: `BannerHost`, `SidebarProvider`, `SettingsDialogProvider`, `DeveloperSidebar`, `DeveloperHeader`.
+The portal layout adds `BannerHost`, `SidebarProvider`,
+`SettingsDialogProvider`, `PortalSidebar`, and `PortalHeader`.
 
 ## 6. Component Organization
 
@@ -152,8 +143,8 @@ src/components/
 |-- ui/                       # shadcn/ui primitives
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
-|-- consumer/                 # consumer portal sidebar/header/footer
-|-- developer/                # developer portal sidebar/header/agent settings
+|-- portal/                   # unified sidebar/header/footer and Manage navigation
+|-- developer/                # agent-management settings form
 |-- providers/                # Clerk auth bridge and React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
@@ -259,7 +250,7 @@ src/hooks/room/
 
 ## 8. Room Page Interaction Flow
 
-`src/app/c/room/[id]/page.tsx` is the consumer room page. It is a client component that:
+`src/app/(portal)/room/[id]/page.tsx` is the room page. It is a client component that:
 
 - Reads `roomId` from the route.
 - Reads user/auth state from Clerk.
@@ -522,10 +513,10 @@ health.ts, memory.ts, quote.ts, request.ts, response.ts, room.ts, sse.ts
 
 Other library modules:
 
-- `auth.ts`: Clerk token bridge.
-- `urls.ts`: cross-subdomain URL helpers.
+- `auth.ts`: intentional local auth adapter with a Clerk-shaped interface.
+- `routes.ts`: canonical public and management route vocabulary.
 - `utils.ts`: `cn`, `getApiUrl`, and formatting helpers.
-- `consumer-nav.ts`, `developer-nav.ts`, `nav-items.ts`: navigation configuration.
+- `consumer-nav.ts`, `nav-items.ts`: top-level navigation configuration.
 - `system-agents.ts`: system/supervisor agent classification.
 - `agent-avatar.ts`, `agent-icon-utils.ts`, `file-icon-utils.ts`: display helpers.
 - `api/files.ts` and `hooks/useRoomFile.ts`: authenticated room-file upload,
@@ -545,46 +536,25 @@ Other library modules:
 
 The frontend no longer emits the legacy `target_group` field. `src/lib/types/agent-group.ts` validates that mention routing and target-mode routing are mutually exclusive before the request is sent.
 
-## 13. Portals
+## 13. Unified Portal
 
-### Consumer portal
+The `(portal)` route group provides one shared shell without adding a URL
+segment.
 
-Consumer portal routes are under `src/app/c/`.
+- `/`: landing/entry behavior.
+- `/chat` and `/room/[id]`: chat creation and real-time room workspace.
+- `/agents` and `/agents/[id]`: public agent marketplace/profile.
+- `/hub`: the single Hub status page.
+- `/about`, `/pricing`: public pages.
+- `/manage/agents` and `/manage/agents/[id]`: owned-agent listing and management.
+- `/manage/agents/new`: agent registration.
+- `/manage/api-keys`: discovery API keys.
+- `/manage/inspector`: A2A inspector.
 
-Primary pages:
-
-- `/c`: landing/entry behavior.
-- `/c/chat`: new room creation and use-case cards.
-- `/c/room/[id]`: real-time room workspace.
-- `/c/agents` and `/c/agents/[id]`: agent marketplace/profile.
-- `/c/hub`: hub status.
-- `/c/about`, `/c/pricing`: public pages.
-
-Primary shell:
-
-- `src/components/consumer/consumer-sidebar.tsx`
-- `src/components/consumer/consumer-header.tsx`
-- `src/components/consumer/consumer-footer.tsx`
-
-### Developer portal
-
-Developer portal routes are under `src/app/d/`.
-
-Primary pages:
-
-- `/d`: dashboard.
-- `/d/register`: agent registration.
-- `/d/agents` and `/d/agents/[id]`: agent management.
-- `/d/inspector`: A2A inspector.
-- `/d/discovery-api-keys`: discovery API keys.
-- `/d/docs`: developer docs content.
-- `/d/hub`: hub status.
-
-Primary shell:
-
-- `src/components/developer/developer-sidebar.tsx`
-- `src/components/developer/developer-header.tsx`
-- `src/components/developer/agent-settings-card.tsx`
+The shared shell is implemented by `src/components/portal/`. The Manage
+sidebar item is an expandable control with links to owned agents, Hub,
+registration, API keys, and Inspector. `src/lib/routes.ts` is the canonical
+route vocabulary for application links.
 
 ## 14. Testing Layout
 
@@ -623,8 +593,7 @@ src/
 |-- components/          # UI, portal shells, room workspace, conversation renderer
 |-- hooks/               # public hooks and room orchestration
 |-- lib/                 # API clients, type definitions, selectors, room sync, timeline logic
-|-- stores/              # Zustand message, streaming, and room UI stores
-`-- proxy.ts             # Clerk + subdomain routing proxy
+`-- stores/              # Zustand message, streaming, and room UI stores
 ```
 
 Important generated/local-only files:

@@ -296,7 +296,6 @@ describe('useMessageStore', () => {
         makeIncoming({
           id: 'agent-reply', messageType: 'agent',
           timestamp: '2026-02-17T10:01:00Z',
-          // @ts-expect-error – relatedMessageId is set internally but not in IncomingMessage
         }),
         'sse',
       )

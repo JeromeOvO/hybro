@@ -60,6 +60,6 @@ fi
 
 echo "========================================"
 echo "Hybro AI is now running!"
-echo "Developer Portal: http://localhost:3000"
+echo "Hybro App: http://localhost:3000"
 echo "API Server: http://localhost:8000"
 echo "========================================"

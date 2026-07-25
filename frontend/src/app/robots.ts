@@ -5,8 +5,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/c/about", "/privacy", "/d/docs"],
-        disallow: ["/c/chat", "/c/room/", "/d/agents/", "/d/inspector", "/d/register", "/d/discovery-api-keys"],
+        allow: ['/', '/about', '/agents', '/privacy'],
+        disallow: ['/chat', '/room/', '/manage/'],
       },
     ],
     sitemap: "https://hybro.ai/sitemap.xml",

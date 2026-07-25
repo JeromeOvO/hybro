@@ -1,7 +1,6 @@
 "use client"
 
 import { useUser } from "@/lib/auth"
-import { usePathname } from "next/navigation"
 import { RefreshCw, House, ArrowRight } from "lucide-react"
 import Link from "next/link"
 
@@ -19,16 +18,15 @@ import { DangerZoneSection } from "@/components/settings/danger-zone-section"
 import { SettingsCard } from "@/components/settings/settings-card"
 import { Separator } from "@/components/ui/separator"
 import { useHubStatus } from "@/hooks/useHubStatus"
+import { routes } from '@/lib/routes'
 
 function HubStatusLine({ onNavigate }: { onNavigate: () => void }) {
   const { hasHub, isOnline, isLoading } = useHubStatus()
-  const pathname = usePathname()
-  const hubPath = pathname.startsWith("/d") ? "/d/hub" : "/c/hub"
 
   return (
     <SettingsCard title="My Hub" description="Local agent hub">
       <Link
-        href={hubPath}
+        href={routes.hub}
         onClick={onNavigate}
         className="flex items-center justify-between group hover:bg-muted/50 -mx-2 -my-1 px-2 py-1 rounded-md transition-colors"
       >

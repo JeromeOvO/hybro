@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     frontend_origins: str | list[str] = [
         "http://localhost:3000",
-        "http://dev.localhost:3000",
+        "https://hybro.ai",
     ]
     api_prefix: str = "/api/v1"
 

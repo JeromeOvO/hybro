@@ -13,6 +13,12 @@ function makeUser(id: string, clientRequestId: string): MessageEntity {
     senderName: 'User',
     timestamp: '2026-01-01T00:00:00.000Z',
     clientRequestId,
+    source: 'db',
+    sourceVersion: 1,
+    displayType: 'user-bubble',
+    isEphemeral: false,
+    createdAt: 0,
+    updatedAt: 0,
     processingStatusLogs: [{ id: 'log-1', message: 'Thinking...', timestamp: '2026-01-01T00:00:01.000Z' }],
   }
 }
@@ -34,6 +40,12 @@ function makeAgent(
     clientRequestId,
     taskStatus: 'completed',
     timestamp: '2026-01-01T00:00:02.000Z',
+    source: 'db',
+    sourceVersion: 1,
+    displayType: 'agent-bubble',
+    isEphemeral: false,
+    createdAt: 0,
+    updatedAt: 0,
   }
 }
 
