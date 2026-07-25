@@ -501,9 +501,7 @@ class StaleTaskChecker:
                     state=target_state,
                     text=msg.message_content.message_text or "",
                     artifacts=(
-                        artifacts_to_dicts(task.artifacts)
-                        if task.artifacts
-                        else None
+                        artifacts_to_dicts(task.artifacts) if task.artifacts else None
                     ),
                 )
             )

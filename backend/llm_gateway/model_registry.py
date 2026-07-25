@@ -76,6 +76,7 @@ class ModelRegistryImpl:
             capabilities=["embedding"],
             max_context_tokens=8192,
         )
+
     def _register(
         self,
         *,

@@ -447,51 +447,37 @@ class MessageRuntimeStorePart:
             "task_updated_at": now,
         }
         query = {
-                "message_id": message_id,
-                "message_content.message_task.status.state": {
-                    "$nin": terminal_values
+            "message_id": message_id,
+            "message_content.message_task.status.state": {"$nin": terminal_values},
+            "$and": [
+                {
+                    "$or": [
+                        {"terminal_finalization.state": {"$ne": "finalizing"}},
+                        {"terminal_finalization.heartbeat_at": {"$lt": stale_before}},
+                        {
+                            "$and": [
+                                {
+                                    "terminal_finalization.heartbeat_at": {
+                                        "$exists": False
+                                    }
+                                },
+                                {
+                                    "terminal_finalization.started_at": {
+                                        "$lt": stale_before
+                                    }
+                                },
+                            ]
+                        },
+                    ]
                 },
-                "$and": [
-                    {
-                        "$or": [
-                            {"terminal_finalization.state": {"$ne": "finalizing"}},
-                            {
-                                "terminal_finalization.heartbeat_at": {
-                                    "$lt": stale_before
-                                }
-                            },
-                            {
-                                "$and": [
-                                    {
-                                        "terminal_finalization.heartbeat_at": {
-                                            "$exists": False
-                                        }
-                                    },
-                                    {
-                                        "terminal_finalization.started_at": {
-                                            "$lt": stale_before
-                                        }
-                                    },
-                                ]
-                            },
-                        ]
-                    },
-                    {
-                        "$or": [
-                            {
-                                "artifact_materialization.state": {
-                                    "$ne": "running"
-                                }
-                            },
-                            {
-                                "artifact_materialization.expires_at": {
-                                    "$lte": now
-                                }
-                            },
-                        ]
-                    },
-                ],
-            }
+                {
+                    "$or": [
+                        {"artifact_materialization.state": {"$ne": "running"}},
+                        {"artifact_materialization.expires_at": {"$lte": now}},
+                    ]
+                },
+            ],
+        }
         loop = asyncio.get_running_loop()
         deadline = loop.time() + ARTIFACT_MATERIALIZATION_WAIT_SECONDS
         while loop.time() < deadline:
@@ -503,9 +489,9 @@ class MessageRuntimeStorePart:
                     "task_updated_at": claimed_at,
                 }
             )
-            query["$and"][1]["$or"][1][
-                "artifact_materialization.expires_at"
-            ] = {"$lte": claimed_at}
+            query["$and"][1]["$or"][1]["artifact_materialization.expires_at"] = {
+                "$lte": claimed_at
+            }
             result = await self._room_agent_messages.update_one(
                 query,
                 {"$set": updates},
@@ -716,8 +702,7 @@ class MessageRuntimeStorePart:
             },
             {
                 "$set": {
-                    "artifact_materialization.expires_at": now
-                    + timedelta(minutes=2)
+                    "artifact_materialization.expires_at": now + timedelta(minutes=2)
                 }
             },
         )

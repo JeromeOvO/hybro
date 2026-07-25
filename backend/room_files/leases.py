@@ -63,11 +63,7 @@ class RoomWriteLeases:
                 "lifecycle_state": "active",
                 "write_leases.lease_id": lease_id,
             },
-            {
-                "$set": {
-                    "write_leases.$[lease].expires_at": self._now() + self._ttl
-                }
-            },
+            {"$set": {"write_leases.$[lease].expires_at": self._now() + self._ttl}},
             array_filters=[{"lease.lease_id": lease_id}],
         )
         return _changed(result)
@@ -176,9 +172,7 @@ class RoomWriteLeases:
                 {"room_id": room_id},
                 {"$pull": {"write_leases": {"expires_at": {"$lte": now}}}},
             )
-            room = await self._rooms.find_one(
-                {"room_id": room_id}, {"write_leases": 1}
-            )
+            room = await self._rooms.find_one({"room_id": room_id}, {"write_leases": 1})
             if room is None or not room.get("write_leases"):
                 return True
             await asyncio.sleep(0.05)

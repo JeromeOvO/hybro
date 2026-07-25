@@ -293,11 +293,7 @@ async def test_build_attachment_file_parts_reports_storage_oversize_as_file_too_
     from room.a2a_file_parts import build_attachment_file_parts
     from room_files import FileTooLargeError
 
-    reader = BytesReader(
-        {
-            "file-1": FileTooLargeError("file-1")
-        }
-    )
+    reader = BytesReader({"file-1": FileTooLargeError("file-1")})
 
     result = await build_attachment_file_parts(
         attachments=[_attachment()],

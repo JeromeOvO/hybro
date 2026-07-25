@@ -26,7 +26,9 @@ async def _bounded_json_object(request: Request) -> JsonMap:
             if int(content_length) > MAX_A2A_WEBHOOK_BODY_BYTES:
                 raise HTTPException(status_code=413, detail="Payload too large")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length"
+            ) from exc
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)

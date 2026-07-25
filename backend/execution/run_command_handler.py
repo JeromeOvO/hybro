@@ -80,9 +80,7 @@ class RunCommandHandler:
         if not _feature_run_dual_write_enabled() or not room_id or not message_id:
             return None
         if self._room_files is not None and not _lease_held:
-            async with self._room_files.write_lease(
-                room_id, "run-processing-status"
-            ):
+            async with self._room_files.write_lease(room_id, "run-processing-status"):
                 return await self.record_processing_status(
                     room_id,
                     status,

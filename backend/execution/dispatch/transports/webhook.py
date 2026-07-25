@@ -230,9 +230,7 @@ class WebhookTransport(AgentTransport):
         # 4. Normalize Task -> AgentEvent and delegate
         is_artifact_update = _artifact_update_payload(payload)
         event = await asyncio.to_thread(
-            self._artifact_update_event
-            if is_artifact_update
-            else self._task_to_event,
+            self._artifact_update_event if is_artifact_update else self._task_to_event,
             *(
                 (payload, updated_task, current_msg)
                 if is_artifact_update

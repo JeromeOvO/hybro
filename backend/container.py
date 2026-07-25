@@ -768,12 +768,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 accumulate_artifact_on_message=(
                     message_store.accumulate_artifact_on_message
                 ),
-                claim_terminal_finalization=(
-                    message_store.claim_terminal_finalization
-                ),
-                begin_terminal_finalization=(
-                    message_store.begin_terminal_finalization
-                ),
+                claim_terminal_finalization=(message_store.claim_terminal_finalization),
+                begin_terminal_finalization=(message_store.begin_terminal_finalization),
                 terminal_finalization_matches=(
                     message_store.terminal_finalization_matches
                 ),
@@ -795,9 +791,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 heartbeat_artifact_materialization=(
                     message_store.heartbeat_artifact_materialization
                 ),
-                is_artifact_update_recorded=(
-                    message_store.is_artifact_update_recorded
-                ),
+                is_artifact_update_recorded=(message_store.is_artifact_update_recorded),
                 set_terminal_finalization_content=(
                     message_store.set_terminal_finalization_content
                 ),

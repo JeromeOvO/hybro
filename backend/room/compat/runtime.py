@@ -1085,9 +1085,7 @@ class RoomServices:
                 error="Room still has active writes",
                 status_code=409,
             )
-        await self.room_files.set_deletion_phase(
-            room_id, deletion_id, "cleaning"
-        )
+        await self.room_files.set_deletion_phase(room_id, deletion_id, "cleaning")
         cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
         owned_cleanup_ok = await self._delete_room_owned_data(
             room_id, deletion_id=deletion_id
@@ -1100,9 +1098,7 @@ class RoomServices:
                 error="Room cleanup is incomplete and will be retried",
                 status_code=500,
             )
-        await self.room_files.set_deletion_phase(
-            room_id, deletion_id, "finalizing"
-        )
+        await self.room_files.set_deletion_phase(room_id, deletion_id, "finalizing")
         success = await facade.delete_room(room_id, actual_owner_id)
         if not success:
             return RoomCenterRoomSettingResponse(
@@ -1142,14 +1138,10 @@ class RoomServices:
             )
             return False
 
-    async def _delete_room_owned_data(
-        self, room_id: str, *, deletion_id: str
-    ) -> bool:
+    async def _delete_room_owned_data(self, room_id: str, *, deletion_id: str) -> bool:
         ok = True
         try:
-            await self.room_files.delete_for_room(
-                room_id, deletion_id=deletion_id
-            )
+            await self.room_files.delete_for_room(room_id, deletion_id=deletion_id)
             if not await self.room_files.delete_room_state(room_id):
                 ok = False
         except Exception:
@@ -4271,8 +4263,7 @@ class RoomServices:
                     att.file_url = (
                         await room_files.get_url(att.file_id)
                         if room_files is not None
-                        else att.file_url
-                        or f"/api/v1/files/{att.file_id}/content"
+                        else att.file_url or f"/api/v1/files/{att.file_id}/content"
                     )
 
         return RoomCenterUserMessageResponse(

@@ -61,7 +61,9 @@ class _PerEventBoundedStream(httpx.AsyncByteStream):
                 if not boundaries:
                     break
                 boundary = min(boundaries)
-                separator_size = 4 if pending[boundary : boundary + 4] == b"\r\n\r\n" else 2
+                separator_size = (
+                    4 if pending[boundary : boundary + 4] == b"\r\n\r\n" else 2
+                )
                 if boundary > self._max_bytes:
                     raise A2AResponseTooLargeError("A2A SSE event exceeds size limit")
                 del pending[: boundary + separator_size]
@@ -88,9 +90,7 @@ class BoundedAsyncTransport(httpx.AsyncBaseTransport):
                 declared = int(content_length)
             except ValueError as exc:
                 await response.aclose()
-                raise A2AResponseTooLargeError(
-                    "invalid A2A Content-Length"
-                ) from exc
+                raise A2AResponseTooLargeError("invalid A2A Content-Length") from exc
             if declared > self._max_bytes:
                 await response.aclose()
                 raise A2AResponseTooLargeError("A2A response exceeds size limit")

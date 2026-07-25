@@ -19,10 +19,7 @@ class Rooms:
         if query.get("room_owner_id") not in (None, self.doc.get("room_owner_id")):
             return False
         lifecycle = self.doc.get("lifecycle_state")
-        if (
-            "lifecycle_state" in query
-            and query["lifecycle_state"] != lifecycle
-        ):
+        if "lifecycle_state" in query and query["lifecycle_state"] != lifecycle:
             return False
         if "$or" in query and lifecycle not in (None, "active"):
             return False

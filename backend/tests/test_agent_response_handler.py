@@ -223,9 +223,7 @@ class TestArtifactUpdateEvent:
         db = MagicMock()
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         handler = _make_handler(db=db)
-        handler._existing_artifact_journal = AsyncMock(
-            side_effect=[existing, existing]
-        )
+        handler._existing_artifact_journal = AsyncMock(side_effect=[existing, existing])
         event = AgentEvent(
             kind="artifact_update",
             **_base_event(),

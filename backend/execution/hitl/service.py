@@ -61,9 +61,7 @@ def _room_write_fenced(method):
     async def fenced(self, room_id: str, *args, **kwargs):
         if self._room_files is None:
             return await method(self, room_id, *args, **kwargs)
-        async with self._room_files.write_lease(
-            room_id, f"hitl:{method.__name__}"
-        ):
+        async with self._room_files.write_lease(room_id, f"hitl:{method.__name__}"):
             return await method(self, room_id, *args, **kwargs)
 
     return fenced
