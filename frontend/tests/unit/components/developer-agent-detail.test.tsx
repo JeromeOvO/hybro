@@ -29,10 +29,6 @@ vi.mock('@/lib/api', () => ({
   updateAgent: mockUpdateAgent,
 }))
 
-vi.mock('@/lib/urls', () => ({
-  consumerUrl: (path: string) => `http://localhost:3000${path}`,
-}))
-
 vi.mock('@/lib/agent-avatar', () => ({
   getAgentAvatarUri: (id: string) => `/avatar/${id}`,
 }))
@@ -109,7 +105,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   mockParamId.mockReturnValue('agent-1')
   mockUseAuth.mockReturnValue({ userId: 'owner-user', getToken: vi.fn() })
-  const mod = await import('@/app/d/agents/[id]/page')
+  const mod = await import('@/app/(portal)/manage/agents/[id]/page')
   DeveloperAgentManagePage = mod.default
 })
 
@@ -191,6 +187,19 @@ describe('DeveloperAgentManagePage', () => {
         expect(screen.getByText(/v3\.1\.0/)).toBeInTheDocument()
       })
       expect(screen.getAllByText('Weather Bot').length).toBeGreaterThan(0)
+    })
+
+    it('opens the public agent profile in a new tab', async () => {
+      mockGetAgent.mockResolvedValue(buildResponse(buildAgent()))
+
+      render(<DeveloperAgentManagePage />)
+
+      const publicLink = await screen.findByRole('link', {
+        name: /View as User/i,
+      })
+      expect(publicLink).toHaveAttribute('href', '/agents/agent-1')
+      expect(publicLink).toHaveAttribute('target', '_blank')
+      expect(publicLink).toHaveAttribute('rel', 'noopener noreferrer')
     })
 
     it('shows "Agent Not Found" card when API returns failure', async () => {

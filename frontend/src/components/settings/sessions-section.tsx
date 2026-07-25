@@ -8,11 +8,12 @@ type SessionWithActivitiesResource = {
   status?: string
   latestActivity?: {
     browserName?: string
+    browserVersion?: string
     deviceType?: string
     ipAddress?: string
   }
   lastActiveAt?: Date
-  revoke?: () => Promise<unknown>
+  revoke: () => Promise<unknown>
 }
 import { useSession } from "@/lib/auth"
 import { toast } from "sonner"

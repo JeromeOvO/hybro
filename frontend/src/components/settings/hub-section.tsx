@@ -81,8 +81,8 @@ export function HubSection() {
                 <div>
                   <span className="font-medium text-foreground">Create an API key</span>
                   {' — '}
-                  <a href="/d/discovery-api-keys" className="text-primary hover:underline">
-                    Developer Portal &rarr; API Keys
+                  <a href="/manage/api-keys" className="text-primary hover:underline">
+                    Manage &rarr; API Keys
                   </a>
                 </div>
               </li>

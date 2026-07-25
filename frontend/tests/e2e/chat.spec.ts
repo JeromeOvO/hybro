@@ -19,15 +19,11 @@ test.describe('Chat Flow', () => {
   })
 })
 
-test.describe('Chat Page (public render, auth on submit)', () => {
-  // The chat page renders its UI for all users, including unauthenticated.
-  // Auth is checked only on submit — it redirects to /sign-in?redirect_url=<current path + query>.
-  // These tests verify the page loads correctly without auth.
-
+test.describe('Chat Page with local identity', () => {
   test('should render chat page with quick-start templates', async ({ page }) => {
-    await page.goto('/c/chat')
+    await page.goto('/chat')
 
-    // Wait for Clerk isLoaded (the spinner disappears)
+    // Wait for the local auth adapter to load (the spinner disappears).
     await page.waitForFunction(
       () => !document.querySelector('.animate-spin'),
       { timeout: 15000 },
@@ -38,11 +34,19 @@ test.describe('Chat Page (public render, auth on submit)', () => {
     await expect(templates.first()).toBeVisible({ timeout: 5000 })
   })
 
-  test('unauthenticated submit should redirect to sign-in', async ({ page }) => {
-    await page.goto('/c/chat')
+  test('submitting creates a room and navigates without a sign-in redirect', async ({ page }) => {
+    await page.route('**/roomCenter/createNewRoom', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          room: { room_id: 'e2e-created-room' },
+        }),
+      })
+    })
+    await page.goto('/chat')
 
-    // Wait for Clerk to finish loading (spinner disappears).
-    // If this times out, Clerk failed to hydrate — which is a real failure.
     await page.waitForFunction(
       () => !document.querySelector('.animate-spin'),
       { timeout: 15000 },
@@ -54,67 +58,19 @@ test.describe('Chat Page (public render, auth on submit)', () => {
 
     // Type a message and submit
     await chatInput.click()
-    await page.keyboard.type('Test message from unauthenticated user')
+    await page.keyboard.type('Test message from local user')
     await page.keyboard.press('Enter')
 
-    // After submit, unauthenticated user should be redirected to /sign-in
-    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
-  })
-
-  test('unauthenticated submit from agent link should preserve agentId in redirect_url', async ({ page }) => {
-    // Simulate arriving via "Chat with this agent" on the agent profile page
-    await page.goto('/c/chat?agentId=test-agent-123')
-
-    await page.waitForFunction(
-      () => !document.querySelector('.animate-spin'),
-      { timeout: 15000 },
-    )
-
-    const chatInput = page.locator('[contenteditable="true"]')
-    await expect(chatInput).toBeVisible({ timeout: 5000 })
-
-    await chatInput.click()
-    await page.keyboard.type('Hello agent')
-    await page.keyboard.press('Enter')
-
-    // After redirect, the sign-in URL must include redirect_url with the agentId param
-    // so the user returns to the correct agent chat after login.
-    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
-    const url = page.url()
-    expect(url).toContain('redirect_url')
-    expect(decodeURIComponent(url)).toContain('agentId=test-agent-123')
-  })
-
-  test('unauthenticated submit preserves both agentId and prompt params in redirect_url', async ({ page }) => {
-    // Simulate arriving via "Chat with this agent" with a pre-filled prompt
-    await page.goto('/c/chat?agentId=test-agent-456&prompt=Hello%20world')
-
-    await page.waitForFunction(
-      () => !document.querySelector('.animate-spin'),
-      { timeout: 15000 },
-    )
-
-    const chatInput = page.locator('[contenteditable="true"]')
-    await expect(chatInput).toBeVisible({ timeout: 5000 })
-
-    await chatInput.click()
-    await page.keyboard.press('Enter')
-
-    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
-    const url = page.url()
-    const decoded = decodeURIComponent(url)
-    expect(decoded).toContain('agentId=test-agent-456')
-    // The prompt value may be encoded as + or %20 for spaces; check the key is present
-    // and that the value survived the redirect round-trip.
-    expect(decoded).toMatch(/prompt=Hello[+ ]world/)
+    await expect(page).toHaveURL(/\/room\/e2e-created-room$/, { timeout: 10000 })
+    await expect(page).not.toHaveURL(/sign-in/)
   })
 })
 
 test.describe('Page Content', () => {
   test('should render about page with main content area', async ({ page }) => {
-    await page.goto('/c/about')
+    await page.goto('/about')
 
-    // The c/ layout renders two <main> elements:
+    // The portal layout renders two <main> elements:
     //   1. SidebarInset: <main data-slot="sidebar-inset">
     //   2. Layout content: <main class="flex flex-1 flex-col min-w-0"> (no side padding — pages own their own padding)
     // Target the inner content main via :not([data-slot]).
@@ -125,8 +81,8 @@ test.describe('Page Content', () => {
 
 test.describe('Theme Toggle', () => {
   test('should toggle between light and dark themes', async ({ page }) => {
-    // The sidebar (and theme toggle) only exists on /c/* routes, not the marketing homepage.
-    await page.goto('/c/chat')
+    // The sidebar (and theme toggle) only exists on /* routes, not the marketing homepage.
+    await page.goto('/chat')
 
     // ThemeToggle renders in two places depending on auth state:
     //   - Unauthenticated: small button in the sidebar footer (always visible)

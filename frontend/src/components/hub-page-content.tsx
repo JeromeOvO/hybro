@@ -27,16 +27,11 @@ import { formatTimestamp } from "@/lib/time"
 import { getAgentAvatarUri } from "@/lib/agent-avatar"
 import { cn } from "@/lib/utils"
 import type { Agent } from "@/lib/types"
-
-interface HubPageContentProps {
-  apiKeysPath: string
-  /** Portal base path used for agent detail links (e.g. "/c" or "/d") */
-  basePath: string
-}
+import { routes } from '@/lib/routes'
 
 const MANUAL_REFRESH_SPIN_MS = 600
 
-export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
+export function HubPageContent() {
   const { getToken } = useAuth()
   const queryClient = useQueryClient()
   const { hub, isOnline, hasHub, isLoading: hubLoading, isFetching: hubFetching } = useHubStatus()
@@ -189,7 +184,7 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                       <div>
                         <span className="font-medium text-foreground">Create an API key</span>
                         {" — "}
-                        <Link href={apiKeysPath} className="text-primary hover:underline inline-flex items-center gap-1">
+                        <Link href={routes.manage.apiKeys} className="text-primary hover:underline inline-flex items-center gap-1">
                           API Keys <ExternalLink className="h-3 w-3" />
                         </Link>
                       </div>
@@ -270,7 +265,7 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                 {hubAgents.map(agent => (
                   <Link
                     key={agent.agent_id}
-                    href={`${basePath}/agents/${agent.agent_id}`}
+                    href={routes.manage.agent(agent.agent_id)}
                     className={cn(
                       "block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                       !isOnline && "pointer-events-none opacity-50",

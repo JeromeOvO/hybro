@@ -117,7 +117,7 @@ let ConsumerAgentProfilePage: React.ComponentType
 beforeEach(async () => {
   vi.clearAllMocks()
   mockParamId.mockReturnValue('agent-test-1')
-  const mod = await import('@/app/c/agents/[id]/page')
+  const mod = await import('@/app/(portal)/agents/[id]/page')
   ConsumerAgentProfilePage = mod.default
 })
 
@@ -261,7 +261,7 @@ describe('ConsumerAgentProfilePage', () => {
       await waitFor(() => {
         expect(screen.getByText('Manage')).toBeInTheDocument()
       })
-      expect(screen.queryByText('Manage on Developer Portal')).not.toBeInTheDocument()
+      expect(screen.queryByText('Manage agent')).not.toBeInTheDocument()
     })
   })
 

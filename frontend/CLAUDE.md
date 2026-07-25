@@ -27,20 +27,19 @@ Node version: 20.19 (`.nvmrc`). Install: `npm install`.
 
 ## Architecture
 
-### Dual-Portal via Subdomain Routing
+### Unified Portal Routing
 
-The app serves **two portals** from one Next.js deployment:
-
-- `/c/*` — **Consumer portal** (hybro.ai): chat rooms, agent discovery, pricing
-- `/d/*` — **Developer portal** (developer.hybro.ai): agent registration, hub management, inspector
-
-`src/proxy.ts` (exported as middleware) inspects the request hostname and rewrites `/` → `/c/` or `/d/` accordingly. Local dev uses `localhost` → consumer, `dev.localhost` → developer, or `?_subdomain=developer` query param.
+The app uses one `(portal)` route group and one shared sidebar/header shell.
+Public and chat routes are unprefixed (`/`, `/chat`, `/room/[id]`, `/agents`,
+`/agents/[id]`, `/hub`). Agent-management tools live under `/manage/*`.
+`/manage` redirects to `/manage/agents`; retired portal-prefixed routes are not
+rewritten.
 
 ### Real-Time Chat Pipeline
 
 The core user experience flows through:
 
-1. **Room creation** (`/c/chat` → `useChatRoomCreation`) — creates room via REST, navigates to `/c/room/[id]`
+1. **Room creation** (`/chat` → `useChatRoomCreation`) — creates room via REST, navigates to `/room/[id]`
 2. **Room hydration** (`useRoomHydration`) — fetches persisted messages from DB, populates the message store
 3. **SSE connection** (`src/lib/api/sse.ts` → `SSEConnection`) — fetch-based streaming with reconnect/backoff, receives `AnySSEFrame` events
 4. **SSE handlers** (`src/hooks/room/sse-handlers/`) — parse frames, dispatch to message store and processing status
@@ -64,7 +63,9 @@ The core user experience flows through:
 
 ### Authentication
 
-Clerk handles auth. `@clerk/nextjs` provides `ClerkProvider` at root, middleware validates sessions via `clerkMiddleware` in `proxy.ts`. Client-side uses `useAuth().getToken()` for API calls.
+The repository intentionally uses the local auth mock in `src/lib/auth.tsx`.
+The Clerk-shaped client API is retained so existing pages and API calls keep
+their authentication interface.
 
 ### UI System
 
@@ -107,5 +108,5 @@ Do not add or commit `superpowers/` or related planning artifacts.
 
 Copy `.env.example` → `.env.local`. Key vars:
 - `NEXT_PUBLIC_API_BASE_URL` — backend URL
-- `NEXT_PUBLIC_CONSUMER_URL` / `NEXT_PUBLIC_DEVELOPER_URL` — subdomain routing
+- `NEXT_PUBLIC_APP_URL` — optional canonical application URL
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — auth

@@ -179,7 +179,7 @@ describe('convertApiMessageToIncoming', () => {
           message_text: '',
           message_task: {
             status: { state: 'working' },
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
@@ -220,7 +220,7 @@ describe('convertApiMessageToIncoming', () => {
             kind: 'task',
             contextId: 'ctx-1',
             id: 'task-1',
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
@@ -248,7 +248,7 @@ describe('convertApiMessageToIncoming', () => {
               user_answer: 'Approve',
             },
             status: { state: 'completed' },
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
 
@@ -284,7 +284,7 @@ describe('convertApiMessageToIncoming', () => {
               hitl_group_index: 0,
             },
             status: { state: 'completed' },
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
 
@@ -322,7 +322,7 @@ describe('convertApiMessageToIncoming', () => {
               hitl_group_index: 0,
             },
             status: { state: 'completed' },
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
 
@@ -705,7 +705,7 @@ describe('convertApiMessageToIncoming', () => {
               task_content: privateSentinel,
               internal_task_payload: { instructions: privateSentinel },
             },
-          } as RoomMessage['message_content']['message_task'],
+          } as unknown as RoomMessage['message_content']['message_task'],
         },
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())

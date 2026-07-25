@@ -23,10 +23,6 @@ vi.mock('@/lib/api', () => ({
   getAgentsByProviderId: mockGetAgentsByProviderId,
 }))
 
-vi.mock('@/lib/urls', () => ({
-  consumerUrl: (path: string) => `http://localhost:3000${path}`,
-}))
-
 vi.mock('@/lib/agent-avatar', () => ({
   getAgentAvatarUri: (id: string) => `/avatar/${id}`,
 }))
@@ -81,7 +77,7 @@ let DeveloperAgentsPage: React.ComponentType
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  const mod = await import('@/app/d/agents/page')
+  const mod = await import('@/app/(portal)/manage/agents/page')
   DeveloperAgentsPage = mod.default
 })
 
@@ -192,7 +188,23 @@ describe('DeveloperAgentsPage', () => {
 
       await userEvent.click(screen.getByText('My Agent'))
 
-      expect(mockPush).toHaveBeenCalledWith('/agents/abc-123')
+      expect(mockPush).toHaveBeenCalledWith('/manage/agents/abc-123')
+    })
+
+    it('opens the public agent profile in a new tab', async () => {
+      mockGetAgentsByProviderId.mockResolvedValue(
+        buildAgentsResponse([buildAgent()])
+      )
+
+      const { container } = render(<DeveloperAgentsPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('My Agent')).toBeInTheDocument()
+      })
+
+      const publicLink = container.querySelector('a[href="/agents/agent-1"]')
+      expect(publicLink).toHaveAttribute('target', '_blank')
+      expect(publicLink).toHaveAttribute('rel', 'noopener noreferrer')
     })
   })
 

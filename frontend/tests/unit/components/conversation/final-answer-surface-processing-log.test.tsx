@@ -125,7 +125,6 @@ describe('FinalAnswerSurface processing logs', () => {
           status: 'completed',
           phase: 'completed',
           supervisorStage: {
-            status: 'completed',
             details: 'Requesting Cyber Insurer Agent',
           },
           finalAnswer: { kind: 'llm_synthesis', label: 'Synthesized', primaryMessageId: 'summary-1' },

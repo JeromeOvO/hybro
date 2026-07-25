@@ -57,7 +57,7 @@ function createWrapper() {
   }
 }
 
-let HubPageContent: React.ComponentType<{ apiKeysPath: string; basePath: string }>
+let HubPageContent: React.ComponentType
 
 beforeEach(async () => {
   vi.clearAllMocks()
@@ -75,7 +75,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: true, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     expect(screen.getByText('Loading hub status...')).toBeInTheDocument()
   })
@@ -84,7 +84,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('No hub connected')).toBeInTheDocument()
@@ -98,13 +98,13 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Setup Guide')).toBeInTheDocument()
     })
     const link = screen.getByText('API Keys').closest('a')
-    expect(link?.getAttribute('href')).toBe('/d/keys')
+    expect(link?.getAttribute('href')).toBe('/manage/api-keys')
   })
 
   it('shows "Hub Connected" when hub is online', async () => {
@@ -114,7 +114,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Connected')).toBeInTheDocument()
@@ -128,7 +128,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Connected')).toBeInTheDocument()
@@ -143,7 +143,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Connected')).toBeInTheDocument()
@@ -160,7 +160,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Offline')).toBeInTheDocument()
@@ -174,7 +174,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText(/Connected since/)).toBeInTheDocument()
@@ -195,7 +195,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText(/Last seen/)).toBeInTheDocument()
@@ -214,7 +214,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Offline')).toBeInTheDocument()
@@ -236,7 +236,7 @@ describe('HubPageContent', () => {
       ],
     })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Code Helper')).toBeInTheDocument()
@@ -259,7 +259,7 @@ describe('HubPageContent', () => {
       ],
     })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub Agent')).toBeInTheDocument()
@@ -274,7 +274,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hub connected but no agents registered yet.')).toBeInTheDocument()
@@ -285,7 +285,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     expect(screen.getByText('My Hub')).toBeInTheDocument()
   })
@@ -294,7 +294,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     expect(screen.getByRole('button', { name: /Refresh/ })).toBeInTheDocument()
   })
@@ -303,7 +303,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     const refreshButton = screen.getByRole('button', { name: /Refresh/ })
     expect(refreshButton).toHaveClass('hover:bg-black/10')
@@ -315,7 +315,7 @@ describe('HubPageContent', () => {
     mockUseHubStatus.mockReturnValue({ hub: null, isOnline: false, hasHub: false, isLoading: false, invalidate: mockInvalidate })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await user.hover(screen.getByRole('button', { name: /Refresh/ }))
     await waitFor(() => {
@@ -333,7 +333,7 @@ describe('HubPageContent', () => {
       agents: [buildAgent({ agent_id: 'a1', name: 'Hover Agent' })],
     })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Hover Agent')).toBeInTheDocument()
@@ -354,7 +354,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     const refreshIcon = screen.getByRole('button', { name: /Refresh/ }).querySelector('svg')
     expect(refreshIcon).toHaveClass('animate-spin')
@@ -372,7 +372,7 @@ describe('HubPageContent', () => {
     })
     mockGetAllActiveAgents.mockResolvedValue({ success: true, agents: [] })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     const refreshButton = screen.getByRole('button', { name: /Refresh/ })
     const refreshIcon = refreshButton.querySelector('svg')
@@ -391,7 +391,7 @@ describe('HubPageContent', () => {
     })
   })
 
-  it('renders agent cards as links to the correct portal detail page', async () => {
+  it('renders agent cards as links to the management detail page', async () => {
     mockUseHubStatus.mockReturnValue({
       hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 1 },
       isOnline: true, hasHub: true, isLoading: false, invalidate: mockInvalidate,
@@ -401,31 +401,12 @@ describe('HubPageContent', () => {
       agents: [buildAgent({ agent_id: 'a1', name: 'Clickable Agent' })],
     })
 
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/c" />, { wrapper: createWrapper() })
+    render(<HubPageContent />, { wrapper: createWrapper() })
 
     await waitFor(() => {
       expect(screen.getByText('Clickable Agent')).toBeInTheDocument()
     })
     const link = screen.getByText('Clickable Agent').closest('a')
-    expect(link?.getAttribute('href')).toBe('/c/agents/a1')
-  })
-
-  it('uses developer basePath for agent links', async () => {
-    mockUseHubStatus.mockReturnValue({
-      hub: { hub_id: 'h1', is_online: true, last_connected_at: null, agent_count: 1 },
-      isOnline: true, hasHub: true, isLoading: false, invalidate: mockInvalidate,
-    })
-    mockGetAllActiveAgents.mockResolvedValue({
-      success: true,
-      agents: [buildAgent({ agent_id: 'a1', name: 'Dev Agent' })],
-    })
-
-    render(<HubPageContent apiKeysPath="/d/keys" basePath="/d" />, { wrapper: createWrapper() })
-
-    await waitFor(() => {
-      expect(screen.getByText('Dev Agent')).toBeInTheDocument()
-    })
-    const link = screen.getByText('Dev Agent').closest('a')
-    expect(link?.getAttribute('href')).toBe('/d/agents/a1')
+    expect(link?.getAttribute('href')).toBe('/manage/agents/a1')
   })
 })

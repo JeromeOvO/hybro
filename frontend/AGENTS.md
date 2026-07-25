@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Next.js 16 TypeScript app. Routes live in `src/app`, including groups such as `src/app/(auth)`, `src/app/c`, and `src/app/d`. Components are in `src/components`, grouped by feature plus shared primitives in `src/components/ui`. Hooks live in `src/hooks`, shared logic and API clients in `src/lib`, and Zustand stores in `src/stores`. Static assets are in `public`. Unit tests are colocated as `*.test.ts` when useful, or placed under `tests/unit`; Playwright tests live in `tests/e2e`.
+This is a Next.js 16 TypeScript app. Routes live in `src/app`, including `src/app/(portal)` for the unified application shell and `src/app/(auth)` for auth-shaped mock pages. Components are in `src/components`, grouped by feature plus shared primitives in `src/components/ui`. Hooks live in `src/hooks`, shared logic and API clients in `src/lib`, and Zustand stores in `src/stores`. Static assets are in `public`. Unit tests are colocated as `*.test.ts` when useful, or placed under `tests/unit`; Playwright tests live in `tests/e2e`.
 
 ## Build, Test, and Development Commands
 

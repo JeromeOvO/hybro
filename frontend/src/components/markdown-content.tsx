@@ -118,7 +118,7 @@ function CollapsibleCodeBlock({
 function processMentions(content: string): string {
   return content.replace(
     /<@([^|]+)\|([^>]+)>/g,
-    '[@$2](/c/agents/$1)'
+    '[@$2](/agents/$1)'
   )
 }
 
@@ -129,7 +129,7 @@ function stripLiteralFourSpacesPrefix(content: string): string {
 
 /** Check if a link href points to an agent profile (i.e. was an @mention). */
 function isAgentMentionHref(href: string | undefined): boolean {
-  return !!href && href.startsWith('/c/agents/')
+  return !!href && href.startsWith('/agents/')
 }
 
 export function copySelectionWithMentions(
@@ -157,7 +157,7 @@ export function copySelectionWithMentions(
   mentionEls.forEach((el) => {
     const agentId =
       el.dataset.id ||
-      (el.getAttribute('href') || '').match(/\/c\/agents\/([^/?#]+)/)?.[1]
+      (el.getAttribute('href') || '').match(/\/agents\/([^/?#]+)/)?.[1]
     const mentionText = (el.textContent || '').trim()
     const agentName = mentionText.startsWith('@') ? mentionText.slice(1) : mentionText
     if (!agentId || !mentionText) return
@@ -470,7 +470,7 @@ export function LinkifiedContent({ content }: { content: string }) {
       parts.push(
         <a
           key={`link-${keyIndex++}`}
-          href={`/c/agents/${agentId}`}
+          href={`/agents/${agentId}`}
           target="_blank"
           rel="noopener noreferrer"
           className="room-mention mx-1 select-text hover:underline underline-offset-2 transition-opacity hover:opacity-80"

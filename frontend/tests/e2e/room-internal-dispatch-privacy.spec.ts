@@ -238,7 +238,7 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.goto(`/c/room/${ROOM_ID}`)
+  await page.goto(`/room/${ROOM_ID}`)
 
   await expect(page.getByTestId('chat-input')).toBeVisible()
   await expectInternalPromptNeverRendered(page)

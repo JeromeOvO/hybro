@@ -41,7 +41,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
 
   return (
     <Link
-      href={`/c/agents/${agent.agent_id}`}
+      href={`/agents/${agent.agent_id}`}
       className="block rounded-xl focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
     >
       <Card

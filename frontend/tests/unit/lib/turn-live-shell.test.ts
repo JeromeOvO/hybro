@@ -43,7 +43,6 @@ function makeAgentResult(
     isSummaryAgent: false,
     isEphemeral: false,
     artifacts: [],
-    isSummaryAgent: false,
     ...overrides,
   }
 }
@@ -156,7 +155,6 @@ describe('getSupervisorStatusLine', () => {
       status: 'completed',
       phase: 'completed',
       supervisorStage: {
-        status: 'completed',
         details: 'Requesting Cyber Insurer Agent',
       },
     })
@@ -169,7 +167,6 @@ describe('getSupervisorStatusLine', () => {
       status: 'active',
       phase: 'collecting',
       supervisorStage: {
-        status: 'working',
         details: 'Evaluating agent results...',
       },
     })

@@ -35,7 +35,6 @@ function makeAgent(
     isSummaryAgent: false,
     isEphemeral: false,
     artifacts: [],
-    isSummaryAgent: false,
     ...overrides,
   }
 }

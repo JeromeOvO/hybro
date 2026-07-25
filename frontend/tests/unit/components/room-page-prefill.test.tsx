@@ -103,7 +103,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   // Reset Zustand store
   useRoomUiStore.setState({ pendingRoomData: {} })
-  const mod = await import("@/app/c/room/[id]/page")
+  const mod = await import("@/app/(portal)/room/[id]/page")
   RoomChatPage = mod.default
 })
 
