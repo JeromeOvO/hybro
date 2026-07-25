@@ -3,6 +3,7 @@ const withId = (base: string, id: string) => `${base}/${encodeURIComponent(id)}`
 export const routes = {
   home: '/',
   about: '/about',
+  openSource: '/open-source',
   pricing: '/pricing',
   privacy: '/privacy',
   chat: '/chat',
