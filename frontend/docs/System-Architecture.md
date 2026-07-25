@@ -167,11 +167,9 @@ src/components/
 |-- nav-main.tsx
 |-- nav-agent.tsx
 |-- nav-user.tsx
-|-- nav-hub.tsx
 |-- nav-docs-button.tsx
 |-- nav-discord-button.tsx
 |-- require-auth.tsx
-|-- developer-docs-content.tsx
 |-- hub-page-content.tsx
 |-- use-case-card.tsx
 |-- cookie-banner.tsx

@@ -108,5 +108,4 @@ Do not add or commit `superpowers/` or related planning artifacts.
 
 Copy `.env.example` → `.env.local`. Key vars:
 - `NEXT_PUBLIC_API_BASE_URL` — backend URL
-- `NEXT_PUBLIC_APP_URL` — optional canonical application URL
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — auth
