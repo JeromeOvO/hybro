@@ -1,11 +1,28 @@
-import { BookOpen, Mail } from "lucide-react"
+import { BookOpen, Mail, Code2 } from "lucide-react"
 import { DiscordIcon, GithubIcon } from "@/components/icons"
+import Link from "next/link"
 
 export function PortalFooter() {
   return (
     <footer className="py-10 px-4 md:px-8 border-t border-border/40">
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 mb-6">
+          <Link
+            href="/open-source"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
+          >
+            <Code2 className="h-4 w-4 text-[hsl(var(--color-hybro-hy))]" />
+            Open Source
+          </Link>
+          <a
+            href="https://github.com/hybroai/hybro"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
+          >
+            <GithubIcon className="h-4 w-4" />
+            hybro
+          </a>
           <a
             href="https://docs.hybro.ai/"
             target="_blank"

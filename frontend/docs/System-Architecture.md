@@ -100,6 +100,7 @@ src/app/
     |-- layout.tsx
     |-- page.tsx
     |-- about/page.tsx
+    |-- open-source/page.tsx
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
     |-- chat/page.tsx
