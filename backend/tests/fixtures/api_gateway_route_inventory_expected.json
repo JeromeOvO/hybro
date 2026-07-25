@@ -230,28 +230,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/agent/{agent_id}/avatar",
-    "methods": [
-      "POST"
-    ],
-    "name": "upload_agent_avatar",
-    "endpoint_module": "api_gateway.routes.agent_routes",
-    "declared_owner": "api_gateway.routes.agent_routes",
-    "tags": [
-      "agent"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_agent_avatar_manager",
-      "get_agent_service",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/agent/{agent_id}/capability-issues",
     "methods": [
       "GET"
@@ -553,6 +531,28 @@
       "get_current_user",
       "get_file_storage",
       "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/files/{file_id}/content",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_file",
+    "endpoint_module": "api_gateway.routes.files_routes",
+    "declared_owner": "api_gateway.routes.files_routes",
+    "tags": [
+      "files",
+      "files"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_file_storage"
     ],
     "auth_dependencies": [
       "get_current_user"

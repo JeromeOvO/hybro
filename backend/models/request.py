@@ -273,7 +273,7 @@ class RoomCenterRoomSettingRequest(BaseModel):
 
 class UserAttachmentRequest(BaseModel):
     """Wire format from frontend. Only file_id is used server-side; all metadata
-    is resolved from the file_uploads collection to prevent spoofing.
+    is resolved from the room_files collection to prevent spoofing.
     """
 
     file_id: str

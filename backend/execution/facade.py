@@ -350,12 +350,17 @@ def hub_agent_response_internal_to_agent_event(
         lifecycle_message_id=_hub_payload_lifecycle_message_id(kind, payload),
         append=_optional_hub_bool(payload, "append", default=False),
         last_chunk=_optional_hub_bool(payload, "last_chunk", default=False),
+        artifact_update_id=event.idempotency_key,
+        retry_on_finalization_conflict=bool(event.journal_id),
+        finalization_recovery_id=event.journal_id,
         is_final=_optional_hub_bool(payload, "is_final", default=event.is_terminal),
         agent_name=_optional_hub_str(payload, "agent_name"),
         step_number=_optional_hub_int(payload, "step_number"),
         total_steps=_optional_hub_int(payload, "total_steps"),
         skip_persist=_optional_hub_bool(payload, "skip_persist", default=False),
-        s3_converted=_optional_hub_bool(payload, "s3_converted", default=False),
+        files_materialized=_optional_hub_bool(
+            payload, "files_materialized", default=False
+        ),
         details=_agent_event_details(_thaw_hub_payload_value(payload.get("details"))),
     )
 

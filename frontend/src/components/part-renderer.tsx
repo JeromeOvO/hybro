@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Code2, ImageIcon, Volume2, Film, AlertCircle, ChevronRight } from 'lucide-react'
+import { AlertCircle, ChevronRight, Code2 } from 'lucide-react'
 import { getFileIcon } from '@/lib/file-icon-utils'
+import { previewKind } from '@/lib/file-preview-policy'
 import type { ArtifactPart } from '@/stores/message-store/types'
-import { isPresignedUrlExpired } from '@/lib/presigned-url'
+import { useRoomFile } from '@/hooks/useRoomFile'
 import { tryParseJson } from '@/lib/utils'
 import { MarkdownContent } from './markdown-content'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
@@ -65,38 +66,29 @@ function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boole
 }
 
 function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
-  const [loadError, setLoadError] = useState(false)
+  const [downloadError, setDownloadError] = useState(false)
   const mime = file.mime_type || ''
-  const isImage = mime.startsWith('image/')
-  const isAudio = mime.startsWith('audio/')
-  const isVideo = mime.startsWith('video/')
-  const src = file.uri || null
+  const kind = previewKind(mime, file.sizeBytes)
+  const { objectUrl, error, download } = useRoomFile(file.fileId, kind !== null)
   const displayName = isDisplayableName(file.name) ? file.name : undefined
 
-  if (isImage && src) {
-    if (loadError) {
-      return <ResourceExpiredBanner icon={ImageIcon} />
-    }
+  if (kind === 'image' && objectUrl) {
     return (
       <div className="my-1">
         <ImageLightbox
-          src={src}
+          src={objectUrl}
           alt={displayName || 'image'}
           caption={displayName}
-          onError={() => setLoadError(true)}
         />
       </div>
     )
   }
 
-  if (isAudio && src) {
-    if (loadError) {
-      return <ResourceExpiredBanner icon={Volume2} />
-    }
+  if (kind === 'audio' && objectUrl) {
     return (
       <div className="my-1">
-        <audio controls preload="metadata" className="max-w-full" onError={() => setLoadError(true)}>
-          <source src={src} type={mime} />
+        <audio controls preload="metadata" className="max-w-full">
+          <source src={objectUrl} type={mime} />
         </audio>
         {displayName && (
           <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
@@ -105,14 +97,11 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
     )
   }
 
-  if (isVideo && src) {
-    if (loadError) {
-      return <ResourceExpiredBanner icon={Film} />
-    }
+  if (kind === 'video' && objectUrl) {
     return (
       <div className="my-1">
-        <video controls preload="metadata" className="max-w-full max-h-80 rounded-md border border-border" onError={() => setLoadError(true)}>
-          <source src={src} type={mime} />
+        <video controls preload="metadata" className="max-w-full max-h-80 rounded-md border border-border">
+          <source src={objectUrl} type={mime} />
         </video>
         {displayName && (
           <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
@@ -121,36 +110,22 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
     )
   }
 
-  if (src) {
-    return <GenericFileLink src={src} displayName={displayName} mimeType={mime} />
-  }
-
-  const FallbackIcon = isAudio ? Volume2 : isVideo ? Film : ImageIcon
-  return (
-    <div className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-      <FallbackIcon className="h-4 w-4" />
-      <span>{displayName || 'File (no source)'}</span>
-    </div>
-  )
-}
-
-function GenericFileLink({ src, displayName, mimeType }: { src: string; displayName: string | undefined; mimeType?: string }) {
-  const { icon: Icon, color } = getFileIcon(mimeType, displayName)
-
-  if (isPresignedUrlExpired(src)) {
+  const { icon: Icon, color } = getFileIcon(mime, displayName)
+  if (!file.fileId || error || downloadError) {
     return <ResourceExpiredBanner icon={Icon} />
   }
-
   return (
-    <a
-      href={src}
-      target="_blank"
-      rel="noopener noreferrer"
+    <button
+      type="button"
+      onClick={() => {
+        setDownloadError(false)
+        void download(displayName || 'download').catch(() => setDownloadError(true))
+      }}
       className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors"
     >
       <Icon className={`h-4 w-4 shrink-0 ${color}`} />
       <span>{displayName || 'Download file'}</span>
-    </a>
+    </button>
   )
 }
 

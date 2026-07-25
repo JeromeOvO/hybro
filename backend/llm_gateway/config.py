@@ -11,7 +11,6 @@ class LLMGatewayConfig:
     supervisor_json_timeout_seconds: float = 30.0
     supervisor_text_timeout_seconds: float = 90.0
     supervisor_stream_timeout_seconds: float = 90.0
-    bedrock_request_timeout_seconds: float = 45.0
     default_generation_model: str = "lead_ai_model"
     default_embedding_model: str = "embedding_model"
     default_supervisor_model: str = "supervisor_model"
@@ -52,11 +51,6 @@ class LLMGatewayConfig:
                 settings_obj,
                 "llm_gateway_supervisor_stream_timeout_seconds",
                 defaults.supervisor_stream_timeout_seconds,
-            ),
-            bedrock_request_timeout_seconds=_setting(
-                settings_obj,
-                "llm_gateway_bedrock_request_timeout_seconds",
-                defaults.bedrock_request_timeout_seconds,
             ),
             default_generation_model=_string_setting(
                 settings_obj,

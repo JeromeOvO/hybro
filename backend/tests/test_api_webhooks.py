@@ -9,6 +9,7 @@ Tests cover:
 - Error handling
 """
 
+import json
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
@@ -103,6 +104,27 @@ class TestParseStreamResponse:
                     "parts": [{"text": "chunk"}],
                 },
             }
+        }
+        result = parse_stream_response(payload, "msg-004")
+        assert result.status.state == TaskState.working
+        assert len(result.artifacts) == 1
+
+    def test_parses_jsonrpc_result_artifact_update_variant(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "result": {
+                "artifactUpdate": {
+                    "taskId": "task-004",
+                    "contextId": "ctx-004",
+                    "artifact": {
+                        "artifactId": "art-004",
+                        "name": "streamed",
+                        "parts": [{"text": "chunk"}],
+                    },
+                    "append": True,
+                }
+            },
         }
         result = parse_stream_response(payload, "msg-004")
         assert result.status.state == TaskState.working
@@ -293,10 +315,13 @@ class TestWebhookRouteAdapter:
     @pytest.mark.asyncio
     async def test_route_uses_injected_transport_and_notification_token(self):
         class FakeRequest:
-            async def json(self):
-                return {"task": {"id": "task-001"}}
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
 
         transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
         transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
 
         result = await webhooks.handle_a2a_webhook(
@@ -308,6 +333,9 @@ class TestWebhookRouteAdapter:
         )
 
         assert result == {"status": "accepted"}
+        transport.authenticate_webhook.assert_awaited_once_with(
+            "msg-001", "header-token"
+        )
         transport.handle_webhook.assert_awaited_once_with(
             "msg-001",
             {"task": {"id": "task-001"}},
@@ -317,10 +345,13 @@ class TestWebhookRouteAdapter:
     @pytest.mark.asyncio
     async def test_route_rejects_non_object_json_payload(self):
         class FakeRequest:
-            async def json(self):
-                return ["not", "an", "object"]
+            headers = {}
+
+            async def stream(self):
+                yield b'["not","an","object"]'
 
         transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
         transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
 
         with pytest.raises(HTTPException) as exc:
@@ -335,6 +366,93 @@ class TestWebhookRouteAdapter:
         assert exc.value.status_code == 400
         transport.handle_webhook.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_route_rejects_declared_oversize_before_reading_body(self):
+        class FakeRequest:
+            headers = {"content-length": str(webhooks.MAX_A2A_WEBHOOK_BODY_BYTES + 1)}
+
+            async def stream(self):
+                raise AssertionError("body must not be read")
+                yield b""
+
+        with pytest.raises(HTTPException) as exc:
+            transport = MagicMock()
+            transport.authenticate_webhook = AsyncMock(return_value=None)
+            transport.handle_webhook = AsyncMock()
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="msg-001",
+                authorization="",
+                x_a2a_notification_token="token",
+                transport=transport,
+            )
+
+        assert exc.value.status_code == 413
+        transport.authenticate_webhook.assert_awaited_once_with("msg-001", "token")
+        transport.handle_webhook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_rejects_invalid_token_before_reading_body(self):
+        class FakeRequest:
+            headers = {}
+
+            async def stream(self):
+                raise AssertionError("body must not be read before authentication")
+                yield b""
+
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(
+            side_effect=HTTPException(status_code=401, detail="Invalid token")
+        )
+        transport.handle_webhook = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="msg-001",
+                authorization="Bearer invalid-token",
+                x_a2a_notification_token="",
+                transport=transport,
+            )
+
+        assert exc.value.status_code == 401
+        transport.authenticate_webhook.assert_awaited_once_with(
+            "msg-001", "invalid-token"
+        )
+        transport.handle_webhook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_offloads_json_parsing(self, monkeypatch):
+        class FakeRequest:
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+        offloaded = []
+
+        async def to_thread(function, *args):
+            offloaded.append(function)
+            return function(*args)
+
+        monkeypatch.setattr(
+            "api_gateway.routes.webhook_routes.asyncio.to_thread",
+            to_thread,
+        )
+
+        await webhooks.handle_a2a_webhook(
+            request=FakeRequest(),
+            message_id="msg-001",
+            authorization="Bearer valid-token",
+            x_a2a_notification_token="",
+            transport=transport,
+        )
+
+        assert json.loads in offloaded
+
     def test_webhook_transport_signature_matches_route_protocol(self):
         protocol_hints = get_type_hints(WebhookReceiver.handle_webhook)
         transport_hints = get_type_hints(WebhookTransport.handle_webhook)
@@ -343,7 +461,7 @@ class TestWebhookRouteAdapter:
         assert transport_hints["return"] == protocol_hints["return"]
 
 
-def _make_webhook_transport(*, db=None, handler=None):
+def _make_webhook_transport(*, db=None, handler=None, terminal_task_fetcher=None):
     if handler is None:
         handler = MagicMock(spec=AgentResponseHandler)
         handler.handle = AsyncMock()
@@ -357,6 +475,7 @@ def _make_webhook_transport(*, db=None, handler=None):
         webhook_auth=db,
         message_reader=db,
         cancellation_reader=db,
+        terminal_task_fetcher=terminal_task_fetcher,
     )
 
 
@@ -425,14 +544,26 @@ class TestWebhookTransportFlow:
     """Tests for webhook processing flow after auth."""
 
     @pytest.mark.asyncio
-    async def test_accepts_valid_webhook(self):
+    async def test_accepts_valid_webhook(self, monkeypatch):
         db = MagicMock()
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
-        msg = _make_tracked_message()
+        msg = _make_tracked_message(state=TaskState.working)
+        msg.message_content.message_task.id = "task-001"
+        msg.agent_url = "https://agent.example.com"
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
         db.is_message_cancelled = AsyncMock(return_value=False)
 
         wt = _make_webhook_transport(db=db)
+        offloaded = []
+
+        async def to_thread(function, *args):
+            offloaded.append(function.__name__)
+            return function(*args)
+
+        monkeypatch.setattr(
+            "execution.dispatch.transports.webhook.asyncio.to_thread",
+            to_thread,
+        )
         payload = {
             "task": {
                 "id": "task-001",
@@ -449,6 +580,38 @@ class TestWebhookTransportFlow:
         event = wt.response_handler.handle.call_args[0][0]
         assert isinstance(event, AgentEvent)
         assert event.kind == "response"
+        assert offloaded == ["parse_stream_response", "_task_to_event"]
+
+    @pytest.mark.asyncio
+    async def test_terminal_webhook_ignores_stale_nonterminal_task_fetch(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        msg = _make_tracked_message(state=TaskState.working)
+        msg.message_content.message_task.id = "task-001"
+        msg.agent_url = "https://agent.example.com"
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+        stale_task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(state=TaskState.working),
+        )
+        fetcher = AsyncMock(return_value=stale_task)
+        wt = _make_webhook_transport(db=db, terminal_task_fetcher=fetcher)
+        payload = {
+            "task": {
+                "id": "task-001",
+                "contextId": "ctx-001",
+                "status": {"state": "completed"},
+            }
+        }
+
+        result = await wt.handle_webhook("msg-001", payload, "valid-token")
+
+        assert result["status"] == "accepted"
+        event = wt.response_handler.handle.await_args.args[0]
+        assert event.kind == "response"
+        assert event.state == "completed"
 
     @pytest.mark.asyncio
     async def test_skips_already_terminal_task(self):
@@ -520,6 +683,112 @@ class TestWebhookTransportNormalize:
         event = wt._task_to_event(task, msg)
         assert event.kind == "response"
         assert event.text == "done"
+
+    def test_artifact_update_uses_jsonrpc_request_id_for_deduplication(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "result": {
+                "artifactUpdate": {
+                    "taskId": "task-004",
+                    "contextId": "ctx-004",
+                    "artifact": {
+                        "artifactId": "art-004",
+                        "name": "streamed",
+                        "parts": [{"text": "chunk"}],
+                    },
+                    "append": True,
+                }
+            },
+        }
+        task = parse_stream_response(payload, "msg-004")
+        event = _make_webhook_transport()._artifact_update_event(
+            payload,
+            task,
+            _make_tracked_message(),
+        )
+
+        assert event.artifact_update_id.startswith("jsonrpc:v1:")
+
+        retry = _make_webhook_transport()._artifact_update_event(
+            payload,
+            task,
+            _make_tracked_message(),
+        )
+        assert retry.artifact_update_id == event.artifact_update_id
+
+    def test_artifact_update_jsonrpc_deduplication_distinguishes_id_types(self):
+        string_id_payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "artifactUpdate": {
+                    "taskId": "task-004",
+                    "contextId": "ctx-004",
+                    "artifact": {
+                        "artifactId": "art-004",
+                        "parts": [{"text": "chunk"}],
+                    },
+                }
+            },
+        }
+        numeric_id_payload = {**string_id_payload, "id": 1}
+        transport = _make_webhook_transport()
+
+        string_event = transport._artifact_update_event(
+            string_id_payload,
+            parse_stream_response(string_id_payload, "msg-004"),
+            _make_tracked_message(),
+        )
+        numeric_event = transport._artifact_update_event(
+            numeric_id_payload,
+            parse_stream_response(numeric_id_payload, "msg-004"),
+            _make_tracked_message(),
+        )
+
+        assert string_event.artifact_update_id != numeric_event.artifact_update_id
+
+    def test_artifact_update_jsonrpc_deduplication_includes_payload(self):
+        first_payload = {
+            "jsonrpc": "2.0",
+            "id": "request-1",
+            "result": {
+                "artifactUpdate": {
+                    "taskId": "task-004",
+                    "contextId": "ctx-004",
+                    "artifact": {
+                        "artifactId": "art-004",
+                        "parts": [{"text": "first"}],
+                    },
+                }
+            },
+        }
+        second_payload = {
+            **first_payload,
+            "result": {
+                "artifactUpdate": {
+                    **first_payload["result"]["artifactUpdate"],
+                    "artifact": {
+                        "artifactId": "art-004",
+                        "parts": [{"text": "second"}],
+                    },
+                }
+            },
+        }
+        transport = _make_webhook_transport()
+
+        first_event = transport._artifact_update_event(
+            first_payload,
+            parse_stream_response(first_payload, "msg-004"),
+            _make_tracked_message(),
+        )
+        second_event = transport._artifact_update_event(
+            second_payload,
+            parse_stream_response(second_payload, "msg-004"),
+            _make_tracked_message(),
+        )
+
+        assert first_event.artifact_update_id != second_event.artifact_update_id
 
     def test_completed_task_promotes_agent_status_message_as_public_text(self):
         public_text = "The agent completed the request."

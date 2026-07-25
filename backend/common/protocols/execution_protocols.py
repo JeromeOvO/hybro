@@ -81,6 +81,8 @@ class RoomDistributedLock(Protocol):
 
 @runtime_checkable
 class WebhookReceiver(Protocol):
+    async def authenticate_webhook(self, message_id: str, token: str) -> None: ...
+
     async def handle_webhook(
         self, message_id: str, payload: dict[str, JsonValue], token: str
     ) -> dict[str, JsonValue]: ...

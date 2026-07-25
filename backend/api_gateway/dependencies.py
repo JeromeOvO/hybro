@@ -17,7 +17,6 @@ from agent.protocols import (
 )
 from common.protocols import (
     A2ATaskStatusReader,
-    AgentAvatarManager,
     AgentRegistry,
     APIKeyRateLimiter,
     APIKeyStore,
@@ -45,7 +44,6 @@ class APIGatewayDeps:
     agent_center: AgentCenterCompatibility
     agent_service: AgentRegistry
     capability_issue_service: AgentCapabilityIssueStore
-    agent_avatar_manager: AgentAvatarManager
     agent_liveness_checker: AgentLivenessChecker
     agent_group_store: AgentGroupStoreCompatibility
     api_key_store: APIKeyStore | None
@@ -135,12 +133,6 @@ def get_capability_issue_service(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentCapabilityIssueStore:
     return deps.capability_issue_service
-
-
-def get_agent_avatar_manager(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentAvatarManager:
-    return deps.agent_avatar_manager
 
 
 def get_agent_liveness_checker(

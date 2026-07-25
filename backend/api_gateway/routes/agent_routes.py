@@ -1,6 +1,4 @@
-from uuid import uuid4
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from agent.protocols import (
     AgentCapabilityIssueStore,
@@ -8,7 +6,6 @@ from agent.protocols import (
     AgentLivenessChecker,
 )
 from api_gateway.dependencies import (
-    get_agent_avatar_manager,
     get_agent_center,
     get_agent_liveness_checker,
     get_agent_service,
@@ -21,7 +18,7 @@ from common.auth import (
     get_current_user,
     get_optional_user,
 )
-from common.protocols import AgentAvatarManager, AgentRegistry
+from common.protocols import AgentRegistry
 from models.agent import IssueStatus
 from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
@@ -139,65 +136,6 @@ async def update_agent(
         )
 
     return agent_center_response
-
-
-_AVATAR_ALLOWED_TYPES = frozenset(
-    {"image/jpeg", "image/png", "image/webp", "image/gif"}
-)
-_AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-_AVATAR_EXT_MAP = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-    "image/gif": "gif",
-}
-
-
-@router.post("/agent/{agent_id}/avatar")
-async def upload_agent_avatar(
-    agent_id: str,
-    file: UploadFile,
-    user: ClerkUser = Depends(get_current_user),
-    agent_lookup: AgentRegistry = Depends(get_agent_service),
-    avatar_manager: AgentAvatarManager = Depends(get_agent_avatar_manager),
-):
-    """Upload a custom avatar image for an agent - PROTECTED (requires ownership)
-
-    Accepts multipart/form-data with a single `file` field.
-    Stores the image under the agent-avatars/ S3 prefix (publicly readable)
-    and persists the permanent URL to agent_card.iconUrl in MongoDB.
-
-    Returns: { "iconUrl": "<permanent public URL>" }
-    """
-    existing_agent = await agent_lookup.get_agent(agent_id)
-    if not existing_agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if existing_agent.provider_id != user.user_id:
-        raise HTTPException(
-            status_code=403, detail="You do not have permission to update this agent"
-        )
-
-    if file.content_type not in _AVATAR_ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type: {file.content_type}. Allowed: jpeg, png, webp, gif",
-        )
-
-    content = await file.read()
-    if len(content) > _AVATAR_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Avatar image must be ≤ 5 MB")
-
-    ext = _AVATAR_EXT_MAP[file.content_type]
-    s3_key = f"agent-avatars/{agent_id}/{uuid4().hex}.{ext}"
-
-    icon_url = await avatar_manager.store_avatar(
-        agent_id=agent_id,
-        s3_key=s3_key,
-        content=content,
-        content_type=file.content_type,
-    )
-
-    return {"iconUrl": icon_url}
 
 
 # ============= CAPABILITY ISSUE ENDPOINTS (Auth Required) =============

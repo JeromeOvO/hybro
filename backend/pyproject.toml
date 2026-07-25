@@ -24,9 +24,6 @@ dependencies = [
     "openai>=1.86.0",
     "tiktoken>=0.9.0",
     "mcp>=1.9.4",
-    # AWS
-    "aioboto3>=13.0.0",
-    "botocore>=1.38.36",
     # HTTP clients
     "aiohttp>=3.12.13",
     "httpx>=0.28.1",
@@ -40,6 +37,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "pydantic-settings>=2.9.1",
     "python-dotenv>=1.1.0",
+    "platformdirs>=4.3.8",
     # Utilities
     "cachetools>=5.5.2",
     "loguru>=0.7.3",
@@ -186,6 +184,7 @@ packages = [
     "room",
     "room.compat",
     "room.repository",
+    "room_files",
     "context_memory",
     "context_memory.compat",
     "context_memory.repository",
@@ -195,7 +194,6 @@ packages = [
     "dal.redis",
     "dal.runtime_store",
     "dal.runtime_store.parts",
-    "dal.s3",
     "delivery",
     "delivery.sse",
     "delivery.event_bus",

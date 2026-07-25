@@ -81,6 +81,8 @@ class RoomFacade:
 
     async def get_room(self, room_id: str) -> RoomInfo | None:
         doc = await self._repository.get_by_id(room_id)
+        if doc is not None and doc.get("lifecycle_state", "active") != "active":
+            return None
         return room_info_from_doc(doc) if doc is not None else None
 
     async def get_room_agents(self, room_id: str) -> list[str]:

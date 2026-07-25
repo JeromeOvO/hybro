@@ -6,7 +6,14 @@ import type { AttachmentData } from '@/lib/types/attachments'
 export interface ArtifactPart {
   kind: 'text' | 'file' | 'data'
   text?: string
-  file?: { uri?: string; bytes?: string; mime_type?: string; name?: string }
+  file?: {
+    uri?: string
+    fileId?: string
+    mime_type?: string
+    name?: string
+    sizeBytes?: number
+    sha256?: string
+  }
   data?: Record<string, unknown>
 }
 

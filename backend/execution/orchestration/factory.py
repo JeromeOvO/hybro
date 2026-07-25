@@ -50,7 +50,7 @@ def create_room_message_center(
         "task_notifications": None,
         "task_notification_impl": None,
         "agent_health_service": None,
-        "object_storage": None,
+        "room_files": None,
         "capability_issue_service": None,
         "context_memory_runtime": _defaults.context_memory_runtime,
         "context_compaction": _defaults.context_compaction,
@@ -61,8 +61,6 @@ def create_room_message_center(
         "cloud_health_cache_ttl": 30.0,
         "cloud_health_check_timeout": 5.0,
     }
-    if "s3_service" in kwargs and "object_storage" not in kwargs:
-        kwargs["object_storage"] = kwargs.pop("s3_service")
     deps.update(kwargs)
     if deps.get("event_publisher") is None:
         raise RuntimeError("RoomMessageCenter event_publisher dependency is required")

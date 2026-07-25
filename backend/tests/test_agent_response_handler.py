@@ -96,6 +96,56 @@ def _base_event(**overrides):
     return defaults
 
 
+@pytest.mark.asyncio
+async def test_completed_journal_replay_is_acknowledged_without_repeating_side_effects():
+    db = MagicMock()
+    db.begin_terminal_finalization = AsyncMock(return_value=None)
+    db.terminal_finalization_matches = AsyncMock(return_value=True)
+    db.update_task_state_on_message = AsyncMock(return_value=(False, None))
+    db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    delivery = MagicMock()
+    delivery.send_agent_response = AsyncMock()
+    handler = _make_handler(db=db, sse=delivery)
+
+    await handler.handle(
+        AgentEvent(
+            kind="response",
+            **_base_event(),
+            text="already committed",
+            retry_on_finalization_conflict=True,
+            finalization_recovery_id="journal-1",
+        )
+    )
+
+    db.terminal_finalization_matches.assert_awaited_once_with(
+        "msg-001",
+        "completed",
+        recovery_source="journal",
+        recovery_id="journal-1",
+    )
+    db.update_task_state_on_message.assert_not_awaited()
+    delivery.send_agent_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_journal_finalization_conflict_remains_retryable():
+    db = MagicMock()
+    db.begin_terminal_finalization = AsyncMock(return_value=None)
+    db.terminal_finalization_matches = AsyncMock(return_value=False)
+    handler = _make_handler(db=db)
+
+    with pytest.raises(RuntimeError, match="already in progress"):
+        await handler.handle(
+            AgentEvent(
+                kind="response",
+                **_base_event(),
+                retry_on_finalization_conflict=True,
+                finalization_recovery_id="journal-1",
+            )
+        )
+
+
 def test_processing_status_callback_has_no_required_post_emit_business_side_effects():
     path = (
         Path(__file__).resolve().parents[1]
@@ -148,7 +198,355 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
 
 class TestArtifactUpdateEvent:
     @pytest.mark.asyncio
-    async def test_hub_artifact_update_drops_private_payload_without_public_side_effects_or_mutation(
+    async def test_append_false_replacement_excludes_old_artifact_from_budget(self):
+        existing = [
+            {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "file",
+                        "file": {
+                            "uri": f"/api/v1/files/old-{index}/content",
+                            "name": f"old-{index}.bin",
+                            "mimeType": "application/octet-stream",
+                        },
+                        "metadata": {
+                            "file_id": f"old-{index}",
+                            "size_bytes": 5 * 1024 * 1024,
+                            "sha256": f"old-sha-{index}",
+                        },
+                    }
+                    for index in range(20)
+                ],
+            }
+        ]
+        db = MagicMock()
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        handler = _make_handler(db=db)
+        handler._existing_artifact_journal = AsyncMock(side_effect=[existing, existing])
+        event = AgentEvent(
+            kind="artifact_update",
+            **_base_event(),
+            artifacts=[
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "bmV3",
+                                "name": "new.bin",
+                                "mimeType": "application/octet-stream",
+                            },
+                        }
+                    ],
+                }
+            ],
+            append=False,
+        )
+
+        observed_budget = {}
+
+        async def materialize(parts, *args, **kwargs):
+            del args
+            observed_budget.update(kwargs["budget"])
+            parts[0] = {"kind": "data", "data": {"type": "replacement"}}
+            return 0
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
+                materialize,
+            )
+            mp.setattr(
+                "common.utils.a2a_helpers.delete_superseded_agent_artifacts",
+                AsyncMock(),
+            )
+            await handler._process_artifact(event)
+
+        assert observed_budget["attempted"] == 0
+        assert observed_budget["raw"] == 0
+
+    @pytest.mark.asyncio
+    async def test_terminal_append_false_replacement_uses_retained_budget(self):
+        existing = [
+            {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "file",
+                        "file": {
+                            "uri": f"/api/v1/files/old-{index}/content",
+                            "name": f"old-{index}.bin",
+                            "mimeType": "application/octet-stream",
+                        },
+                        "metadata": {
+                            "file_id": f"old-{index}",
+                            "size_bytes": 5 * 1024 * 1024,
+                            "sha256": f"old-sha-{index}",
+                        },
+                    }
+                    for index in range(20)
+                ],
+            }
+        ]
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(
+                message_content=SimpleNamespace(
+                    message_task=SimpleNamespace(artifacts=existing)
+                )
+            )
+        )
+        handler = _make_handler(db=db)
+        storage = MagicMock()
+        storage.content_url.return_value = "/api/v1/files/new-file/content"
+        storage.store_agent_artifact = AsyncMock(
+            return_value={
+                "file_id": "new-file",
+                "file_name": "new.bin",
+                "mime_type": "application/octet-stream",
+                "size_bytes": 3,
+                "sha256": "new-sha",
+            }
+        )
+
+        from a2a_adapter import artifact_storage
+        from common.utils.a2a_helpers import bind_a2a_artifact_files
+
+        artifact_storage.bind_artifact_files(storage)
+        bind_a2a_artifact_files(artifact_storage)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            artifacts=[
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "bmV3",
+                                "name": "new.bin",
+                                "mimeType": "application/octet-stream",
+                            },
+                        }
+                    ],
+                }
+            ],
+            append=False,
+        )
+
+        _text, artifacts = await handler._project_completed_output(event)
+
+        storage.store_agent_artifact.assert_awaited_once()
+        assert artifacts is not None
+        assert artifacts[0]["parts"][0]["metadata"]["file_id"] == "new-file"
+
+    @pytest.mark.asyncio
+    async def test_append_false_deletes_superseded_agent_file_after_journal_replace(
+        self,
+    ):
+        old_part = {
+            "kind": "file",
+            "file": {
+                "uri": "/api/v1/files/old-file/content",
+                "name": "old.txt",
+                "mimeType": "text/plain",
+            },
+            "metadata": {
+                "file_id": "old-file",
+                "file_name": "old.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 3,
+                "sha256": "old-sha",
+            },
+        }
+        db = MagicMock()
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        handler = _make_handler(db=db)
+        handler._existing_artifact_journal = AsyncMock(
+            side_effect=[
+                [
+                    {
+                        "artifactId": "artifact-1",
+                        "parts": [old_part],
+                    }
+                ],
+                [
+                    {
+                        "artifactId": "artifact-1",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "uri": "/api/v1/files/new-file/content",
+                                    "name": "new.txt",
+                                    "mimeType": "text/plain",
+                                },
+                                "metadata": {
+                                    "file_id": "new-file",
+                                    "file_name": "new.txt",
+                                    "mime_type": "text/plain",
+                                    "size_bytes": 3,
+                                    "sha256": "new-sha",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            ]
+        )
+        event = AgentEvent(
+            kind="artifact_update",
+            **_base_event(),
+            artifacts=[
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "bmV3",
+                                "name": "new.txt",
+                                "mimeType": "text/plain",
+                            },
+                        }
+                    ],
+                }
+            ],
+            append=False,
+        )
+
+        async def materialize(parts, *args, **kwargs):
+            del args, kwargs
+            parts[0] = {
+                "kind": "file",
+                "file": {
+                    "uri": "/api/v1/files/new-file/content",
+                    "name": "new.txt",
+                    "mimeType": "text/plain",
+                },
+                "metadata": {
+                    "file_id": "new-file",
+                    "file_name": "new.txt",
+                    "mime_type": "text/plain",
+                    "size_bytes": 3,
+                    "sha256": "new-sha",
+                },
+            }
+            return 1
+
+        with pytest.MonkeyPatch.context() as mp:
+            cleanup = AsyncMock()
+            mp.setattr(
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
+                materialize,
+            )
+            mp.setattr(
+                "common.utils.a2a_helpers.delete_superseded_agent_artifacts",
+                cleanup,
+            )
+            await handler._process_artifact(event)
+
+        cleanup.assert_awaited_once_with(
+            room_id="room-001",
+            message_id="msg-001",
+            file_ids={"old-file"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_append_false_keeps_file_referenced_by_another_artifact(self):
+        shared_part = {
+            "kind": "file",
+            "file": {
+                "uri": "/api/v1/files/shared-file/content",
+                "name": "shared.txt",
+                "mimeType": "text/plain",
+            },
+            "metadata": {
+                "file_id": "shared-file",
+                "file_name": "shared.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 6,
+                "sha256": "shared-sha",
+            },
+        }
+        existing = [
+            {"artifactId": "artifact-1", "parts": [deepcopy(shared_part)]},
+            {"artifactId": "artifact-2", "parts": [deepcopy(shared_part)]},
+        ]
+        committed = [
+            {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "file",
+                        "file": {
+                            "uri": "/api/v1/files/new-file/content",
+                            "name": "new.txt",
+                            "mimeType": "text/plain",
+                        },
+                        "metadata": {
+                            "file_id": "new-file",
+                            "file_name": "new.txt",
+                            "mime_type": "text/plain",
+                            "size_bytes": 3,
+                            "sha256": "new-sha",
+                        },
+                    }
+                ],
+            },
+            existing[1],
+        ]
+        db = MagicMock()
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        handler = _make_handler(db=db)
+        handler._existing_artifact_journal = AsyncMock(
+            side_effect=[existing, committed]
+        )
+        event = AgentEvent(
+            kind="artifact_update",
+            **_base_event(),
+            artifacts=[
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "bmV3",
+                                "name": "new.txt",
+                                "mimeType": "text/plain",
+                            },
+                        }
+                    ],
+                }
+            ],
+            append=False,
+        )
+
+        async def materialize(parts, *args, **kwargs):
+            del args, kwargs
+            parts[:] = deepcopy(committed[0]["parts"])
+            return 1
+
+        with pytest.MonkeyPatch.context() as mp:
+            cleanup = AsyncMock()
+            mp.setattr(
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
+                materialize,
+            )
+            mp.setattr(
+                "common.utils.a2a_helpers.delete_superseded_agent_artifacts",
+                cleanup,
+            )
+            await handler._process_artifact(event)
+
+        cleanup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_hub_artifact_update_journals_without_public_side_effects(
         self,
     ):
         """Nonterminal artifacts never cross the public response boundary."""
@@ -207,14 +605,14 @@ class TestArtifactUpdateEvent:
         with pytest.MonkeyPatch.context() as mp:
             mock_convert = AsyncMock(return_value=1)
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 mock_convert,
             )
             await h.handle(event)
 
-        mock_convert.assert_not_awaited()
+        mock_convert.assert_awaited_once()
         h._task_writer.update_task_state_on_message.assert_not_awaited()
-        h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
+        h._message_writer.accumulate_artifact_on_message.assert_awaited_once()
         h._delivery.send_artifact_update.assert_not_awaited()
         h._delivery.send_agent_response.assert_not_awaited()
         h._delivery.send_task_update.assert_not_awaited()
@@ -225,6 +623,165 @@ class TestArtifactUpdateEvent:
         assert event.artifacts == original_artifacts
         assert event.append is True
         assert event.last_chunk is True
+
+    @pytest.mark.asyncio
+    async def test_recovery_budget_does_not_charge_existing_durable_files_twice(
+        self,
+    ):
+        parts = [
+            {
+                "kind": "file",
+                "file": {
+                    "uri": f"/api/v1/files/file-{index}/content",
+                    "name": f"{index}.bin",
+                    "mimeType": "application/octet-stream",
+                },
+                "metadata": {
+                    "file_id": f"file-{index}",
+                    "size_bytes": 1,
+                    "sha256": f"sha-{index}",
+                },
+            }
+            for index in range(20)
+        ]
+        existing = [
+            {
+                "artifactId": "artifact-1",
+                "parts": parts,
+            }
+        ]
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(
+                message_content=SimpleNamespace(
+                    message_task=SimpleNamespace(artifacts=existing)
+                )
+            )
+        )
+        handler = _make_handler(db=db)
+        budget = await handler._artifact_budget_from_journal("msg-001")
+        storage = MagicMock()
+        storage.content_url.side_effect = lambda file_id: (
+            f"/api/v1/files/{file_id}/content"
+        )
+
+        async def validate_reference(**kwargs):
+            file_id = kwargs["file_id"]
+            index = file_id.removeprefix("file-")
+            return {
+                "file_id": file_id,
+                "file_name": f"{index}.bin",
+                "mime_type": "application/octet-stream",
+                "size_bytes": 1,
+                "sha256": f"sha-{index}",
+                "status": "ready",
+            }
+
+        storage.validate_agent_reference = AsyncMock(side_effect=validate_reference)
+
+        from a2a_adapter.artifact_storage import (
+            bind_artifact_files,
+            materialize_inline_file_parts,
+        )
+
+        bind_artifact_files(storage)
+        replayed_parts = deepcopy(existing[0]["parts"]) + [
+            {
+                "kind": "file",
+                "file": {
+                    "bytes": "bmV3",
+                    "name": "new.bin",
+                    "mimeType": "application/octet-stream",
+                },
+            }
+        ]
+        await materialize_inline_file_parts(
+            replayed_parts,
+            "room-001",
+            "msg-001",
+            budget=budget,
+            artifact_slot="id:artifact-1",
+        )
+
+        assert all(part["kind"] == "file" for part in replayed_parts[:20])
+        assert replayed_parts[20]["data"]["type"] == "file_unavailable"
+        assert replayed_parts[20]["data"]["reason"] == "size_limit"
+        assert budget["converted"] == 20
+        assert budget["raw"] == 20
+        assert budget["precounted_file_ids"] == {}
+
+    @pytest.mark.asyncio
+    async def test_terminal_top_level_parts_share_durable_journal_budget(self):
+        existing = [
+            {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "file",
+                        "file": {
+                            "uri": f"/api/v1/files/file-{index}/content",
+                            "name": f"{index}.bin",
+                            "mimeType": "application/octet-stream",
+                        },
+                        "metadata": {
+                            "file_id": f"file-{index}",
+                            "size_bytes": 1,
+                            "sha256": f"sha-{index}",
+                        },
+                    }
+                    for index in range(20)
+                ],
+            }
+        ]
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(
+                message_content=SimpleNamespace(
+                    message_task=SimpleNamespace(artifacts=existing)
+                )
+            )
+        )
+        handler = _make_handler(db=db)
+        storage = MagicMock()
+        storage.content_url.side_effect = lambda file_id: (
+            f"/api/v1/files/{file_id}/content"
+        )
+        storage.store_agent_artifact = AsyncMock(
+            return_value={
+                "file_id": "new-file",
+                "file_name": "new.bin",
+                "mime_type": "application/octet-stream",
+                "size_bytes": 3,
+                "sha256": "new-sha",
+            }
+        )
+
+        from a2a_adapter import artifact_storage
+        from common.utils.a2a_helpers import bind_a2a_artifact_files
+
+        artifact_storage.bind_artifact_files(storage)
+        bind_a2a_artifact_files(artifact_storage)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            parts=[
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": "bmV3",
+                        "name": "new.bin",
+                        "mimeType": "application/octet-stream",
+                    },
+                }
+            ],
+        )
+
+        _text, artifacts = await handler._project_completed_output(event)
+
+        storage.store_agent_artifact.assert_not_awaited()
+        assert artifacts is not None
+        assert artifacts[-1]["parts"][0]["kind"] == "data"
+        assert artifacts[-1]["parts"][0]["data"]["reason"] == "size_limit"
 
     @pytest.mark.asyncio
     async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(
@@ -245,7 +802,7 @@ class TestArtifactUpdateEvent:
         h._delivery.send_artifact_update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_file_artifact_update_is_dropped_without_s3_conversion(self):
+    async def test_file_artifact_update_materialization_failure_is_not_public(self):
         h = _make_handler()
         artifact = {
             "artifactId": "a1",
@@ -263,14 +820,14 @@ class TestArtifactUpdateEvent:
         )
 
         with pytest.MonkeyPatch.context() as mp:
-            mock_convert = AsyncMock(side_effect=RuntimeError("S3 unavailable"))
+            mock_convert = AsyncMock(side_effect=RuntimeError("files unavailable"))
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 mock_convert,
             )
             await h.handle(event)
 
-        mock_convert.assert_not_awaited()
+        mock_convert.assert_awaited_once()
         h._message_writer.accumulate_artifact_on_message.assert_not_awaited()
         h._delivery.send_artifact_update.assert_not_awaited()
 
@@ -281,6 +838,29 @@ class TestArtifactUpdateEvent:
 
 
 class TestResponseEvent:
+    @pytest.mark.asyncio
+    async def test_completed_response_does_not_replace_artifacts_when_journal_read_fails(
+        self,
+    ):
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            side_effect=RuntimeError("temporary Mongo read failure")
+        )
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        handler = _make_handler(db=db)
+
+        with pytest.raises(RuntimeError, match="temporary Mongo read failure"):
+            await handler.handle(
+                AgentEvent(
+                    kind="response",
+                    **_base_event(),
+                    text="Visible final answer",
+                )
+            )
+
+        db.update_task_state_on_message.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_persists_completed_and_resumes(self):
         h = _make_handler()
@@ -408,7 +988,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 AsyncMock(side_effect=RuntimeError("S3 unavailable")),
             )
             mp.setattr(
@@ -460,7 +1040,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 AsyncMock(side_effect=RuntimeError("S3 unavailable")),
             )
             mp.setattr(
@@ -498,7 +1078,7 @@ class TestResponseEvent:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 AsyncMock(side_effect=RuntimeError("S3 unavailable")),
             )
             mp.setattr(
@@ -1819,7 +2399,7 @@ class TestHandlerNotifyTaskUpdate:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                "common.utils.a2a_helpers.materialize_inline_file_parts",
                 AsyncMock(side_effect=RuntimeError("S3 unavailable")),
             )
             await h.handle(event)
@@ -1921,7 +2501,7 @@ class TestHandlerNotifyTaskUpdate:
 
         await h.handle(event)
 
-        mock_impl.assert_not_awaited()
+        mock_impl.assert_awaited_once()
         service.ingest_agent_result.assert_awaited_once_with(
             AgentResultRead(
                 agent_message_id="msg-001",

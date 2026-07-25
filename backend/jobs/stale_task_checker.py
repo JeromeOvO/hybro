@@ -28,11 +28,13 @@ from common.a2a_constants import (
 from common.config import settings
 from common.types import Task
 from common.utils.a2a_helpers import (
-    convert_pydantic_artifacts_to_s3,
+    artifacts_to_dicts,
     extract_text_from_artifacts,
+    materialize_artifacts,
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.run_store import OrchestrationStoreConflict
 from execution.task_tracking import public_persisted_task_data
 from jobs.constants import STALE_TASK_CHECKER
@@ -109,14 +111,14 @@ class StaleTaskCheckerDeps:
     a2a_service: Any
 
 
-async def _best_effort_convert_pydantic_artifacts_to_s3(
+async def _best_effort_materialize_artifacts(
     artifacts: list,
     *,
     room_id: str,
     message_id: str,
 ) -> None:
     try:
-        await convert_pydantic_artifacts_to_s3(
+        await materialize_artifacts(
             artifacts,
             room_id=room_id,
             message_id=message_id,
@@ -180,6 +182,9 @@ class StaleTaskChecker:
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
+        self._terminal_event_handler: Callable[[AgentEvent], Awaitable[None]] | None = (
+            None
+        )
 
     def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a leader gate instance for distributed leader gating."""
@@ -202,6 +207,11 @@ class StaleTaskChecker:
 
     def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
         self._runtime_deps = deps
+
+    def set_terminal_event_handler(
+        self, handler: Callable[[AgentEvent], Awaitable[None]]
+    ) -> None:
+        self._terminal_event_handler = handler
 
     def _deps(self) -> StaleTaskCheckerDeps:
         if self._runtime_deps is not None:
@@ -461,6 +471,42 @@ class StaleTaskChecker:
         if not task:
             return
 
+        finalization = msg.terminal_finalization or {}
+        if (
+            finalization.get("state") == "finalizing"
+            and finalization.get("recovery_source") == "journal"
+        ):
+            return
+        if (
+            finalization.get("state") == "finalizing"
+            and self._terminal_event_handler is not None
+        ):
+            target_state = str(finalization.get("target_state") or "failed")
+            kind = (
+                "response"
+                if target_state == "completed"
+                else "canceled"
+                if target_state == "canceled"
+                else "error"
+            )
+            await self._terminal_event_handler(
+                AgentEvent(
+                    kind=kind,
+                    message_id=message_id,
+                    room_id=msg.room_id,
+                    agent_id=msg.agent_id or "",
+                    user_id=msg.user_id,
+                    related_message_id=msg.related_message_id,
+                    turn_id=msg.turn_id,
+                    state=target_state,
+                    text=msg.message_content.message_text or "",
+                    artifacts=(
+                        artifacts_to_dicts(task.artifacts) if task.artifacts else None
+                    ),
+                )
+            )
+            return
+
         agent_task_id = task.id
         created_at = (
             ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
@@ -527,7 +573,7 @@ class StaleTaskChecker:
                 return
 
             if current_task.artifacts:
-                await _best_effort_convert_pydantic_artifacts_to_s3(
+                await _best_effort_materialize_artifacts(
                     current_task.artifacts,
                     room_id=msg.room_id,
                     message_id=message_id,
@@ -552,6 +598,42 @@ class StaleTaskChecker:
                 task_text = (
                     extract_text_from_artifacts(projected_task.artifacts) or None
                 )
+            if is_terminal_state(current_task.status.state) and (
+                self._terminal_event_handler is not None
+            ):
+                terminal_state = current_task.status.state
+                re_cancelled = await self._store.is_message_cancelled(message_id)
+                if not re_cancelled and msg.related_message_id:
+                    re_cancelled = await self._store.is_message_cancelled(
+                        msg.related_message_id
+                    )
+                if re_cancelled or terminal_state == CommonTaskState.CANCELED:
+                    kind = "canceled"
+                elif terminal_state == CommonTaskState.COMPLETED:
+                    kind = "response"
+                else:
+                    kind = "error"
+                await self._terminal_event_handler(
+                    AgentEvent(
+                        kind=kind,
+                        message_id=message_id,
+                        room_id=msg.room_id,
+                        agent_id=msg.agent_id or "",
+                        related_message_id=msg.related_message_id,
+                        user_id=msg.user_id,
+                        client_request_id=msg.client_request_id,
+                        task_id=current_task.id,
+                        context_id=current_task.context_id,
+                        state=getattr(terminal_state, "value", str(terminal_state)),
+                        text=task_text or "",
+                        artifacts=[
+                            artifact.model_dump(mode="json", exclude_none=True)
+                            for artifact in (current_task.artifacts or [])
+                        ]
+                        or None,
+                    )
+                )
+                return
             await self._store.update_task_on_message(
                 message_id,
                 projected_task_data,

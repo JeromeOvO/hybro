@@ -21,7 +21,7 @@ const ACCEPTED_MIME_SET = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ])
 const ACCEPTED_TYPES = [...ACCEPTED_MIME_SET].join(',')
-const MAX_FILE_SIZE = 50 * 1024 * 1024
+const MAX_FILE_SIZE = 5 * 1024 * 1024
 const MAX_ATTACHMENTS = 10
 
 export { ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS }

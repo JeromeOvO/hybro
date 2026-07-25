@@ -2,14 +2,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.config.settings import settings
-from common.dto import LLMResponse, LLMStructuredResponse
 from common.utils.time import utcnow
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from llm_gateway.errors import LLMModelRoutingError, LLMServiceNotBoundError
-from llm_gateway.gateway import LLMGatewayImpl
-from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.services import SupervisorLLMService
 from models.supervisor import (
     ActionType,
     RoomConfig,
@@ -18,50 +13,6 @@ from models.supervisor import (
     SupervisorTrajectory,
     TrajectoryEntry,
 )
-
-
-class FakeGatewayProvider:
-    def __init__(self, structured_data=None) -> None:
-        self.generate_calls = []
-        self.structured_calls = []
-        self.stream_calls = []
-        self.structured_data = structured_data or {
-            "action": "done",
-            "reasoning": "provider response",
-        }
-
-    async def generate(self, messages, model: str, **kwargs):
-        self.generate_calls.append({"messages": messages, "model": model, **kwargs})
-        return LLMResponse(content="text", model=model)
-
-    async def generate_structured(
-        self,
-        messages,
-        model: str,
-        schema=None,
-        json_mode: bool = False,
-        **kwargs,
-    ):
-        self.structured_calls.append(
-            {
-                "messages": messages,
-                "model": model,
-                "schema": schema,
-                "json_mode": json_mode,
-                **kwargs,
-            }
-        )
-        return LLMStructuredResponse(data=self.structured_data, model=model)
-
-    async def generate_stream(self, messages, model: str, **kwargs):
-        self.stream_calls.append({"messages": messages, "model": model, **kwargs})
-        yield "focused stream"
-
-    async def embed(self, text: str, model: str):
-        return [1.0]
-
-    async def embed_batch(self, texts, model: str):
-        return [[1.0] for _ in texts]
 
 
 @pytest.mark.asyncio
@@ -195,45 +146,3 @@ async def test_supervisor_service_delegates_text_stream_to_focused_service():
         system_prompt="system",
         user_prompt="user",
     )
-
-
-@pytest.mark.asyncio
-async def test_focused_supervisor_routes_to_bedrock_provider_when_flag_enabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(settings, "use_bedrock_supervisor", True)
-    monkeypatch.setattr(
-        settings,
-        "bedrock_supervisor_model",
-        "anthropic.claude-opus-test",
-    )
-    openai_provider = FakeGatewayProvider()
-    bedrock_provider = FakeGatewayProvider(
-        structured_data={
-            "action": "done",
-            "reasoning": "Bedrock provider response",
-        }
-    )
-    gateway = LLMGatewayImpl(
-        model_registry=ModelRegistryImpl(),
-        providers={
-            "openai": openai_provider,
-            "bedrock": bedrock_provider,
-            "gemini": FakeGatewayProvider(),
-        },
-    )
-    service = RoomSupervisorService(
-        supervisor_service=SupervisorLLMService(gateway),
-    )
-
-    result = await service._call_supervisor_llm(
-        system_prompt="Test system",
-        user_prompt="Test user",
-    )
-
-    assert result["reasoning"] == "Bedrock provider response"
-    assert bedrock_provider.structured_calls[0]["model"] == (
-        "anthropic.claude-opus-test"
-    )
-    assert bedrock_provider.structured_calls[0]["json_mode"] is True
-    assert openai_provider.structured_calls == []

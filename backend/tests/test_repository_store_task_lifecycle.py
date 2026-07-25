@@ -127,6 +127,43 @@ def _assert_terminal_state_filter(query: dict) -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_finalization_matches_exact_completed_journal_recovery():
+    collection = RecordingCollection([{"message_id": "msg-1"}])
+    store = _store(collection)
+
+    assert await store.terminal_finalization_matches(
+        "msg-1",
+        "completed",
+        recovery_source="journal",
+        recovery_id="journal-1",
+    )
+    assert collection.find_one_calls == [
+        {
+            "message_id": "msg-1",
+            "message_content.message_task.status.state": "completed",
+            "terminal_finalization.state": "terminal",
+            "terminal_finalization.target_state": "completed",
+            "terminal_finalization.recovery_source": "journal",
+            "terminal_finalization.recovery_id": "journal-1",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_finalization_without_recovery_id_never_matches():
+    collection = RecordingCollection()
+    store = _store(collection)
+
+    assert not await store.terminal_finalization_matches(
+        "msg-1",
+        "completed",
+        recovery_source="journal",
+        recovery_id=None,
+    )
+    assert collection.find_one_calls == []
+
+
+@pytest.mark.asyncio
 async def test_check_task_limits_honors_compatibility_store_overrides():
     class CountingMessageRepository:
         async def count_agent_messages(self, query: dict) -> int:

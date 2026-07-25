@@ -16,19 +16,18 @@ from common.types import AgentCard
 # Two distinct sets exist because the semantics differ:
 #
 #   AGENT_CARD_HUB_NO_OVERWRITE — used when syncing data from a hub.
-#     Hub agents own their `url` (it is their real endpoint) so only the
-#     Hybro-managed avatar field is protected.
+#     Hub agents own their complete card, including iconUrl.
 #
 #   AGENT_CARD_HEALTH_NO_SYNC — used when syncing from a live health-check.
 #     The registered `url` is Hybro's source of truth (the live card may
-#     advertise a different address), so both fields are protected.
+#     advertise a different address), so only url is protected.
 # ---------------------------------------------------------------------------
 
-# Fields Hybro manages for hub-sourced agents; all others come from the hub.
-AGENT_CARD_HUB_NO_OVERWRITE: frozenset[str] = frozenset({"iconUrl"})
+# Hub-sourced card fields are authoritative.
+AGENT_CARD_HUB_NO_OVERWRITE: frozenset[str] = frozenset()
 
 # Fields Hybro manages for health-check syncs; all others come from the live card.
-AGENT_CARD_HEALTH_NO_SYNC: frozenset[str] = frozenset({"url", "iconUrl"})
+AGENT_CARD_HEALTH_NO_SYNC: frozenset[str] = frozenset({"url"})
 
 
 def coerce_legacy_agent_card(value: Any) -> Any:

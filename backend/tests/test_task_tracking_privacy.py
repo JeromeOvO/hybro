@@ -229,7 +229,11 @@ def test_completed_projection_sanitizes_artifact_metadata_but_preserves_delivery
                                 name="result.csv",
                             ),
                             metadata={
-                                "s3_key": "artifacts/room/msg/result.csv",
+                                "file_id": "a" * 32,
+                                "file_name": "result.csv",
+                                "mime_type": "text/csv",
+                                "size_bytes": 12,
+                                "sha256": "hash",
                                 "private": private_sentinel,
                             },
                         )
@@ -245,11 +249,16 @@ def test_completed_projection_sanitizes_artifact_metadata_but_preserves_delivery
     part_root = part.get("root", part)
 
     assert persisted["artifacts"][0]["metadata"] is None
-    assert part_root["file"]["uri"] == "https://storage.example/result.csv"
-    assert part_root["file"]["mimeType"] == "text/csv"
-    assert part_root["file"]["name"] == "result.csv"
-    assert part_root["metadata"] == {"s3_key": "artifacts/room/msg/result.csv"}
+    assert "file" not in part_root
+    assert part_root["metadata"] == {
+        "file_id": "a" * 32,
+        "file_name": "result.csv",
+        "mime_type": "text/csv",
+        "size_bytes": 12,
+        "sha256": "hash",
+    }
     assert private_sentinel not in json.dumps(persisted)
+    Task.model_validate(persisted)
 
 
 def test_completed_projection_drops_unaddressable_inline_file_part():

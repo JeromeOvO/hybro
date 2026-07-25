@@ -63,10 +63,24 @@ class TextPart(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-class FilePart(BaseModel):
+class RoomArtifactPart(BaseModel):
+    """Application file projection; wire content is optional after materialization."""
+
     kind: Literal["file"] = "file"
-    file: FileContent
+    file: FileContent | None = None
     metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def check_reference(self) -> Self:
+        file_id = self.metadata.get("file_id") if self.metadata else None
+        if self.file is None and not file_id:
+            raise ValueError("A file part requires wire content or metadata.file_id")
+        return self
+
+
+# Compatibility name for transport-facing code. Persisted projections use the
+# metadata-only shape accepted by RoomArtifactPart.
+FilePart = RoomArtifactPart
 
 
 class DataPart(BaseModel):
@@ -88,7 +102,10 @@ class TaskState(str, Enum):
     expired = "expired"
 
 
-PartUnion = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
+PartUnion = Annotated[
+    TextPart | RoomArtifactPart | DataPart,
+    Field(discriminator="kind"),
+]
 
 
 class Part(RootModel[PartUnion]):

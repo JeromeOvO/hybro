@@ -314,10 +314,10 @@ def test_artifact_factory_materializes_non_text_parts_on_task():
 
 
 @pytest.mark.asyncio
-async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
+async def test_pydantic_artifact_files_persist_internal_mime_type():
     from a2a_adapter.artifact_storage import (
-        bind_a2a_storage_dependencies,
-        convert_pydantic_artifacts_to_s3,
+        bind_artifact_files,
+        materialize_artifacts,
     )
     from common.types import Artifact, FileContent, FilePart, Part
 
@@ -325,14 +325,18 @@ async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
         def __init__(self):
             self.uploads = []
 
-        async def upload_file(self, **kwargs):
+        async def store_agent_artifact(self, **kwargs):
             self.uploads.append(kwargs)
-
-        async def generate_presigned_url(self, s3_key, filename=None):
-            return f"https://files.example/{s3_key}"
+            return {
+                "file_id": "a" * 32,
+                "file_name": kwargs["file_name"],
+                "mime_type": kwargs["mime_type"],
+                "size_bytes": len(kwargs["content"]),
+                "sha256": "hash",
+            }
 
     storage = _Storage()
-    bind_a2a_storage_dependencies(storage_service=storage)
+    bind_artifact_files(storage)
     artifact = Artifact(
         artifact_id="art-1",
         parts=[
@@ -348,16 +352,71 @@ async def test_pydantic_artifact_storage_reads_internal_mime_type_attribute():
         ],
     )
 
-    converted = await convert_pydantic_artifacts_to_s3(
+    converted = await materialize_artifacts(
         [artifact],
         room_id="room-1",
         message_id="msg-1",
     )
 
     assert converted == 1
-    assert storage.uploads[0]["content_type"] == "image/png"
+    assert storage.uploads[0]["mime_type"] == "image/png"
     assert type(artifact.parts[0].root.file).__module__ == "common.types"
     assert artifact.parts[0].root.file.mime_type == "image/png"
+    assert artifact.parts[0].root.metadata["file_id"] == "a" * 32
+
+
+@pytest.mark.asyncio
+async def test_artifact_materialization_enforces_raw_budget_across_artifacts(
+    monkeypatch,
+):
+    import a2a_adapter.artifact_storage as storage_module
+    from common.types import Artifact, FileContent, FilePart, Part
+
+    class _Storage:
+        def __init__(self):
+            self.uploads = []
+
+        async def store_agent_artifact(self, **kwargs):
+            self.uploads.append(kwargs)
+            return {
+                "file_id": "a" * 32,
+                "file_name": kwargs["file_name"],
+                "mime_type": kwargs["mime_type"],
+                "size_bytes": len(kwargs["content"]),
+                "sha256": "hash",
+            }
+
+    storage = _Storage()
+    storage_module.bind_artifact_files(storage)
+    monkeypatch.setattr(storage_module, "MAX_TOTAL_RAW_BYTES", 5)
+    artifacts = [
+        Artifact(
+            artifact_id=f"artifact-{index}",
+            parts=[
+                Part(
+                    root=FilePart(
+                        file=FileContent(
+                            bytes="dGVzdA==",
+                            mimeType="text/plain",
+                            name=f"file-{index}.txt",
+                        )
+                    )
+                )
+            ],
+        )
+        for index in range(2)
+    ]
+
+    converted = await storage_module.materialize_artifacts(
+        artifacts,
+        room_id="room-1",
+        message_id="msg-1",
+    )
+
+    assert converted == 1
+    assert len(storage.uploads) == 1
+    assert artifacts[1].parts[0].root.kind == "data"
+    assert artifacts[1].parts[0].root.data["reason"] == "size_limit"
 
 
 def test_to_sdk_message_preserves_inline_file_bytes():
@@ -1048,7 +1107,6 @@ async def test_stream_with_docker_host_url_fallback_does_not_retry_after_yield()
     assert attempted_urls == ["http://127.0.0.1:9060/a2a"]
 
 
-@pytest.mark.asyncio
 def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     monkeypatch,
 ):
@@ -1063,12 +1121,6 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
         "gemini_embedding_model_name",
         "gemini-embed",
     )
-    monkeypatch.setattr(
-        registry_module.settings,
-        "bedrock_supervisor_model",
-        "bedrock-supervisor",
-    )
-
     registry = registry_module.ModelRegistryImpl()
 
     assert registry.get_model("lead_ai_model").model_id == "gpt-lead"
@@ -1079,7 +1131,7 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
         "embedding_model",
         "gemini_embedding_model_name",
     ]
-    assert len(registry.list_models()) == 8
+    assert len(registry.list_models()) == 7
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
     assert (
         registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
@@ -1323,171 +1375,6 @@ async def test_gemini_provider_prefers_async_sdk_embeddings_when_available():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_provider_generates_text_and_structured_json():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession(
-        {
-            "content": [{"text": '{"ok": true}'}],
-            "usage": {
-                "input_tokens": 5,
-                "output_tokens": 6,
-            },
-        }
-    )
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    text = await provider.generate([{"role": "user", "content": "hello"}], "bedrock")
-    structured = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "bedrock",
-    )
-
-    assert text.content == '{"ok": true}'
-    assert structured.data == {"ok": True}
-    assert text.usage == LLMUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11)
-    with pytest.raises(NotImplementedError):
-        await provider.embed("hello", "bedrock")
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_uses_content_blocks_and_merges_consecutive_roles():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession({"content": [{"text": "ok"}]})
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    await provider.generate(
-        [
-            {"role": "system", "content": "system"},
-            {"role": "user", "content": "one"},
-            {"role": "user", "content": "two"},
-            {"role": "assistant", "content": "three"},
-            {"role": "assistant", "content": "four"},
-        ],
-        "bedrock",
-    )
-
-    body = json.loads(session.client_instance.calls[0]["body"])
-    assert body["system"] == "system"
-    assert body["messages"] == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "one"},
-                {"type": "text", "text": "two"},
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "three"},
-                {"type": "text", "text": "four"},
-            ],
-        },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_uses_claude_messages_api_parameters():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession({"content": [{"text": '{"ok": true}'}]})
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    await provider.generate(
-        [
-            {"role": "system", "content": "System instructions"},
-            {"role": "user", "content": "User question"},
-        ],
-        "anthropic.claude-opus",
-    )
-
-    call = session.client_instance.calls[0]
-    body = json.loads(call["body"])
-    assert call["modelId"] == "anthropic.claude-opus"
-    assert call["contentType"] == "application/json"
-    assert call["accept"] == "application/json"
-    assert body["anthropic_version"] == "bedrock-2023-05-31"
-    assert body["max_tokens"] == 4096
-    assert body["temperature"] == 1.0
-    assert body["system"] == "System instructions"
-    assert body["messages"] == [
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": "User question"}],
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_extracts_first_balanced_json_object():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession(
-        {
-            "content": [
-                {
-                    "text": 'preface {"outer": {"inner": true}} trailing {"ignored": true}'
-                }
-            ],
-        }
-    )
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    response = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "bedrock",
-    )
-
-    assert response.data == {"outer": {"inner": True}}
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_extracts_json_from_code_fence():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession(
-        {"content": [{"text": '```json\n{"ok": true}\n```\nignored'}]}
-    )
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    response = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "bedrock",
-    )
-
-    assert response.data == {"ok": True}
-
-
-@pytest.mark.asyncio
-async def test_bedrock_provider_stream_error_event_raises():
-    from llm_gateway.providers.bedrock_provider import BedrockProvider
-
-    session = _FakeBedrockSession(
-        {"content": [{"text": "unused"}]},
-        stream_events=[
-            {
-                "modelStreamErrorException": {
-                    "message": "stream failed",
-                }
-            }
-        ],
-    )
-    provider = BedrockProvider(session=session, region="us-west-2")
-
-    with pytest.raises(ValueError, match="modelStreamErrorException"):
-        async for _ in provider.generate_stream(
-            [{"role": "user", "content": "hello"}],
-            "bedrock",
-        ):
-            pass
-
-
-@pytest.mark.asyncio
 async def test_llm_gateway_routes_generation_structured_and_embeddings():
     from llm_gateway.gateway import LLMGatewayImpl
 
@@ -1682,55 +1569,3 @@ class _FakeModelRegistry:
         if capability is None:
             return models
         return [model for model in models if capability in model.capabilities]
-
-
-class _FakeBedrockBody:
-    def __init__(self, payload):
-        self.payload = payload
-
-    async def read(self):
-        return json.dumps(self.payload).encode()
-
-
-class _FakeBedrockClient:
-    def __init__(self, payload, stream_events=None):
-        self.payload = payload
-        self.stream_events = stream_events or []
-        self.calls = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-    async def invoke_model(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"body": _FakeBedrockBody(self.payload)}
-
-    async def invoke_model_with_response_stream(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"body": _FakeBedrockStream(self.stream_events)}
-
-
-class _FakeBedrockSession:
-    def __init__(self, payload, stream_events=None):
-        self.client_instance = _FakeBedrockClient(payload, stream_events)
-
-    def client(self, service_name, region_name=None):
-        assert service_name == "bedrock-runtime"
-        assert region_name == "us-west-2"
-        return self.client_instance
-
-
-class _FakeBedrockStream:
-    def __init__(self, events):
-        self.events = events
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self.events:
-            raise StopAsyncIteration
-        return self.events.pop(0)

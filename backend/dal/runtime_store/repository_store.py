@@ -879,14 +879,30 @@ class RuntimeRepositoryStore:
             context_id=context_id,
         )
 
+    async def terminal_finalization_matches(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        recovery_source: str,
+        recovery_id: str | None,
+    ) -> bool:
+        return await self._message_delegate().terminal_finalization_matches(
+            message_id,
+            state,
+            recovery_source=recovery_source,
+            recovery_id=recovery_id,
+        )
+
     async def accumulate_artifact_on_message(
         self,
         message_id: str,
         artifact: dict,
         append: bool = False,
+        update_key: str | None = None,
     ) -> bool:
         return await self._message_delegate().accumulate_artifact_on_message(
-            message_id, artifact, append
+            message_id, artifact, append, update_key
         )
 
     async def update_task_state_on_message_if_not_terminal(

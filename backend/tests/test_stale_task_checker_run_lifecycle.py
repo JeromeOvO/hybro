@@ -20,6 +20,78 @@ from models.room import MessageContent, RoomAgentMessage
 
 
 @pytest.mark.asyncio
+async def test_journal_finalization_is_never_taken_over_by_stale_poller():
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-message-1",
+        user_id="user-1",
+        agent_id="agent-1",
+        agent_url="https://agent.example",
+        has_task_tracking=True,
+        terminal_finalization={
+            "state": "finalizing",
+            "recovery_source": "journal",
+            "recovery_id": "journal-1",
+        },
+        message_content=MessageContent(
+            message_task=Task(
+                id="remote-task",
+                context_id="remote-context",
+                status=TaskStatus(state=TaskState.working),
+            )
+        ),
+    )
+    handler = AsyncMock()
+    checker = StaleTaskChecker()
+    checker.set_terminal_event_handler(handler)
+    checker._get_task_from_agent = AsyncMock()
+
+    await checker._process_stale_task(msg)
+
+    checker._get_task_from_agent.assert_not_awaited()
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_message_finalization_with_agent_url_resumes_persisted_projection():
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-message-1",
+        user_id="user-1",
+        agent_id="agent-1",
+        agent_url="https://agent.example",
+        has_task_tracking=True,
+        terminal_finalization={
+            "state": "finalizing",
+            "target_state": "completed",
+            "recovery_source": "message",
+        },
+        message_content=MessageContent(
+            message_text="persisted result",
+            message_task=Task(
+                id="remote-task",
+                context_id="remote-context",
+                status=TaskStatus(state=TaskState.working),
+                artifacts=[],
+            ),
+        ),
+    )
+    handler = AsyncMock()
+    checker = StaleTaskChecker()
+    checker.set_terminal_event_handler(handler)
+    checker._get_task_from_agent = AsyncMock()
+
+    await checker._process_stale_task(msg)
+
+    checker._get_task_from_agent.assert_not_awaited()
+    event = handler.await_args.args[0]
+    assert event.kind == "response"
+    assert event.message_id == "agent-message-1"
+    assert event.text == "persisted result"
+    assert event.state == "completed"
+
+
+@pytest.mark.asyncio
 async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(
     monkeypatch,
 ):
@@ -222,9 +294,16 @@ async def test_stale_recovery_persists_public_projection_without_inline_file_byt
 
     async def convert_artifacts_side_effect(artifacts, **_kwargs):
         artifacts[0].parts[1].root.file.uri = "https://storage.example/secret.txt"
+        artifacts[0].parts[1].root.metadata = {
+            "file_id": "a" * 32,
+            "file_name": "secret.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 1,
+            "sha256": "hash",
+        }
 
     with patch(
-        "jobs.stale_task_checker.convert_pydantic_artifacts_to_s3",
+        "jobs.stale_task_checker.materialize_artifacts",
         new=AsyncMock(side_effect=convert_artifacts_side_effect),
     ) as convert_artifacts:
         await checker._process_stale_task(msg)
@@ -237,10 +316,13 @@ async def test_stale_recovery_persists_public_projection_without_inline_file_byt
     assert persisted["metadata"] is None
     file_part = persisted["artifacts"][0]["parts"][1]
     file_root = file_part.get("root", file_part)
-    assert file_root["file"] == {
-        "uri": "https://storage.example/secret.txt",
-        "mimeType": "text/plain",
-        "name": "secret.txt",
+    assert "file" not in file_root
+    assert file_root["metadata"] == {
+        "file_id": "a" * 32,
+        "file_name": "secret.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 1,
+        "sha256": "hash",
     }
     assert private_sentinel not in json.dumps(persisted)
 
@@ -306,7 +388,7 @@ async def test_stale_recovery_drops_inline_file_when_s3_conversion_fails():
     checker._get_task_from_agent = AsyncMock(return_value=current_task)
 
     with patch(
-        "jobs.stale_task_checker.convert_pydantic_artifacts_to_s3",
+        "jobs.stale_task_checker.materialize_artifacts",
         new=AsyncMock(side_effect=RuntimeError("storage unavailable")),
     ):
         await checker._process_stale_task(msg)

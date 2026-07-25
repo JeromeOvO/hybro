@@ -7,9 +7,9 @@ from common.protocols import LLMProviderAdapter
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedError
 from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.providers import BedrockProvider, GeminiProvider, OpenAIProvider
+from llm_gateway.providers import GeminiProvider, OpenAIProvider
 
-ProviderHint = Literal["openai", "gemini", "bedrock"]
+ProviderHint = Literal["openai", "gemini"]
 T = TypeVar("T")
 
 
@@ -26,7 +26,6 @@ class LLMGatewayImpl:
             providers = {
                 "openai": OpenAIProvider(),
                 "gemini": GeminiProvider(),
-                "bedrock": BedrockProvider(),
             }
         self._providers: dict[str, LLMProviderAdapter] = providers
 

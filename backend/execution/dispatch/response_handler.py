@@ -1,13 +1,16 @@
 """AgentResponseHandler — single source of truth for processing agent results.
 
 Terminal events delegate to ``notify_task_update`` for SSE emission.
-Nonterminal ``artifact_update`` events are dropped before persistence, S3
+Nonterminal ``artifact_update`` events are folded before durable file
 conversion, mutation, or public delivery.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import inspect
+import json
 from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
@@ -37,6 +40,7 @@ class ResponseMessageWriter(Protocol):
         artifact: dict,
         *,
         append: bool = False,
+        update_key: str | None = None,
     ) -> bool: ...
 
 
@@ -155,6 +159,103 @@ def _materialized_text_artifact(message_id: str, text: str) -> dict:
     }
 
 
+def _artifact_identity(artifact: dict, position: int) -> str:
+    artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
+    if artifact_id:
+        return str(artifact_id)
+    explicit_index = artifact.get("index")
+    if explicit_index is not None:
+        return f"index:{explicit_index}"
+    return f"slot:{position}"
+
+
+def _with_durable_artifact_identity(artifact: dict, position: int) -> dict:
+    if artifact.get("artifactId") or artifact.get("artifact_id"):
+        return artifact
+    return {**artifact, "artifactId": _artifact_identity(artifact, position)}
+
+
+def _artifact_file_ids(artifact: dict) -> set[str]:
+    file_ids: set[str] = set()
+    for part in artifact.get("parts") or []:
+        payload = _part_payload(part)
+        metadata = payload.get("metadata") if isinstance(payload, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        file_id = metadata.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            file_ids.add(file_id)
+    return file_ids
+
+
+def _superseded_artifact_file_ids(
+    existing_artifacts: list[dict],
+    artifact: dict,
+    position: int,
+    *,
+    append: bool,
+) -> set[str]:
+    if append:
+        return set()
+    identity = _artifact_identity(artifact, position)
+    for existing_position, existing in enumerate(existing_artifacts):
+        if _artifact_identity(existing, existing_position) == identity:
+            return _artifact_file_ids(existing)
+    return set()
+
+
+def _retained_artifacts_for_update(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    append: bool,
+) -> list[dict]:
+    if append:
+        return existing
+    replaced_identities = {
+        _artifact_identity(artifact, position)
+        for position, artifact in enumerate(incoming)
+    }
+    return [
+        artifact
+        for position, artifact in enumerate(existing)
+        if _artifact_identity(artifact, position) not in replaced_identities
+    ]
+
+
+def _merge_artifact_journal(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    append: bool,
+) -> list[dict]:
+    merged = [dict(artifact) for artifact in existing]
+    positions = {
+        _artifact_identity(artifact, position): position
+        for position, artifact in enumerate(merged)
+    }
+    for incoming_position, raw_artifact in enumerate(incoming):
+        artifact = _with_durable_artifact_identity(raw_artifact, incoming_position)
+        identity = _artifact_identity(artifact, incoming_position)
+        existing_position = positions.get(identity)
+        if existing_position is None:
+            positions[identity] = len(merged)
+            merged.append(artifact)
+            continue
+        if append:
+            current = merged[existing_position]
+            new_parts = list(artifact.get("parts") or [])
+            current_parts = list(current.get("parts") or [])
+            if new_parts and current_parts[-len(new_parts) :] != new_parts:
+                current["parts"] = current_parts + new_parts
+            current.update(
+                {key: value for key, value in artifact.items() if key != "parts"}
+            )
+        else:
+            merged[existing_position] = artifact
+    return merged
+
+
 def bind_orchestration_result_ingestor(
     service: OrchestrationResultIngestorService | None,
 ) -> None:
@@ -184,6 +285,7 @@ class AgentResponseHandler:
         task_notifier=None,
         task_notification_store: TaskNotificationStorePort | None = None,
         task_notification_impl=None,
+        room_files=None,
     ) -> None:
         self._message_writer = message_writer
         self._task_writer = task_writer
@@ -200,6 +302,7 @@ class AgentResponseHandler:
             raise RuntimeError("Task notification store dependency has not been bound")
         self._task_notification_store = task_notification_store
         self._task_notification_impl = task_notification_impl
+        self._room_files = room_files
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -288,6 +391,15 @@ class AgentResponseHandler:
             )
 
     async def handle(self, event: AgentEvent) -> None:
+        if self._room_files is not None:
+            async with self._room_files.write_lease(
+                event.room_id, f"agent-event:{event.kind}"
+            ):
+                await self._handle(event)
+            return
+        await self._handle(event)
+
+    async def _handle(self, event: AgentEvent) -> None:
         match event.kind:
             case "artifact_update":
                 await self._on_artifact(event)
@@ -306,14 +418,213 @@ class AgentResponseHandler:
             case "processing_status":
                 await self._on_processing_status(event)
 
-    # --- Nonterminal artifacts (private, no public side effects) ---
+    # --- Nonterminal artifacts (durable journal, no public side effects) ---
 
     async def _on_artifact(self, e: AgentEvent) -> None:
-        """Drop nonterminal artifact updates at the public boundary."""
-        logger.debug(
-            "Dropping nonterminal artifact_update for message %s",
-            e.message_id,
+        await self._run_artifact_materialization(
+            e,
+            lambda: self._process_artifact(e),
         )
+
+    async def _process_artifact(self, e: AgentEvent) -> None:
+        """Materialize and journal artifact updates for terminal reconstruction."""
+        artifacts = list(e.artifacts or [])
+        if not artifacts and e.parts:
+            artifacts = [
+                {
+                    "artifactId": f"{e.message_id}-stream",
+                    "name": "stream",
+                    "parts": e.parts,
+                }
+            ]
+        if not artifacts:
+            return
+        from common.utils.a2a_helpers import materialize_inline_file_parts
+
+        existing_artifacts = await self._existing_artifact_journal(e.message_id)
+        budget = self._artifact_budget(
+            _retained_artifacts_for_update(
+                existing_artifacts,
+                artifacts,
+                append=e.append,
+            )
+        )
+        for artifact_position, artifact in enumerate(artifacts):
+            update_key = (
+                hashlib.sha256(
+                    json.dumps(
+                        {
+                            "event_id": e.artifact_update_id,
+                            "artifact_position": artifact_position,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                if e.artifact_update_id
+                else None
+            )
+            seen_method = getattr(
+                self._message_writer, "is_artifact_update_recorded", None
+            )
+            method_is_explicit = "is_artifact_update_recorded" in getattr(
+                self._message_writer, "__dict__", {}
+            ) or hasattr(type(self._message_writer), "is_artifact_update_recorded")
+            if (
+                method_is_explicit
+                and callable(seen_method)
+                and update_key is not None
+                and await seen_method(e.message_id, update_key)
+            ):
+                continue
+            artifact = _with_durable_artifact_identity(artifact, artifact_position)
+            superseded_file_ids = _superseded_artifact_file_ids(
+                existing_artifacts,
+                artifact,
+                artifact_position,
+                append=e.append,
+            )
+            parts = artifact.get("parts")
+            if isinstance(parts, list):
+                try:
+                    artifact_id = artifact.get("artifactId") or artifact.get(
+                        "artifact_id"
+                    )
+                    explicit_index = artifact.get("index")
+                    artifact_slot = (
+                        f"id:{artifact_id}"
+                        if artifact_id
+                        else f"index:{explicit_index}"
+                        if explicit_index is not None
+                        else f"slot:{artifact_position}"
+                    )
+                    await materialize_inline_file_parts(
+                        parts,
+                        e.room_id,
+                        e.message_id,
+                        budget=budget,
+                        artifact_slot=artifact_slot,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not materialize artifact journal files for %s",
+                        e.message_id,
+                        exc_info=True,
+                    )
+            public_artifact = public_artifact_data(artifact)
+            public_artifact["artifactId"] = _artifact_identity(
+                artifact, artifact_position
+            )
+            if e.last_chunk:
+                public_artifact["metadata"] = {"last_chunk": True}
+            public_artifact["parts"] = _sanitize_public_parts(
+                public_artifact.get("parts") or []
+            )
+            if not public_artifact["parts"]:
+                continue
+            persisted = await self._message_writer.accumulate_artifact_on_message(
+                e.message_id,
+                public_artifact,
+                append=e.append,
+                update_key=update_key,
+            )
+            await self._delete_superseded_artifact_files(
+                e,
+                persisted=persisted,
+                previous_file_ids=superseded_file_ids,
+                current_artifact=public_artifact,
+            )
+
+    async def _delete_superseded_artifact_files(
+        self,
+        e: AgentEvent,
+        *,
+        persisted: bool,
+        previous_file_ids: set[str],
+        current_artifact: dict,
+    ) -> None:
+        del current_artifact
+        committed_artifacts = await self._existing_artifact_journal(e.message_id)
+        if not committed_artifacts:
+            return
+        committed_file_ids = {
+            file_id
+            for artifact in committed_artifacts
+            for file_id in _artifact_file_ids(artifact)
+        }
+        file_ids = previous_file_ids - committed_file_ids
+        if not persisted or not file_ids:
+            return
+        try:
+            from common.utils.a2a_helpers import delete_superseded_agent_artifacts
+
+            await delete_superseded_agent_artifacts(
+                room_id=e.room_id,
+                message_id=e.message_id,
+                file_ids=file_ids,
+            )
+        except Exception:
+            logger.warning(
+                "Could not remove superseded artifact files for %s",
+                e.message_id,
+                exc_info=True,
+            )
+
+    async def _run_artifact_materialization(  # noqa: C901
+        self, e: AgentEvent, operation
+    ) -> None:
+        claim = getattr(self._message_writer, "claim_artifact_materialization", None)
+        explicit = "claim_artifact_materialization" in getattr(
+            self._message_writer, "__dict__", {}
+        ) or hasattr(type(self._message_writer), "claim_artifact_materialization")
+        if not explicit or not callable(claim):
+            await operation()
+            return
+        token = await claim(
+            e.message_id,
+            e.artifact_update_id or f"{e.task_id or e.message_id}:artifact",
+        )
+        if token is None:
+            return
+        heartbeat = self._message_writer.heartbeat_artifact_materialization
+        release = self._message_writer.release_artifact_materialization
+        stopped = asyncio.Event()
+        owner_task = asyncio.current_task()
+
+        async def maintain() -> None:
+            while not stopped.is_set():
+                try:
+                    await asyncio.wait_for(stopped.wait(), timeout=30)
+                    return
+                except TimeoutError:
+                    try:
+                        renewed = await heartbeat(e.message_id, token)
+                    except Exception:
+                        renewed = False
+                    if not renewed:
+                        stopped.set()
+                        if owner_task is not None:
+                            owner_task.cancel()
+                        return
+
+        maintainer = asyncio.create_task(maintain())
+        try:
+            await operation()
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Artifact materialization lease lost for {e.message_id}"
+                )
+        except asyncio.CancelledError:
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Artifact materialization lease lost for {e.message_id}"
+                ) from None
+            raise
+        finally:
+            stopped.set()
+            maintainer.cancel()
+            await asyncio.gather(maintainer, return_exceptions=True)
+            await release(e.message_id, token)
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
@@ -322,30 +633,62 @@ class AgentResponseHandler:
         e: AgentEvent,
     ) -> tuple[str | None, list[dict] | None]:
         had_structured_output = bool(e.parts or e.artifacts)
-        # Convert inline base64 file parts to S3 URIs before public projection.
+        existing_artifacts = await self._existing_artifact_journal(e.message_id)
+        # Materialize inline file parts before public projection.
         if had_structured_output:
-            from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+            from common.utils.a2a_helpers import materialize_inline_file_parts
 
             try:
-                # Convert parts referenced by both e.parts and nested inside e.artifacts
-                if e.parts:
-                    await convert_inline_bytes_to_s3(
-                        e.parts,
-                        e.room_id,
-                        e.message_id,
+                incoming_for_budget = e.artifacts or [
+                    {
+                        "artifactId": f"{e.message_id}-response",
+                        "parts": e.parts or [],
+                    }
+                ]
+                budget = self._artifact_budget(
+                    _retained_artifacts_for_update(
+                        existing_artifacts,
+                        incoming_for_budget,
+                        append=e.append,
                     )
+                )
                 if e.artifacts:
-                    for artifact in e.artifacts:
+                    for artifact_position, artifact in enumerate(e.artifacts):
+                        artifact = _with_durable_artifact_identity(
+                            artifact, artifact_position
+                        )
+                        e.artifacts[artifact_position] = artifact
+                        artifact_id = artifact.get("artifactId") or artifact.get(
+                            "artifact_id"
+                        )
+                        explicit_index = artifact.get("index")
+                        artifact_slot = (
+                            f"id:{artifact_id}"
+                            if artifact_id
+                            else f"index:{explicit_index}"
+                            if explicit_index is not None
+                            else f"slot:{artifact_position}"
+                        )
                         artifact_parts = artifact.get("parts", [])
                         if artifact_parts:
-                            await convert_inline_bytes_to_s3(
+                            await materialize_inline_file_parts(
                                 artifact_parts,
                                 e.room_id,
                                 e.message_id,
+                                budget=budget,
+                                artifact_slot=artifact_slot,
                             )
+                elif e.parts:
+                    await materialize_inline_file_parts(
+                        e.parts,
+                        e.room_id,
+                        e.message_id,
+                        budget=budget,
+                        artifact_slot=f"id:{e.message_id}-response",
+                    )
             except Exception:
                 logger.warning(
-                    "S3 conversion failed for terminal artifacts on message %s; "
+                    "File materialization failed for terminal artifacts on message %s; "
                     "dropping unaddressable file bytes before persistence",
                     e.message_id,
                     exc_info=True,
@@ -353,19 +696,32 @@ class AgentResponseHandler:
 
         artifacts_for_db: list[dict] | None = None
         if e.artifacts:
-            artifacts_for_db = _sanitize_public_artifacts(e.artifacts) or None
+            incoming = _sanitize_public_artifacts(e.artifacts)
+            artifacts_for_db = (
+                _merge_artifact_journal(
+                    existing_artifacts,
+                    incoming,
+                    append=e.append,
+                )
+                or None
+            )
         elif e.parts:
             sanitized_parts = _sanitize_public_parts(e.parts)
             if sanitized_parts:
-                artifacts_for_db = [
+                incoming = [
                     {
                         "artifactId": f"{e.message_id}-response",
                         "name": "response",
                         "parts": sanitized_parts,
                     }
                 ]
+                artifacts_for_db = _merge_artifact_journal(
+                    existing_artifacts,
+                    incoming,
+                    append=e.append,
+                )
         elif e.public_text or e.text:
-            artifacts_for_db = [
+            artifacts_for_db = existing_artifacts + [
                 _materialized_text_artifact(e.message_id, e.public_text or e.text)
             ]
 
@@ -395,66 +751,235 @@ class AgentResponseHandler:
         e.details = None
         return display_text, display_artifacts
 
-    async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
-        display_text, display_artifacts = await self._project_completed_output(e)
+    async def _artifact_budget_from_journal(self, message_id: str) -> dict[str, Any]:
+        return self._artifact_budget(await self._existing_artifact_journal(message_id))
 
-        if not e.skip_persist:
-            _, resolved_text = await self._task_writer.update_task_state_on_message(
-                e.message_id,
-                "completed",
-                message_text=display_text,
-                artifacts=display_artifacts,
+    @staticmethod
+    def _artifact_budget(artifacts: list[dict]) -> dict[str, Any]:
+        converted = 0
+        raw = 0
+        precounted_file_ids: dict[str, int] = {}
+        for artifact in artifacts:
+            for part in artifact.get("parts") or []:
+                if part.get("kind") != "file":
+                    continue
+                metadata = part.get("metadata") or {}
+                converted += 1
+                raw += int(metadata.get("size_bytes") or 0)
+                file_id = metadata.get("file_id")
+                if isinstance(file_id, str) and file_id:
+                    precounted_file_ids[file_id] = (
+                        precounted_file_ids.get(file_id, 0) + 1
+                    )
+        return {
+            "converted": converted,
+            "attempted": converted,
+            "raw": raw,
+            "encoded": 0,
+            "precounted_file_ids": precounted_file_ids,
+        }
+
+    async def _existing_artifact_journal(self, message_id: str) -> list[dict]:
+        read_message = getattr(
+            self._client_request_resolver,
+            "get_room_agent_message_by_message_id",
+            None,
+        )
+        if not callable(read_message):
+            return []
+        try:
+            maybe_message = read_message(message_id)
+            message = (
+                await maybe_message
+                if inspect.isawaitable(maybe_message)
+                else maybe_message
             )
+            task = (
+                message.message_content.message_task
+                if message is not None and message.message_content
+                else None
+            )
+            if not task or not task.artifacts:
+                return []
+            from common.utils.a2a_helpers import artifacts_to_dicts
+
+            return _sanitize_public_artifacts(artifacts_to_dicts(task.artifacts))
+        except Exception:
+            logger.warning(
+                "Could not read artifact journal for terminal message %s",
+                message_id,
+                exc_info=True,
+            )
+            raise
+
+    async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
+        finalization_token, fenced = await self._begin_terminal_finalization(
+            e, "completed"
+        )
+        if fenced and finalization_token is None:
+            if await self._terminal_replay_already_applied(e, "completed"):
+                return
+            self._raise_if_retryable_finalization_conflict(e)
+            return
+        display_text, display_artifacts = await self._run_with_finalization_heartbeat(
+            e.message_id,
+            finalization_token,
+            lambda: self._project_completed_output(e),
+        )
+        if not e.skip_persist:
+            if fenced:
+                persisted = await self._set_terminal_finalization_content(
+                    e.message_id,
+                    finalization_token,
+                    message_text=display_text,
+                    artifacts=display_artifacts,
+                )
+                resolved_text = display_text
+            else:
+                (
+                    finalization_token,
+                    persisted,
+                    resolved_text,
+                ) = await self._claim_terminal_finalization(
+                    e,
+                    state="completed",
+                    message_text=display_text,
+                    artifacts=display_artifacts,
+                )
+            if not persisted:
+                logger.debug(
+                    "Terminal finalizer already claimed for message %s",
+                    e.message_id,
+                )
+                return
             if resolved_text:
                 display_text = resolved_text
-        await self._notify_terminal_best_effort(e, coerce_task_state("completed"))
-        await self._terminate_slot(
-            e,
-            "completed",
-            content=display_text,
-            artifacts=display_artifacts,
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "notification",
+            lambda: self._notify_terminal_best_effort(
+                e,
+                coerce_task_state("completed"),
+                emit_processing_status=e.emit_processing_status,
+            ),
         )
-        # NOTE: send_agent_response removed — _notify() above already delivers
-        # content + parts via task_update SSE. The redundant agent_response SSE
-        # created a duplicate message entity in the frontend.
-        await self._ingest_orchestration_result(
-            e,
-            status="completed",
-            text=display_text,
-            artifacts=display_artifacts or [],
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "slot_termination",
+            lambda: self._terminate_slot(
+                e,
+                "completed",
+                content=display_text,
+                artifacts=display_artifacts,
+            ),
         )
-        await self._resume_orchestration(e.message_id, display_text or "")
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "result_ingestion",
+            lambda: self._ingest_orchestration_result(
+                e,
+                status="completed",
+                text=display_text,
+                artifacts=display_artifacts or [],
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "orchestration_resume",
+            lambda: self._resume_orchestration(e.message_id, display_text or ""),
+        )
+        if finalization_token is not None:
+            await self._complete_terminal_finalization(
+                e.message_id, finalization_token, "completed"
+            )
 
     async def _on_error(self, e: AgentEvent) -> None:
-        state = e.state or "failed"
-        error = _safe_terminal_error(state)
+        source_state = e.state or "failed"
+        try:
+            coerce_task_state(source_state)
+            state = source_state
+        except (ValueError, KeyError):
+            state = "failed"
+        error = _safe_terminal_error(source_state)
         e.text = ""
         e.error_text = error
         e.parts = None
         e.artifacts = None
+        finalization_token, fenced = await self._begin_terminal_finalization(e, state)
+        if fenced and finalization_token is None:
+            if await self._terminal_replay_already_applied(e, state):
+                return
+            self._raise_if_retryable_finalization_conflict(e)
+            return
         if not e.skip_persist:
-            await self._task_writer.update_task_state_on_message(
-                e.message_id,
-                state,
-                message_text=error,
+            if fenced:
+                persisted = await self._set_terminal_finalization_content(
+                    e.message_id,
+                    finalization_token,
+                    message_text=error,
+                    artifacts=None,
+                )
+            else:
+                (
+                    finalization_token,
+                    persisted,
+                    _,
+                ) = await self._claim_terminal_finalization(
+                    e,
+                    state=state,
+                    message_text=error,
+                    artifacts=None,
+                )
+            if not persisted:
+                return
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "notification",
+            lambda: self._notify_terminal_best_effort(
+                e,
+                coerce_task_state(state),
+                error=error,
+                emit_processing_status=e.emit_processing_status,
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "slot_termination",
+            lambda: self._terminate_slot(
+                e,
+                "failed",
+                content=None,
+                error=error,
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "result_ingestion",
+            lambda: self._ingest_orchestration_result(
+                e,
+                status=source_state,
+                text=None,
+                artifacts=[],
+                error=error,
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "orchestration_resume",
+            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+        )
+        if finalization_token is not None:
+            await self._complete_terminal_finalization(
+                e.message_id, finalization_token, state
             )
-        await self._notify_terminal_best_effort(
-            e, coerce_task_state(state), error=error
-        )
-        await self._terminate_slot(
-            e,
-            "failed",
-            content=None,
-            error=error,
-        )
-        await self._ingest_orchestration_result(
-            e,
-            status=state,
-            text=None,
-            artifacts=[],
-            error=error,
-        )
-        await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_canceled(self, e: AgentEvent) -> None:
         canceled_text = _safe_terminal_error("canceled")
@@ -462,22 +987,289 @@ class AgentResponseHandler:
         e.error_text = canceled_text
         e.parts = None
         e.artifacts = None
-        if not e.skip_persist:
-            await self._task_writer.update_task_state_on_message(
-                e.message_id,
-                "canceled",
-                message_text=canceled_text,
-            )
-        await self._notify_terminal_best_effort(e, coerce_task_state("canceled"))
-        await self._terminate_slot(e, "canceled")
-        await self._ingest_orchestration_result(
-            e,
-            status="canceled",
-            text=None,
-            artifacts=[],
-            error=canceled_text,
+        finalization_token, fenced = await self._begin_terminal_finalization(
+            e, "canceled"
         )
-        await self._resume_orchestration(e.message_id, "", failed=True)
+        if fenced and finalization_token is None:
+            if await self._terminal_replay_already_applied(e, "canceled"):
+                return
+            self._raise_if_retryable_finalization_conflict(e)
+            return
+        if not e.skip_persist:
+            if fenced:
+                persisted = await self._set_terminal_finalization_content(
+                    e.message_id,
+                    finalization_token,
+                    message_text=canceled_text,
+                    artifacts=None,
+                )
+            else:
+                (
+                    finalization_token,
+                    persisted,
+                    _,
+                ) = await self._claim_terminal_finalization(
+                    e,
+                    state="canceled",
+                    message_text=canceled_text,
+                    artifacts=None,
+                )
+            if not persisted:
+                return
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "notification",
+            lambda: self._notify_terminal_best_effort(
+                e,
+                coerce_task_state("canceled"),
+                emit_processing_status=e.emit_processing_status,
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "slot_termination",
+            lambda: self._terminate_slot(e, "canceled"),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "result_ingestion",
+            lambda: self._ingest_orchestration_result(
+                e,
+                status="canceled",
+                text=None,
+                artifacts=[],
+                error=canceled_text,
+            ),
+        )
+        await self._run_finalization_step(
+            e.message_id,
+            finalization_token,
+            "orchestration_resume",
+            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+        )
+        if finalization_token is not None:
+            await self._complete_terminal_finalization(
+                e.message_id, finalization_token, "canceled"
+            )
+
+    async def _claim_terminal_finalization(
+        self,
+        e: AgentEvent,
+        *,
+        state: str,
+        message_text: str | None,
+        artifacts: list[dict] | None,
+    ) -> tuple[str | None, bool, str | None]:
+        claim = getattr(self._task_writer, "claim_terminal_finalization", None)
+        if callable(claim) and inspect.iscoroutinefunction(claim):
+            token, resolved_text = await claim(
+                e.message_id,
+                state,
+                message_text=message_text,
+                artifacts=artifacts,
+            )
+            return token, token is not None, resolved_text
+        kwargs: dict[str, Any] = {"message_text": message_text}
+        if artifacts is not None or state == "completed":
+            kwargs["artifacts"] = artifacts
+        update_result = self._task_writer.update_task_state_on_message(
+            e.message_id, state, **kwargs
+        )
+        if not inspect.isawaitable(update_result):
+            return None, False, message_text
+        persisted, resolved_text = await update_result
+        return None, persisted, resolved_text
+
+    async def _begin_terminal_finalization(
+        self, e: AgentEvent, state: str
+    ) -> tuple[str | None, bool]:
+        if e.skip_persist:
+            return None, False
+        begin = getattr(self._task_writer, "begin_terminal_finalization", None)
+        explicit = "begin_terminal_finalization" in getattr(
+            self._task_writer, "__dict__", {}
+        ) or hasattr(type(self._task_writer), "begin_terminal_finalization")
+        if not explicit or not callable(begin):
+            return None, False
+        return (
+            await begin(
+                e.message_id,
+                state,
+                recovery_source=(
+                    "journal" if e.retry_on_finalization_conflict else "message"
+                ),
+                recovery_id=e.finalization_recovery_id,
+            ),
+            True,
+        )
+
+    async def _terminal_replay_already_applied(self, e: AgentEvent, state: str) -> bool:
+        if not e.retry_on_finalization_conflict:
+            return False
+        matches = getattr(self._task_writer, "terminal_finalization_matches", None)
+        if not callable(matches):
+            return False
+        return bool(
+            await matches(
+                e.message_id,
+                state,
+                recovery_source="journal",
+                recovery_id=e.finalization_recovery_id,
+            )
+        )
+
+    @staticmethod
+    def _raise_if_retryable_finalization_conflict(e: AgentEvent) -> None:
+        if e.retry_on_finalization_conflict:
+            raise RuntimeError(
+                f"Terminal finalization is already in progress for {e.message_id}"
+            )
+
+    async def _set_terminal_finalization_content(
+        self,
+        message_id: str,
+        token: str | None,
+        *,
+        message_text: str | None,
+        artifacts: list[dict] | None,
+    ) -> bool:
+        if token is None:
+            return False
+        persist = getattr(self._task_writer, "set_terminal_finalization_content", None)
+        if not callable(persist):
+            return False
+        return await persist(
+            message_id,
+            token,
+            message_text=message_text,
+            artifacts=artifacts,
+        )
+
+    async def _complete_terminal_finalization(
+        self, message_id: str, token: str, state: str
+    ) -> None:
+        complete = getattr(self._task_writer, "complete_terminal_finalization", None)
+        if (
+            not callable(complete)
+            or not inspect.iscoroutinefunction(complete)
+            or not await complete(message_id, token, state)
+        ):
+            raise RuntimeError(
+                f"Terminal finalization lease lost for message {message_id}"
+            )
+
+    async def _run_finalization_step(  # noqa: C901
+        self,
+        message_id: str,
+        token: str | None,
+        step: str,
+        operation,
+    ) -> None:
+        if token is None:
+            await operation()
+            return
+        heartbeat = getattr(self._task_writer, "heartbeat_terminal_finalization", None)
+        claim = getattr(self._task_writer, "claim_terminal_finalization_step", None)
+        complete = getattr(
+            self._task_writer, "complete_terminal_finalization_step", None
+        )
+        if callable(heartbeat) and not await heartbeat(message_id, token):
+            raise RuntimeError(
+                f"Terminal finalization lease lost for message {message_id}"
+            )
+        if callable(claim) and not await claim(message_id, token, step):
+            return
+        stopped = asyncio.Event()
+        owner_task = asyncio.current_task()
+
+        async def maintain() -> None:
+            if not callable(heartbeat):
+                return
+            while not stopped.is_set():
+                try:
+                    await asyncio.wait_for(stopped.wait(), timeout=60)
+                    return
+                except TimeoutError:
+                    try:
+                        renewed = await heartbeat(message_id, token)
+                    except Exception:
+                        renewed = False
+                    if not renewed:
+                        stopped.set()
+                        if owner_task is not None:
+                            owner_task.cancel()
+                        return
+
+        maintainer = asyncio.create_task(maintain())
+        try:
+            await operation()
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Terminal finalization lease lost for message {message_id}"
+                )
+        except asyncio.CancelledError:
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Terminal finalization lease lost for message {message_id}"
+                ) from None
+            raise
+        finally:
+            stopped.set()
+            maintainer.cancel()
+            await asyncio.gather(maintainer, return_exceptions=True)
+        if callable(complete) and not await complete(message_id, token, step):
+            raise RuntimeError(
+                f"Terminal finalization step {step} lost for message {message_id}"
+            )
+
+    async def _run_with_finalization_heartbeat(  # noqa: C901
+        self, message_id: str, token: str | None, operation
+    ):
+        if token is None:
+            return await operation()
+        heartbeat = getattr(self._task_writer, "heartbeat_terminal_finalization", None)
+        if not callable(heartbeat):
+            return await operation()
+        stopped = asyncio.Event()
+        owner_task = asyncio.current_task()
+
+        async def maintain() -> None:
+            while not stopped.is_set():
+                try:
+                    await asyncio.wait_for(stopped.wait(), timeout=60)
+                    return
+                except TimeoutError:
+                    try:
+                        renewed = await heartbeat(message_id, token)
+                    except Exception:
+                        renewed = False
+                    if not renewed:
+                        stopped.set()
+                        if owner_task is not None:
+                            owner_task.cancel()
+                        return
+
+        maintainer = asyncio.create_task(maintain())
+        try:
+            result = await operation()
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Terminal finalization lease lost for message {message_id}"
+                )
+            return result
+        except asyncio.CancelledError:
+            if stopped.is_set():
+                raise RuntimeError(
+                    f"Terminal finalization lease lost for message {message_id}"
+                ) from None
+            raise
+        finally:
+            stopped.set()
+            maintainer.cancel()
+            await asyncio.gather(maintainer, return_exceptions=True)
 
     async def _on_interactive(self, e: AgentEvent) -> None:
         state = e.state or "input-required"
@@ -759,32 +1551,13 @@ class AgentResponseHandler:
         e.parts = None
         e.artifacts = None
         e.details = None
-        if terminal_task_state is not None:
-            await self._persist_processing_status_terminal(
-                e,
-                status=terminal_result_status,
-                message_text=error,
-                artifacts=None,
-            )
-            await self._notify_terminal_best_effort(
-                e,
-                terminal_task_state,
-                error=error,
-                emit_processing_status=False,
-            )
-        await self._terminate_slot(
-            e,
-            "canceled" if terminal_result_status == "canceled" else "failed",
-            content=None,
-            error=error,
-        )
-        await self._ingest_orchestration_result(
-            e,
-            status=terminal_result_status,
-            text=None,
-            artifacts=[],
-            error=error,
-        )
+        if terminal_task_state is None:
+            e.state = terminal_result_status
+        e.emit_processing_status = False
+        if terminal_result_status == "canceled":
+            await self._on_canceled(e)
+        else:
+            await self._on_error(e)
 
     async def _close_processing_status_completed(
         self,
@@ -793,33 +1566,11 @@ class AgentResponseHandler:
         terminal_result_status: str,
         terminal_task_state,
     ) -> None:
-        display_text, display_artifacts = await self._project_completed_output(e)
-        if terminal_task_state is not None:
-            resolved_text = await self._persist_processing_status_terminal(
-                e,
-                status=terminal_result_status,
-                message_text=display_text,
-                artifacts=display_artifacts,
-            )
-            if resolved_text:
-                display_text = resolved_text
-            await self._notify_terminal_best_effort(
-                e,
-                terminal_task_state,
-                emit_processing_status=False,
-            )
-        await self._terminate_slot(
-            e,
-            "completed",
-            content=display_text,
-            artifacts=display_artifacts,
-        )
-        await self._ingest_orchestration_result(
-            e,
-            status=terminal_result_status,
-            text=display_text,
-            artifacts=display_artifacts or [],
-        )
+        del terminal_result_status
+        if terminal_task_state is None:
+            return
+        e.emit_processing_status = False
+        await self._on_response(e)
 
     # --- Helpers ---
 
@@ -941,6 +1692,27 @@ class AgentResponseHandler:
                 e.message_id,
                 exc_info=True,
             )
+
+    async def _notify_terminal(
+        self,
+        e: AgentEvent,
+        state: Any,
+        *,
+        error: str | None = None,
+        emit_processing_status: bool = True,
+    ) -> None:
+        if emit_processing_status:
+            await self._notify(e, state, error=error)
+            return
+        await self.notify_task_update(
+            message_id=e.message_id,
+            state=state,
+            room_id=e.room_id,
+            user_id=e.user_id or "",
+            error=error,
+            parts=e.parts,
+            emit_processing_status=False,
+        )
 
     @staticmethod
     def _orchestration_result_artifacts(

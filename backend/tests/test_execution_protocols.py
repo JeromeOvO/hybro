@@ -309,7 +309,6 @@ def _make_room_message_center_port_deps():
         "context_compaction": MagicMock(),
         "hitl_coordinator": MagicMock(),
         "task_notifications": MagicMock(),
-        "object_storage": MagicMock(),
     }
 
 
@@ -404,7 +403,6 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.task_notifications is deps["task_notifications"]
     assert runtime.context_memory_runtime is deps["context_memory_runtime"]
     assert runtime.context_compaction is deps["context_compaction"]
-    assert runtime.direct_transport.object_storage is deps["object_storage"]
 
 
 def test_room_message_center_factory_requires_event_publisher():

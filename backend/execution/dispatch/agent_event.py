@@ -54,6 +54,7 @@ class AgentEvent:
     # Artifact streaming flags (A2A spec)
     append: bool = False
     last_chunk: bool = False
+    artifact_update_id: str | None = None
 
     # Metadata
     is_final: bool = False
@@ -63,6 +64,9 @@ class AgentEvent:
 
     # Flow control
     skip_persist: bool = False
-    s3_converted: bool = False
+    files_materialized: bool = False
     details: str | None = None
     created_at: str | None = None
+    emit_processing_status: bool = True
+    retry_on_finalization_conflict: bool = False
+    finalization_recovery_id: str | None = None

@@ -123,6 +123,7 @@ class RuntimeMessageStore(Protocol):
         message_id: str,
         artifact: dict,
         append: bool = False,
+        update_key: str | None = None,
     ) -> bool: ...
 
 

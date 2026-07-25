@@ -70,12 +70,15 @@ def _default_hub_response_converter(event: Any) -> Any:
         lifecycle_message_id=payload.get("lifecycle_message_id"),
         append=bool(payload.get("append", False)),
         last_chunk=bool(payload.get("last_chunk", False)),
+        artifact_update_id=getattr(event, "idempotency_key", None),
+        retry_on_finalization_conflict=bool(getattr(event, "journal_id", None)),
+        finalization_recovery_id=getattr(event, "journal_id", None),
         is_final=bool(payload.get("is_final", getattr(event, "is_terminal", False))),
         agent_name=payload.get("agent_name"),
         step_number=payload.get("step_number"),
         total_steps=payload.get("total_steps"),
         skip_persist=bool(payload.get("skip_persist", False)),
-        s3_converted=bool(payload.get("s3_converted", False)),
+        files_materialized=bool(payload.get("files_materialized", False)),
         details=payload.get("details"),
     )
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+import httpx  # noqa: F401 - compatibility patch point for confined SDK tests
 from a2a.types import AgentCard
 
 from common.types import Task
 
+from .bounded_http import bounded_client
 from .card_data import sdk_agent_card_data
 from .docker_host_fallback import with_docker_host_fallback
 from .message_factory import from_sdk_task
@@ -34,7 +35,7 @@ async def fetch_remote_task(
 
         card = AgentCard(**sdk_agent_card_data(agent_card_data))
         request = build_get_task_request(task_id)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with bounded_client(timeout=timeout) as client:
             response = await with_docker_host_fallback(
                 card,
                 lambda candidate: A2AClient(

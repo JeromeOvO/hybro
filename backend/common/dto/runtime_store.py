@@ -58,10 +58,10 @@ class RuntimeRoomRecord(FrozenDTO):
 
 class RuntimeUserAttachment(FrozenDTO):
     file_id: str
-    s3_key: str
     mime_type: str
     file_name: str
     size_bytes: int
+    sha256: str | None = None
     file_url: str | None = None
 
 

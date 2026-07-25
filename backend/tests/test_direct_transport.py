@@ -7,7 +7,7 @@ Tests cover:
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -601,7 +601,6 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
         message_reader=MagicMock(),
         artifact_store=MagicMock(),
         task_updater=MagicMock(),
-        object_storage=MagicMock(),
     )
     message = RoomAgentMessage(
         room_id="room-1",
@@ -1266,7 +1265,7 @@ class TestArtifactUpdateRoutedThroughHandler:
         result.append = True
         result.last_chunk = False
 
-        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        proc._materialize_inline_file_parts = AsyncMock()
 
         await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
@@ -1318,7 +1317,7 @@ class TestArtifactUpdateRoutedThroughHandler:
         private_sentinel = "PRIVATE_SENTINEL_stream_artifact_metadata"
         proc = _make_processor()
         proc.response_handler.handle = AsyncMock()
-        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        proc._materialize_inline_file_parts = AsyncMock()
         current_message = _make_room_agent_message()
         agent_card = MagicMock(spec_set=["name"])
         agent_card.name = "test-agent"
@@ -1400,7 +1399,7 @@ class TestArtifactUpdateRoutedThroughHandler:
             metadata={"private": private_metadata},
         )
         result = MagicMock(artifact=artifact, append=False, last_chunk=False)
-        proc._convert_inline_bytes_to_s3 = AsyncMock(
+        proc._materialize_inline_file_parts = AsyncMock(
             side_effect=RuntimeError("S3 unavailable")
         )
 
@@ -1432,7 +1431,7 @@ class TestArtifactUpdateRoutedThroughHandler:
             send_sse=True,
         )
         streaming_state = MessageStreamingState()
-        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        proc._materialize_inline_file_parts = AsyncMock()
         first = MagicMock(
             artifact=Artifact(
                 artifact_id="artifact-1",
@@ -1504,7 +1503,7 @@ class TestArtifactUpdateRoutedThroughHandler:
         result.append = False
         result.last_chunk = False
 
-        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        proc._materialize_inline_file_parts = AsyncMock()
 
         await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
@@ -1550,7 +1549,7 @@ class TestArtifactUpdateRoutedThroughHandler:
             ],
         )
         result = MagicMock(artifact=artifact, append=False, last_chunk=False)
-        proc._convert_inline_bytes_to_s3 = AsyncMock()
+        proc._materialize_inline_file_parts = AsyncMock()
 
         await proc._handle_stream_artifact_update(result, ctx, streaming_state)
 
@@ -2555,6 +2554,53 @@ class TestFinalizePolledTaskPrivacy:
             ],
             metadata={"remote_error": private_text},
             kind="task",
+        )
+
+    @pytest.mark.asyncio
+    async def test_polled_artifacts_share_one_aggregate_materialization_budget(self):
+        proc = _make_processor()
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+        completed_task = self._make_completed_task_with_private_history("private")
+        completed_task.artifacts = [
+            Artifact(
+                artifact_id=f"artifact-{index}",
+                parts=[
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                bytes="eA==",
+                                mimeType="text/plain",
+                                name=f"file-{index}.txt",
+                            )
+                        )
+                    )
+                ],
+            )
+            for index in range(2)
+        ]
+
+        with patch(
+            "common.utils.a2a_helpers.materialize_artifacts",
+            new=AsyncMock(return_value=2),
+        ) as materialize:
+            await proc._finalize_polled_task(
+                completed_task,
+                current_message,
+                agent_card,
+                room_id="room-1",
+                message_id="agent-msg-1",
+                task_info={"webhook_token": "tok"},
+                ctx=self._make_ctx(current_message, agent_card),
+            )
+
+        materialize.assert_awaited_once_with(
+            completed_task.artifacts,
+            "room-1",
+            "agent-msg-1",
         )
 
     def _make_ctx(self, current_message, agent_card):

@@ -159,7 +159,18 @@ async def test_room_repository_uses_rooms_collection_and_query_shapes():
 
     assert mongo.collection_calls == ["rooms"]
     assert rooms.find_one_calls == [{"room_id": "r1"}]
-    assert rooms.find_calls == [({"room_owner_id": "u1"}, {})]
+    assert rooms.find_calls == [
+        (
+            {
+                "room_owner_id": "u1",
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            {},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -190,11 +201,23 @@ async def test_room_repository_create_update_update_fields_set_membership_and_de
     assert deleted is True
     assert rooms.insert_one_calls == [{"room_id": "r2", "room_name": "New"}]
     assert rooms.update_one_calls[0] == (
-        {"room_id": "r1"},
+        {
+            "room_id": "r1",
+            "$or": [
+                {"lifecycle_state": "active"},
+                {"lifecycle_state": {"$exists": False}},
+            ],
+        },
         {"$set": {"room_name": "Changed"}},
         {},
     )
-    assert rooms.find_one_and_update_calls[-1][0] == {"room_id": "r1"}
+    assert rooms.find_one_and_update_calls[-1][0] == {
+        "room_id": "r1",
+        "$or": [
+            {"lifecycle_state": "active"},
+            {"lifecycle_state": {"$exists": False}},
+        ],
+    }
     assert rooms.delete_one_calls == [{"room_id": "r2"}]
     assert all(isinstance(doc, dict) for doc in rooms.docs)
 

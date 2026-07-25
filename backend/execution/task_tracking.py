@@ -15,8 +15,8 @@ from common.a2a_constants import (
 from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
 from common.types import MessageRole as Role
 from common.utils.a2a_helpers import (
-    convert_pydantic_artifacts_to_s3,
     extract_parts_from_artifacts,
+    materialize_artifacts,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -49,7 +49,9 @@ _PUBLIC_SAFE_STATUS_TEXT = {
     "expired": "Task expired",
 }
 _COMPLETED_STATE = "completed"
-_PUBLIC_METADATA_KEYS = frozenset({"s3_key"})
+_PUBLIC_METADATA_KEYS = frozenset(
+    {"file_id", "file_name", "mime_type", "size_bytes", "sha256"}
+)
 
 if TYPE_CHECKING:
     from execution.ports import A2ATaskTrackingStorePort
@@ -397,7 +399,7 @@ class A2ATaskTrackingService:
             artifact_id=str(uuid4()),
         )
         if completed_task.artifacts:
-            await _best_effort_convert_pydantic_artifacts_to_s3(
+            await _best_effort_materialize_artifacts(
                 completed_task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
@@ -466,7 +468,7 @@ class A2ATaskTrackingService:
         room_id: str | None,
     ) -> dict[str, Any]:
         if task.artifacts:
-            await _best_effort_convert_pydantic_artifacts_to_s3(
+            await _best_effort_materialize_artifacts(
                 task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
@@ -608,7 +610,7 @@ def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, An
     return {key: value for key, value in trusted.items() if value is not None}
 
 
-async def _best_effort_convert_pydantic_artifacts_to_s3(
+async def _best_effort_materialize_artifacts(
     artifacts: list,
     *,
     room_id: str,
@@ -616,7 +618,7 @@ async def _best_effort_convert_pydantic_artifacts_to_s3(
     context: str,
 ) -> None:
     try:
-        await convert_pydantic_artifacts_to_s3(
+        await materialize_artifacts(
             artifacts,
             room_id=room_id,
             message_id=message_id,
@@ -819,15 +821,15 @@ def _public_part_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     file_payload = public_payload.get("file")
     if isinstance(file_payload, dict):
-        uri = file_payload.get("uri")
-        if not isinstance(uri, str) or not uri.strip():
+        if not public_metadata or not public_metadata.get("file_id"):
             return None
-        allowed_file_keys = {"uri", "mimeType", "mime_type", "name"}
-        public_payload["file"] = {
-            key: value
-            for key, value in file_payload.items()
-            if key in allowed_file_keys and value is not None
-        }
+        # A2A FileContent is a transport type. Persisted/API projections keep
+        # only the stable room-file reference and never retain bytes or URI.
+        public_payload.pop("file", None)
+    elif public_payload.get("kind") == "file" and (
+        not public_metadata or not public_metadata.get("file_id")
+    ):
+        return None
     return public_payload
 
 

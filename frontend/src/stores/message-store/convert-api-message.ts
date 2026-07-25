@@ -192,6 +192,7 @@ export async function convertApiMessageToIncoming(
         mimeType: att.mime_type as string,
         fileName: (att.file_name as string) || 'unknown',
         sizeBytes: (att.size_bytes as number) || 0,
+        sha256: att.sha256 as string | undefined,
       }))
     if (attachments.length === 0) attachments = undefined
   }
@@ -213,10 +214,18 @@ export async function convertApiMessageToIncoming(
             const kind = (root.kind as string) || 'text'
             if (kind === 'text') return null
             const fileData = root.file as Record<string, unknown> | undefined
-            const safeFile = fileData ? {
-              uri: fileData.uri as string | undefined,
-              mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
-              name: fileData.name as string | undefined,
+            const fileMetadata = root.metadata as Record<string, unknown> | undefined
+            const safeFile = fileData || typeof fileMetadata?.file_id === 'string' ? {
+              uri: fileData?.uri as string | undefined,
+              fileId: fileMetadata?.file_id as string | undefined,
+              mime_type: (
+                fileMetadata?.mime_type
+                || fileData?.mime_type
+                || fileData?.mimeType
+              ) as string | undefined,
+              name: (fileMetadata?.file_name || fileData?.name) as string | undefined,
+              sizeBytes: fileMetadata?.size_bytes as number | undefined,
+              sha256: fileMetadata?.sha256 as string | undefined,
             } : undefined
             return {
               kind: kind as ArtifactPart['kind'],

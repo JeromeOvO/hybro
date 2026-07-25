@@ -77,6 +77,7 @@ def test_a2a_adapter_import_boundary():
     allowed_roots = set(sys.stdlib_module_names) | {
         "__future__",
         "a2a",
+        "aiohttp",
         "common",
         "dal",
         "httpx",

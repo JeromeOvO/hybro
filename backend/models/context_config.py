@@ -83,7 +83,7 @@ class CompactionConfig:
     NOTE: This is LOSSLESS compaction (pointer-based), NOT summarization.
 
     Current implementation: Text content stored in MongoDB
-    Future extension: Binary content (images, files, video) will use S3 (see Section 6.8)
+    Binary room files are managed independently by the room-files module.
     """
 
     @property

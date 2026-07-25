@@ -228,14 +228,23 @@ class MongoOrchestrationRunStore:
         *,
         runs_collection_name: str = "orchestration_runs",
         events_collection_name: str = "orchestration_run_events",
+        room_files=None,
     ) -> None:
         self._runs = mongo.collection(runs_collection_name)
         self._events = mongo.collection(events_collection_name)
+        self._room_files = room_files
 
     async def create_run(
         self,
         state: OrchestrationRunState,
+        *,
+        _lease_held: bool = False,
     ) -> OrchestrationRunState:
+        if self._room_files is not None and not _lease_held:
+            async with self._room_files.write_lease(
+                state.room_id, "orchestration-run-create"
+            ):
+                return await self.create_run(state, _lease_held=True)
         existing = await self._runs.find_one({"run_id": state.run_id})
         if existing is not None:
             raise OrchestrationStoreConflict(f"run_id {state.run_id!r} already exists")
@@ -268,7 +277,25 @@ class MongoOrchestrationRunStore:
         state: OrchestrationRunState,
         *,
         expected_version: int,
+        _lease_held: bool = False,
     ) -> OrchestrationRunState:
+        if self._room_files is not None and not _lease_held:
+            canonical = await self._runs.find_one({"run_id": state.run_id})
+            if canonical is None:
+                raise KeyError(f"run_id {state.run_id!r} does not exist")
+            canonical_room_id = str(canonical.get("room_id") or "")
+            if canonical_room_id != state.room_id:
+                raise OrchestrationStoreConflict(
+                    f"run_id {state.run_id!r} belongs to another room"
+                )
+            async with self._room_files.write_lease(
+                canonical_room_id, "orchestration-run-save"
+            ):
+                return await self.save_state(
+                    state,
+                    expected_version=expected_version,
+                    _lease_held=True,
+                )
         current = await self._runs.find_one({"run_id": state.run_id})
         if current is None:
             raise KeyError(f"run_id {state.run_id!r} does not exist")
@@ -303,7 +330,22 @@ class MongoOrchestrationRunStore:
     async def append_event(
         self,
         event: OrchestrationRunEvent,
+        *,
+        _lease_held: bool = False,
     ) -> OrchestrationRunEvent:
+        if self._room_files is not None and not _lease_held:
+            canonical = await self._runs.find_one({"run_id": event.run_id})
+            if canonical is None:
+                raise KeyError(f"run_id {event.run_id!r} does not exist")
+            canonical_room_id = str(canonical.get("room_id") or "")
+            if canonical_room_id != event.room_id:
+                raise OrchestrationStoreConflict(
+                    f"run_id {event.run_id!r} belongs to another room"
+                )
+            async with self._room_files.write_lease(
+                canonical_room_id, "orchestration-event-append"
+            ):
+                return await self.append_event(event, _lease_held=True)
         current = await self._runs.find_one({"run_id": event.run_id})
         if current is None:
             raise KeyError(f"run_id {event.run_id!r} does not exist")

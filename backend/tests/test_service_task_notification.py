@@ -31,7 +31,7 @@ PATCH_EXTRACT_ERR = "execution.dispatch.task_notifications.extract_error_message
 PATCH_EXTRACT_STATUS = "execution.dispatch.task_notifications.extract_status_message"
 PATCH_SLEEP = "execution.dispatch.task_notifications.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
-PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
+PATCH_CONVERT_S3 = "common.utils.a2a_helpers.materialize_inline_file_parts"
 
 
 def _make_task(

@@ -9,6 +9,10 @@ Task -> AgentEvent normalization.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fastapi import HTTPException
@@ -68,6 +72,19 @@ def _safe_terminal_error(state: Any) -> str:
     return _PUBLIC_TERMINAL_ERRORS.get(str(state), "Task failed")
 
 
+def _jsonrpc_update_id(payload: JsonMap) -> str:
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    for chunk in encoder.iterencode({"id": payload["id"], "payload": payload}):
+        digest.update(chunk.encode())
+    return f"jsonrpc:v1:{digest.hexdigest()}"
+
+
 class WebhookTransport(AgentTransport):
     """Push-notification transport for async A2A agents (inbound-only)."""
 
@@ -78,12 +95,15 @@ class WebhookTransport(AgentTransport):
         message_reader: WebhookMessageReader,
         cancellation_reader: WebhookCancellationReader,
         task_notifier=None,
+        terminal_task_fetcher: Callable[[str, str], Awaitable[Any | None]]
+        | None = None,
     ) -> None:
         super().__init__(response_handler)
         self._webhook_auth = webhook_auth
         self._message_reader = message_reader
         self._cancellation_reader = cancellation_reader
         self._task_notifier = task_notifier
+        self._terminal_task_fetcher = terminal_task_fetcher
 
     async def dispatch(
         self,
@@ -92,14 +112,8 @@ class WebhookTransport(AgentTransport):
     ) -> Any:
         raise NotImplementedError("Webhooks are inbound-only")
 
-    async def handle_webhook(
-        self,
-        message_id: str,
-        payload: JsonMap,
-        token: str,
-    ) -> JsonMap:
-        """Called by the FastAPI route. Validate, parse, delegate."""
-        # 1. Validate webhook token (hash-based)
+    async def authenticate_webhook(self, message_id: str, token: str) -> None:
+        """Reject unauthorized webhook requests before their body is read."""
         if not token:
             logger.warning(
                 "Webhook for task %s: Missing authorization token", message_id
@@ -130,8 +144,20 @@ class WebhookTransport(AgentTransport):
                 )
                 raise HTTPException(status_code=500, detail="Token verification failed")
 
+    async def handle_webhook(
+        self,
+        message_id: str,
+        payload: JsonMap,
+        token: str,
+    ) -> JsonMap:
+        """Called by the FastAPI route. Validate, parse, delegate."""
+        # Revalidate at the business boundary so non-HTTP callers cannot bypass auth.
+        await self.authenticate_webhook(message_id, token)
+
         # 2. Parse StreamResponse
-        updated_task = parse_stream_response(payload, message_id)
+        updated_task = await asyncio.to_thread(
+            parse_stream_response, payload, message_id
+        )
         logger.info(
             "Webhook for task %s: Parsed task state=%s, artifacts=%d",
             message_id,
@@ -187,8 +213,30 @@ class WebhookTransport(AgentTransport):
                     else str(current_state),
                 }
 
+        if (
+            is_terminal_state(updated_task.status.state)
+            and not updated_task.artifacts
+            and self._terminal_task_fetcher is not None
+            and current_msg.agent_url
+            and current_task is not None
+            and current_task.id
+        ):
+            fetched = await self._terminal_task_fetcher(
+                current_msg.agent_url, current_task.id
+            )
+            if fetched is not None and is_terminal_state(fetched.status.state):
+                updated_task = fetched
+
         # 4. Normalize Task -> AgentEvent and delegate
-        event = self._task_to_event(updated_task, current_msg)
+        is_artifact_update = _artifact_update_payload(payload)
+        event = await asyncio.to_thread(
+            self._artifact_update_event if is_artifact_update else self._task_to_event,
+            *(
+                (payload, updated_task, current_msg)
+                if is_artifact_update
+                else (updated_task, current_msg)
+            ),
+        )
         await self.response_handler.handle(event)
 
         return {"status": "accepted"}
@@ -268,6 +316,51 @@ class WebhookTransport(AgentTransport):
             state=state_value,
         )
 
+    def _artifact_update_event(
+        self, payload: JsonMap, task: Any, msg: RoomAgentMessage
+    ) -> AgentEvent:
+        envelope = payload.get("result")
+        source = envelope if isinstance(envelope, dict) else payload
+        update = source.get("artifactUpdate") or source.get("artifact_update")
+        if not isinstance(update, dict):
+            update = payload
+        update_metadata = update.get("metadata")
+        if not isinstance(update_metadata, dict):
+            update_metadata = {}
+        stable_update_id = next(
+            (
+                str(value)
+                for key in ("event_id", "eventId", "idempotency_key", "idempotencyKey")
+                if (value := update_metadata.get(key)) is not None
+            ),
+            None,
+        )
+        if (
+            stable_update_id is None
+            and payload.get("jsonrpc") is not None
+            and payload.get("id") is not None
+        ):
+            stable_update_id = _jsonrpc_update_id(payload)
+        artifacts = [
+            artifact.model_dump(mode="json", exclude_none=True)
+            for artifact in (getattr(task, "artifacts", None) or [])
+        ]
+        return AgentEvent(
+            kind="artifact_update",
+            message_id=msg.message_id,
+            room_id=msg.room_id,
+            agent_id=msg.agent_id or "",
+            related_message_id=msg.related_message_id,
+            user_id=msg.user_id,
+            client_request_id=msg.client_request_id,
+            task_id=getattr(task, "id", None),
+            context_id=getattr(task, "context_id", None),
+            artifacts=artifacts,
+            append=bool(update.get("append", False)),
+            last_chunk=bool(update.get("lastChunk", update.get("last_chunk", False))),
+            artifact_update_id=stable_update_id,
+        )
+
 
 def parse_stream_response(payload: dict[str, Any], message_id: str) -> Any:
     """Parse A2A StreamResponse format into a Task object.
@@ -284,3 +377,12 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Any:
         return parse_stream_response_payload(payload, message_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _artifact_update_payload(payload: JsonMap) -> bool:
+    if "artifactUpdate" in payload or "artifact_update" in payload:
+        return True
+    result = payload.get("result")
+    return isinstance(result, dict) and (
+        "artifactUpdate" in result or "artifact_update" in result
+    )

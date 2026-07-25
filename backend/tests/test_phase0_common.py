@@ -105,11 +105,13 @@ def test_phase0_dtos_can_be_instantiated():
     FileMetadata(
         file_id="f1",
         room_id="r1",
-        user_id="u1",
-        s3_key="uploads/r1/f1/x.txt",
+        owner_id="u1",
+        source="user_upload",
         mime_type="text/plain",
         file_name="x.txt",
         size_bytes=1,
+        sha256="0" * 64,
+        status="ready",
     )
     GatewayRoute(agent_id="a1", gateway_url="/gateway/a1")
     QueryFilter(criteria={"room_id": "r1"})

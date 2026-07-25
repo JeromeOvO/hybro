@@ -137,7 +137,7 @@ def test_common_a2a_helpers_do_not_perform_storage_signing():
 def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
     seams = {
         Path("common/utils/a2a_helpers.py"): {
-            "a2a_artifact_storage": "A2AArtifactStorage | None"
+            "a2a_artifact_storage": "A2AArtifactFiles | None"
         },
         Path("common/utils/context_utils.py"): {
             "context_turn_factory": "ContextTurnFactory | None"
@@ -469,11 +469,13 @@ def test_common_foundation_dtos_can_be_instantiated():
     FileMetadata(
         file_id="f1",
         room_id="r1",
-        user_id="u1",
-        s3_key="uploads/r1/f1/x.txt",
+        owner_id="u1",
+        source="user_upload",
         mime_type="text/plain",
         file_name="x.txt",
         size_bytes=1,
+        sha256="0" * 64,
+        status="ready",
     )
     GatewayRoute(agent_id="a1", gateway_url="/gateway/a1")
     QueryFilter(criteria={"room_id": "r1"})
@@ -967,13 +969,12 @@ def test_protocol_methods_match_design_doc():
             "remove_connection",
             "get_room_status",
         },
-        protocols.WebhookReceiver: {"handle_webhook"},
+        protocols.WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         protocols.RoomDistributedLock: {"acquire", "release"},
         protocols.RoomMembershipSeedSource: {
             "get_saved_group",
             "list_current_agents",
         },
-        protocols.AgentAvatarManager: {"store_avatar"},
         protocols.APIKeyStore: {
             "add_api_key",
             "deactivate_api_key",
@@ -1181,7 +1182,16 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.GatewayDiscoveryProvider: {"discover_agents"},
         protocols.RateLimiter: {"check", "check_global"},
-        protocols.FileStorage: {"upload", "get_url", "delete", "list_for_room"},
+        protocols.FileStorage: {
+            "upload",
+            "get_url",
+            "delete",
+            "list_for_room",
+            "get_ready_file",
+            "prepare_download",
+            "stream",
+        },
+        protocols.PreparedFileStream: {"aclose"},
         protocols.AgentTransport: {"send_message", "stream_message"},
         protocols.APIKeyPrincipal: set(),
         protocols.APIKeyAuthenticator: {"validate_api_key"},
@@ -1236,17 +1246,6 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
-        protocols.ObjectStorageDAL: {
-            "put",
-            "put_file",
-            "get_text",
-            "get_bytes",
-            "get_presigned_url",
-            "delete",
-            "delete_prefix",
-            "get_public_url",
-            "head",
-        },
         protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
         protocols.IndexRegistry: {"register", "ensure_all"},
@@ -1452,6 +1451,10 @@ def test_protocol_methods_match_design_doc():
     _assert_params(
         protocols.SSERouteTransport.get_room_status,
         ["self", "room_id"],
+    )
+    _assert_params(
+        protocols.WebhookReceiver.authenticate_webhook,
+        ["self", "message_id", "token"],
     )
     _assert_params(
         protocols.WebhookReceiver.handle_webhook,

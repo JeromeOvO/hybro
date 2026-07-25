@@ -978,6 +978,18 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
       if (a.agentResults[i].artifacts[j].artifactId !== b.agentResults[i].artifacts[j].artifactId) return false
       if (a.agentResults[i].artifacts[j].isStreaming !== b.agentResults[i].artifacts[j].isStreaming) return false
       if (a.agentResults[i].artifacts[j].parts.length !== b.agentResults[i].artifacts[j].parts.length) return false
+      for (let k = 0; k < a.agentResults[i].artifacts[j].parts.length; k++) {
+        const left = a.agentResults[i].artifacts[j].parts[k]
+        const right = b.agentResults[i].artifacts[j].parts[k]
+        if (left.kind !== right.kind) return false
+        if (left.text !== right.text) return false
+        if (left.file?.fileId !== right.file?.fileId) return false
+        if (left.file?.name !== right.file?.name) return false
+        if (left.file?.mime_type !== right.file?.mime_type) return false
+        if (left.file?.sizeBytes !== right.file?.sizeBytes) return false
+        if (left.file?.sha256 !== right.file?.sha256) return false
+        if (JSON.stringify(left.data) !== JSON.stringify(right.data)) return false
+      }
     }
     // V2 AgentResultViewModel fields
     if (a.agentResults[i].hitlResolved?.prompt !== b.agentResults[i].hitlResolved?.prompt) return false

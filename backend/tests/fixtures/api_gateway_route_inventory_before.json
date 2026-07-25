@@ -56,7 +56,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -223,29 +222,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_service",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/agent/{agent_id}/avatar",
-    "methods": [
-      "POST"
-    ],
-    "name": "upload_agent_avatar",
-    "endpoint_module": "api_gateway.routes.agent_routes",
-    "declared_owner": "api_gateway.routes.agent_routes",
-    "tags": [
-      "agent"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_agent_avatar_manager",
-      "get_agent_service",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -430,7 +406,7 @@
       "POST"
     ],
     "name": "create_endpoint",
-    "endpoint_module": "api_gateway.viewsets.base",
+    "endpoint_module": "api_gateway.viewsets.agent",
     "declared_owner": "api_gateway.routes.agent_routes",
     "tags": [
       "agent",
@@ -439,7 +415,8 @@
     "status_code": 201,
     "dependencies": [
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -461,7 +438,8 @@
     "status_code": 204,
     "dependencies": [
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -505,7 +483,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -527,7 +506,8 @@
     "status_code": null,
     "dependencies": [
       "get_current_user",
-      "get_viewset_repository"
+      "get_viewset_repository",
+      "get_viewset_repository_provider"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -551,6 +531,28 @@
       "get_current_user",
       "get_file_storage",
       "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/files/{file_id}/content",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_file",
+    "endpoint_module": "api_gateway.routes.files_routes",
+    "declared_owner": "api_gateway.routes.files_routes",
+    "tags": [
+      "files",
+      "files"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_file_storage"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -843,7 +845,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -863,7 +866,10 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -883,7 +889,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -903,7 +911,10 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -923,7 +934,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -943,7 +955,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -984,7 +998,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1004,7 +1020,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1024,7 +1042,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1066,7 +1086,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1087,7 +1109,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1108,7 +1132,9 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user"
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -1215,7 +1241,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_webhook_transport"
+      "get_webhook_receiver"
     ],
     "auth_dependencies": [],
     "include_in_schema": true

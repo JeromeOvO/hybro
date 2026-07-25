@@ -13,7 +13,7 @@ function hasContent(artifact: ArtifactData): boolean {
   if (artifact.isStreaming) return true
   return artifact.parts.some(p =>
     (p.kind === 'text' && !!p.text?.trim()) ||
-    (p.kind === 'file' && !!(p.file?.uri || p.file?.bytes)) ||
+    (p.kind === 'file' && !!p.file?.fileId) ||
     (p.kind === 'data' && p.data != null && Object.keys(p.data).length > 0)
   )
 }

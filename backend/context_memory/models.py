@@ -19,8 +19,6 @@ class ContentReferenceData:
     document_id: str | None = None
     content_hash: str | None = None
     created_at: datetime | str | None = None
-    s3_bucket: str | None = None
-    s3_key: str | None = None
     url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -32,8 +30,6 @@ class ContentReferenceData:
                 "document_id": self.document_id,
                 "content_hash": self.content_hash,
                 "created_at": self.created_at,
-                "s3_bucket": self.s3_bucket,
-                "s3_key": self.s3_key,
                 "url": self.url,
             }.items()
             if value is not None
@@ -42,8 +38,6 @@ class ContentReferenceData:
     def to_compact_string(self) -> str:
         if self.storage_type == "mongodb":
             return f"[Content stored: db/{self.collection}/{self.document_id}]"
-        if self.storage_type == "s3":
-            return f"[Content stored: s3://{self.s3_bucket}/{self.s3_key}]"
         if self.storage_type == "url":
             return f"[Content from: {self.url}]"
         return "[Content reference]"

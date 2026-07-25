@@ -16,7 +16,15 @@ class RoomMongoRepository:
         return await self._rooms.find_one({"room_id": room_id})
 
     async def get_by_owner(self, owner_id: str) -> list[dict]:
-        return await self._rooms.find({"room_owner_id": owner_id})
+        return await self._rooms.find(
+            {
+                "room_owner_id": owner_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            }
+        )
 
     async def create(self, room: dict) -> str:
         inserted_id = await self._rooms.insert_one(dict(room))
@@ -24,12 +32,25 @@ class RoomMongoRepository:
 
     async def update(self, room_id: str, updates: dict) -> bool:
         return await self._rooms.update_one(
-            {"room_id": room_id}, {"$set": dict(updates)}
+            {
+                "room_id": room_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            {"$set": dict(updates)},
         )
 
     async def update_fields(self, room_id: str, updates: dict) -> dict | None:
         return await self._rooms.find_one_and_update(
-            {"room_id": room_id},
+            {
+                "room_id": room_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
             {"$set": dict(updates)},
             return_document=True,
         )

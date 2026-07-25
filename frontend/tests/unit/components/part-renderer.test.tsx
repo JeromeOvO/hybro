@@ -1,7 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { CollapsibleJsonBlock, PartRenderer } from '@/components/part-renderer'
 import type { ArtifactPart } from '@/stores/message-store/types'
+
+vi.mock('@/hooks/useRoomFile', () => ({
+  useRoomFile: (fileId: string | undefined, preview: boolean) => ({
+    objectUrl: fileId && preview ? `blob:${fileId}` : null,
+    error: null,
+    download: vi.fn(),
+  }),
+}))
 
 describe('PartRenderer', () => {
   it('renders text part as paragraph', () => {
@@ -15,64 +23,63 @@ describe('PartRenderer', () => {
   it('renders image file as img with alt', () => {
     const part: ArtifactPart = {
       kind: 'file',
-      file: { uri: 'https://example.com/pic.png', mime_type: 'image/png', name: 'pic.png' },
+      file: { fileId: 'a'.repeat(32), mime_type: 'image/png', name: 'pic.png' },
     }
     const { container } = render(<PartRenderer part={part} />)
     const img = container.querySelector('img')
 
     expect(img).toBeTruthy()
-    expect(img!.getAttribute('src')).toBe('https://example.com/pic.png')
+    expect(img!.getAttribute('src')).toBe(`blob:${'a'.repeat(32)}`)
     expect(img!.getAttribute('alt')).toBe('pic.png')
   })
 
   it('renders audio file as audio element', () => {
     const part: ArtifactPart = {
       kind: 'file',
-      file: { uri: 'https://example.com/clip.mp3', mime_type: 'audio/mpeg', name: 'clip.mp3' },
+      file: { fileId: 'b'.repeat(32), mime_type: 'audio/mpeg', name: 'clip.mp3' },
     }
     const { container } = render(<PartRenderer part={part} />)
     const audio = container.querySelector('audio')
 
     expect(audio).toBeTruthy()
     const source = audio!.querySelector('source')
-    expect(source!.getAttribute('src')).toBe('https://example.com/clip.mp3')
+    expect(source!.getAttribute('src')).toBe(`blob:${'b'.repeat(32)}`)
     expect(source!.getAttribute('type')).toBe('audio/mpeg')
   })
 
   it('renders video file as video element', () => {
     const part: ArtifactPart = {
       kind: 'file',
-      file: { uri: 'https://example.com/video.mp4', mime_type: 'video/mp4', name: 'video.mp4' },
+      file: { fileId: 'c'.repeat(32), mime_type: 'video/mp4', name: 'video.mp4' },
     }
     const { container } = render(<PartRenderer part={part} />)
     const video = container.querySelector('video')
 
     expect(video).toBeTruthy()
     const source = video!.querySelector('source')
-    expect(source!.getAttribute('src')).toBe('https://example.com/video.mp4')
+    expect(source!.getAttribute('src')).toBe(`blob:${'c'.repeat(32)}`)
     expect(source!.getAttribute('type')).toBe('video/mp4')
   })
 
-  it('renders generic file as download link', () => {
+  it('renders generic file as authenticated download button', () => {
     const part: ArtifactPart = {
       kind: 'file',
-      file: { uri: 'https://example.com/doc.pdf', mime_type: 'application/pdf', name: 'doc.pdf' },
+      file: { fileId: 'd'.repeat(32), mime_type: 'application/pdf', name: 'doc.pdf' },
     }
     const { container } = render(<PartRenderer part={part} />)
-    const link = container.querySelector('a')
+    const button = container.querySelector('button')
 
-    expect(link).toBeTruthy()
-    expect(link!.getAttribute('href')).toBe('https://example.com/doc.pdf')
-    expect(link!.getAttribute('target')).toBe('_blank')
+    expect(button).toBeTruthy()
+    expect(container.querySelector('a')).toBeNull()
     expect(screen.getByText('doc.pdf')).toBeTruthy()
   })
 
   it('does not render inline file bytes without a URI', () => {
     const privateBytes = 'PRIVATE_SENTINEL_renderer_file_bytes'
-    const part: ArtifactPart = {
+    const part = {
       kind: 'file',
       file: { bytes: privateBytes, mime_type: 'image/png', name: 'private.png' },
-    }
+    } as unknown as ArtifactPart
     const { container } = render(<PartRenderer part={part} />)
 
     expect(container.querySelector('img')).toBeNull()

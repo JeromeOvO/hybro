@@ -54,9 +54,11 @@ class RunCommandHandler:
         *,
         run_repository: RunRepository,
         run_event_repository: RunEventRepository,
+        room_files=None,
     ) -> None:
         self._runs = run_repository
         self._run_events = run_event_repository
+        self._room_files = room_files
 
     def _normalize_status(self, status: Any) -> str:
         return status.value if hasattr(status, "value") else str(status)
@@ -72,10 +74,21 @@ class RunCommandHandler:
         *,
         client_request_id: str | None = None,
         details: str | None = None,
+        _lease_held: bool = False,
     ) -> dict[str, Any] | None:
         """Persist lifecycle from processing_status semantics. Returns last run_event payload for SSE."""
         if not _feature_run_dual_write_enabled() or not room_id or not message_id:
             return None
+        if self._room_files is not None and not _lease_held:
+            async with self._room_files.write_lease(room_id, "run-processing-status"):
+                return await self.record_processing_status(
+                    room_id,
+                    status,
+                    message_id,
+                    client_request_id=client_request_id,
+                    details=details,
+                    _lease_held=True,
+                )
 
         status_value = self._normalize_status(status)
         run_id = self._run_id_for_message(message_id)
@@ -165,11 +178,25 @@ class RunCommandHandler:
         causation_id: str,
         client_request_id: str | None = None,
         terminal_summary: dict[str, Any] | None = None,
+        _lease_held: bool = False,
     ) -> dict[str, Any] | None:
         if not _feature_run_dual_write_enabled():
             return None
         if not isinstance(target_state, RunState):
             raise TypeError("target_state must be a public RunState")
+        if self._room_files is not None and not _lease_held:
+            async with self._room_files.write_lease(room_id, "run-projection"):
+                return await self.project_run_state(
+                    room_id=room_id,
+                    run_id=run_id,
+                    trigger_message_id=trigger_message_id,
+                    target_state=target_state,
+                    terminal_reason=terminal_reason,
+                    causation_id=causation_id,
+                    client_request_id=client_request_id,
+                    terminal_summary=terminal_summary,
+                    _lease_held=True,
+                )
 
         state = target_state
         existing = await self._find_existing_projection_event(
@@ -332,7 +359,12 @@ class RunCommandHandler:
         return True
 
     async def append_run_timeout_failure(
-        self, room_id: str, run_id: str, *, stale_minutes: int
+        self,
+        room_id: str,
+        run_id: str,
+        *,
+        stale_minutes: int,
+        _lease_held: bool = False,
     ) -> dict[str, Any] | None:
         """Watchdog: fail a stuck non-terminal run.
 
@@ -343,6 +375,14 @@ class RunCommandHandler:
         """
         if not _feature_run_dual_write_enabled():
             return None
+        if self._room_files is not None and not _lease_held:
+            async with self._room_files.write_lease(room_id, "run-watchdog"):
+                return await self.append_run_timeout_failure(
+                    room_id,
+                    run_id,
+                    stale_minutes=stale_minutes,
+                    _lease_held=True,
+                )
 
         if await self.heal_head_from_events(run_id):
             return None

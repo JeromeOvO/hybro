@@ -15,11 +15,13 @@ class RateLimitInfo(FrozenDTO):
 class FileMetadata(FrozenDTO):
     file_id: str
     room_id: str
-    user_id: str
-    s3_key: str
+    owner_id: str
+    source: str
     mime_type: str
     file_name: str
     size_bytes: int
+    sha256: str
+    status: str
     created_at: datetime | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 

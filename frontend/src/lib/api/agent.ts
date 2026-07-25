@@ -54,30 +54,6 @@ export async function updateAgent(
   )
 }
 
-// Upload a custom avatar image for an agent
-export async function uploadAgentAvatar(
-  agentId: string,
-  file: File,
-  getToken?: () => Promise<string | null>
-): Promise<{ iconUrl: string }> {
-  const { getClientAuthHeaders } = await import('../auth')
-  const authHeaders = await getClientAuthHeaders(getToken)
-  // Remove Content-Type so the browser sets multipart/form-data with the correct boundary
-  const { 'Content-Type': _ct, ...multipartHeaders } = authHeaders as Record<string, string>
-  const formData = new FormData()
-  formData.append('file', file)
-  const response = await fetch(`${API_BASE_URL}/${agentId}/avatar`, {
-    method: 'POST',
-    headers: multipartHeaders,
-    body: formData,
-  })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`Avatar upload failed (${response.status}): ${text}`)
-  }
-  return response.json()
-}
-
 // Delete agent
 export async function deleteAgent(
   request: AgentCenterRequest,
@@ -154,4 +130,4 @@ export async function getAgentListWithConditions(
     request,
     getToken
   )
-} 
+}

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+from common.utils.logger import get_logger
 from hub_runtime_bridge.service.hub_publish import internal_event_from_journal_claim
+
+logger = get_logger(__name__)
 
 
 class HubResponseReplayWorker:
@@ -49,16 +52,23 @@ class HubResponseReplayWorker:
     async def replay_once(self) -> int:
         count = 0
         for record in await self._journal.find_replayable(self._batch_size):
-            if not await self._owns_record(record):
-                continue
-            claim = await self._journal.claim_for_processing(
-                record["journal_id"], self._worker_id
-            )
-            if claim:
-                await self._dispatcher.dispatch_hub_internal_response(
-                    internal_event_from_journal_claim(claim)
+            try:
+                if not await self._owns_record(record):
+                    continue
+                claim = await self._journal.claim_for_processing(
+                    record["journal_id"], self._worker_id
                 )
-                count += 1
+                if claim:
+                    await self._dispatcher.dispatch_hub_internal_response(
+                        internal_event_from_journal_claim(claim)
+                    )
+                    count += 1
+            except Exception:
+                logger.warning(
+                    "Hub journal replay failed for %s",
+                    record.get("journal_id", "<missing>"),
+                    exc_info=True,
+                )
         return count
 
     async def _run(self) -> None:
