@@ -239,6 +239,48 @@ async def test_room_files_rejects_upload_before_writing_metadata_or_content():
     assert collection.docs == []
 
 
+async def test_missing_local_content_does_not_tombstone_shared_metadata():
+    now = datetime(2026, 7, 23, tzinfo=UTC)
+    file_id = "d" * 32
+    collection = InMemoryCollection()
+    collection.docs.append(
+        {
+            "file_id": file_id,
+            "room_id": "room-1",
+            "owner_id": "user-1",
+            "source": "user_upload",
+            "file_name": "remote.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 6,
+            "sha256": "missing-locally",
+            "status": "ready",
+            "version": 2,
+            "reference_claims": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    files = RoomFiles(
+        metadata=collection,
+        content=MemoryFileContentStore(),
+        now=lambda: now,
+    )
+
+    assert await files.get_ready_file(file_id, owner_id="user-1") is None
+    assert (
+        await files.prepare_download(
+            file_id,
+            owner_id="user-1",
+            chunk_size=1024,
+        )
+        is None
+    )
+    assert await files.recover() == 0
+    assert collection.docs[0]["status"] == "ready"
+    assert collection.docs[0]["version"] == 2
+    assert "delete_reason" not in collection.docs[0]
+
+
 async def test_room_files_materializes_agent_artifact_idempotently():
     collection = InMemoryCollection()
     rooms = InMemoryCollection()

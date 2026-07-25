@@ -352,7 +352,6 @@ class RoomFiles:
         if exists is not None and not await exists(
             file_id, int(doc.get("size_bytes") or 0)
         ):
-            await self._mark_unavailable(file_id, int(doc.get("version", 1)))
             return None
         return FileInfo(
             file_id=str(doc["file_id"]),
@@ -385,7 +384,6 @@ class RoomFiles:
             expected_size=size_bytes,
         )
         if stream is None:
-            await self._mark_unavailable(file_id, int(doc.get("version", 1)))
             return None
         return (
             FileInfo(
@@ -947,38 +945,8 @@ class RoomFiles:
                 return None
         return None
 
-    async def _mark_unavailable(self, file_id: str, version: int) -> bool:
-        result = await self._metadata.update_one(
-            {"file_id": file_id, "status": "ready", "version": version},
-            {
-                "$set": {
-                    "status": "delete_pending",
-                    "delete_reason": "compensation",
-                    "delete_claimed_at": self._now(),
-                    "updated_at": self._now(),
-                },
-                "$inc": {"version": 1},
-            },
-        )
-        return _changed(result)
-
     async def _reconcile_content(self) -> int:
         recovered = 0
-        exists = getattr(self._content, "exists", None)
-        if exists is not None:
-            cursor = self._metadata.find({"status": "ready"})
-            if inspect.isawaitable(cursor):
-                cursor = await cursor
-            async for doc in _aiter_documents(cursor):
-                if not await exists(
-                    str(doc["file_id"]),
-                    int(doc.get("size_bytes") or 0),
-                    str(doc.get("sha256") or "") or None,
-                ) and await self._mark_unavailable(
-                    str(doc["file_id"]), int(doc.get("version", 1))
-                ):
-                    recovered += 1
-
         list_file_ids = getattr(self._content, "list_file_ids", None)
         if list_file_ids is not None:
             for file_id in await list_file_ids():

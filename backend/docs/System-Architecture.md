@@ -677,6 +677,13 @@ the `FileContentStore`/`FileStorage` contracts and do not construct filesystem
 paths. A future remote object-store adapter can replace the content store at
 composition time without changing room, API, or A2A contracts.
 
+Every application instance connected to the same MongoDB must also mount the
+same persistent `HYBRO_FILE_DIR`. A local content miss is treated
+non-destructively: reads return unavailable without changing shared metadata,
+because the bytes may still exist on another instance. Recovery deletes local
+content that has no metadata, but it does not tombstone ready metadata solely
+because the current process cannot see the corresponding local file.
+
 Agent artifact replacement is also owned by this boundary. After an
 `append=false` journal replacement commits, superseded file IDs are claimed and
 deleted only after the complete committed journal confirms that no artifact
