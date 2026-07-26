@@ -6,9 +6,7 @@ import subprocess
 from pathlib import Path
 
 SCRIPT = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "ensure_webhook_signing_key.sh"
+    Path(__file__).resolve().parents[1] / "scripts" / "ensure_webhook_signing_key.sh"
 )
 
 
