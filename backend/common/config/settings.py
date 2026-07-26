@@ -255,6 +255,14 @@ class Settings(BaseSettings):
         except (TypeError, ValueError):
             return 5
 
+    @field_validator("webhook_signing_key", mode="before")
+    @classmethod
+    def validate_webhook_signing_key(cls, value):
+        key = str(value or "").strip()
+        if key and len(key.encode()) < 32:
+            raise ValueError("WEBHOOK_SIGNING_KEY must be at least 32 bytes")
+        return key
+
     @field_validator("feature_run_dual_write", mode="before")
     @classmethod
     def normalize_feature_run_dual_write(cls, value):

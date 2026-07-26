@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from common.config.settings import Settings
 
@@ -242,3 +243,25 @@ def test_compaction_concurrency_preserves_legacy_fallbacks(
     settings = Settings(_env_file=None, compaction_concurrency=raw)
 
     assert settings.compaction_concurrency == expected
+
+
+def test_webhook_signing_key_allows_disabled_default() -> None:
+    settings = Settings(_env_file=None, webhook_signing_key="")
+
+    assert settings.webhook_signing_key == ""
+
+
+def test_webhook_signing_key_accepts_at_least_32_bytes() -> None:
+    signing_key = "k" * 32
+
+    settings = Settings(_env_file=None, webhook_signing_key=f" {signing_key} ")
+
+    assert settings.webhook_signing_key == signing_key
+
+
+def test_webhook_signing_key_rejects_short_configured_value() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="WEBHOOK_SIGNING_KEY must be at least 32 bytes",
+    ):
+        Settings(_env_file=None, webhook_signing_key="too-short")

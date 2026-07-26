@@ -41,6 +41,10 @@ if [ ! -f backend/.env ]; then
     fi
 fi
 
+if [ -f backend/.env ]; then
+    sh backend/scripts/ensure_webhook_signing_key.sh backend/.env
+fi
+
 if [ ! -f frontend/.env.local ]; then
     if [ -f frontend/.env.example ]; then
         cp frontend/.env.example frontend/.env.local
