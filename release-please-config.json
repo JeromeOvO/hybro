@@ -1,14 +1,17 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "include-component-in-tag": false,
   "packages": {
     ".": {
-      "release-type": "node",
+      "release-type": "simple",
       "package-name": "hybro",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
       "extra-files": [
         "VERSION",
-        "backend/pyproject.toml"
+        "backend/pyproject.toml",
+        "frontend/package.json",
+        "frontend/package-lock.json"
       ]
     }
   }
