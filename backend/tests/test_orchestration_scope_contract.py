@@ -721,7 +721,11 @@ async def test_v2_mentions_must_be_subset_of_selected_candidates():
     svc._persist_user_message.assert_not_awaited()
 
 
-def _v2_preflight_context(*, pending_clarification: bool = False):
+def _v2_preflight_context(
+    *,
+    pending_clarification: bool = False,
+    empty_scope: bool = False,
+):
     room_extend_info = {"use_supervisor": True, "debateMode": False}
     if pending_clarification:
         room_extend_info["pending_clarification_message_id"] = "clarify-1"
@@ -751,6 +755,9 @@ def _v2_preflight_context(*, pending_clarification: bool = False):
         },
     )
     agent = _agent("agent-1", "Agent One")
+    selected_scope = (
+        ({}, True, []) if empty_scope else ({"agent-1": "Agent One"}, False, [agent])
+    )
     return RoomMessagePreflightContext(
         request=request,
         target_group="room_team",
@@ -763,7 +770,7 @@ def _v2_preflight_context(*, pending_clarification: bool = False):
         message_text="Coordinate this",
         pre_resolved_mentions=None,
         pre_resolved_scope=None,
-        pre_resolved_selected_scope=({"agent-1": "Agent One"}, False, [agent]),
+        pre_resolved_selected_scope=selected_scope,
         token=SimpleNamespace(is_cancelled=False),
     )
 
@@ -810,3 +817,26 @@ async def test_v2_pending_clarification_resumes_before_new_envelope(monkeypatch)
     svc._prepare_clarify_resume.assert_awaited_once()
     svc._prepare_orchestration_envelope.assert_not_awaited()
     svc._prepare_for_supervisor.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_empty_scope_still_prepares_supervisor_envelope(monkeypatch):
+    monkeypatch.setattr(settings, "execution_orchestration_v2", True)
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._handle_no_agents_fallback = AsyncMock()
+    svc._prepare_orchestration_envelope = AsyncMock(
+        return_value=ParseResult(success=True)
+    )
+
+    response = await svc.run_message_preflight_to_room(
+        _v2_preflight_context(empty_scope=True)
+    )
+
+    assert response.success is True
+    svc._handle_no_agents_fallback.assert_not_awaited()
+    svc._prepare_orchestration_envelope.assert_awaited_once()
+    assert (
+        svc._prepare_orchestration_envelope.await_args.kwargs["selected_agent_set"]
+        == {}
+    )

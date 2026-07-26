@@ -344,7 +344,24 @@ activate the versioned runtime.
 Versioned supervisor requests can also carry an explicit candidate scope from
 the API boundary into a lightweight orchestration envelope. Scope normalization
 rejects unknown, inaccessible, or inconsistent agent selections before planner
-execution. The versioned planner action schema and pure action validator enforce
+execution. The frontend selector defines this scope: `all_agents` snapshots every
+visible active Agent, `room_default` snapshots active room members, and explicit
+or saved-group selections snapshot their authorized members. Execution does not
+run Mongo lexical matching before the Supervisor; it supplies every Agent Card
+profile in the selected scope so the Supervisor makes the suitability decision.
+Lexical matching remains available to discovery and suggestion surfaces.
+
+The Supervisor applies an agent-first policy. It delegates to one suitable Agent,
+delegates independent work to multiple Agents in parallel, or delegates dependent
+work sequentially. When no scoped Agent is suitable, or suitable Agent execution
+has failed with no useful retry or alternate, the dedicated `platform_answer`
+action streams a direct HYBRO Platform LLM response. A no-suitable-Agent response
+must disclose that the currently connected Agents have limited capability for the
+request; an execution-failure fallback must distinguish that operational failure.
+An empty candidate scope is therefore a valid Supervisor input, not a pending
+synthetic A2A task.
+
+The versioned planner action schema and pure action validator enforce
 candidate membership, step-budget, required-target, and prior-output rules while
 the existing supervisor loop remains the default runtime path. Lightweight v2
 envelope activation and state-driven execution are disabled by default behind
@@ -725,9 +742,11 @@ Important Mongo collections include:
 - `gateway_api_requests`
 - `agent_capability_issues`
 
-Mongo text indexes support Agent lexical matching and Context Memory keyword
-retrieval. Room file metadata lives in MongoDB and file bytes live in the local
-file directory.
+Mongo text indexes support Agent lexical matching for discovery/suggestion
+surfaces and Context Memory keyword retrieval. Supervisor execution routing does
+not use lexical matching; it evaluates the complete authorized candidate scope.
+Room file metadata lives in MongoDB and file bytes live in the local file
+directory.
 
 At startup, each search index is compared with its required keys and weights.
 Because MongoDB permits only one text index per collection, a mismatched index
@@ -850,7 +869,11 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - Assemble room/conversation context.
    - Run the adaptive `SupervisorExecutor` loop.
    - The supervisor compares the persisted goal with accumulated context and
-     decides whether to delegate, ask for clarification, fail, or complete.
+     prefers suitable Agents from the complete selector-defined scope.
+   - If no scoped Agent is suitable, use `platform_answer` to stream a direct
+     Platform response with the required connected-Agent capability disclosure.
+   - The Supervisor can delegate to one Agent or coordinate multiple Agents in
+     parallel or sequence.
    - Execution performs final synthesis after `complete` and marks the run
      terminal only after the user-facing response has been streamed.
    - Agent messages are created dynamically instead of being pre-generated.

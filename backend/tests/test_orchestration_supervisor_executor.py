@@ -1597,6 +1597,55 @@ async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
 
 
 @pytest.mark.asyncio
+async def test_platform_answers_directly_when_no_candidate_agent_is_suitable():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="What is 2 + 2?"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": [],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.PLATFORM_ANSWER,
+            reasoning="No connected agent is suitable for this general question.",
+            synthesis_instruction="Answer the question directly.",
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="What is 2 + 2?",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.synthesis_text == "Final summary"
+    executor.agent_message_processor.process_single_message.assert_not_awaited()
+    synthesis_instruction = executor._stream_supervisor_synthesis.await_args.kwargs[
+        "synthesis_instruction"
+    ]
+    assert "Answer the question directly." in synthesis_instruction
+    assert "connected agents have limited capabilities" in synthesis_instruction
+    state = await store.get_latest_by_user_message_id("message-1")
+    assert state is not None
+    assert state.status == OrchestrationStatus.COMPLETED
+    assert state.candidate_agent_ids == []
+
+
+@pytest.mark.asyncio
 async def test_supervisor_records_dispatch_status_through_run_reducer():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(
@@ -10031,6 +10080,17 @@ def test_orchestration_envelope_requires_candidate_scope():
                 "orchestration_schema_version": 2,
                 "orchestration_run_id": "message-1",
                 "candidate_agent_ids": ["agent-1"],
+            }
+        )
+        is True
+    )
+    assert (
+        RoomMessageCenter._is_v2_supervisor_envelope(
+            {
+                "orchestration": True,
+                "orchestration_schema_version": 2,
+                "orchestration_run_id": "message-2",
+                "candidate_agent_ids": [],
             }
         )
         is True

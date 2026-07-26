@@ -155,6 +155,55 @@ async def test_room_team_bypasses_matcher():
 
 
 @pytest.mark.asyncio
+async def test_all_agents_scope_returns_every_active_agent_without_matching():
+    """Execution routing gives the Supervisor the complete active scope."""
+    from models.room import Room
+
+    agents = [
+        _make_agent("agent1", "Agent One", "Handles research"),
+        _make_agent("agent2", "Agent Two", "Handles analysis"),
+    ]
+    room = Room(
+        room_id="room123",
+        room_name="Test Room",
+        room_owner_id="user123",
+        room_owner_name="Test User",
+    )
+    room_runtime = RoomServices()
+    room_runtime._store = MagicMock()
+    room_runtime._store.get_all_active_agents = AsyncMock(return_value=agents)
+    room_runtime._sanitize_routing_scope = AsyncMock(return_value=(agents, []))
+    room_runtime.agent_selection_service = MagicMock()
+    room_runtime.agent_selection_service.select_agents_for_message = AsyncMock()
+
+    result = await room_runtime._resolve_explicit_target_scope(
+        room=room,
+        message_text="A request that lexical search would normally filter",
+        target_group="all_agents",
+        is_debate_mode=False,
+        sender_user_id="user123",
+    )
+
+    assert isinstance(result, tuple)
+    selected_agent_set, auto_assign, resolved_agents = result
+    assert selected_agent_set == {
+        "agent1": "Agent One",
+        "agent2": "Agent Two",
+    }
+    assert auto_assign is True
+    assert resolved_agents == agents
+    room_runtime._store.get_all_active_agents.assert_awaited_once_with(
+        user_id="user123"
+    )
+    room_runtime._sanitize_routing_scope.assert_awaited_once_with(
+        ["agent1", "agent2"],
+        sender_user_id="user123",
+        required_input_modes=None,
+    )
+    room_runtime.agent_selection_service.select_agents_for_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_debate_dispatcher_shared_by_both_paths():
     """Verify both debate_service and SequentialDebateDispatcher produce same output."""
     original_task = "Analyze this data"

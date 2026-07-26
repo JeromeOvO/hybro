@@ -1223,6 +1223,61 @@ def test_complete_and_synthesize_before_agent_output_are_rejected(action_type):
         _validate(action, has_agent_output=False)
 
 
+def test_platform_answer_before_agent_output_is_allowed():
+    action = PlannerAction(
+        action=PlannerActionType.PLATFORM_ANSWER,
+        reasoning="No suitable agent in the selected scope.",
+        synthesis_instruction=(
+            "Answer directly and disclose that the connected agents do not cover "
+            "this request."
+        ),
+    )
+
+    result = _validate(action, has_agent_output=False)
+
+    assert result is action
+
+
+def test_platform_answer_is_allowed_after_step_budget_is_exhausted():
+    action = PlannerAction(
+        action=PlannerActionType.PLATFORM_ANSWER,
+        reasoning="Agent execution failed and no alternate remains.",
+        synthesis_instruction="Answer directly and disclose the execution failure.",
+    )
+
+    result = _validate(action, steps_used=8, step_budget=8)
+
+    assert result is action
+
+
+def test_platform_answer_is_part_of_planner_response_schema():
+    payload = {
+        "action": "platform_answer",
+        "reasoning": "No suitable agent in scope.",
+        "targets": [],
+        "questions": [],
+        "synthesis_instruction": "Answer directly with a capability limitation.",
+        "failure_reason": None,
+        "completion_evidence": None,
+    }
+
+    validate(payload, PLANNER_ACTION_RESPONSE_SCHEMA)
+    parsed = RoomSupervisorService.parse_planner_action(payload)
+
+    assert parsed.action == PlannerActionType.PLATFORM_ANSWER
+
+
+def test_planner_prompt_requires_domain_supported_agent_suitability():
+    import inspect
+
+    source = inspect.getsource(RoomSupervisorPlannerAdapter._call_supervisor_service)
+
+    assert "Agent Card's" in source
+    assert "accepting text" in source
+    assert "unrelated " in source
+    assert '"domain.' in source
+
+
 def test_complete_allowed_after_agent_output_before_budget_exhaustion():
     action = _action(PlannerActionType.COMPLETE)
 

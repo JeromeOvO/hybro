@@ -14,13 +14,18 @@ from models.orchestration import (
 )
 
 AuthorizationKind = Literal[
-    "room_member", "saved_group_member", "explicit_selection", "mention"
+    "room_member",
+    "saved_group_member",
+    "explicit_selection",
+    "mention",
+    "all_active_agents",
 ]
 _AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
     "room_default": "room_member",
     "saved_group": "saved_group_member",
     "explicit_selection": "explicit_selection",
     "mention": "mention",
+    "all_agents": "all_active_agents",
 }
 SUPPORTED_CANDIDATE_SCOPE_SOURCES = frozenset(_AUTHORIZATION_KIND_BY_SOURCE)
 

@@ -38,6 +38,20 @@ def test_normalize_candidate_scope_falls_back_to_agent_ids_when_agents_empty():
     assert [agent.agent_id for agent in scope.agents] == ["agent-1"]
 
 
+def test_normalize_all_agents_scope_records_all_active_authorization():
+    scope = normalize_candidate_scope(
+        room_id="room-1",
+        source="all_agents",
+        selected_by_user_id="user-1",
+        selected_agent_set={"agent-1": "Broker", "agent-2": "Insurer"},
+    )
+
+    assert scope.source == "all_agents"
+    assert scope.agent_ids == ["agent-1", "agent-2"]
+    assert scope.authorization_basis is not None
+    assert scope.authorization_basis.kind == "all_active_agents"
+
+
 def test_normalize_candidate_scope_treats_string_as_single_agent_id():
     scope = normalize_candidate_scope(
         room_id="room-1",

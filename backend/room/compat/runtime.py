@@ -2471,7 +2471,18 @@ class RoomServices:
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
-            candidate_scope_mode = "explicit_selection"
+            if selected_agent_ids is not None:
+                candidate_scope_mode = "explicit_selection"
+            elif target_group == "all_agents":
+                candidate_scope_mode = "all_agents"
+            elif target_group == "room_team":
+                candidate_scope_mode = "room_default"
+            else:
+                candidate_scope_mode = "saved_group"
+            request.extend_info = {
+                **(request.extend_info or {}),
+                "candidate_scope_mode": candidate_scope_mode,
+            }
         candidate_scope_mode = candidate_scope_mode.strip() or "explicit_selection"
 
         if (
@@ -2547,7 +2558,7 @@ class RoomServices:
             scope_result = await self._resolve_selected_candidate_scope(
                 selected_agent_ids,
                 sender_user_id=request.user_id,
-                required_input_modes=required_input_modes,
+                required_input_modes=None,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
                 return scope_result, None
@@ -2556,7 +2567,7 @@ class RoomServices:
                 mention_result = await self._validate_canonical_mentions(
                     mentioned_agent_ids,
                     sender_user_id=request.user_id,
-                    required_input_modes=required_input_modes,
+                    required_input_modes=None,
                 )
                 if isinstance(mention_result, RoomCenterUserMessageResponse):
                     return mention_result, None
@@ -2590,7 +2601,7 @@ class RoomServices:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids,
                 sender_user_id=request.user_id,
-                required_input_modes=required_input_modes,
+                required_input_modes=(None if use_supervisor else required_input_modes),
             )
             if isinstance(mention_result, RoomCenterUserMessageResponse):
                 return mention_result, None
@@ -2602,7 +2613,7 @@ class RoomServices:
                 target_group,
                 is_debate_mode,
                 sender_user_id=request.user_id,
-                required_input_modes=required_input_modes,
+                required_input_modes=(None if use_supervisor else required_input_modes),
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
                 return scope_result, None
@@ -2763,8 +2774,10 @@ class RoomServices:
                 mention_agents, _rejected = await self._sanitize_routing_scope(
                     [mention["agent_id"] for mention in mentions],
                     sender_user_id=request.user_id,
-                    required_input_modes=self._derive_required_input_modes(
-                        user_message
+                    required_input_modes=(
+                        None
+                        if use_supervisor
+                        else self._derive_required_input_modes(user_message)
                     ),
                 )
                 eligible_mention_ids = {agent.agent_id for agent in mention_agents}
@@ -2800,14 +2813,13 @@ class RoomServices:
         elif pre_resolved_mentions and use_supervisor:
             pass
         elif target_group == "all_agents":
-            required_modes = self._derive_required_input_modes(user_message)
             selection_result = await self._resolve_explicit_target_scope(
                 room,
                 message_text,
                 target_group,
                 is_debate_mode,
                 sender_user_id=request.user_id,
-                required_input_modes=required_modes,
+                required_input_modes=None,
             )
             if isinstance(selection_result, RoomCenterUserMessageResponse):
                 # all_agents runs after persist — attach the real message_id
@@ -2825,7 +2837,7 @@ class RoomServices:
         else:
             selected_agent_set, auto_assign, agents = {}, True, []
 
-        if not selected_agent_set:
+        if not selected_agent_set and not use_supervisor:
             return await self._handle_no_agents_fallback(
                 request, user_message, target_group
             )
@@ -3219,38 +3231,23 @@ class RoomServices:
             tuple[dict, bool, list] | RoomCenterUserMessageResponse
         ):
             try:
-                selection_result = (
-                    await self.agent_selection_service.select_agents_for_message(
-                        message_text,
-                        user_id=sender_user_id,
-                        required_input_modes=required_input_modes,
-                        is_debate_mode=is_debate_mode,
-                    )
+                active_agents = await self._store.get_all_active_agents(
+                    user_id=sender_user_id
                 )
-
-                if selection_result.agents:
-                    selected_ids = [agent.agent_id for agent in selection_result.agents]
-                    full_agents, _rejected = await self._sanitize_routing_scope(
-                        selected_ids,
-                        sender_user_id=sender_user_id,
-                        required_input_modes=required_input_modes,
-                    )
-                    selected = {
-                        agent.agent_id: agent.agent_card.name for agent in full_agents
-                    }
-
-                    logger.info(
-                        "All Agents mode: Selected %s agents with strategy=%s",
-                        len(full_agents),
-                        selection_result.strategy.value,
-                    )
-
-                    return selected, True, full_agents
-
-                logger.warning(
-                    "All Agents mode: No agents found — returning empty scope"
+                active_ids = [agent.agent_id for agent in (active_agents or [])]
+                full_agents, _rejected = await self._sanitize_routing_scope(
+                    active_ids,
+                    sender_user_id=sender_user_id,
+                    required_input_modes=required_input_modes,
                 )
-                return {}, True, []
+                selected = {
+                    agent.agent_id: agent.agent_card.name for agent in full_agents
+                }
+                logger.info(
+                    "All Agents mode: Providing all %s active agents to Supervisor",
+                    len(full_agents),
+                )
+                return selected, True, full_agents
             except Exception as e:
                 error_msg = "Agent selection failed. Please try again."
                 logger.error(

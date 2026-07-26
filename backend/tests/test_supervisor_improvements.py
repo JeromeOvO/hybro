@@ -484,13 +484,13 @@ class TestSupervisorSSEStageNotifications:
 
         details = _get_sse_details(se)
         assert details == [
-            "Reviewing progress (step 1 of 8)...",
+            "Reviewing progress...",
             "Planning next action...",
             "Goal is not complete yet. Continuing with 1 agent(s)...",
             "Delegating to 1 agent(s)...",
             "Evaluating agent results...",
             "Agent results recorded. Checking whether the goal is complete...",
-            "Reviewing progress (step 2 of 8)...",
+            "Reviewing progress...",
             "Planning next action...",  # second loop iteration before DONE
             "Goal complete. Preparing final response...",
             "Synthesizing responses...",

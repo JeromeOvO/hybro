@@ -49,7 +49,7 @@ class Rooms:
             self.doc.setdefault("write_leases", []).append(deepcopy(pushed))
         return True
 
-    async def find_one(self, query, projection=None):
+    async def find_one(self, query, *, projection=None):
         del projection
         if query.get("room_id") != self.doc.get("room_id"):
             return None
