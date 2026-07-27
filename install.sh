@@ -52,6 +52,14 @@ if [ ! -f frontend/.env.local ]; then
     fi
 fi
 
+if [ ! -f default_agents/.env ]; then
+    if [ -f default_agents/.env.example ]; then
+        cp default_agents/.env.example default_agents/.env
+        echo "Created default_agents/.env from example"
+        echo "NOTE: set OPENAI_API_KEY in default_agents/.env so the default agents can respond."
+    fi
+fi
+
 echo "Starting Docker containers..."
 if docker compose version >/dev/null 2>&1; then
     docker compose up -d --build

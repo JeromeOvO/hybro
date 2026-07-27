@@ -1,0 +1,18 @@
+[project]
+name = "weather-agent"
+version = "1.0.0"
+description = "LangChain Weather Agent (OpenAI) exposed as an A2A server"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "a2a-adapter[langchain]>=0.1.4",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+weather-agent = "a2a_main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

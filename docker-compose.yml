@@ -1,18 +1,41 @@
+# Shared config for every default agent (see default_agents/agents.yaml).
+x-agent: &agent
+  build:
+    context: ./default_agents
+    dockerfile: Dockerfile
+  env_file:
+    - ./default_agents/.env
+  restart: always
+  depends_on:
+    backend:
+      condition: service_healthy
+
 services:
   mongo:
     image: mongo:7.0
-    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    command:
+      - "--replSet"
+      - "rs0"
+      - "--bind_ip_all"
+      - "--port"
+      - "27017"
+      - "--quiet"
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
-      interval: 5s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   mongo-setup:
     image: mongo:7.0
@@ -59,6 +82,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else sys.exit(1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     restart: always
 
   frontend:
@@ -74,6 +103,82 @@ services:
     depends_on:
       - backend
     restart: always
+
+  # ---- Default agents (see default_agents/agents.yaml) ----
+  weather-agent:
+    <<: *agent
+    build:
+      context: ./default_agents
+      dockerfile: Dockerfile
+      args:
+        AGENT_DIR: weather_agent
+    environment:
+      - SERVER_PORT=7001
+      - SERVER_DOMAIN=weather-agent
+    ports:
+      - "7001:7001"   
+
+  image-generator-agent:
+    <<: *agent
+    build:
+      context: ./default_agents
+      dockerfile: Dockerfile
+      args:
+        AGENT_DIR: image_generator_agent
+    environment:
+      - SERVER_PORT=6002
+      - SERVER_DOMAIN=image-generator-agent
+    ports:
+      - "6002:6002"  
+
+  travel-planner-agent:
+    <<: *agent
+    build:
+      context: ./default_agents
+      dockerfile: Dockerfile
+      args:
+        AGENT_DIR: travel_planner_agent
+    environment:
+      - SERVER_PORT=7002
+      - SERVER_DOMAIN=travel-planner-agent
+    ports:
+      - "7002:7002"   # published for host-side tests/debugging
+
+  story-agent:
+    <<: *agent
+    build:
+      context: ./default_agents
+      dockerfile: Dockerfile
+      args:
+        AGENT_DIR: story_agent
+    environment:
+      - SERVER_PORT=7003
+      - SERVER_DOMAIN=story-agent
+    ports:
+      - "7003:7003"   # published for host-side tests/debugging
+
+  # One-shot: registers every enabled agent with the backend, then exits.
+  registrar:
+    build:
+      context: ./default_agents
+      dockerfile: Dockerfile.registrar
+    env_file:
+      - ./default_agents/.env
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - API_PREFIX=/api/v1
+    restart: "no"
+    depends_on:
+      backend:
+        condition: service_healthy
+      weather-agent:
+        condition: service_started
+      image-generator-agent:
+        condition: service_started
+      travel-planner-agent:
+        condition: service_started
+      story-agent:
+        condition: service_started
 
   # Optional local hub daemon for routing agent messages
   # hub:
