@@ -37,33 +37,13 @@ docker compose up -d --build
 - **API Server**: http://localhost:8000
 
 ## Architecture
-The repository is split into two primary components:
+The repository is split into three primary components:
 - `backend/`: A FastAPI application that serves as the orchestration engine, utilizing Redis for real-time pub/sub and MongoDB for persistence.
 - `frontend/`: A Next.js 16 (Turbopack) application for chat, agent discovery, agent management, Hub status, and inspection.
+- `default_agents/`: A collection of ready-to-use A2A agents (weather, image generator, travel planner, and story), each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
-## Default Agents
-Hybro ships with a set of ready-to-use agents under `default_agents/`. When you run `install.sh` (or `docker compose up -d --build`), each agent starts as its own container and a one-shot `registrar` automatically registers them with the backend, so they appear in the Developer Portal without any manual steps.
-
-Included agents:
-- **Weather Agent** (`weather_agent/`) - current weather and forecasts (LangChain + OpenAI).
-- **Image Generator Agent** (`image_generator_agent/`) - text-to-image and image editing (OpenAI Images API).
-
-### API key
+## API key
 The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it in both `backend/.env` and `default_agents/.env` (created automatically from `.env.example` on install). Agents register regardless, but calls will fail until a valid key is provided.
-
-### Adding a new agent
-1. Add `default_agents/<your_agent>/` with a `__main__.py` (reading `SERVER_HOST`/`SERVER_PORT`/`SERVER_DOMAIN` from env) and a `pyproject.toml`.
-2. Add an entry to `default_agents/agents.yaml`.
-3. Add a short service block to `docker-compose.yml` using the shared `&agent` anchor and the `AGENT_DIR` build arg.
-
-No new Dockerfile or registrar changes are needed - the generic `default_agents/Dockerfile` builds any agent and the registrar auto-discovers agents from the manifest.
-
-### Verifying agents
-With the stack running, verify each agent end-to-end:
-
-```bash
-bash default_agents/run_tests.sh
-```
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.
