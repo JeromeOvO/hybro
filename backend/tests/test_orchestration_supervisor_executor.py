@@ -1645,6 +1645,89 @@ async def test_platform_answers_directly_when_no_candidate_agent_is_suitable():
     assert state.candidate_agent_ids == []
 
 
+def test_platform_answer_copy_keeps_successful_prior_dispatch_as_capability_limit():
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Handle an earlier request",
+                task_hash="hash-1",
+                status="completed",
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                status="completed",
+            )
+        ],
+    )
+
+    details, disclosure = supervisor_executor_module._platform_answer_copy(state)
+
+    assert details == "No suitable connected agent. HYBRO is answering..."
+    assert "connected agents have limited capabilities" in disclosure
+    assert "execution failed" not in disclosure
+
+
+def test_platform_answer_copy_reports_explicit_dispatch_failure():
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Handle the request",
+                task_hash="hash-1",
+                status="failed",
+            )
+        ]
+    )
+
+    details, disclosure = supervisor_executor_module._platform_answer_copy(state)
+
+    assert details == "Connected agent execution failed. HYBRO is answering..."
+    assert "connected-agent execution failed" in disclosure
+    assert "no agent was suitable" in disclosure
+
+
+def test_platform_answer_copy_uses_only_runtime_open_failures():
+    runtime_failure = OpenFailureRecord(
+        failure_id="failure-1",
+        fingerprint="runtime-failure",
+        source="runtime",
+        dispatch_intent_id="intent-1",
+        error_code="agent_execution_failed",
+        error_message="Agent request failed",
+        recoverable=False,
+    )
+    planner_failure = OpenFailureRecord(
+        failure_id="failure-2",
+        fingerprint="planner-failure",
+        source="planner_validator",
+        error_code="planner_action_invalid",
+        error_message="Planner action was invalid",
+        recoverable=False,
+    )
+
+    runtime_details, _ = supervisor_executor_module._platform_answer_copy(
+        _run_state(open_failures=[runtime_failure])
+    )
+    planner_details, _ = supervisor_executor_module._platform_answer_copy(
+        _run_state(open_failures=[planner_failure])
+    )
+
+    assert runtime_details == "Connected agent execution failed. HYBRO is answering..."
+    assert planner_details == "No suitable connected agent. HYBRO is answering..."
+
+
 @pytest.mark.asyncio
 async def test_supervisor_records_dispatch_status_through_run_reducer():
     store = InMemoryOrchestrationRunStore()
