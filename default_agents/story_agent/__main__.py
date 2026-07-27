@@ -30,7 +30,7 @@ if __name__ == '__main__':
 
         print('Creating AgentCard...')
         agent_card = AgentCard(
-            name='Story Agent streaming',
+            name='Story Agent',
             description='story',
             url=agent_host_url,
             version='1.0.0',
