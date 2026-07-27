@@ -88,6 +88,8 @@ class PlannerActionValidator:
                 resource_fingerprints=resource_fingerprints or {},
                 guardrails_enabled=guardrails_enabled,
             )
+        if action.action == PlannerActionType.PLATFORM_ANSWER:
+            _validate_platform_answer(action, run_state=run_state)
         if action.action != PlannerActionType.COMPLETE:
             _validate_terminal_output(action, has_agent_output=has_agent_output)
         if action.action == PlannerActionType.ASK_USER and run_state is not None:
@@ -547,6 +549,7 @@ def _validate_step_budget(
     step_budget: int,
 ) -> None:
     if steps_used >= step_budget and action.action not in (
+        PlannerActionType.PLATFORM_ANSWER,
         PlannerActionType.SYNTHESIZE,
         PlannerActionType.COMPLETE,
         PlannerActionType.ASK_USER,
@@ -616,6 +619,33 @@ def _validate_terminal_output(
     ):
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} requires agent output"
+        )
+
+
+def _validate_platform_answer(
+    action: PlannerAction,
+    *,
+    run_state: OrchestrationRunState | None,
+) -> None:
+    if not (action.synthesis_instruction or "").strip():
+        raise PlannerActionValidationError(
+            "platform_answer requires synthesis_instruction",
+            code="platform_answer_instruction_missing",
+        )
+    if run_state is None:
+        return
+    if run_state.pending_hitl_request_ids:
+        raise PlannerActionValidationError(
+            "platform_answer is blocked by pending HITL",
+            code="platform_answer_pending_hitl",
+        )
+    if any(
+        item.status not in TERMINAL_DISPATCH_STATUSES | {"success"}
+        for item in run_state.active_dispatches
+    ):
+        raise PlannerActionValidationError(
+            "platform_answer is blocked by active dispatches",
+            code="platform_answer_active_dispatch",
         )
 
 

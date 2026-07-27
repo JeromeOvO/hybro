@@ -161,6 +161,20 @@ _GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
 
 DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
+_OPERATIONAL_FAILURE_STATUSES = frozenset(
+    {
+        "abandoned",
+        "cancelled",
+        "canceled",
+        "error",
+        "errored",
+        "expired",
+        "failed",
+        "rejected",
+        "timed_out",
+        "timeout",
+    }
+)
 
 
 def _log_value(value: Any) -> Any:
@@ -169,6 +183,39 @@ def _log_value(value: Any) -> Any:
 
 def _open_failure_count(state: OrchestrationRunState) -> int:
     return len([failure for failure in state.open_failures if failure.status == "open"])
+
+
+def _platform_answer_copy(state: OrchestrationRunState) -> tuple[str, str]:
+    def is_failure_status(status: str) -> bool:
+        return status.strip().lower() in _OPERATIONAL_FAILURE_STATUSES
+
+    has_operational_failure = (
+        any(is_failure_status(intent.status) for intent in state.dispatch_intents)
+        or any(is_failure_status(output.status) for output in state.agent_outputs)
+        or any(outcome.status == "failed" for outcome in state.delegation_outcomes)
+        or any(
+            failure.status == "open" and failure.source != "planner_validator"
+            for failure in state.open_failures
+        )
+    )
+    if has_operational_failure:
+        return (
+            "Connected agent execution failed. HYBRO is answering...",
+            (
+                "Answer the original user request directly as HYBRO Platform. "
+                "Explicitly state that suitable connected-agent execution failed "
+                "and no useful retry or alternate remains. Describe this as an "
+                "operational failure, not as a claim that no agent was suitable."
+            ),
+        )
+    return (
+        "No suitable connected agent. HYBRO is answering...",
+        (
+            "Answer the original user request directly as HYBRO Platform. "
+            "Explicitly state that the currently connected agents have limited "
+            "capabilities and none is suitable for this request."
+        ),
+    )
 
 
 def _join_log_ids(values: Sequence[str]) -> str:
@@ -913,11 +960,7 @@ class SupervisorExecutor:
                     room_id=room_id,
                     user_message_id=user_message_id,
                     client_request_id=state.client_request_id,
-                    details=(
-                        "Reviewing progress (step "
-                        f"{min(state.steps_used + 1, state.step_budget)} of "
-                        f"{state.step_budget})..."
-                    ),
+                    details="Reviewing progress...",
                     stage="reviewing_progress",
                 )
                 await self._emit_supervisor_stage(
@@ -1267,6 +1310,33 @@ class SupervisorExecutor:
                         token=token,
                     )
 
+                case PlannerActionType.PLATFORM_ANSWER:
+                    stage_details, disclosure = _platform_answer_copy(state)
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details=stage_details,
+                        stage="platform_answer",
+                    )
+                    instruction = (planner_action.synthesis_instruction or "").strip()
+                    platform_action = planner_action.model_copy(
+                        update={
+                            "synthesis_instruction": (
+                                f"{instruction}\n\n{disclosure}"
+                                if instruction
+                                else disclosure
+                            )
+                        }
+                    )
+                    return await self._run_synthesis_action(
+                        state=state,
+                        planner_action=platform_action,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        token=token,
+                    )
+
                 case PlannerActionType.COMPLETE:
                     await self._emit_supervisor_stage(
                         room_id=room_id,
@@ -1509,6 +1579,7 @@ class SupervisorExecutor:
         if planner_action.action in {
             PlannerActionType.COMPLETE,
             PlannerActionType.SYNTHESIZE,
+            PlannerActionType.PLATFORM_ANSWER,
         }:
             return SupervisorExecutor._delegate_action_for_next_participant(
                 state,
@@ -6374,6 +6445,12 @@ class SupervisorExecutor:
         if planner_action.action == PlannerActionType.SYNTHESIZE:
             return SupervisorAction(
                 action=ActionType.SYNTHESIZE,
+                reasoning=planner_action.reasoning,
+                synthesis_instruction=planner_action.synthesis_instruction,
+            )
+        if planner_action.action == PlannerActionType.PLATFORM_ANSWER:
+            return SupervisorAction(
+                action=ActionType.PLATFORM_ANSWER,
                 reasoning=planner_action.reasoning,
                 synthesis_instruction=planner_action.synthesis_instruction,
             )

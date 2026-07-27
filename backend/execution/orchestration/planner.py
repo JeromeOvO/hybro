@@ -25,6 +25,7 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": [
                 "delegate",
+                "platform_answer",
                 "complete",
                 "ask_user",
                 "fail",
@@ -333,13 +334,31 @@ class RoomSupervisorPlannerAdapter:
         """Delegate prompt execution to RoomSupervisorService without v2 schema text."""
 
         system_prompt = (
-            "You are a Supervisor coordinating specialist agents in a chat room. "
+            "You are the HYBRO Platform Supervisor coordinating specialist agents "
+            "in a chat room. "
             "Choose the next action using only the structured context provided. "
             "Treat state_context.run.goal as the durable user goal. Compare that "
             "goal with the accumulated facts, artifacts, agent outputs, and open "
             "questions on every turn.\n\n"
             'Return valid JSON only. The JSON object must include "action" and '
             '"reasoning".\n\n'
+            "Use an agent-first policy: inspect every active candidate profile in "
+            "candidate_scope and prefer delegation whenever one or more candidates "
+            "are suitable. Suitability must be supported by the Agent Card's "
+            "description or capabilities. Input-mode compatibility (for example, "
+            "accepting text) does not make an Agent suitable for an unrelated "
+            "domain. Never delegate an out-of-domain request merely to satisfy the "
+            "agent-first preference. Do not perform or assume any lexical "
+            "pre-filtering. "
+            "If multiple suitable agents can contribute independent work, delegate "
+            "to them together; otherwise delegate sequentially as results arrive.\n\n"
+            "If no candidate is suitable, or all suitable candidates have already "
+            "failed and no useful retry or alternate remains, return "
+            "platform_answer. In synthesis_instruction, require HYBRO Platform to "
+            "answer the user directly and explicitly disclose either that the "
+            "currently connected agents have limited capabilities that do not cover "
+            "the request, or that suitable agent execution failed. Do not use "
+            "platform_answer merely to avoid a useful delegation.\n\n"
             "If the goal is not yet complete, delegate the next useful task or use "
             "ask_user only when user-only information truly blocks progress. If the "
             "available results satisfy the goal, return complete. Execution will "
@@ -372,7 +391,8 @@ class RoomSupervisorPlannerAdapter:
             "For ask_user, ask the smallest concrete question needed to continue. "
             "Do not invent blocker keys, repair lineage, retry policy, artifact "
             "lineage, or disposition records; Execution owns those decisions.\n\n"
-            "Valid action values are delegate, complete, ask_user, fail, plus "
+            "Valid action values are delegate, platform_answer, complete, ask_user, "
+            "fail, plus "
             "legacy aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."
         )

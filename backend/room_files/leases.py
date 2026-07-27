@@ -86,7 +86,7 @@ class RoomWriteLeases:
                     }
                 },
             },
-            {"_id": 1},
+            projection={"_id": 1},
         )
         if room is None:
             raise FileConflictError("room write lease was lost")
@@ -172,7 +172,10 @@ class RoomWriteLeases:
                 {"room_id": room_id},
                 {"$pull": {"write_leases": {"expires_at": {"$lte": now}}}},
             )
-            room = await self._rooms.find_one({"room_id": room_id}, {"write_leases": 1})
+            room = await self._rooms.find_one(
+                {"room_id": room_id},
+                projection={"write_leases": 1},
+            )
             if room is None or not room.get("write_leases"):
                 return True
             await asyncio.sleep(0.05)

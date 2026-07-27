@@ -1370,7 +1370,7 @@ class RoomMessageCenter:
             isinstance(run_id, str)
             and bool(run_id.strip())
             and isinstance(candidate_agent_ids, list)
-            and any(
+            and all(
                 isinstance(agent_id, str) and bool(agent_id.strip())
                 for agent_id in candidate_agent_ids
             )
@@ -1383,7 +1383,7 @@ class RoomMessageCenter:
         message_text: str,
     ) -> tuple[list[AgentProfile], RoomConfig, str | None]:
         candidate_agent_ids = extend.get("candidate_agent_ids")
-        if not isinstance(candidate_agent_ids, list) or not candidate_agent_ids:
+        if not isinstance(candidate_agent_ids, list):
             raise ValueError("v2 orchestration envelope missing candidate_agent_ids")
 
         agent_registry: list[AgentProfile] = []

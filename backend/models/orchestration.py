@@ -69,6 +69,7 @@ class OrchestrationEventType(StrEnum):
 
 class PlannerActionType(StrEnum):
     DELEGATE = "delegate"
+    PLATFORM_ANSWER = "platform_answer"
     ASK_USER = "ask_user"
     SYNTHESIZE = "synthesize"
     COMPLETE = "complete"
@@ -231,7 +232,13 @@ class PlannerQuestion(BaseModel):
 
 
 class AuthorizationBasis(BaseModel):
-    kind: Literal["room_member", "saved_group_member", "explicit_selection", "mention"]
+    kind: Literal[
+        "room_member",
+        "saved_group_member",
+        "explicit_selection",
+        "mention",
+        "all_active_agents",
+    ]
     room_id: str | None = None
     group_id: str | None = None
     selected_by_user_id: str | None = None

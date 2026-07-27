@@ -80,6 +80,7 @@ class RoomConfig(BaseModel):
 
 class ActionType(StrEnum):
     DELEGATE = "delegate"
+    PLATFORM_ANSWER = "platform_answer"
     SYNTHESIZE = "synthesize"
     CLARIFY = "clarify"
     DONE = "done"

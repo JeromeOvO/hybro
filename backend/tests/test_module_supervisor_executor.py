@@ -1428,7 +1428,7 @@ class TestProcessingStatusLifecycleOrder:
         se.delivery.send_processing_status.assert_not_called()
         assert order == ["emit", "emit", "emit"]
         assert [call.kwargs["details"]["message"] for call in emit.await_args_list] == [
-            "Reviewing progress (step 1 of 1)...",
+            "Reviewing progress...",
             "Planning next action...",
             "Unable to continue the workflow.",
         ]

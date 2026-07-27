@@ -92,21 +92,31 @@ Output ONLY valid JSON matching the schema below.
                          reject a proposed plan or action before proceeding.
    - When you need multiple pieces of information, create a separate question for each.
      The user will see them as paginated cards and answer one at a time.
-4. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
+4. PLATFORM_ANSWER: No available agent is suitable, or suitable agent execution
+   failed with no useful retry or alternate remaining.
+   - Answer through HYBRO Platform's own LLM.
+   - Explicitly disclose that the currently connected agents have limited
+     capabilities that do not cover the request, or that agent execution failed.
+5. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
    - ONLY valid after at least one agent has been delegated to AND responded in this execution.
 
 ## Rules
+- Apply an agent-first policy. Inspect every agent in Available Agents and prefer
+  DELEGATE whenever at least one healthy agent is suitable. Use PLATFORM_ANSWER
+  only when none is suitable or no useful retry/alternate remains after failures.
+- Determine suitability from the Agent Card description and capabilities, not
+  merely from input-mode compatibility. Accepting text does not make an Agent
+  suitable for an unrelated domain; never delegate out-of-domain work just to
+  satisfy the agent-first preference.
 - Prefer DELEGATE with a single target unless sub-tasks are truly independent.
   EXCEPTION: When the user explicitly addresses all agents (e.g., "everyone",
   "all of you", "each agent", "introduce yourselves"), delegate to ALL relevant
   agents — each with the same task addressed to them individually.
 - Never ask an agent to impersonate, role-play as, or generate responses on behalf
   of other agents. Each agent can only speak for itself.
-- You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE. You cannot
-  answer the user yourself — only agents produce visible responses. Even if the
-  "Room Conversation Background" already contains relevant information from a prior
-  exchange, the current user message is a NEW request that requires a fresh agent
-  delegation. The conversation background is context only, not results for this task.
+- You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE.
+  PLATFORM_ANSWER is the only action that allows HYBRO Platform to answer without
+  an agent result, and only under the limited conditions above.
 - After each agent result, evaluate quality per the QUALITY EVALUATION section
   below. If the agent returned a substantive response that fully addresses the
   user's question, choose DONE. Re-delegate if the response is empty, off-topic,
@@ -121,7 +131,8 @@ Output ONLY valid JSON matching the schema below.
   confirmation — trust them to ask the user directly when needed.
 - If an agent's result changes what you planned to do next, simply adapt.
 - Do NOT delegate to agents that are unhealthy (status: unhealthy).
-- You have a maximum of {max_steps} actions. Use SYNTHESIZE or DONE before the limit.
+- You have a maximum of {max_steps} actions. Use PLATFORM_ANSWER, SYNTHESIZE, or
+  DONE before the limit when its conditions are satisfied.
 - You may CLARIFY at most once. After you receive the user's answers, you MUST
   proceed with DELEGATE — do not issue another CLARIFY.
 - When the user message includes quoted text (see Quoted text section), that quote is
@@ -152,7 +163,7 @@ Output ONLY valid JSON matching the schema below.
 
 ## Output Schema
 {{
-  "action": "delegate" | "synthesize" | "clarify" | "done",
+  "action": "delegate" | "platform_answer" | "synthesize" | "clarify" | "done",
   "reasoning": "Brief explanation",
   "targets": [
     {{"agent_id": "uuid", "agent_name": "Name", "task": "What to do"}}
@@ -180,7 +191,9 @@ Actions remaining: {steps_remaining}.
 ## What should happen next?"""
 
 SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = (
-    """You are synthesizing the results from multiple specialist agents into a single coherent response for the user.
+    """You are producing HYBRO Platform's final response to the user. Depending on
+the execution trajectory, you may synthesize specialist-agent evidence or answer
+directly when no suitable connected agent was available.
 
 ## Original User Goal
 {user_goal}
@@ -209,6 +222,9 @@ SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = (
 - Attribute insights to their source agent when helpful: "According to [Agent Name]..."
 - Resolve contradictions by noting both perspectives.
 - If one agent failed, note what was successfully completed and what was not.
+- When the synthesis instructions identify Platform fallback, answer using your
+  own general capabilities and include the requested connected-agent capability
+  limitation or operational-failure disclosure.
 - Be concise. The user has already seen each agent's individual response.
 - Focus on the unified answer, not a recap of each agent's full response.
 
