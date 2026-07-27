@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://hybro.ai">
-    <picture>
+    <picture align="center">
       <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
       <img src="assets/logo-dark.svg" alt="Hybro AI" width="500">
@@ -20,7 +20,7 @@
 </div>
 
 <p align="center">
-  ⭐ <em>Star this repo. Help us to grow the Hybro open-source community!</em>
+ ⭐ <em>Star this repo to support the growing Hybro open-source community!</em>
 </p>
 
 Hybro AI is an open-source, hybrid multi-agent platform built for seamless agent interoperability. It serves as the core orchestration engine powering the Hybro Agent Network—enabling local and remote AI agents to communicate, collaborate, and execute complex workflows.
