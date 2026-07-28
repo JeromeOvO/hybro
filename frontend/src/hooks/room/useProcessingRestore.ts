@@ -161,6 +161,16 @@ export function useProcessingRestore(
               const refreshedMessage = refreshedStore.entities[liveLifecycleMessage.id]
               if (!refreshedMessage?.turnTerminalStatus) return
 
+              const { sending: liveSending } =
+                useRoomUiStore.getState().rooms[roomId] ?? {}
+              if (
+                lifecycle.getMessageId() !== liveLifecycleMessage.id ||
+                liveSending ||
+                lifecycle.getPendingRunEventAck()
+              ) {
+                return
+              }
+
               lifecycle.markProcessingResolved()
               refreshedStore.removeMessage(lifecycle.placeholderId(roomId))
               lifecycle.stopProcessing()
