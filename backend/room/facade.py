@@ -248,10 +248,14 @@ class RoomFacade:
         await self._message_repository.save_user_message(doc)
         return saved_user_message_from_doc(doc)
 
+    def ensure_user_message_id(self, user_message: RoomUserMessage) -> str:
+        if user_message.message_id == "":
+            user_message.message_id = self._id_factory()
+        return user_message.message_id
+
     async def persist_user_message(self, user_message: RoomUserMessage) -> bool:
         try:
-            if user_message.message_id == "":
-                user_message.message_id = self._id_factory()
+            self.ensure_user_message_id(user_message)
             doc = user_message.model_dump(mode="json", exclude={"quote"})
             _strip_file_urls(doc)
             return bool(await self._message_repository.save_user_message(doc))

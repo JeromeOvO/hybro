@@ -20,7 +20,7 @@ class InMemoryCollection:
         self.docs.append(deepcopy(doc))
         return SimpleNamespace(inserted_id=doc["file_id"])
 
-    async def find_one(self, query):
+    async def find_one(self, query, **kwargs):
         for doc in self.docs:
             if _matches(doc, query):
                 return deepcopy(doc)
@@ -131,6 +131,37 @@ async def test_room_files_upload_persists_ready_metadata_and_content():
             "updated_at": now,
         }
     ]
+
+
+async def test_reconcile_content_uses_collection_projection_keyword():
+    collection = InMemoryCollection()
+    collection.docs.append({"file_id": "known-file"})
+    content_store = SimpleNamespace(
+        list_file_ids=AsyncMock(return_value=["known-file", "orphan-file"]),
+        delete=AsyncMock(return_value=True),
+    )
+    files = RoomFiles(metadata=collection, content=content_store)
+
+    assert await files._reconcile_content() == 1
+    content_store.delete.assert_awaited_once_with("orphan-file")
+
+
+async def test_reference_recovery_uses_message_projection_keyword():
+    messages = SimpleNamespace(find_one=AsyncMock(return_value={"_id": "message"}))
+    files = RoomFiles(
+        metadata=InMemoryCollection(),
+        content=MemoryFileContentStore(),
+        messages=messages,
+    )
+
+    assert await files._message_exists("message-1") is True
+    assert await files._has_message_reference("file-1") is True
+    assert messages.find_one.await_args_list[0].args == ({"message_id": "message-1"},)
+    assert messages.find_one.await_args_list[0].kwargs == {"projection": {"_id": 1}}
+    assert messages.find_one.await_args_list[1].args == (
+        {"message_content.attachments.file_id": "file-1"},
+    )
+    assert messages.find_one.await_args_list[1].kwargs == {"projection": {"_id": 1}}
 
 
 async def test_user_upload_survives_lost_finalize_acknowledgement():

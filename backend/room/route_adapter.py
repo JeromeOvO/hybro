@@ -127,5 +127,17 @@ class RoomRouteAdapter:
             context
         )
 
+    async def update_user_message_orchestration_status(
+        self,
+        message_id: str,
+        status: str,
+    ) -> bool:
+        return bool(
+            await self._require_room_services().update_user_message_orchestration_status(
+                message_id,
+                status,
+            )
+        )
+
 
 __all__ = ["RoomRouteAdapter"]

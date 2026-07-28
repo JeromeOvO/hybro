@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from common.a2a_constants import TERMINAL_STATES, CommonTaskState
@@ -22,6 +22,16 @@ from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
 ARTIFACT_MATERIALIZATION_WAIT_SECONDS = 20 * 60 + 60
+
+
+def _legacy_claim_threshold_text(stale_threshold: Any) -> str:
+    if isinstance(stale_threshold, datetime):
+        return (
+            stale_threshold.astimezone(UTC)
+            .replace(tzinfo=None)
+            .isoformat(timespec="microseconds")
+        )
+    return str(stale_threshold)
 
 
 class MessageRuntimeStorePart:
@@ -207,6 +217,12 @@ class MessageRuntimeStorePart:
                     "$or": [
                         {"processing_claimed_at": None},
                         {"processing_claimed_at": {"$lt": stale_threshold}},
+                        {
+                            "processing_claimed_at": {
+                                "$type": "string",
+                                "$lt": _legacy_claim_threshold_text(stale_threshold),
+                            }
+                        },
                     ],
                 },
                 {"$set": {"processing_claimed_at": utcnow()}},

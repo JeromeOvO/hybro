@@ -620,6 +620,20 @@ async def test_legacy_user_message_persistence_strips_ephemeral_fields():
     assert "file_url" not in stored["message_content"]["attachments"][0]
 
 
+def test_ensure_user_message_id_assigns_once_and_is_idempotent():
+    facade, _, _, _, _ = _facade(ids=["generated-message-id"])
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="",
+        user_id="user",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    assert facade.ensure_user_message_id(user_message) == "generated-message-id"
+    assert user_message.message_id == "generated-message-id"
+    assert facade.ensure_user_message_id(user_message) == "generated-message-id"
+
+
 @pytest.mark.asyncio
 async def test_quote_materialization_validates_source_and_dual_writes_extend_info():
     quote_repo = FakeQuoteRepository()

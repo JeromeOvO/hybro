@@ -287,15 +287,21 @@ export function deriveFinalAnswer(
   }
 
   // --- 2. Canceled/Failed (Hardware priority) ---
-  if (isCanceledMultiAgentTurn(turn, real)) {
+  if (
+    turn.turnTerminalStatus === 'canceled'
+    || isCanceledMultiAgentTurn(turn, real)
+  ) {
     return buildCanceledFinalAnswer()
   }
-  if (isFailedMultiAgentTurn(turn, real)) {
+  if (
+    turn.turnTerminalStatus === 'failed'
+    || isFailedMultiAgentTurn(turn, real)
+  ) {
     return buildFailedFinalAnswer()
   }
   if (
     orchestrator?.status === "failed" &&
-    (turn.turnTerminalStatus === "failed" || turn.status === "failed")
+    turn.status === "failed"
   ) {
     return buildFailedFinalAnswer()
   }
@@ -320,7 +326,6 @@ export function deriveFinalAnswer(
   // --- 4. Orchestrator-driven Derivation (New System Agent Architecture) ---
   if (orchestrator) {
     if (orchestrator.status === "working" && !isTurnTerminal(turn.status)) {
-      const hasRealWorking = real.some(r => r.status === "working")
       const isSynthesizing = shouldShowSynthesizingPhase(turn, real)
         || orchestrator.taskStatusMessage?.toLowerCase().includes('synthesiz')
         || turn.processingStatusLogs.some(log => log.message.toLowerCase().includes('synthesiz'))

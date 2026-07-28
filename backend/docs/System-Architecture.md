@@ -351,15 +351,28 @@ run Mongo lexical matching before the Supervisor; it supplies every Agent Card
 profile in the selected scope so the Supervisor makes the suitability decision.
 Lexical matching remains available to discovery and suggestion surfaces.
 
-The Supervisor applies an agent-first policy. It delegates to one suitable Agent,
-delegates independent work to multiple Agents in parallel, or delegates dependent
-work sequentially. When no scoped Agent is suitable, or suitable Agent execution
-has failed with no useful retry or alternate, the dedicated `platform_answer`
-action streams a direct HYBRO Platform LLM response. A no-suitable-Agent response
-must disclose that the currently connected Agents have limited capability for the
-request; an execution-failure fallback must distinguish that operational failure.
-An empty candidate scope is therefore a valid Supervisor input, not a pending
-synthetic A2A task.
+HYBRO is the primary user-facing assistant; Supervisor is only the internal
+planner role. User-facing synthesis speaks as HYBRO and does not expose planner,
+routing, orchestration, or action terminology. Specialist Agents are optional
+external tools. The planner delegates when a suitable Agent materially advances
+the goal through a domain workflow, reusable structured artifact, external
+action, or specialist work meaningfully different from a prose response.
+HYBRO's ability to draft plausible prose is not by itself a reason to avoid
+delegation. Explicit Agent requests and approval of a previously offered Agent
+action also prefer delegation. The planner can delegate to one suitable Agent,
+delegate independent work in parallel, or delegate dependent work sequentially.
+A request to read, explain, or summarize a readable attachment is answered
+through `platform_answer` first. That response offers exactly one concrete Agent
+action when one suitable next step materially advances the likely goal, and
+delegation starts only after the user confirms or requests the offered result.
+
+When no scoped Agent is suitable, or suitable Agent execution has failed with no
+useful retry or alternate, `platform_answer` streams a direct HYBRO response. A
+no-suitable-Agent response answers naturally without exposing routing
+decisions, connected-Agent names, capability limitations, or unsolicited
+domain-specific next steps. An execution-failure fallback must still distinguish
+and disclose that operational failure. An empty candidate scope is therefore a
+valid Supervisor input, not a pending synthetic A2A task.
 
 The versioned planner action schema and pure action validator enforce
 candidate membership, step-budget, required-target, and prior-output rules while
@@ -407,11 +420,21 @@ The v2 planner receives a bounded resource catalog for user attachments and
 generated projections. Resource references are explicit: planner targets select
 context, artifact, or attachment refs, dispatch validates those refs against the
 run state and Agent Card input modes, and only selected payloads are materialized
-for the target Agent. PDF text projection is size-bounded and injected as
-selected context, while raw attachments remain behind an explicit-ref-only
-forwarding policy. The resource provider and projection service are assembled in
-`container.py`; failure recovery and retry policy remain separate orchestration
-concerns.
+for the target Agent. The planner keeps each private Agent task concise: only the
+objective, material constraints, and expected result belong in the task, while
+source material travels through the smallest sufficient reference set. It
+prefers structured artifacts over copied prose and text projections over raw
+attachments unless the raw file is required. PDF text projection is size-bounded
+and injected as selected context, while raw attachments remain behind an
+explicit-ref-only forwarding policy. The resource provider and projection
+service are assembled in `container.py`; failure recovery and retry policy
+remain separate orchestration concerns.
+
+For a direct `platform_answer`, Execution resolves readable PDF projections into
+a separate bounded, untrusted attachment-content section of the synthesis
+instruction. The synthesis model treats that section as source data rather than
+instructions. This lets HYBRO answer attachment questions without
+delegating the file merely to obtain its text.
 
 ### Execution Control Plane
 
@@ -459,9 +482,14 @@ orchestration steps. A2A adapters and `DirectTransport` perform protocol
 conversion, send/stream/cancel, and normalized result production only.
 `HITLService` owns HITL request/response lifecycle CAS and persistence;
 `ExecutionFacade` records HITL answers onto orchestration runs and resumes
-Execution.
+Execution. Because an intentional HITL pause retains the original user
+message's processing claim, the immediate HITL resume refreshes and reuses that
+claim. Crash and orphan recovery remain separate: they may reclaim a message
+only after its processing claim crosses the configured stale threshold. The
+reclaim query accepts both BSON datetimes and legacy ISO-string claim timestamps
+so persisted turns retain the same timeout semantics across storage versions.
 
-An external A2A `input-required` state is not automatically user-facing HITL.
+An external A2A `input-required` state is not always immediately user-facing HITL.
 Execution first performs a bounded, silent recovery using information that was
 not already delivered to that A2A task. Original dispatch refs and previously
 attempted content fingerprints cannot be replayed as new evidence. An explicit
@@ -469,7 +497,10 @@ continuation result with material output resumes the loop; a push continuation
 pauses for its callback. If no new information exists, the blocking reply still
 requires input, or a blocking reply has neither state nor output, Execution
 preserves `awaiting_input` and upgrades it through `HITLService`. This recovery
-does not return to the planner or consume the remaining orchestration budget.
+does not return to the planner or consume the remaining orchestration budget. In
+particular, when the Agent already received selected context, artifact, or
+attachment refs and no new payload resolves the request, Execution promotes the
+existing A2A continuation to HITL instead of dispatching the same task again.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer; safe concrete
@@ -871,7 +902,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - The supervisor compares the persisted goal with accumulated context and
      prefers suitable Agents from the complete selector-defined scope.
    - If no scoped Agent is suitable, use `platform_answer` to stream a direct
-     Platform response with the required connected-Agent capability disclosure.
+     natural Platform response without exposing Agent routing or capabilities.
    - The Supervisor can delegate to one Agent or coordinate multiple Agents in
      parallel or sequence.
    - Execution performs final synthesis after `complete` and marks the run

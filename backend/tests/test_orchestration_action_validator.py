@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from jsonschema import ValidationError, validate
 
@@ -1276,6 +1279,113 @@ def test_planner_prompt_requires_domain_supported_agent_suitability():
     assert "accepting text" in source
     assert "unrelated " in source
     assert '"domain.' in source
+
+
+@pytest.mark.asyncio
+async def test_planner_platform_answer_prompt_forbids_agent_specific_routing_copy():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "platform_answer",
+                "reasoning": "Answer the greeting directly.",
+                "targets": [],
+                "questions": [],
+                "synthesis_instruction": "Reply naturally.",
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="hi",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ]
+    assert "do not mention routing decisions" in system_prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_planner_prompt_keeps_hybro_primary_for_readable_attachments():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "platform_answer",
+                "reasoning": "The platform can answer from the PDF projection.",
+                "targets": [],
+                "questions": [],
+                "synthesis_instruction": "Read and summarize the PDF.",
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Can you read this PDF?",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ].lower()
+    assert "you are hybro, the primary user-facing assistant" in system_prompt
+    assert "speak in the first person as hybro" in system_prompt
+    assert "never refer to yourself as 'the supervisor'" in system_prompt
+    assert "read, explain, or summarize an attachment" in system_prompt
+    assert "should offer exactly one concrete opt-in agent action" in system_prompt
+    assert "treat that as approval" in system_prompt
+    assert "do not name connected agents" in system_prompt.lower()
+    assert "do not suggest domain-specific next steps" in system_prompt.lower()
+    assert "limited capabilities" not in system_prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_planner_prompt_keeps_agent_dispatch_payloads_concise():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "A specialist workflow materially advances the goal.",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "task": "Produce the requested structured artifact.",
+                        "parallel_group": None,
+                        "depends_on": [],
+                        "required_resource_refs": [],
+                    }
+                ],
+                "questions": [],
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Create the specialist artifact.",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ].lower()
+    assert "private execution payloads" in system_prompt
+    assert "keep each target.task concise and operational" in system_prompt
+    assert "do not include planner reasoning" in system_prompt
+    assert "do not duplicate expected_outputs in task" in system_prompt
+    assert "select the smallest sufficient resource set" in system_prompt
+    assert "prefer a structured artifact over copied prose" in system_prompt
 
 
 def test_complete_allowed_after_agent_output_before_budget_exhaustion():

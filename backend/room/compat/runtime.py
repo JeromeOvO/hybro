@@ -3089,7 +3089,9 @@ class RoomServices:
             else None
         )
         file_ids = [attachment.file_id for attachment in attachments or []]
+        facade = self._require_facade()
         if file_ids:
+            facade.ensure_user_message_id(user_message)
             try:
                 await self.room_files.claim_references(
                     room_id=user_message.room_id,
@@ -3105,7 +3107,7 @@ class RoomServices:
                 )
                 return False
 
-        persisted = await self._require_facade().persist_user_message(user_message)
+        persisted = await facade.persist_user_message(user_message)
         if not persisted and file_ids:
             await self.room_files.release_references(
                 message_id=user_message.message_id,

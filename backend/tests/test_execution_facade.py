@@ -798,6 +798,7 @@ async def test_resolve_hitl_updates_orchestration_state_after_successful_respons
     assert resumed_request.room_id == "room-1"
     assert resumed_request.room_user_message_id == "msg-1"
     assert resumed_request.is_recovery is True
+    assert resumed_request.reuse_processing_claim is True
     release_recovery.set()
     await asyncio.gather(*facade._inflight)
 

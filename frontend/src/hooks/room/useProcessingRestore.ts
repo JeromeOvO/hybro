@@ -19,6 +19,7 @@ export function useProcessingRestore(
   queryLoading: boolean,
   lifecycle: ProcessingLifecycle,
   getToken?: (() => Promise<string | null>) | undefined,
+  reconcileWithDb?: ((roomId: string) => Promise<unknown>) | undefined,
 ) {
   // Reactive subscription ensures the effect re-fires when hydration completes,
   // even if room/queryLoading settled first.
@@ -127,6 +128,10 @@ export function useProcessingRestore(
       // behind by missed terminal SSE without deleting per-turn update history.
       // But don't wipe it if a message send is still in flight (the SSE events
       // haven't arrived yet).
+      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
+      if (sending) return
+      if (lifecycle.getPendingRunEventAck()) return
+
       const liveLifecycleMessageId = lifecycle.getMessageId()
       const liveLifecycleMessage = liveLifecycleMessageId
         ? store.entities[liveLifecycleMessageId]
@@ -137,15 +142,47 @@ export function useProcessingRestore(
         !liveLifecycleMessage.turnTerminalStatus &&
         !allAgentsTerminalForUserMessage(store.entities, roomId, liveLifecycleMessage.id)
       ) {
+        if (getToken && reconcileWithDb) {
+          void (async () => {
+            try {
+              const result = await inquiryActiveRuns(
+                roomId,
+                getToken,
+                undefined,
+                liveLifecycleMessage.id,
+              )
+              const backendRunActive = (result.active_runs ?? []).some(
+                run => run.trigger_message_id === liveLifecycleMessage.id,
+              )
+              if (!result.success || backendRunActive) return
+
+              await reconcileWithDb(roomId)
+              const refreshedStore = useMessageStore.getState()
+              const refreshedMessage = refreshedStore.entities[liveLifecycleMessage.id]
+              if (!refreshedMessage?.turnTerminalStatus) return
+
+              lifecycle.markProcessingResolved()
+              refreshedStore.removeMessage(lifecycle.placeholderId(roomId))
+              lifecycle.stopProcessing()
+            } catch {
+              // Preserve the live lifecycle when backend truth cannot be confirmed.
+            }
+          })()
+        }
         return
       }
 
       if (lifecycle.isPlaceholderDismissed()) return
-      const { sending } = useRoomUiStore.getState().rooms[roomId] ?? {}
-      if (sending) return
-      if (lifecycle.getPendingRunEventAck()) return
       store.removeMessage(lifecycle.placeholderId(roomId))
       lifecycle.stopProcessing()
     }
-  }, [room, queryLoading, roomId, lifecycle, hydratedFromDb, getToken])
+  }, [
+    room,
+    queryLoading,
+    roomId,
+    lifecycle,
+    hydratedFromDb,
+    getToken,
+    reconcileWithDb,
+  ])
 }

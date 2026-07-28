@@ -143,6 +143,7 @@ class OrchestrationRequest(BaseModel):
     room_related_message_id: str | None = None
     user_id: str | None = None
     is_recovery: bool = False
+    reuse_processing_claim: bool = False
     client_request_id: str | None = None
 
 
