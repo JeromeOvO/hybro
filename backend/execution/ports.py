@@ -507,6 +507,10 @@ class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
         self, message_id: str
     ) -> RoomUserMessage | None: ...
 
+    async def get_room_user_messages_by_room_id(
+        self, room_id: str
+    ) -> list[RoomUserMessage]: ...
+
     async def get_room_agent_message_by_message_id(
         self, message_id: str
     ) -> RoomAgentMessage | None: ...

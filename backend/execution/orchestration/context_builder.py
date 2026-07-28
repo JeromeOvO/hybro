@@ -178,6 +178,28 @@ def _planner_public_state_payload(
     return payload
 
 
+def _planner_feedback_payload(
+    state_context: OrchestrationStateContext,
+) -> list[dict[str, Any]]:
+    feedback: list[dict[str, Any]] = []
+    for failure in state_context.open_failures:
+        if (
+            failure.get("source") != "planner_validator"
+            or failure.get("status") != "open"
+        ):
+            continue
+        feedback.append(
+            {
+                "error_code": failure.get("error_code"),
+                "error_message": failure.get("error_message"),
+                "retry_count": failure.get("retry_count", 0),
+                "max_retries": failure.get("max_retries", 0),
+                "recovery_hints": list(failure.get("recovery_hints") or []),
+            }
+        )
+    return feedback[-1:]
+
+
 class OrchestrationPlannerContext(BaseModel):
     """Structured input boundary for planner adapters."""
 
@@ -207,6 +229,7 @@ class OrchestrationPlannerContext(BaseModel):
             "room_background": self.room_background,
             "candidate_scope": self.candidate_scope.model_dump(mode="json"),
             "state_context": _planner_public_state_payload(self.state_context),
+            "planner_feedback": _planner_feedback_payload(self.state_context),
             "available_resources": [
                 resource.model_dump(mode="json")
                 for resource in self.available_resources

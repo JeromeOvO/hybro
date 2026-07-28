@@ -389,7 +389,14 @@ result ingestion. `build_orchestration_planner_context` projects quoted content,
 candidate metadata, step budget, and durable run state into an immutable
 planner-facing payload; `RoomSupervisorPlannerAdapter` parses and validates the
 next action through the supervisor service's public planner boundary and the
-existing action contract. Agent terminal responses can
+existing action contract. Backend control state remains private, but the latest
+open planner-validator failure is projected separately as bounded,
+planner-facing retry feedback containing only its error, retry count, and
+recovery hints. The next planning attempt must correct that error instead of
+repeating an identical invalid action. Delegation defaults to one Agent per
+planner step; multiple targets are reserved for independent work with one shared
+parallel group, while dependent Agent work advances sequentially across steps.
+Agent terminal responses can
 be normalized into `AgentResultRead` records and projected by the pure,
 replay-safe `AgentResultIngestor` when an orchestration ingestion service is
 bound. Sparse or identical terminal replays preserve richer output and do not
@@ -420,21 +427,41 @@ The v2 planner receives a bounded resource catalog for user attachments and
 generated projections. Resource references are explicit: planner targets select
 context, artifact, or attachment refs, dispatch validates those refs against the
 run state and Agent Card input modes, and only selected payloads are materialized
-for the target Agent. The planner keeps each private Agent task concise: only the
-objective, material constraints, and expected result belong in the task, while
-source material travels through the smallest sufficient reference set. It
-prefers structured artifacts over copied prose and text projections over raw
-attachments unless the raw file is required. PDF text projection is size-bounded
-and injected as selected context, while raw attachments remain behind an
-explicit-ref-only forwarding policy. The resource provider and projection
-service are assembled in `container.py`; failure recovery and retry policy
-remain separate orchestration concerns.
+for the target Agent. When the current turn has no attachment, the catalog also
+includes a bounded set of the room's most recent user attachments with their
+original source-message lineage, allowing follow-up phrases such as “this
+information” to select the earlier projection by reference. A current-turn
+attachment takes precedence and suppresses prior-turn carryover. The planner
+keeps each private Agent task concise: only the objective, material constraints,
+and expected result belong in the task, while source material travels through
+the smallest sufficient reference set. It prefers structured artifacts over
+copied prose. Text projections are preferred when plain extracted text is
+sufficient; a raw attachment is preferred when the target Agent advertises a
+native intake or document-processing workflow for its MIME type. PDF text
+projection is size-bounded and injected as selected context, while raw
+attachments remain behind an explicit-ref-only forwarding policy. An explicitly
+selected prior-turn attachment is resolved from room history under the same
+room boundary before preflight, so follow-up dispatches can forward the original
+file rather than failing against the attachment-less approval message. For
+orchestrated dispatch, the target Agent's current request is the private,
+capability-scoped dispatch task—not the user's short approval message—and
+selected text resources are compiled into that same request body so single-text
+and multi-part A2A consumers receive equivalent input. The action validator also
+rejects a delegate task that mentions an available resource ID without selecting
+that exact ID through dispatch refs, allowing the next planner attempt to repair
+the omission before any external Agent is called. The resource provider and
+projection service are assembled in `container.py`; failure recovery and retry
+policy remain separate orchestration concerns.
 
 For a direct `platform_answer`, Execution resolves readable PDF projections into
 a separate bounded, untrusted attachment-content section of the synthesis
 instruction. The synthesis model treats that section as source data rather than
-instructions. This lets HYBRO answer attachment questions without
-delegating the file merely to obtain its text.
+instructions. Follow-up direct answers reuse the same bounded recent-room
+attachment lookup as planning, so Planner and synthesis see consistent source
+material. This lets HYBRO answer attachment questions without delegating the file
+merely to obtain its text. When the user explicitly requests a suitable external
+outcome, that request is already authorization and takes precedence over the
+attachment direct-answer path; dependent Agent work proceeds one target at a time.
 
 ### Execution Control Plane
 

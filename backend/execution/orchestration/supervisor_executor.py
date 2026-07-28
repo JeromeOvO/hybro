@@ -165,6 +165,7 @@ _GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
 DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 PLATFORM_ATTACHMENT_CONTEXT_MAX_CHARS = 40_000
+RECENT_ROOM_ATTACHMENT_RESOURCE_LIMIT = 8
 _OPERATIONAL_FAILURE_STATUSES = frozenset(
     {
         "abandoned",
@@ -981,14 +982,22 @@ class SupervisorExecutor:
                     stage="planning",
                 )
 
-            original_attachments = self._user_attachments_from_message(user_message)
+            (
+                resource_attachments,
+                attachment_source_message_ids,
+            ) = await self._v2_resource_attachments(
+                room_id=room_id,
+                user_message_id=user_message_id,
+                user_message=user_message,
+            )
             available_resources = (
                 await self.orchestration_resource_provider.list_resources(
                     run_id=state.run_id,
                     room_id=room_id,
                     user_message_id=user_message_id,
-                    attachments=original_attachments,
+                    attachments=resource_attachments,
                     candidate_agents=self._v2_candidate_scope(state, agent_registry),
+                    attachment_source_message_ids=attachment_source_message_ids,
                 )
             )
             resource_fingerprints = _resource_fingerprints(available_resources)
@@ -5394,7 +5403,11 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         user_message,
     ) -> str:
-        attachments = self._user_attachments_from_message(user_message)
+        attachments, _ = await self._v2_resource_attachments(
+            room_id=state.room_id,
+            user_message_id=state.user_message_id,
+            user_message=user_message,
+        )
         if not attachments:
             return ""
 
@@ -7100,6 +7113,59 @@ class SupervisorExecutor:
                     exc_info=True,
                 )
         return normalized
+
+    async def _v2_resource_attachments(
+        self,
+        *,
+        room_id: str,
+        user_message_id: str,
+        user_message,
+    ) -> tuple[list[UserAttachment], dict[str, str]]:
+        current = self._user_attachments_from_message(user_message)[
+            :RECENT_ROOM_ATTACHMENT_RESOURCE_LIMIT
+        ]
+        current_sources = {
+            attachment.file_id: user_message_id for attachment in current
+        }
+        if current:
+            return current, current_sources
+
+        get_room_messages = getattr(
+            self.message_reader,
+            "get_room_user_messages_by_room_id",
+            None,
+        )
+        if get_room_messages is None:
+            return [], {}
+        try:
+            room_messages = await get_room_messages(room_id)
+        except Exception:
+            logger.warning(
+                "Unable to load recent room attachments for orchestration resources",
+                extra={
+                    "room_id": room_id,
+                    "user_message_id": user_message_id,
+                },
+                exc_info=True,
+            )
+            return [], {}
+
+        attachments: list[UserAttachment] = []
+        source_message_ids: dict[str, str] = {}
+        for message in reversed(room_messages):
+            source_message_id = getattr(message, "message_id", None)
+            if not isinstance(source_message_id, str) or (
+                source_message_id == user_message_id
+            ):
+                continue
+            for attachment in self._user_attachments_from_message(message):
+                if attachment.file_id in source_message_ids:
+                    continue
+                attachments.append(attachment)
+                source_message_ids[attachment.file_id] = source_message_id
+                if len(attachments) >= RECENT_ROOM_ATTACHMENT_RESOURCE_LIMIT:
+                    return attachments, source_message_ids
+        return attachments, source_message_ids
 
     @staticmethod
     def _step_result_from_existing_agent_message(

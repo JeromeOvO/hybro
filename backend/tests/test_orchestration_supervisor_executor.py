@@ -475,6 +475,78 @@ async def test_run_builds_resource_catalog_before_planning():
 
 
 @pytest.mark.asyncio
+async def test_run_reuses_recent_prior_turn_attachments_in_resource_catalog():
+    prior_attachment = UserAttachment(
+        file_id="prior-file",
+        mime_type="application/pdf",
+        file_name="prior-submission.pdf",
+        size_bytes=128,
+    )
+    prior_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="prior-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Can you read this PDF?",
+            attachments=[prior_attachment],
+        ),
+    )
+    current_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="current-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use this information for the next step.",
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "current-message",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    provider = SimpleNamespace(list_resources=AsyncMock(return_value=[]))
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="test stop",
+            failure_reason="test stop",
+        )
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=current_message,
+    )
+    executor.message_reader.get_room_user_messages_by_room_id = AsyncMock(
+        return_value=[prior_message, current_message]
+    )
+    executor.orchestration_resource_provider = provider
+    candidate = AgentProfile(agent_id="agent-1", agent_name="Agent One")
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="current-message",
+        message_text="Use this information for the next step.",
+        agent_registry=[candidate],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=current_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    provider.list_resources.assert_awaited_once_with(
+        run_id="current-message",
+        room_id="room-1",
+        user_message_id="current-message",
+        attachments=[prior_attachment],
+        candidate_agents=[candidate],
+        attachment_source_message_ids={"prior-file": "prior-message"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_materializes_only_selected_resource_refs_for_dispatch():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -1781,6 +1853,91 @@ async def test_platform_answer_receives_pdf_text_projection_for_direct_response(
     provider.resolve_ref.assert_awaited_once_with(
         "ctx:file-file-1:text",
         run_id="message-1",
+        attachments=[attachment],
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_answer_reuses_prior_turn_pdf_projection_for_follow_up():
+    attachment = UserAttachment(
+        file_id="prior-file",
+        s3_key="uploads/room-1/prior-file/application.pdf",
+        mime_type="application/pdf",
+        file_name="application.pdf",
+        size_bytes=128,
+    )
+    prior_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="prior-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Can you read this PDF?",
+            attachments=[attachment],
+        ),
+    )
+    current_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="current-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use the application details in your answer.",
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "current-message",
+            "candidate_agent_ids": [],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.PLATFORM_ANSWER,
+            reasoning="Answer from the prior PDF projection.",
+            synthesis_instruction="Answer using the application details.",
+        )
+    )
+    provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-prior-file:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Client: Acme SaaS Inc\nEmployees: 250\nMFA: Yes",
+                metadata={"file_name": "application.pdf"},
+            )
+        ),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=current_message,
+    )
+    executor.message_reader.get_room_user_messages_by_room_id = AsyncMock(
+        return_value=[prior_message, current_message]
+    )
+    executor.orchestration_resource_provider = provider
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="current-message",
+        message_text="Use the application details in your answer.",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=current_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    instruction = executor._stream_supervisor_synthesis.await_args.kwargs[
+        "synthesis_instruction"
+    ]
+    assert "Client: Acme SaaS Inc" in instruction
+    assert "Employees: 250" in instruction
+    provider.resolve_ref.assert_awaited_once_with(
+        "ctx:file-prior-file:text",
+        run_id="current-message",
         attachments=[attachment],
     )
 

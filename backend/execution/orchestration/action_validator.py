@@ -81,6 +81,7 @@ class PlannerActionValidator:
                 action,
                 candidate_agent_ids=candidate_agent_ids,
                 run_state=run_state,
+                available_resource_refs=set((resource_fingerprints or {}).keys()),
             )
             PlannerActionValidator._validate_delegate_outcome_policy(
                 action,
@@ -568,6 +569,7 @@ def _validate_delegate(
     *,
     candidate_agent_ids: Iterable[str],
     run_state: OrchestrationRunState | None,
+    available_resource_refs: set[str],
 ) -> None:
     if not action.targets:
         raise PlannerActionValidationError(
@@ -599,6 +601,29 @@ def _validate_delegate(
             raise PlannerActionValidationError(
                 f"delegate target {target.agent_id!r} requires a non-empty task",
                 code="delegate_task_empty",
+            )
+        selected_resource_refs = {
+            *target.required_resource_refs,
+            *(
+                ref.ref_id
+                for ref in (
+                    *target.context_refs,
+                    *target.artifact_refs,
+                    *target.attachment_refs,
+                )
+            ),
+        }
+        omitted_resource_refs = {
+            ref_id
+            for ref_id in available_resource_refs
+            if ref_id in target.task and ref_id not in selected_resource_refs
+        }
+        if omitted_resource_refs:
+            refs = ", ".join(sorted(omitted_resource_refs))
+            raise PlannerActionValidationError(
+                "delegate task mentions available resource ref(s) without "
+                f"selecting them: {refs}",
+                code="delegate_resource_ref_omitted",
             )
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)

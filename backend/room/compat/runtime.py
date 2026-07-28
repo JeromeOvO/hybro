@@ -3788,6 +3788,27 @@ class RoomServices:
         agent = await self._store.get_agent_by_agent_id(agent_id)
         agent_name = agent.agent_card.name if agent else None
 
+        resolved_resource_payloads = request.resolved_resource_payloads
+        if resolved_resource_payloads is None:
+            resolved_resource_payloads = request.dispatch_resource_payloads
+        if resolved_resource_payloads is None:
+            resolved_payload_refs = (
+                message.extend_info.get("resolved_dispatch_payload_refs")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+            resolved_resource_payloads = (
+                resolved_payload_refs.get("resource_payloads")
+                if isinstance(resolved_payload_refs, dict)
+                else None
+            )
+        if resolved_resource_payloads is None:
+            resolved_resource_payloads = (
+                message.extend_info.get("resolved_dispatch_resource_payloads")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+
         # Turn context (QUOTE_REPLY): user prompt + quote snapshot + separate agent task
         turn_ctx = None
         if orchestration_user_message_id:
@@ -3813,8 +3834,37 @@ class RoomServices:
                     )
 
         original_text = agent_message.parts[0].root.text or ""
-        current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
-        agent_task_for_cas = original_text if turn_ctx else None
+        if dispatch_task_text:
+            current_task_for_cas = dispatch_task_text
+            agent_task_for_cas = None
+        else:
+            current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
+            agent_task_for_cas = original_text if turn_ctx else None
+
+        embedded_text_resource_indexes: set[int] = set()
+        selected_text_sections: list[str] = []
+        if dispatch_task_text and isinstance(resolved_resource_payloads, list):
+            for index, payload in enumerate(resolved_resource_payloads):
+                if not isinstance(payload, dict):
+                    continue
+                text = payload.get("text")
+                mime_type = str(payload.get("mime_type") or "").split(";", 1)[0]
+                if (
+                    not isinstance(text, str)
+                    or not text.strip()
+                    or mime_type == "application/json"
+                ):
+                    continue
+                ref_id = payload.get("ref_id")
+                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
+                selected_text_sections.append(f"Resource {label}:\n{text.strip()}")
+                embedded_text_resource_indexes.add(index)
+        if selected_text_sections:
+            current_task_for_cas = (
+                f"{current_task_for_cas}\n\n"
+                "Selected source material follows.\n"
+                + "\n\n".join(selected_text_sections)
+            )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
         )
@@ -3937,30 +3987,10 @@ class RoomServices:
             # Log but continue with original message if context building fails
             logger.warning(f"Failed to build context for agent message: {e}")
 
-        resolved_resource_payloads = request.resolved_resource_payloads
-        if resolved_resource_payloads is None:
-            resolved_resource_payloads = request.dispatch_resource_payloads
-        if resolved_resource_payloads is None:
-            resolved_payload_refs = (
-                message.extend_info.get("resolved_dispatch_payload_refs")
-                if isinstance(message.extend_info, dict)
-                else None
-            )
-            resolved_resource_payloads = (
-                resolved_payload_refs.get("resource_payloads")
-                if isinstance(resolved_payload_refs, dict)
-                else None
-            )
-        if resolved_resource_payloads is None:
-            resolved_resource_payloads = (
-                message.extend_info.get("resolved_dispatch_resource_payloads")
-                if isinstance(message.extend_info, dict)
-                else None
-            )
         if isinstance(resolved_resource_payloads, list):
             target_agent_card = getattr(agent, "agent_card", None)
             accepted_modes = agent_input_modes(target_agent_card)
-            for payload in resolved_resource_payloads:
+            for index, payload in enumerate(resolved_resource_payloads):
                 if not isinstance(payload, dict):
                     continue
                 text = payload.get("text")
@@ -4025,6 +4055,8 @@ class RoomServices:
                     continue
 
                 if not isinstance(text, str) or not text.strip():
+                    continue
+                if index in embedded_text_resource_indexes:
                     continue
                 if mime_type == "application/json" and mime_type_is_accepted(
                     mime_type, accepted_modes
@@ -4094,7 +4126,7 @@ class RoomServices:
             if isinstance(message.extend_info, dict)
             else None
         )
-        if user_attachments and forwarding_policy == "explicit_refs_only":
+        if forwarding_policy == "explicit_refs_only":
             raw_attachment_refs = request.explicit_attachment_refs
             if (
                 raw_attachment_refs is None
@@ -4119,11 +4151,71 @@ class RoomServices:
                     continue
                 if isinstance(raw_ref, dict) and raw_ref.get("ref_id"):
                     selected_ref_set.add(str(raw_ref["ref_id"]))
+
+            def is_selected_attachment(attachment: UserAttachment) -> bool:
+                return (
+                    attachment.file_id in selected_ref_set
+                    or f"file:{attachment.file_id}" in selected_ref_set
+                )
+
+            selected_file_ids = {
+                attachment.file_id
+                for attachment in user_attachments
+                if is_selected_attachment(attachment)
+            }
+            unresolved_ref_ids = {
+                ref.removeprefix("file:")
+                for ref in selected_ref_set
+                if ref.removeprefix("file:") not in selected_file_ids
+            }
+            get_room_user_messages = getattr(
+                self._store,
+                "get_room_user_messages_by_room_id",
+                None,
+            )
+            if unresolved_ref_ids and get_room_user_messages is not None:
+                try:
+                    room_user_messages = await get_room_user_messages(message.room_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to load prior room attachments for explicit dispatch",
+                        extra={
+                            "room_id": message.room_id,
+                            "agent_message_id": message.message_id,
+                        },
+                        exc_info=True,
+                    )
+                    room_user_messages = []
+                for room_user_message in reversed(room_user_messages):
+                    message_content = getattr(
+                        room_user_message,
+                        "message_content",
+                        None,
+                    )
+                    prior_attachments = getattr(
+                        message_content,
+                        "attachments",
+                        None,
+                    )
+                    for prior_attachment in prior_attachments or []:
+                        try:
+                            attachment = (
+                                prior_attachment
+                                if isinstance(prior_attachment, UserAttachment)
+                                else UserAttachment.model_validate(prior_attachment)
+                            )
+                        except Exception:
+                            continue
+                        if attachment.file_id not in unresolved_ref_ids:
+                            continue
+                        user_attachments.append(attachment)
+                        unresolved_ref_ids.remove(attachment.file_id)
+                    if not unresolved_ref_ids:
+                        break
             user_attachments = [
                 attachment
                 for attachment in user_attachments
-                if attachment.file_id in selected_ref_set
-                or f"file:{attachment.file_id}" in selected_ref_set
+                if is_selected_attachment(attachment)
             ]
         if user_attachments:
             agent_card_obj = getattr(agent, "agent_card", None)
