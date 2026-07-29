@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8](https://github.com/hybroai/hybro/compare/v0.2.7...v0.2.8) (2026-07-29)
+
+
+### Bug Fixes
+
+* **frontend:** guard stale processing restoration ([b297197](https://github.com/hybroai/hybro/commit/b2971974f2aaa0fa25c5f1687a823710d7733474))
+* improve supervisor delegation context ([83c7be7](https://github.com/hybroai/hybro/commit/83c7be77a28a2b2f14cb4179d06fe4bba24aa2ea))
+* stabilize supervisor attachment and recovery flows ([3f90655](https://github.com/hybroai/hybro/commit/3f9065577c5bd6b2c4f407de11ffc59e1b025f35))
+
 ## [0.2.7](https://github.com/hybroai/hybro/compare/v0.2.6...v0.2.7) (2026-07-27)
 
 
