@@ -310,6 +310,61 @@ async def test_blocking_resume_logs_state_result_before_returning():
 
 
 @pytest.mark.asyncio
+async def test_unhandled_supervisor_failure_terminalizes_system_task():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.reconstruct_from_envelope(
+        run_id="message-1",
+        room_id="room-1",
+        user_message_id="message-1",
+        envelope={},
+        goal="Coordinate this",
+    )
+    state.status = OrchestrationStatus.RUNNING
+    state.system_agent_message_id = "sys-message-1"
+    await store.create_run(state)
+
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    system_message = SimpleNamespace(
+        message_id="sys-message-1",
+        message_content=SimpleNamespace(
+            message_text="",
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state="submitted"),
+            ),
+        ),
+    )
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=system_message
+    )
+
+    await executor._mark_current_run_failed_after_unhandled_exception(
+        "message-1",
+        reason="planner failed",
+    )
+
+    executor.delivery.send_task_update.assert_awaited_once_with(
+        room_id="room-1",
+        message_id="sys-message-1",
+        status="failed",
+    )
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
+        "sys-message-1",
+        system_message.message_content,
+    )
+    assert system_message.message_content.message_task.status.state.value == "failed"
+
+
+@pytest.mark.asyncio
 async def test_loaded_debate_run_reconciles_missing_participant_snapshot():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -417,6 +472,78 @@ async def test_run_builds_resource_catalog_before_planning():
     assert result.status == RunStatus.FAILED
     provider.list_resources.assert_awaited_once()
     assert planner.contexts[0].available_resources == []
+
+
+@pytest.mark.asyncio
+async def test_run_reuses_recent_prior_turn_attachments_in_resource_catalog():
+    prior_attachment = UserAttachment(
+        file_id="prior-file",
+        mime_type="application/pdf",
+        file_name="prior-submission.pdf",
+        size_bytes=128,
+    )
+    prior_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="prior-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Can you read this PDF?",
+            attachments=[prior_attachment],
+        ),
+    )
+    current_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="current-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use this information for the next step.",
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "current-message",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    provider = SimpleNamespace(list_resources=AsyncMock(return_value=[]))
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="test stop",
+            failure_reason="test stop",
+        )
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=current_message,
+    )
+    executor.message_reader.get_room_user_messages_by_room_id = AsyncMock(
+        return_value=[prior_message, current_message]
+    )
+    executor.orchestration_resource_provider = provider
+    candidate = AgentProfile(agent_id="agent-1", agent_name="Agent One")
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="current-message",
+        message_text="Use this information for the next step.",
+        agent_registry=[candidate],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=current_message,
+    )
+
+    assert result.status == RunStatus.FAILED
+    provider.list_resources.assert_awaited_once_with(
+        run_id="current-message",
+        room_id="room-1",
+        user_message_id="current-message",
+        attachments=[prior_attachment],
+        candidate_agents=[candidate],
+        attachment_source_message_ids={"prior-file": "prior-message"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1638,11 +1765,181 @@ async def test_platform_answers_directly_when_no_candidate_agent_is_suitable():
         "synthesis_instruction"
     ]
     assert "Answer the question directly." in synthesis_instruction
-    assert "connected agents have limited capabilities" in synthesis_instruction
+    assert "Do not mention agent routing" in synthesis_instruction
+    assert "connected agents have limited capabilities" not in synthesis_instruction
+    assert "agent names" in synthesis_instruction
+    assert "domain-specific next steps" in synthesis_instruction
     state = await store.get_latest_by_user_message_id("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.COMPLETED
     assert state.candidate_agent_ids == []
+
+
+@pytest.mark.asyncio
+async def test_platform_answer_receives_pdf_text_projection_for_direct_response():
+    attachment = UserAttachment(
+        file_id="file-1",
+        s3_key="uploads/room-1/file-1/application.pdf",
+        mime_type="application/pdf",
+        file_name="application.pdf",
+        size_bytes=128,
+    )
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Can you read this PDF?",
+            attachments=[attachment],
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["broker-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.PLATFORM_ANSWER,
+            reasoning="Answer from the readable PDF projection.",
+            synthesis_instruction=(
+                "Summarize the PDF, then ask whether the user wants the Cyber "
+                "Broker Agent to prepare a submission."
+            ),
+        )
+    )
+    provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-file-1:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Client: Acme SaaS Inc\nEmployees: 250\nMFA: Yes",
+                metadata={"file_name": "application.pdf"},
+            )
+        ),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=user_message,
+    )
+    executor.orchestration_resource_provider = provider
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Can you read this PDF?",
+        agent_registry=[
+            AgentProfile(agent_id="broker-1", agent_name="Cyber Broker Agent")
+        ],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    executor.agent_message_processor.process_single_message.assert_not_awaited()
+    instruction = executor._stream_supervisor_synthesis.await_args.kwargs[
+        "synthesis_instruction"
+    ]
+    assert "Client: Acme SaaS Inc" in instruction
+    assert "Employees: 250" in instruction
+    assert "untrusted attachment content" in instruction
+    assert "Cyber Broker Agent to prepare a submission" in instruction
+    provider.resolve_ref.assert_awaited_once_with(
+        "ctx:file-file-1:text",
+        run_id="message-1",
+        attachments=[attachment],
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_answer_reuses_prior_turn_pdf_projection_for_follow_up():
+    attachment = UserAttachment(
+        file_id="prior-file",
+        s3_key="uploads/room-1/prior-file/application.pdf",
+        mime_type="application/pdf",
+        file_name="application.pdf",
+        size_bytes=128,
+    )
+    prior_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="prior-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Can you read this PDF?",
+            attachments=[attachment],
+        ),
+    )
+    current_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="current-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="Use the application details in your answer.",
+        ),
+        extend_info={
+            "orchestration": True,
+            "orchestration_schema_version": 2,
+            "orchestration_run_id": "current-message",
+            "candidate_agent_ids": [],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.PLATFORM_ANSWER,
+            reasoning="Answer from the prior PDF projection.",
+            synthesis_instruction="Answer using the application details.",
+        )
+    )
+    provider = SimpleNamespace(
+        list_resources=AsyncMock(return_value=[]),
+        resolve_ref=AsyncMock(
+            return_value=ResourcePayload(
+                ref_id="ctx:file-prior-file:text",
+                kind="context",
+                mime_type="text/plain",
+                text="Client: Acme SaaS Inc\nEmployees: 250\nMFA: Yes",
+                metadata={"file_name": "application.pdf"},
+            )
+        ),
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=planner,
+        user_message=current_message,
+    )
+    executor.message_reader.get_room_user_messages_by_room_id = AsyncMock(
+        return_value=[prior_message, current_message]
+    )
+    executor.orchestration_resource_provider = provider
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="current-message",
+        message_text="Use the application details in your answer.",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=current_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    instruction = executor._stream_supervisor_synthesis.await_args.kwargs[
+        "synthesis_instruction"
+    ]
+    assert "Client: Acme SaaS Inc" in instruction
+    assert "Employees: 250" in instruction
+    provider.resolve_ref.assert_awaited_once_with(
+        "ctx:file-prior-file:text",
+        run_id="current-message",
+        attachments=[attachment],
+    )
 
 
 def test_platform_answer_copy_keeps_successful_prior_dispatch_as_capability_limit():
@@ -1670,9 +1967,13 @@ def test_platform_answer_copy_keeps_successful_prior_dispatch_as_capability_limi
 
     details, disclosure = supervisor_executor_module._platform_answer_copy(state)
 
-    assert details == "No suitable connected agent. HYBRO is answering..."
-    assert "connected agents have limited capabilities" in disclosure
+    assert details == "HYBRO is answering directly..."
+    assert "Do not mention agent routing" in disclosure
+    assert "connected agents have limited capabilities" not in disclosure
+    assert "agent names" in disclosure
     assert "execution failed" not in disclosure
+    assert "as HYBRO." in disclosure
+    assert "HYBRO Platform" not in disclosure
 
 
 def test_platform_answer_copy_reports_explicit_dispatch_failure():
@@ -1696,6 +1997,8 @@ def test_platform_answer_copy_reports_explicit_dispatch_failure():
     assert details == "Connected agent execution failed. HYBRO is answering..."
     assert "connected-agent execution failed" in disclosure
     assert "no agent was suitable" in disclosure
+    assert "as HYBRO." in disclosure
+    assert "HYBRO Platform" not in disclosure
 
 
 def test_platform_answer_copy_uses_only_runtime_open_failures():
@@ -1725,7 +2028,7 @@ def test_platform_answer_copy_uses_only_runtime_open_failures():
     )
 
     assert runtime_details == "Connected agent execution failed. HYBRO is answering..."
-    assert planner_details == "No suitable connected agent. HYBRO is answering..."
+    assert planner_details == "HYBRO is answering directly..."
 
 
 @pytest.mark.asyncio
@@ -11399,6 +11702,58 @@ async def test_input_required_without_continuation_does_not_create_duplicate_hit
     assert resolved == [awaiting]
     assert follow_up_ids == set()
     executor.hitl_coordinator.request_input.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unresolved_owned_input_required_is_promoted_to_user_hitl():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    state = _run_state(
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="target-1",
+                dispatch_intent_id="intent-1",
+                planned_agent_message_id="broker-msg-1",
+                agent_id="broker-1",
+                task="Prepare a submission from the PDF",
+                task_hash="hash-1",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="ctx:file-file-1:text",
+                    )
+                ],
+            )
+        ]
+    )
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    awaiting = StepResult(
+        step_number=1,
+        agent_id="broker-1",
+        agent_name="Cyber Broker Agent",
+        task="Prepare a submission from the PDF",
+        response_text="",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        status_message="Please provide the customer's email address.",
+        interactive_state="input-required",
+        agent_message_id="broker-msg-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+
+    _, resolved, follow_up_ids = await executor._resolve_agent_input_required_results(
+        state=state,
+        results=[awaiting],
+        user_message=user_message,
+    )
+
+    assert resolved == [awaiting]
+    assert follow_up_ids == {"broker-msg-1"}
 
 
 @pytest.mark.asyncio

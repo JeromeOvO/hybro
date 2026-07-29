@@ -578,6 +578,27 @@ describe('deriveFinalAnswer', () => {
       result.kind === 'deterministic_done' ? result.deterministicIntro : '',
     ).not.toContain('0 agents responded')
   })
+
+  it('returns failed when the turn is terminal but a stale supervisor placeholder is still working', () => {
+    const turn = makeTurn({
+      status: 'failed',
+      turnTerminalStatus: 'failed',
+      agentResults: [
+        makeAgent({
+          messageId: 'sys-u1',
+          agentId: 'system:hybro',
+          agentName: 'HYBRO AI',
+          status: 'working',
+          content: '',
+        }),
+      ],
+    })
+
+    const result = deriveFinalAnswer(turn, ['sys-u1'])
+
+    expect(result.kind).toBe('failed')
+    expect(result.failedIntro).toBe(FAILED_TURN_INTRO)
+  })
 })
 
 describe('derivePrimaryStreamFromFinalAnswer', () => {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from io import BytesIO
 from typing import Any, Literal, Protocol
 
@@ -276,6 +276,7 @@ class OrchestrationResourceProvider:
         user_message_id: str,
         attachments: Sequence[UserAttachment],
         candidate_agents: Sequence[Any],
+        attachment_source_message_ids: Mapping[str, str] | None = None,
     ) -> list[ResourceRef]:
         self._touch_run(run_id)
         resources: list[ResourceRef] = []
@@ -308,7 +309,14 @@ class OrchestrationResourceProvider:
                     ref_id=source_ref_id,
                     kind="attachment",
                     origin="user_message",
-                    source_message_id=user_message_id,
+                    source_message_id=(
+                        attachment_source_message_ids.get(
+                            attachment.file_id,
+                            user_message_id,
+                        )
+                        if attachment_source_message_ids is not None
+                        else user_message_id
+                    ),
                     file_name=attachment.file_name,
                     mime_type=attachment.mime_type,
                     status="ready",

@@ -409,6 +409,17 @@ resolved so canceled or expired request metadata cannot recreate stale HITL UI.
 
 `processing_status` requires `message_id`, non-empty `client_request_id`, a known status, and `details` as either an object or `null`. Active statuses such as `queued`, `processing`, and `awaiting_input` keep the user turn active; terminal statuses mark the correlated user turn and clear the send guard only when they target the user message rather than a per-agent task. HITL resume can introduce a new backend `client_request_id`; in that case, a terminal frame with an agent-task `message_id` is accepted only when `related_message_id` points at the resolved user turn and the new request id differs from the user message's original request id.
 
+Failed and canceled user turns are absorbing lifecycle states: a delayed active
+`processing_status` frame cannot restart their composer processing/Stop state.
+When a live tab misses terminal SSE and the room snapshot reports no active run,
+`useProcessingRestore` rechecks `inquiryActiveRuns` for the exact trigger,
+reconciles messages from the database, and stops processing only after the
+reloaded user message carries a terminal status. Before mutating the lifecycle
+after those asynchronous checks, it verifies that the same user message still
+owns processing and that no new send or pending run-event acknowledgement has
+started. This preserves the send-race guard while allowing backend-confirmed
+failures with zero agent tasks to recover without a page refresh.
+
 **Multi-agent turn completion fallback:** Per-agent terminal SSE alone does not complete a multi-agent turn. The backend emits a `turn_completion_kind` field (`"synthesis"` or `"deterministic"`) as part of the COMPLETED `processing_status` SSE `details` and persists it on the user message `extend_info` before emitting the event. The frontend stores this as `turnCompletionKind` on the user `MessageEntity`.
 
 `deriveFinalAnswer` promotes to `deterministic_done` when `turnCompletionKind === 'deterministic'`, a deterministic `summary-*` digest entity is present, mixed terminal agents resolve without synthesis, or `turnCompletionKind === 'synthesis'` was persisted but no synthesis evidence ever appeared (backend queue path can set synthesis kind even when no LLM step runs). When synthesis is actively in flight — processing logs, synthesis ephemerals, or a working empty LLM summary — the turn stays `pending`/`synthesizing` until content arrives. When `turnCompletionKind` is absent, supervisor turns stay pending until backend truth stamps or synthesis signals arrive; non-supervisor and mixed-failure paths use entity evidence and `isDeterministicCompletionExpected`.

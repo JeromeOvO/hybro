@@ -78,6 +78,12 @@ class TestClaimOrReclaimUserMessage:
         assert "$or" in query
         assert {"processing_claimed_at": None} in query["$or"]
         assert {"processing_claimed_at": {"$lt": threshold}} in query["$or"]
+        assert {
+            "processing_claimed_at": {
+                "$type": "string",
+                "$lt": "2026-01-01T00:00:00.000000",
+            }
+        } in query["$or"]
 
     @pytest.mark.asyncio
     async def test_reclaim_fails_for_recently_claimed(self):
@@ -96,6 +102,28 @@ class TestClaimOrReclaimUserMessage:
 
 class TestIdempotencyGuardInRoomMessageCenter:
     """Tests for the idempotency guard in process_room_user_message."""
+
+    @pytest.mark.asyncio
+    async def test_hitl_resume_reuses_existing_processing_claim(self):
+        """An immediate HITL resume must not wait for its own claim to become stale."""
+        from execution.orchestration.room_message_center import RoomMessageCenter
+
+        rmc = object.__new__(RoomMessageCenter)
+        rmc.message_writer = MagicMock()
+        rmc.message_writer.refresh_processing_claim = AsyncMock(return_value=True)
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+
+        request = MagicMock(
+            room_user_message_id="msg-1",
+            is_recovery=True,
+            reuse_processing_claim=True,
+        )
+
+        claimed = await rmc._claim_user_message(request)
+
+        assert claimed is True
+        rmc.message_writer.refresh_processing_claim.assert_awaited_once_with("msg-1")
+        rmc.message_writer.claim_or_reclaim_user_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_normal_claim_rejected_returns_409(self):

@@ -887,7 +887,10 @@ class RoomFiles:
         if self._messages is None or not message_id:
             return False
         return (
-            await self._messages.find_one({"message_id": message_id}, {"_id": 1})
+            await self._messages.find_one(
+                {"message_id": message_id},
+                projection={"_id": 1},
+            )
             is not None
         )
 
@@ -896,7 +899,8 @@ class RoomFiles:
             return False
         return (
             await self._messages.find_one(
-                {"message_content.attachments.file_id": file_id}, {"_id": 1}
+                {"message_content.attachments.file_id": file_id},
+                projection={"_id": 1},
             )
             is not None
         )
@@ -950,7 +954,10 @@ class RoomFiles:
         list_file_ids = getattr(self._content, "list_file_ids", None)
         if list_file_ids is not None:
             for file_id in await list_file_ids():
-                if await self._metadata.find_one({"file_id": file_id}, {"_id": 1}):
+                if await self._metadata.find_one(
+                    {"file_id": file_id},
+                    projection={"_id": 1},
+                ):
                     continue
                 if await self._content.delete(file_id):
                     recovered += 1

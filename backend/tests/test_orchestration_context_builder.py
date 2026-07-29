@@ -613,7 +613,59 @@ def test_prompt_payload_excludes_shadow_control_state_from_planner():
     assert "recovery_directives" not in state_payload
     assert state_payload["agent_outputs"] == []
     assert state_payload["artifacts"] == []
+    assert payload["planner_feedback"] == []
     assert payload["available_resources"] == []
+
+
+def test_prompt_payload_exposes_sanitized_planner_validation_feedback():
+    state = _run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="private-failure-id",
+                fingerprint="private-fingerprint",
+                source="planner_validator",
+                error_code="parallel_dependency_unspecified",
+                error_message=(
+                    "multi-target delegate requires one explicit independent "
+                    "parallel_group"
+                ),
+                recoverable=True,
+                retry_count=1,
+                max_retries=2,
+                status="open",
+                recovery_hints=["replan_with_valid_schema"],
+            ),
+            OpenFailureRecord(
+                failure_id="runtime-failure",
+                fingerprint="agent-1:timeout",
+                source="a2a_adapter",
+                error_code="timeout",
+                error_message="Agent timed out",
+                recoverable=True,
+                status="open",
+            ),
+        ]
+    )
+
+    payload = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Continue the workflow",
+    ).prompt_payload()
+
+    assert payload["planner_feedback"] == [
+        {
+            "error_code": "parallel_dependency_unspecified",
+            "error_message": (
+                "multi-target delegate requires one explicit independent parallel_group"
+            ),
+            "retry_count": 1,
+            "max_retries": 2,
+            "recovery_hints": ["replan_with_valid_schema"],
+        }
+    ]
+    assert "private-failure-id" not in str(payload["planner_feedback"])
+    assert "private-fingerprint" not in str(payload["planner_feedback"])
+    assert "timeout" not in str(payload["planner_feedback"])
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():

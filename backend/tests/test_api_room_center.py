@@ -357,6 +357,25 @@ class TestRoomCenterAdapter:
         assert await center.create_new_room(MagicMock()) == "created"
         service.create_new_room.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_delegates_orchestration_status_projection_to_bound_runtime(self):
+        service = MagicMock()
+        service._bound = True
+        service.update_user_message_orchestration_status = AsyncMock(return_value=True)
+        center = RoomCenter(room_services=service)
+
+        assert (
+            await center.update_user_message_orchestration_status(
+                "user-message-1",
+                "canceled",
+            )
+            is True
+        )
+        service.update_user_message_orchestration_status.assert_awaited_once_with(
+            "user-message-1",
+            "canceled",
+        )
+
 
 class TestVerifyRoomOwnership:
     """Tests for verify_room_ownership helper function."""

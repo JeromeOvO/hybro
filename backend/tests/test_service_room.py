@@ -18,7 +18,7 @@ import pytest
 
 from common.dto import MessageCommitted, RoomInfo
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
-from models.room import MessageContent, Room, RoomUserMessage
+from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room.compat.runtime import RoomServices
 
 
@@ -324,6 +324,68 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
 
     assert publisher.internal_events == []
     assert publisher.wait_flags == []
+
+
+@pytest.mark.asyncio
+async def test_room_services_assigns_message_id_before_claiming_file_references():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    publisher = RecordingEventPublisher()
+    facade = MagicMock()
+
+    def ensure_user_message_id(user_message):
+        if user_message.message_id == "":
+            user_message.message_id = "generated-message-id"
+        return user_message.message_id
+
+    async def persist_user_message(user_message):
+        if user_message.message_id == "":
+            user_message.message_id = "generated-message-id"
+        return True
+
+    facade.ensure_user_message_id.side_effect = ensure_user_message_id
+    facade.persist_user_message = AsyncMock(side_effect=persist_user_message)
+    room_files = MagicMock()
+    room_files.claim_references = AsyncMock()
+    room_files.commit_references = AsyncMock()
+    svc.bind_facade(facade)
+    svc.bind_room_files(room_files)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="What content in this pdf?",
+            attachments=[
+                UserAttachment(
+                    file_id="pdf-1",
+                    mime_type="application/pdf",
+                    file_name="document.pdf",
+                    size_bytes=1024,
+                )
+            ],
+        ),
+    )
+
+    assert (
+        await svc._persist_user_message_with_lease(user_message, room_agent_set={})
+        is True
+    )
+
+    facade.ensure_user_message_id.assert_called_once_with(user_message)
+    room_files.claim_references.assert_awaited_once_with(
+        room_id="r1",
+        owner_id="user-1",
+        message_id="generated-message-id",
+        file_ids=["pdf-1"],
+    )
+    room_files.commit_references.assert_awaited_once_with(
+        message_id="generated-message-id",
+        file_ids=["pdf-1"],
+    )
+    assert publisher.internal_events[0].message_id == "generated-message-id"
 
 
 @pytest.mark.asyncio

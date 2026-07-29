@@ -955,6 +955,7 @@ class ExecutionFacade:
             room_user_message_id=state.user_message_id,
             user_id=hitl_result.get("responder_id"),
             is_recovery=True,
+            reuse_processing_claim=True,
             client_request_id=state.client_request_id,
         )
         self.schedule_recovery_orchestration(

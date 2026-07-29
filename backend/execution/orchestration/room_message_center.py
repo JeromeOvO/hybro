@@ -793,6 +793,29 @@ class RoomMessageCenter:
                     message_id,
                 )
 
+    async def _claim_user_message(self, request: OrchestrationRequest) -> bool:
+        if getattr(request, "reuse_processing_claim", False):
+            # HITL pauses intentionally retain the processing claim across the
+            # user-input boundary. The response resumes the same logical run,
+            # so refresh that claim instead of waiting for the orphan timeout.
+            return await self.message_writer.refresh_processing_claim(
+                request.room_user_message_id
+            )
+        if request.is_recovery:
+            stale_threshold = utcnow() - timedelta(
+                minutes=getattr(
+                    self,
+                    "orphan_threshold_minutes",
+                    settings.orphan_threshold_minutes,
+                )
+            )
+            return await self.message_writer.claim_or_reclaim_user_message(
+                request.room_user_message_id, stale_threshold
+            )
+        return await self.message_writer.claim_user_message_for_processing(
+            request.room_user_message_id
+        )
+
     # ------------------------------------------------------------------
 
     async def process_room_user_message(
@@ -826,21 +849,7 @@ class RoomMessageCenter:
             return validation_response
 
         # Idempotency guard (SDR 2.5)
-        if request.is_recovery:
-            stale_threshold = utcnow() - timedelta(
-                minutes=getattr(
-                    self,
-                    "orphan_threshold_minutes",
-                    settings.orphan_threshold_minutes,
-                )
-            )
-            claimed = await self.message_writer.claim_or_reclaim_user_message(
-                request.room_user_message_id, stale_threshold
-            )
-        else:
-            claimed = await self.message_writer.claim_user_message_for_processing(
-                request.room_user_message_id
-            )
+        claimed = await self._claim_user_message(request)
 
         if not claimed:
             logger.warning(

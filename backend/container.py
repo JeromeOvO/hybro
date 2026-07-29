@@ -763,6 +763,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
+                get_room_user_messages_by_room_id=(
+                    message_store.get_room_user_messages_by_room_id
+                ),
             )
             execution_message_writer = SimpleNamespace(
                 accumulate_artifact_on_message=(

@@ -148,7 +148,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   }, [roomId, allAgentsData, getAgentSource, hydratedFromDb])
 
   // Processing restore
-  useProcessingRestore(roomId, room, loading, lifecycle, getToken)
+  useProcessingRestore(
+    roomId,
+    room,
+    loading,
+    lifecycle,
+    getToken,
+    reconcileWithDb,
+  )
 
   // Handle SSE messages — delegates to pure dispatcher factory
   const handleSSEMessage = useMemo(
