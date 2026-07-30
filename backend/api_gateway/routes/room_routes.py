@@ -593,23 +593,21 @@ async def send_message(
         return err
 
     logger.info(
-        "gateway_send_message_received room_id=%s user_id=%s "
-        "client_request_id=%s mode=%s schema=%s room_supervisor=%s "
-        "target_mode=%s target_group_id=%s mentioned_count=%d "
-        "selected_count=%d attachment_count=%d inline_file_count=%d message_len=%d",
-        room_id,
-        user.user_id,
-        client_request_id,
-        mode,
-        orchestration_schema_version,
-        room_uses_supervisor,
-        message_target_mode,
-        target_group_id,
-        len(mentioned_agent_ids or []),
-        len(selected_agent_ids or []),
-        len(attachments or []),
-        len(inline_file_ids or []),
-        _message_text_len(message),
+        "gateway_send_message_received",
+        extra={
+            "room_id": room_id,
+            "client_request_id": client_request_id,
+            "mode": mode,
+            "orchestration_schema_version": orchestration_schema_version,
+            "room_supervisor": room_uses_supervisor,
+            "target_mode": message_target_mode,
+            "target_group_id": target_group_id,
+            "mentioned_count": len(mentioned_agent_ids or []),
+            "selected_count": len(selected_agent_ids or []),
+            "attachment_count": len(attachments or []),
+            "inline_file_count": len(inline_file_ids or []),
+            "message_length": _message_text_len(message),
+        },
     )
 
     related_message_id = ""
@@ -637,26 +635,29 @@ async def send_message(
     )
     ack = await engine.execute(execution_request)
     logger.info(
-        "gateway_send_message_ack room_id=%s message_id=%s "
-        "client_request_id=%s success=%s status_code=%s "
-        "should_start_orchestration=%s preflight_outcome=%s",
-        room_id,
-        ack.message_id,
-        client_request_id,
-        ack.success,
-        ack.status_code,
-        ack.should_start_orchestration,
-        ack.preflight_outcome,
+        "gateway_send_message_completed",
+        extra={
+            "room_id": room_id,
+            "message_id": ack.message_id,
+            "user_message_id": ack.message_id,
+            "client_request_id": client_request_id,
+            "outcome": "success" if ack.success else "error",
+            "status": ack.status_code,
+            "should_start_orchestration": ack.should_start_orchestration,
+            "preflight_outcome": ack.preflight_outcome,
+        },
     )
 
     # Auto-trigger processing as background task if message was created successfully
     if ack.success and ack.message_id and ack.should_start_orchestration:
         logger.info(
-            "gateway_send_message_background_scheduled room_id=%s "
-            "message_id=%s client_request_id=%s",
-            room_id,
-            ack.message_id,
-            client_request_id,
+            "gateway_send_message_background_scheduled",
+            extra={
+                "room_id": room_id,
+                "message_id": ack.message_id,
+                "user_message_id": ack.message_id,
+                "client_request_id": client_request_id,
+            },
         )
         background_tasks.add_task(
             engine.start_orchestration,

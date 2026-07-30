@@ -2364,7 +2364,18 @@ class RoomServices:
                 )
             )
 
-        logger.info(f"LLM Parsed result: {parsed_result}")
+        logger.info(
+            "message_parse_completed",
+            extra={
+                "outcome": "success" if parsed_result else "empty",
+                "message_type": (
+                    parsed_result.get("message_type") if parsed_result else None
+                ),
+                "step_count": (
+                    len(parsed_result.get("task_steps", [])) if parsed_result else 0
+                ),
+            },
+        )
 
         if not parsed_result:
             logger.warning("No parsed result from LLM")
@@ -3701,8 +3712,11 @@ class RoomServices:
 
             return "\n".join(parts)
 
-        except Exception as e:
-            logger.warning(f"Failed to build room awareness: {e}")
+        except Exception as exc:
+            logger.warning(
+                "room_awareness_build_failed",
+                extra={"error_type": type(exc).__name__},
+            )
             return None
 
     async def process_agent_message(
@@ -3983,9 +3997,12 @@ class RoomServices:
                         )
 
                 agent_message.parts[0].root.text = context
-        except Exception as e:
+        except Exception as exc:
             # Log but continue with original message if context building fails
-            logger.warning(f"Failed to build context for agent message: {e}")
+            logger.warning(
+                "agent_message_context_build_failed",
+                extra={"error_type": type(exc).__name__},
+            )
 
         if isinstance(resolved_resource_payloads, list):
             target_agent_card = getattr(agent, "agent_card", None)

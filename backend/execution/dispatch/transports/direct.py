@@ -2087,7 +2087,10 @@ class DirectTransport(AgentTransport):
                 )
                 return False, _PUBLIC_AGENT_FAILURE_MESSAGE, None, None
 
-        logger.error("Unexpected response type from task tracking: %s", response)
+        logger.error(
+            "unexpected_task_tracking_response",
+            extra={"response_type": type(response).__name__},
+        )
         return False, "", None, None
 
     async def _finalize_polled_task(

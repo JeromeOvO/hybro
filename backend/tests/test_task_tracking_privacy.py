@@ -1,8 +1,10 @@
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.observability.logging import StructuredFormatter
 from common.types import (
     Artifact,
     DataPart,
@@ -298,11 +300,12 @@ def test_completed_projection_drops_unaddressable_inline_file_part():
 
 
 @pytest.mark.asyncio
-async def test_persist_failed_task_uses_safe_public_error_text():
+async def test_persist_failed_task_uses_safe_public_error_text(caplog):
     private_sentinel = "PRIVATE_SENTINEL_contact_agent_error"
     store = MagicMock()
     store.update_task_on_message = AsyncMock(return_value=True)
     service = A2ATaskTrackingService(store)
+    caplog.set_level(logging.ERROR, logger="execution.task_tracking")
 
     await service._persist_failed_task(
         "agent-message-1",
@@ -311,8 +314,19 @@ async def test_persist_failed_task_uses_safe_public_error_text():
     )
 
     persisted = store.update_task_on_message.await_args.args[1]
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "failed_task_sanitized"
+    )
+    formatted = StructuredFormatter(
+        output_format="json",
+        environment="test",
+        service_version="test",
+    ).format(record)
     assert _status_text(persisted) == "Task failed"
     assert private_sentinel not in json.dumps(persisted)
+    assert private_sentinel not in formatted
 
 
 @pytest.mark.asyncio
@@ -516,6 +530,7 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         send_hitl_reply=send_hitl_reply,
     )
 
+    assert send_hitl_reply.await_args.kwargs["agent_id"] == message.agent_id
     persisted = store.update_task_on_message.await_args.args[1]
     assert persisted["id"] == "remote-task"
     assert persisted["contextId"] == "remote-context"

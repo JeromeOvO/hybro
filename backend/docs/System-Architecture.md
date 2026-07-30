@@ -59,7 +59,8 @@ flowchart TD
 
 ## Runtime Entry Point
 
-`main.py` creates the FastAPI app, configures process logging, installs
+`main.py` creates the FastAPI app, configures the stdout-only structured
+logging pipeline, installs request correlation/logging middleware, installs
 middleware, mounts `api_gateway.router`, and delegates runtime assembly to
 container-owned entrypoints:
 
@@ -176,9 +177,10 @@ use API-key auth from `common.api_key_auth`.
   execution, hub, platform, LLM, and DAL dependencies.
 - `common.config.settings`: environment-backed settings.
 - `common.errors`: typed domain/platform errors.
-- `common.utils`: logging, time, A2A helpers, context utilities, and streaming
-  helpers.
-- `common.observability`: tracing and metrics helpers.
+- `common.utils`: time, A2A helpers, context utilities, streaming helpers, and a
+  side-effect-free compatibility import for the logging API.
+- `common.observability`: process logging, correlation context, tracing, and
+  metrics helpers. See [Observability.md](Observability.md).
 
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.

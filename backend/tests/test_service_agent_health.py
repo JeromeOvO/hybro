@@ -158,7 +158,7 @@ async def test_probe_agent_card_for_health_retries_host_gateway_for_loopback_url
         lambda *, timeout: _AsyncClientContext(client),
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         result = await probe_agent_card_for_health(
             "http://127.0.0.1:9060",
             timeout=1,
@@ -170,7 +170,7 @@ async def test_probe_agent_card_for_health_retries_host_gateway_for_loopback_url
         "http://127.0.0.1:9060" + AGENT_CARD_WELL_KNOWN_PATH,
         "http://host.docker.internal:9060" + AGENT_CARD_WELL_KNOWN_PATH,
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio

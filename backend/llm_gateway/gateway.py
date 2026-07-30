@@ -1,8 +1,11 @@
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Coroutine
+from contextlib import aclosing
 from typing import Any, Literal, TypeVar
 
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
+from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedError
@@ -11,6 +14,7 @@ from llm_gateway.providers import GeminiProvider, OpenAIProvider
 
 ProviderHint = Literal["openai", "gemini"]
 T = TypeVar("T")
+logger = get_logger(__name__)
 
 
 class LLMGatewayImpl:
@@ -35,13 +39,30 @@ class LLMGatewayImpl:
         model: str | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        timeout_seconds = _pop_timeout(kwargs, self.config.request_timeout_seconds)
-        model_info, provider = self._resolve_provider(
-            model or self.config.default_generation_model
-        )
+        started_at = time.perf_counter()
+        requested_model = model or self.config.default_generation_model
+        try:
+            timeout_seconds = _pop_timeout(
+                kwargs,
+                self.config.request_timeout_seconds,
+            )
+            model_info, provider = self._resolve_provider(requested_model)
+        except Exception as exc:
+            _log_call_completed(
+                operation="generate",
+                model=requested_model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
         return await self._with_retry(
             lambda: provider.generate(messages, model=model_info.model_id, **kwargs),
             timeout_seconds=timeout_seconds,
+            operation_name="generate",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def generate_structured(
@@ -52,14 +73,27 @@ class LLMGatewayImpl:
         json_mode: bool = False,
         **kwargs: Any,
     ) -> LLMStructuredResponse:
-        if schema is None and not json_mode:
-            raise LLMModelRoutingError(
-                "generate_structured requires schema or json_mode=True"
+        started_at = time.perf_counter()
+        requested_model = model or self.config.default_generation_model
+        try:
+            if schema is None and not json_mode:
+                raise LLMModelRoutingError(
+                    "generate_structured requires schema or json_mode=True"
+                )
+            timeout_seconds = _pop_timeout(
+                kwargs,
+                self.config.request_timeout_seconds,
             )
-        timeout_seconds = _pop_timeout(kwargs, self.config.request_timeout_seconds)
-        model_info, provider = self._resolve_provider(
-            model or self.config.default_generation_model
-        )
+            model_info, provider = self._resolve_provider(requested_model)
+        except Exception as exc:
+            _log_call_completed(
+                operation="generate_structured",
+                model=requested_model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
         return await self._with_retry(
             lambda: provider.generate_structured(
                 messages,
@@ -69,19 +103,37 @@ class LLMGatewayImpl:
                 **kwargs,
             ),
             timeout_seconds=timeout_seconds,
+            operation_name="generate_structured",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def embed(self, text: str, model: str | None = None) -> list[float]:
-        model_info, provider = self._resolve_provider(
-            model or self.config.default_embedding_model
-        )
-        if "embedding" not in model_info.capabilities:
-            raise ValueError(
-                f"Model {model_info.logical_name} does not support embeddings"
+        started_at = time.perf_counter()
+        requested_model = model or self.config.default_embedding_model
+        try:
+            model_info, provider = self._resolve_provider(requested_model)
+            if "embedding" not in model_info.capabilities:
+                raise ValueError(
+                    f"Model {model_info.logical_name} does not support embeddings"
+                )
+        except Exception as exc:
+            _log_call_completed(
+                operation="embed",
+                model=requested_model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
             )
+            raise
         return await self._with_retry(
             lambda: provider.embed(text, model=model_info.model_id),
             timeout_seconds=self.config.request_timeout_seconds,
+            operation_name="embed",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def embed_batch(
@@ -89,16 +141,30 @@ class LLMGatewayImpl:
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]:
-        model_info, provider = self._resolve_provider(
-            model or self.config.default_embedding_model
-        )
-        if "embedding" not in model_info.capabilities:
-            raise ValueError(
-                f"Model {model_info.logical_name} does not support embeddings"
+        started_at = time.perf_counter()
+        requested_model = model or self.config.default_embedding_model
+        try:
+            model_info, provider = self._resolve_provider(requested_model)
+            if "embedding" not in model_info.capabilities:
+                raise ValueError(
+                    f"Model {model_info.logical_name} does not support embeddings"
+                )
+        except Exception as exc:
+            _log_call_completed(
+                operation="embed_batch",
+                model=requested_model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
             )
+            raise
         return await self._with_retry(
             lambda: provider.embed_batch(texts, model=model_info.model_id),
             timeout_seconds=self.config.request_timeout_seconds,
+            operation_name="embed_batch",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def _generate_with_provider_hint(
@@ -127,14 +193,31 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        model_info, provider_adapter = self._resolve_provider(
-            model, provider_hint=provider
-        )
+        started_at = time.perf_counter()
+        try:
+            model_info, provider_adapter = self._resolve_provider(
+                model,
+                provider_hint=provider,
+            )
+        except Exception as exc:
+            _log_call_completed(
+                operation="generate",
+                provider=provider,
+                model=model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
         return await self._with_retry(
             lambda: provider_adapter.generate(
                 messages, model=model_info.model_id, **kwargs
             ),
             timeout_seconds=timeout_seconds or self.config.request_timeout_seconds,
+            operation_name="generate",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def _generate_structured_with_provider_hint(
@@ -169,13 +252,26 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> LLMStructuredResponse:
-        if schema is None and not json_mode:
-            raise LLMModelRoutingError(
-                "generate_structured requires schema or json_mode=True"
+        started_at = time.perf_counter()
+        try:
+            if schema is None and not json_mode:
+                raise LLMModelRoutingError(
+                    "generate_structured requires schema or json_mode=True"
+                )
+            model_info, provider_adapter = self._resolve_provider(
+                model,
+                provider_hint=provider,
             )
-        model_info, provider_adapter = self._resolve_provider(
-            model, provider_hint=provider
-        )
+        except Exception as exc:
+            _log_call_completed(
+                operation="generate_structured",
+                provider=provider,
+                model=model,
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
         return await self._with_retry(
             lambda: provider_adapter.generate_structured(
                 messages,
@@ -185,6 +281,10 @@ class LLMGatewayImpl:
                 **kwargs,
             ),
             timeout_seconds=timeout_seconds or self.config.request_timeout_seconds,
+            operation_name="generate_structured",
+            provider=model_info.provider,
+            model=model_info.model_id,
+            started_at=started_at,
         )
 
     async def generate_stream(
@@ -194,14 +294,17 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ):
-        async for chunk in self._generate_stream(
-            messages,
-            model=model or self.config.default_generation_model,
-            timeout_seconds=timeout_seconds,
-            provider_hint=None,
-            **kwargs,
-        ):
-            yield chunk
+        async with aclosing(
+            self._generate_stream(
+                messages,
+                model=model or self.config.default_generation_model,
+                timeout_seconds=timeout_seconds,
+                provider_hint=None,
+                **kwargs,
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def _generate_stream_with_provider_hint(
         self,
@@ -212,14 +315,17 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ):
-        async for chunk in self.generate_stream_with_provider(
-            messages,
-            model=model,
-            provider=provider_hint,
-            timeout_seconds=timeout_seconds,
-            **kwargs,
-        ):
-            yield chunk
+        async with aclosing(
+            self.generate_stream_with_provider(
+                messages,
+                model=model,
+                provider=provider_hint,
+                timeout_seconds=timeout_seconds,
+                **kwargs,
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def generate_stream_with_provider(
         self,
@@ -230,16 +336,19 @@ class LLMGatewayImpl:
         timeout_seconds: float | None = None,
         **kwargs: Any,
     ):
-        async for chunk in self._generate_stream(
-            messages,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            provider_hint=provider,
-            **kwargs,
-        ):
-            yield chunk
+        async with aclosing(
+            self._generate_stream(
+                messages,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                provider_hint=provider,
+                **kwargs,
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
-    async def _generate_stream(
+    async def _generate_stream(  # noqa: C901
         self,
         messages: list[dict[str, Any]],
         *,
@@ -250,8 +359,10 @@ class LLMGatewayImpl:
     ):
         timeout = timeout_seconds or self.config.stream_timeout_seconds
         attempts = max(1, self.config.max_attempts)
+        started_at = time.perf_counter()
         for attempt in range(1, attempts + 1):
             yielded = False
+            model_info: ModelInfo | None = None
             try:
                 model_info, provider = self._resolve_provider(
                     model,
@@ -270,13 +381,68 @@ class LLMGatewayImpl:
                     ):
                         yielded = True
                         yield chunk
-                return
-            except (LLMModelRoutingError, LLMStreamingUnsupportedError):
+            except asyncio.CancelledError as exc:
+                _log_stream_completed(
+                    model_info=model_info,
+                    requested_model=model,
+                    attempt=attempt,
+                    started_at=started_at,
+                    outcome="cancelled",
+                    error=exc,
+                )
                 raise
-            except Exception:
+            except GeneratorExit as exc:
+                _log_stream_completed(
+                    model_info=model_info,
+                    requested_model=model,
+                    attempt=attempt,
+                    started_at=started_at,
+                    outcome="cancelled",
+                    error=exc,
+                )
+                raise
+            except (LLMModelRoutingError, LLMStreamingUnsupportedError) as exc:
+                _log_stream_completed(
+                    model_info=model_info,
+                    requested_model=model,
+                    attempt=attempt,
+                    started_at=started_at,
+                    outcome="error",
+                    error=exc,
+                )
+                raise
+            except Exception as exc:
                 if yielded or attempt >= attempts:
+                    _log_stream_completed(
+                        model_info=model_info,
+                        requested_model=model,
+                        attempt=attempt,
+                        started_at=started_at,
+                        outcome="error",
+                        error=exc,
+                    )
                     raise
-                await asyncio.sleep(self.config.retry_backoff_seconds * attempt)
+                try:
+                    await asyncio.sleep(self.config.retry_backoff_seconds * attempt)
+                except asyncio.CancelledError as cancel_exc:
+                    _log_stream_completed(
+                        model_info=model_info,
+                        requested_model=model,
+                        attempt=attempt,
+                        started_at=started_at,
+                        outcome="cancelled",
+                        error=cancel_exc,
+                    )
+                    raise
+            else:
+                _log_stream_completed(
+                    model_info=model_info,
+                    requested_model=model,
+                    attempt=attempt,
+                    started_at=started_at,
+                    outcome="success",
+                )
+                return
 
     def _resolve_provider(
         self,
@@ -313,24 +479,123 @@ class LLMGatewayImpl:
         operation: Callable[[], Awaitable[T] | Coroutine[Any, Any, T]],
         *,
         timeout_seconds: float,
+        operation_name: str,
+        provider: str,
+        model: str,
+        started_at: float | None = None,
     ) -> T:
         attempts = max(1, self.config.max_attempts)
-        for attempt in range(1, attempts + 1):
-            try:
-                async with asyncio.timeout(timeout_seconds):
-                    return await operation()
-            except LLMModelRoutingError:
-                raise
-            except Exception:
-                if attempt >= attempts:
+        started_at = time.perf_counter() if started_at is None else started_at
+        attempt = 1
+        try:
+            for attempt in range(1, attempts + 1):
+                try:
+                    async with asyncio.timeout(timeout_seconds):
+                        result = await operation()
+                except LLMModelRoutingError as exc:
+                    _log_call_completed(
+                        operation=operation_name,
+                        provider=provider,
+                        model=model,
+                        attempt=attempt,
+                        started_at=started_at,
+                        outcome="error",
+                        error=exc,
+                    )
                     raise
-                await asyncio.sleep(self.config.retry_backoff_seconds * attempt)
+                except Exception as exc:
+                    if attempt >= attempts:
+                        _log_call_completed(
+                            operation=operation_name,
+                            provider=provider,
+                            model=model,
+                            attempt=attempt,
+                            started_at=started_at,
+                            outcome="error",
+                            error=exc,
+                        )
+                        raise
+                    await asyncio.sleep(self.config.retry_backoff_seconds * attempt)
+                else:
+                    _log_call_completed(
+                        operation=operation_name,
+                        provider=provider,
+                        model=model,
+                        attempt=attempt,
+                        started_at=started_at,
+                        outcome="success",
+                    )
+                    return result
+        except asyncio.CancelledError as exc:
+            _log_call_completed(
+                operation=operation_name,
+                provider=provider,
+                model=model,
+                attempt=attempt,
+                started_at=started_at,
+                outcome="cancelled",
+                error=exc,
+            )
+            raise
         raise RuntimeError("unreachable retry state")
 
 
 def _pop_timeout(kwargs: dict[str, Any], default: float) -> float:
     timeout = kwargs.pop("timeout_seconds", None)
     return default if timeout is None else float(timeout)
+
+
+def _log_stream_completed(
+    *,
+    model_info: ModelInfo | None,
+    requested_model: str,
+    attempt: int,
+    started_at: float,
+    outcome: str,
+    error: BaseException | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "provider": model_info.provider if model_info is not None else None,
+        "model": model_info.model_id if model_info is not None else requested_model,
+        "operation": "generate_stream",
+        "attempt": attempt,
+        "outcome": outcome,
+        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+    }
+    if error is not None:
+        fields.update(safe_exception_metadata(error))
+        fields["error_code"] = _error_code(error)
+    log_method = logger.error if outcome == "error" else logger.info
+    log_method("llm_call_completed", extra=fields)
+
+
+def _log_call_completed(
+    *,
+    operation: str,
+    model: str,
+    started_at: float,
+    outcome: str,
+    provider: str | None = None,
+    attempt: int = 1,
+    error: BaseException | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "operation": operation,
+        "attempt": attempt,
+        "outcome": outcome,
+        "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+    }
+    if error is not None:
+        fields.update(safe_exception_metadata(error))
+        fields["error_code"] = _error_code(error)
+    log_method = logger.error if outcome == "error" else logger.info
+    log_method("llm_call_completed", extra=fields)
+
+
+def _error_code(exc: BaseException) -> str | int | None:
+    return getattr(exc, "code", None) or getattr(exc, "status_code", None)
 
 
 __all__ = ["LLMGatewayImpl"]

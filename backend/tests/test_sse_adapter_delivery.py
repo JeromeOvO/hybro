@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -160,6 +161,98 @@ async def test_send_methods_emit_typed_events():
     assert events[4].error == "boom"
     assert events[5].error_type == "rate_limit_exceeded"
     assert events[5].retry_after_seconds == 5
+
+
+@pytest.mark.asyncio
+async def test_terminal_delivery_log_is_emitted_once_per_message(caplog):
+    facade = _bind()
+    caplog.set_level(logging.INFO, logger="delivery.facade")
+
+    await facade.send_task_submitted(
+        "room-1",
+        "msg-1",
+        "task-1",
+        "Agent",
+    )
+    await facade.send_task_update("room-1", "msg-1", "completed")
+    await facade.send_agent_response(
+        "room-1",
+        "msg-1",
+        "agent-1",
+        "PRIVATE_RESPONSE_BODY",
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "delivery_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].terminal_kind == "task_update"
+    assert "PRIVATE_RESPONSE_BODY" not in records[0].__dict__.values()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_records_terminal_delivery_and_clears_timer(caplog):
+    facade = _bind()
+    caplog.set_level(logging.INFO, logger="delivery.facade")
+
+    await facade.send_rate_limit_error(
+        "room-1",
+        "msg-rate-limited",
+        "agent-1",
+        "PRIVATE_RATE_LIMIT_REASON",
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "delivery_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].outcome == "rate_limited"
+    assert records[0].terminal_kind == "rate_limit_error"
+    assert ("room-1", "msg-rate-limited") not in facade._delivery_started_at
+
+
+@pytest.mark.asyncio
+async def test_terminal_delivery_log_reports_failed_handoff(caplog):
+    publisher = FakeEventPublisher()
+    publisher.emit = AsyncMock(return_value=False)
+    facade = _bind(event_publisher=publisher)
+    caplog.set_level(logging.INFO, logger="delivery.facade")
+
+    await facade.send_task_update("room-1", "msg-failed", "completed")
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "delivery_completed"
+    )
+    assert record.outcome == "delivery_failed"
+    assert record.terminal_kind == "task_update"
+
+
+@pytest.mark.asyncio
+async def test_successful_retry_after_failed_handoff_logs_success(caplog):
+    publisher = FakeEventPublisher()
+    publisher.emit = AsyncMock(side_effect=[False, True])
+    facade = _bind(event_publisher=publisher)
+    caplog.set_level(logging.INFO, logger="delivery.facade")
+
+    await facade.send_task_update("room-1", "msg-retry", "completed")
+    await facade.send_task_update("room-1", "msg-retry", "completed")
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "delivery_completed"
+    ]
+    assert [record.outcome for record in records] == [
+        "delivery_failed",
+        "completed",
+    ]
+    assert ("room-1", "msg-retry") in facade._terminal_delivery_logged
 
 
 @pytest.mark.asyncio

@@ -1100,6 +1100,7 @@ async def test_injected_outcome_guardrails_atomically_control_duplicate_delegate
         "orchestration_outcome_guardrails",
         not guardrails_enabled,
     )
+    caplog.set_level("INFO", logger=supervisor_executor_module.__name__)
 
     result = await executor.run(
         room_id="room-1",

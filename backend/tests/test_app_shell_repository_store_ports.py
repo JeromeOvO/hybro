@@ -101,7 +101,10 @@ def test_runtime_store_protocol_type_hints_are_resolvable():
     assert task_hints["room_agent_message"] is RuntimeRoomAgentMessage
 
 
-def test_protocol_import_tolerates_json_log_format_environment():
+def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
+    tmp_path,
+):
+    legacy_log_path = tmp_path / "legacy-app.log"
     result = subprocess.run(
         [
             sys.executable,
@@ -114,12 +117,13 @@ def test_protocol_import_tolerates_json_log_format_environment():
         ],
         check=False,
         capture_output=True,
-        env={"LOG_FORMAT": "json", "LOG_PATH": "/tmp/hybro-protocol-import.log"},
+        env={"LOG_FORMAT": "json", "LOG_PATH": str(legacy_log_path)},
         text=True,
     )
 
     assert result.returncode == 0, result.stderr
     assert "RuntimeAgentRoomStore APIKeyAuthenticator" in result.stdout
+    assert not legacy_log_path.exists()
 
 
 class _FakeMongo:

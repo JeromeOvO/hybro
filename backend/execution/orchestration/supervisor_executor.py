@@ -21,14 +21,18 @@ import copy
 import hashlib
 import inspect
 import json
+import time
 from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from cachetools import TTLCache
+
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
 from common.message_commit_events import publish_message_committed
+from common.observability import bind_log_context, safe_exception_metadata
 from common.utils.a2a_helpers import artifacts_to_dicts
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
@@ -351,6 +355,10 @@ class SupervisorExecutor:
         self._guardrails_enabled = guardrails_enabled
         self.result_ingestor = AgentResultIngestor()
         self._processing_status_emitter = None
+        self._terminal_run_logs: TTLCache[tuple[str, str], bool] = TTLCache(
+            maxsize=_settings.terminal_dedup_cache_maxsize,
+            ttl=_settings.terminal_dedup_ttl_seconds,
+        )
 
     @property
     def guardrails_enabled(self) -> bool:
@@ -630,22 +638,50 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         result: SupervisorRunResult,
     ) -> SupervisorRunResult:
-        logger.info(
-            "supervisor_run_completed",
-            extra={
-                "room_id": room_id,
-                "run_id": state.run_id,
-                "user_message_id": state.user_message_id,
-                "status": result.status,
-                "orchestration_status": state.status,
-                "steps_used": state.steps_used,
-                "step_budget": state.step_budget,
-                "open_failure_count": _open_failure_count(state),
-                "agent_output_count": len(state.agent_outputs),
-                "dispatch_intent_count": len(state.dispatch_intents),
-                "terminal_reason": state.terminal_reason,
-            },
-        )
+        if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
+            logger.info(
+                "supervisor_run_paused",
+                extra={
+                    "room_id": room_id,
+                    "run_id": state.run_id,
+                    "user_message_id": state.user_message_id,
+                    "status": result.status,
+                    "outcome": _log_value(result.status),
+                    "duration_ms": round(
+                        (utcnow() - state.created_at).total_seconds() * 1000,
+                        3,
+                    ),
+                    "orchestration_status": state.status,
+                    "steps_used": state.steps_used,
+                    "step_budget": state.step_budget,
+                    "open_failure_count": _open_failure_count(state),
+                    "agent_output_count": len(state.agent_outputs),
+                    "dispatch_intent_count": len(state.dispatch_intents),
+                    "terminal_reason": state.terminal_reason,
+                },
+            )
+        elif self._claim_terminal_run_log(state):
+            logger.info(
+                "supervisor_run_completed",
+                extra={
+                    "room_id": room_id,
+                    "run_id": state.run_id,
+                    "user_message_id": state.user_message_id,
+                    "status": result.status,
+                    "outcome": _log_value(result.status),
+                    "duration_ms": round(
+                        (utcnow() - state.created_at).total_seconds() * 1000,
+                        3,
+                    ),
+                    "orchestration_status": state.status,
+                    "steps_used": state.steps_used,
+                    "step_budget": state.step_budget,
+                    "open_failure_count": _open_failure_count(state),
+                    "agent_output_count": len(state.agent_outputs),
+                    "dispatch_intent_count": len(state.dispatch_intents),
+                    "terminal_reason": state.terminal_reason,
+                },
+            )
 
         system_message_id = state.system_agent_message_id or state.summary_message_id
         if system_message_id and result.status != RunStatus.PAUSED:
@@ -681,6 +717,22 @@ class SupervisorExecutor:
                     "Failed to update terminal state for system:hybro", exc_info=True
                 )
         return result
+
+    def _claim_terminal_run_log(self, state: OrchestrationRunState) -> bool:
+        if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
+            return False
+        cache = getattr(self, "_terminal_run_logs", None)
+        if cache is None:
+            cache = TTLCache(
+                maxsize=_settings.terminal_dedup_cache_maxsize,
+                ttl=_settings.terminal_dedup_ttl_seconds,
+            )
+            self._terminal_run_logs = cache
+        key = (state.run_id, _log_value(state.status))
+        if key in cache:
+            return False
+        cache[key] = True
+        return True
 
     @property
     def run_store(self) -> OrchestrationRunStore:
@@ -914,18 +966,18 @@ class SupervisorExecutor:
             state=state,
         )
         logger.info(
-            "supervisor_loop_started room_id=%s run_id=%s user_message_id=%s "
-            "client_request_id=%s candidate_count=%d agent_registry_count=%d "
-            "steps_used=%d step_budget=%d status=%s",
-            room_id,
-            state.run_id,
-            user_message_id,
-            state.client_request_id,
-            len(state.candidate_agent_ids),
-            len(agent_registry),
-            state.steps_used,
-            state.step_budget,
-            _log_value(state.status),
+            "supervisor_run_started",
+            extra={
+                "room_id": room_id,
+                "run_id": state.run_id,
+                "user_message_id": user_message_id,
+                "client_request_id": state.client_request_id,
+                "candidate_count": len(state.candidate_agent_ids),
+                "agent_registry_count": len(agent_registry),
+                "steps_used": state.steps_used,
+                "step_budget": state.step_budget,
+                "status": _log_value(state.status),
+            },
         )
         state, recovered_status = await self._recover_v2_inflight_dispatch(
             state=state,
@@ -1886,7 +1938,7 @@ class SupervisorExecutor:
         ]
         question_hashes = _planner_question_hashes(planner_action)
         logger.info(
-            "supervisor_planner_decision",
+            "supervisor_planner_completed",
             extra={
                 "run_id": state.run_id,
                 "room_id": state.room_id,
@@ -6983,71 +7035,108 @@ class SupervisorExecutor:
             room_config=room_config,
             user_message=user_message,
         )
-        resolved_hitl_reply = False
-        if resumed_trajectory is not None:
-            resolved_hitl_reply = bool(
-                self._hitl_answer_from_run_request(
+        return await self._run_loaded_state(
+            state=state,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            token=token,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            resumed_trajectory=resumed_trajectory,
+            user_message=user_message,
+        )
+
+    async def _run_loaded_state(
+        self,
+        *,
+        state: OrchestrationRunState,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None,
+        token: CancellationToken | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+        resumed_trajectory: SupervisorTrajectory | None,
+        user_message,
+    ) -> SupervisorRunResult:
+        with bind_log_context(
+            client_request_id=state.client_request_id,
+            room_id=room_id,
+            run_id=state.run_id,
+            user_message_id=user_message_id,
+        ):
+            resolved_hitl_reply = False
+            if resumed_trajectory is not None:
+                resolved_hitl_reply = bool(
+                    self._hitl_answer_from_run_request(
+                        user_message=user_message,
+                        resumed_trajectory=resumed_trajectory,
+                    )
+                )
+                state = await self._resolve_v2_hitl_if_answered(
+                    state,
                     user_message=user_message,
                     resumed_trajectory=resumed_trajectory,
                 )
-            )
-            state = await self._resolve_v2_hitl_if_answered(
-                state,
-                user_message=user_message,
-                resumed_trajectory=resumed_trajectory,
-            )
-            state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
-                state,
-                resumed_trajectory,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                conversation_context=conversation_context,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-            )
-            should_return_waiting_input = (
-                state.status == OrchestrationStatus.AWAITING_USER
-                and self._has_open_pending_hitl(state)
-            )
-            if blocking_resume_status is not None and (
-                blocking_resume_status != RunStatus.AWAITING_INPUT
-                or should_return_waiting_input
-            ):
-                return await self._log_state_and_return(
-                    room_id,
+                state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
                     state,
-                    self._state_run_result(
-                        status=blocking_resume_status,
-                        state=state,
-                    ),
+                    resumed_trajectory,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    conversation_context=conversation_context,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
                 )
+                should_return_waiting_input = (
+                    state.status == OrchestrationStatus.AWAITING_USER
+                    and self._has_open_pending_hitl(state)
+                )
+                if blocking_resume_status is not None and (
+                    blocking_resume_status != RunStatus.AWAITING_INPUT
+                    or should_return_waiting_input
+                ):
+                    return await self._log_state_and_return(
+                        room_id,
+                        state,
+                        self._state_run_result(
+                            status=blocking_resume_status,
+                            state=state,
+                        ),
+                    )
 
-        try:
-            return await self._execute_orchestration_loop(
-                state=state,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                conversation_context=conversation_context,
-                token=token,
-                request_user_id=request_user_id,
-                quoted_text=quoted_text,
-                allow_awaiting_user_recovery=resolved_hitl_reply,
-                user_message=user_message,
-            )
-        except CancellationError:
-            raise
-        except Exception:
-            await self._mark_current_run_failed_after_unhandled_exception(
-                state.run_id,
-                reason="supervisor execution failed unexpectedly",
-            )
-            raise
+            try:
+                return await self._execute_orchestration_loop(
+                    state=state,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    conversation_context=conversation_context,
+                    token=token,
+                    request_user_id=request_user_id,
+                    quoted_text=quoted_text,
+                    allow_awaiting_user_recovery=resolved_hitl_reply,
+                    user_message=user_message,
+                )
+            except CancellationError:
+                raise
+            except Exception:
+                await self._mark_current_run_failed_after_unhandled_exception(
+                    state.run_id,
+                    reason="supervisor execution failed unexpectedly",
+                )
+                raise
 
     async def _mark_current_run_failed_after_unhandled_exception(
         self,
@@ -7467,6 +7556,9 @@ class SupervisorExecutor:
             target: DelegateTarget,
             planned_message_id: str | None = None,
         ) -> StepResult:
+            agent_started_at = time.perf_counter()
+            dispatch_intent_id: str | None = None
+            task_id: str | None = None
             try:
                 logger.info(
                     "supervisor_dispatch_target_started room_id=%s "
@@ -7826,8 +7918,8 @@ class SupervisorExecutor:
                             exc_info=True,
                         )
 
-                logger.info(
-                    "supervisor_agent_dispatching",
+                logger.debug(
+                    "agent_call_started",
                     extra={
                         "room_id": room_id,
                         "user_message_id": user_message_id,
@@ -7838,33 +7930,57 @@ class SupervisorExecutor:
                     },
                 )
 
-                result = await self.agent_message_processor.process_single_message(
-                    message,
-                    room_id,
-                    agent,
-                    user_message_id,
-                    token=token,
-                    step_number=step_number,
-                    total_steps=None,
-                    quoted_text=quoted_text,
-                    dispatch_task=dispatch_task,
-                    resolved_resource_payloads=resolved_resource_payloads,
-                    explicit_attachment_refs=explicit_attachment_refs,
-                    dispatch_resource_payloads=resolved_resource_payloads,
-                    selected_attachment_refs=explicit_attachment_refs,
-                    attachment_forwarding_policy=(
-                        target.attachment_policy
-                        if getattr(target, "attachment_policy", None)
-                        else "explicit_refs_only"
+                dispatch_intent_id = next(
+                    (
+                        intent.dispatch_intent_id
+                        for intent in (run_state.dispatch_intents if run_state else [])
+                        if intent.planned_agent_message_id == message.message_id
                     ),
+                    None,
                 )
-                logger.info(
-                    "supervisor_agent_invocation_completed",
+                task_id = getattr(
+                    getattr(
+                        getattr(message, "message_content", None),
+                        "message_task",
+                        None,
+                    ),
+                    "id",
+                    None,
+                )
+                with bind_log_context(
+                    agent_id=target.agent_id,
+                    task_id=task_id,
+                    dispatch_intent_id=dispatch_intent_id,
+                ):
+                    result = await self.agent_message_processor.process_single_message(
+                        message,
+                        room_id,
+                        agent,
+                        user_message_id,
+                        token=token,
+                        step_number=step_number,
+                        total_steps=None,
+                        quoted_text=quoted_text,
+                        dispatch_task=dispatch_task,
+                        resolved_resource_payloads=resolved_resource_payloads,
+                        explicit_attachment_refs=explicit_attachment_refs,
+                        dispatch_resource_payloads=resolved_resource_payloads,
+                        selected_attachment_refs=explicit_attachment_refs,
+                        attachment_forwarding_policy=(
+                            target.attachment_policy
+                            if getattr(target, "attachment_policy", None)
+                            else "explicit_refs_only"
+                        ),
+                    )
+                logger.debug(
+                    "agent_transport_completed",
                     extra={
                         "room_id": room_id,
                         "user_message_id": user_message_id,
                         "step_number": step_number,
                         "agent_id": target.agent_id,
+                        "task_id": task_id,
+                        "dispatch_intent_id": dispatch_intent_id,
                         "agent_message_id": message.message_id,
                         "processing_status": result.status,
                         "a2a_task_id": getattr(result, "a2a_task_id", None),
@@ -7992,14 +8108,24 @@ class SupervisorExecutor:
                 )
 
                 logger.info(
-                    "supervisor_agent_dispatched",
+                    "agent_call_completed",
                     extra={
+                        "run_id": run_state.run_id if run_state is not None else None,
                         "room_id": room_id,
                         "user_message_id": user_message_id,
                         "step_number": step_number,
                         "agent_id": target.agent_id,
+                        "task_id": task_id,
+                        "dispatch_intent_id": dispatch_intent_id,
                         "agent_name": target.agent_name,
                         "success": step_result.success,
+                        "operation": "dispatch",
+                        "attempt": 1,
+                        "outcome": ("success" if step_result.success else "error"),
+                        "duration_ms": round(
+                            (time.perf_counter() - agent_started_at) * 1000,
+                            3,
+                        ),
                         "status": step_result.status,
                         "has_error": step_result.error_message is not None,
                         "agent_message_id": step_result.agent_message_id,
@@ -8011,9 +8137,26 @@ class SupervisorExecutor:
             except asyncio.CancelledError:
                 logger.warning("dispatch_one cancelled for agent %s", target.agent_id)
                 raise
-            except Exception as e:
-                logger.exception(
-                    "dispatch_one failed for agent %s: %s", target.agent_id, e
+            except Exception as exc:
+                logger.error(
+                    "agent_call_completed",
+                    extra={
+                        "run_id": run_state.run_id if run_state is not None else None,
+                        "room_id": room_id,
+                        "user_message_id": user_message_id,
+                        "agent_id": target.agent_id,
+                        "task_id": task_id,
+                        "dispatch_intent_id": dispatch_intent_id,
+                        "operation": "dispatch",
+                        "attempt": 1,
+                        "outcome": "error",
+                        "duration_ms": round(
+                            (time.perf_counter() - agent_started_at) * 1000,
+                            3,
+                        ),
+                        "error_code": _GENERIC_AGENT_FAILURE_CODE,
+                        **safe_exception_metadata(exc),
+                    },
                 )
                 return StepResult(
                     step_number=step_number,
@@ -8221,6 +8364,11 @@ class SupervisorExecutor:
                 "room_id": room_id,
                 "trajectory_id": trajectory.trajectory_id,
                 "status": result.status,
+                "outcome": _log_value(result.status),
+                "duration_ms": round(
+                    (utcnow() - trajectory.created_at).total_seconds() * 1000,
+                    3,
+                ),
                 "total_steps": len(trajectory.entries),
                 "total_supervisor_calls": trajectory.total_supervisor_calls,
                 "debate_mode": debate_mode,

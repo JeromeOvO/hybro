@@ -45,10 +45,7 @@ class Settings(BaseSettings):
     llm_gateway_default_supervisor_model: str = "supervisor_model"
 
     log_level: str = "INFO"
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    log_path: str = "logs/app.log"
-    log_backup_count: int = 5
-    log_max_bytes: int = 10485760  # 10 MB
+    log_format: str = "auto"
 
     # Feature Flags (runtime-toggleable behavior gates)
     feature_run_dual_write: bool = True
@@ -235,6 +232,24 @@ class Settings(BaseSettings):
             # Split comma-separated string into list
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def validate_log_level(cls, value):
+        normalized = str(value or "INFO").strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(
+                "LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
+            )
+        return normalized
+
+    @field_validator("log_format", mode="before")
+    @classmethod
+    def validate_log_format(cls, value):
+        normalized = str(value or "auto").strip().lower()
+        if normalized not in {"auto", "json", "logfmt"}:
+            raise ValueError("LOG_FORMAT must be auto, json, or logfmt")
+        return normalized
 
     @field_validator("terminal_processing_statuses", mode="before")
     @classmethod

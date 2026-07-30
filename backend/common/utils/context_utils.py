@@ -106,8 +106,11 @@ def estimate_tokens(text: str | None, model: str = "gpt-4") -> int:
         return len(encoding.encode(text))
     except ImportError:
         logger.debug("tiktoken not available, using char/4 heuristic")
-    except Exception as e:
-        logger.debug(f"tiktoken error: {e}, using char/4 heuristic")
+    except Exception as exc:
+        logger.debug(
+            "token_estimation_fallback_selected",
+            extra={"error_type": type(exc).__name__},
+        )
 
     # Fallback: ~4 chars per token for English
     return len(text) // CHARS_PER_TOKEN_ESTIMATE

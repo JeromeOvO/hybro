@@ -1,5 +1,8 @@
+import time
 from enum import Enum
 from typing import Any
+
+from cachetools import TTLCache
 
 from common.dto import (
     AgentMessageFinal,
@@ -10,8 +13,11 @@ from common.dto import (
     TaskSubmittedEvent,
     TaskUpdateEvent,
 )
+from common.observability import get_logger
 from common.protocols import EventPublisher, RedisKV, SSETransport
 from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+
+logger = get_logger(__name__)
 
 
 def _enum_value(value: Any) -> Any:
@@ -132,6 +138,11 @@ class DeliveryFacade:
         self._delivery_pubsub_connected = False
         self._started = False
         self._kv_closed = False
+        self._delivery_started_at: dict[tuple[str, str], float] = {}
+        self._terminal_delivery_logged: TTLCache[tuple[str, str], bool] = TTLCache(
+            maxsize=config.terminal_dedup_cache_maxsize,
+            ttl=config.terminal_dedup_ttl_seconds,
+        )
 
     @property
     def delivery_kv_connected(self) -> bool:
@@ -155,8 +166,9 @@ class DeliveryFacade:
     def broker_connected(self) -> bool:
         return self.delivery_pubsub_connected
 
-    async def emit(self, event: DeliveryEvent) -> None:
-        await self._event_publisher.emit(event)
+    async def emit(self, event: DeliveryEvent) -> bool:
+        result = await self._event_publisher.emit(event)
+        return result is not False
 
     async def open_connection(self, room_id: str) -> Any:
         return await self._sse_transport.open_connection(room_id)
@@ -267,13 +279,20 @@ class DeliveryFacade:
             content_payload["client_request_id"] = client_request_id
         if parts:
             content_payload["parts"] = parts
-        await self.emit(
+        delivered = await self.emit(
             AgentMessageFinal(
                 room_id=room_id,
                 message_id=message_id,
                 agent_id=agent_id,
                 content=content_payload,
             )
+        )
+        self._record_terminal_delivery(
+            room_id=room_id,
+            message_id=message_id,
+            outcome="completed" if delivered else "delivery_failed",
+            terminal_kind="agent_message_final",
+            agent_id=agent_id,
         )
 
     async def send_error(
@@ -282,7 +301,16 @@ class DeliveryFacade:
         error: str,
         message_id: str | None = None,
     ) -> None:
-        await self.emit(ErrorEvent(room_id=room_id, error=error, message_id=message_id))
+        delivered = await self.emit(
+            ErrorEvent(room_id=room_id, error=error, message_id=message_id)
+        )
+        if message_id:
+            self._record_terminal_delivery(
+                room_id=room_id,
+                message_id=message_id,
+                outcome="error" if delivered else "delivery_failed",
+                terminal_kind="error",
+            )
 
     async def send_rate_limit_error(
         self,
@@ -296,7 +324,12 @@ class DeliveryFacade:
         system_requests_used: int = 0,
         system_requests_limit: int | None = None,
     ) -> None:
-        await self.emit(
+        if message_id:
+            self._delivery_started_at.setdefault(
+                (room_id, message_id),
+                time.perf_counter(),
+            )
+        delivered = await self.emit(
             ErrorEvent(
                 room_id=room_id,
                 error=reason,
@@ -309,6 +342,13 @@ class DeliveryFacade:
                 system_requests_used=system_requests_used,
                 system_requests_limit=system_requests_limit,
             )
+        )
+        self._record_terminal_delivery(
+            room_id=room_id,
+            message_id=message_id,
+            outcome="rate_limited" if delivered else "delivery_failed",
+            terminal_kind="rate_limit_error",
+            agent_id=agent_id,
         )
 
     async def send_artifact_update(
@@ -343,7 +383,7 @@ class DeliveryFacade:
         client_request_id: str | None = None,
         agents: list[dict] | None = None,
     ) -> None:
-        await self.emit(
+        delivered = await self.emit(
             ProcessingStatusEvent(
                 room_id=room_id,
                 message_id=message_id,
@@ -360,6 +400,14 @@ class DeliveryFacade:
                 agents=agents,
             )
         )
+        normalized_status = str(_enum_value(status)).lower()
+        if message_id and normalized_status in self.config.terminal_processing_statuses:
+            self._record_terminal_delivery(
+                room_id=room_id,
+                message_id=message_id,
+                outcome=normalized_status if delivered else "delivery_failed",
+                terminal_kind="processing_status",
+            )
 
     async def send_task_submitted(
         self,
@@ -376,6 +424,10 @@ class DeliveryFacade:
         task_content: str | None = None,
         client_request_id: str | None = None,
     ) -> None:
+        self._delivery_started_at.setdefault(
+            (room_id, message_id),
+            time.perf_counter(),
+        )
         await self.emit(
             TaskSubmittedEvent(
                 room_id=room_id,
@@ -413,7 +465,7 @@ class DeliveryFacade:
         parts: list[dict[str, Any]] | None = None,
         client_request_id: str | None = None,
     ) -> None:
-        await self.emit(
+        delivered = await self.emit(
             TaskUpdateEvent(
                 room_id=room_id,
                 message_id=message_id,
@@ -434,6 +486,15 @@ class DeliveryFacade:
                 client_request_id=client_request_id,
             )
         )
+        normalized_status = str(_enum_value(status)).lower()
+        if normalized_status in self.config.terminal_processing_statuses:
+            self._record_terminal_delivery(
+                room_id=room_id,
+                message_id=message_id,
+                outcome=normalized_status if delivered else "delivery_failed",
+                terminal_kind="task_update",
+                agent_id=agent_id,
+            )
 
     def set_draining(self, draining: bool) -> None:
         self._sse_transport.set_draining(draining)
@@ -451,6 +512,40 @@ class DeliveryFacade:
         if self._redis_kv is not None and not self._kv_closed:
             await self._redis_kv.close()
             self._kv_closed = True
+
+    def _record_terminal_delivery(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        outcome: str,
+        terminal_kind: str,
+        agent_id: str | None = None,
+    ) -> None:
+        delivery_key = (room_id, message_id)
+        if outcome != "delivery_failed":
+            if delivery_key in self._terminal_delivery_logged:
+                self._delivery_started_at.pop(delivery_key, None)
+                return
+            self._terminal_delivery_logged[delivery_key] = True
+        started_at = self._delivery_started_at.pop(
+            delivery_key,
+            time.perf_counter(),
+        )
+        logger.info(
+            "delivery_completed",
+            extra={
+                "room_id": room_id,
+                "message_id": message_id,
+                "agent_id": agent_id,
+                "outcome": outcome,
+                "terminal_kind": terminal_kind,
+                "duration_ms": round(
+                    (time.perf_counter() - started_at) * 1000,
+                    3,
+                ),
+            },
+        )
 
 
 __all__ = ["DeliveryCompatibility", "DeliveryFacade"]

@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Protocol
 
-from loguru import logger
-
 from a2a_adapter.agent_card_health import probe_agent_card_for_health
 from common.config.settings import settings
+from common.observability import get_logger, traced_create_task
 from common.protocols import LeaderElector
 from common.types import AgentCard as CommonAgentCard
 from jobs.constants import AGENT_HEALTH_CHECKER
@@ -16,6 +15,8 @@ from models.agent import (
     AgentStatus,
     coerce_legacy_agent_card,
 )
+
+logger = get_logger(__name__)
 
 
 class AgentHealthRepositoryPort(Protocol):
@@ -137,14 +138,24 @@ class AgentHealthService:
                 )
             else:
                 logger.warning(
-                    f"Agent {agent.agent_id} ({agent.agent_card.name}) "
-                    f"unreachable: {result.error or 'unknown adapter error'}"
+                    "agent_health_probe_unreachable",
+                    extra={
+                        "agent_id": agent.agent_id,
+                        "agent_name": agent.agent_card.name,
+                        "error_type": "adapter_error",
+                    },
                 )
 
             return result.is_healthy, result.card
 
-        except Exception as e:
-            logger.error(f"Unexpected error checking agent {agent.agent_id}: {e}")
+        except Exception as exc:
+            logger.error(
+                "agent_health_check_failed",
+                extra={
+                    "agent_id": agent.agent_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
             return False, None
 
     async def _update_agent_card_in_db(
@@ -189,8 +200,14 @@ class AgentHealthService:
             logger.debug(
                 f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
             )
-        except Exception as e:
-            logger.warning(f"Failed to update agent card for {agent.agent_id}: {e}")
+        except Exception as exc:
+            logger.warning(
+                "agent_card_update_failed",
+                extra={
+                    "agent_id": agent.agent_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     async def update_agent_status(self, agent_id: str, new_status: AgentStatus) -> bool:
         """
@@ -208,8 +225,11 @@ class AgentHealthService:
             await repo.update(agent_id, {"agent_status": new_status.value})
             logger.info(f"Agent {agent_id} status updated to {new_status.value}")
             return True
-        except Exception as e:
-            logger.error(f"Failed to update agent {agent_id} status: {e}")
+        except Exception as exc:
+            logger.error(
+                "agent_status_update_failed",
+                extra={"agent_id": agent_id, "error_type": type(exc).__name__},
+            )
             return False
 
     def _get_retry_delay(self, failure_count: int) -> float:
@@ -304,8 +324,11 @@ class AgentHealthService:
 
         except asyncio.CancelledError:
             logger.debug(f"Retry task for agent {agent_id} cancelled")
-        except Exception as e:
-            logger.error(f"Retry task for agent {agent_id} failed: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "agent_health_retry_failed",
+                extra={"agent_id": agent_id, "error_type": type(exc).__name__},
+            )
         finally:
             # Clean up retry task reference
             self._retry_tasks.pop(agent_id, None)
@@ -313,8 +336,9 @@ class AgentHealthService:
     def _schedule_retry(self, agent_id: str):
         """Schedule a retry task for an agent if not already scheduled."""
         if agent_id not in self._retry_tasks or self._retry_tasks[agent_id].done():
-            self._retry_tasks[agent_id] = asyncio.create_task(
-                self._retry_agent_check(agent_id)
+            self._retry_tasks[agent_id] = traced_create_task(
+                self._retry_agent_check(agent_id),
+                name=f"agent-health-retry-{agent_id}",
             )
 
     async def run_health_check_cycle(self):
@@ -378,8 +402,11 @@ class AgentHealthService:
                         # Schedule exponential backoff retry
                         self._schedule_retry(agent_id)
 
-        except Exception as e:
-            logger.error(f"Health check cycle failed: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "agent_health_cycle_failed",
+                extra={"error_type": type(exc).__name__},
+            )
 
     async def _health_check_loop(self):
         """Background loop that periodically runs health checks."""
@@ -394,8 +421,11 @@ class AgentHealthService:
             try:
                 await self._run_one_iteration()
                 await asyncio.sleep(self.check_interval)
-            except Exception as e:
-                logger.error(f"Health check loop failed: {e}", exc_info=True)
+            except Exception as exc:
+                logger.error(
+                    "agent_health_loop_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
                 await asyncio.sleep(60)
 
     async def _run_one_iteration(self) -> None:
@@ -423,7 +453,10 @@ class AgentHealthService:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._health_check_loop())
+        self._task = traced_create_task(
+            self._health_check_loop(),
+            name="agent-health-check",
+        )
         logger.info("Agent health check service started")
 
     async def stop(self):

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -678,7 +679,7 @@ async def test_card_resolver_retries_host_gateway_for_loopback_url(caplog):
     client = _LoopbackCardClient()
     resolver = AgentCardResolverImpl(client=client, cache_ttl=300)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         card = await resolver.resolve_card("http://127.0.0.1:9060")
 
     assert card is not None
@@ -687,7 +688,7 @@ async def test_card_resolver_retries_host_gateway_for_loopback_url(caplog):
         "http://127.0.0.1:9060/.well-known/agent-card.json",
         "http://host.docker.internal:9060/.well-known/agent-card.json",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -907,7 +908,7 @@ async def test_transport_send_message_retries_host_gateway_for_loopback_url(capl
         parts=[{"kind": "text", "text": "hello"}],
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         result = await transport.send_message(
             "http://127.0.0.1:9060/a2a",
             message,
@@ -918,7 +919,7 @@ async def test_transport_send_message_retries_host_gateway_for_loopback_url(capl
         "http://127.0.0.1:9060/a2a",
         "http://host.docker.internal:9060/a2a",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1063,7 +1064,7 @@ async def test_transport_stream_message_retries_host_gateway_for_loopback_url(
         parts=[{"kind": "text", "text": "hello"}],
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         events = [
             event
             async for event in transport.stream_message(
@@ -1079,7 +1080,7 @@ async def test_transport_stream_message_retries_host_gateway_for_loopback_url(
         "http://127.0.0.1:9060/a2a",
         "http://host.docker.internal:9060/a2a",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1105,6 +1106,30 @@ async def test_stream_with_docker_host_url_fallback_does_not_retry_after_yield()
 
     assert yielded_items == ["first-event"]
     assert attempted_urls == ["http://127.0.0.1:9060/a2a"]
+
+
+@pytest.mark.asyncio
+async def test_stream_with_docker_host_fallback_closes_nested_stream():
+    from a2a_adapter.docker_host_fallback import stream_with_docker_host_fallback
+
+    closed = False
+
+    async def _operation(_card):
+        nonlocal closed
+        try:
+            yield "first-event"
+            await asyncio.Event().wait()
+        finally:
+            closed = True
+
+    stream = stream_with_docker_host_fallback(
+        SimpleNamespace(url="https://agent.example"),
+        _operation,
+    )
+    assert await anext(stream) == "first-event"
+    await stream.aclose()
+
+    assert closed is True
 
 
 def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(

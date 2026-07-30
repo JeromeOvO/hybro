@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
 from common.config.settings import settings
+from common.observability import traced_create_task
 from common.utils.a2a_helpers import (
     extract_text_from_artifact_dicts,
     filter_non_text_parts,
@@ -607,7 +608,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"artifact-lease-{e.message_id}",
+        )
         try:
             await operation()
             if stopped.is_set():
@@ -1203,7 +1207,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"terminal-lease-{message_id}",
+        )
         try:
             await operation()
             if stopped.is_set():
@@ -1252,7 +1259,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"terminal-lease-{message_id}",
+        )
         try:
             result = await operation()
             if stopped.is_set():

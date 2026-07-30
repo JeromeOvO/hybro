@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
-
-from loguru import logger
 
 from agent import AgentFacade, AgentMongoRepository
 from api_gateway.dependencies import (
@@ -20,7 +17,12 @@ from api_gateway.dependencies import (
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
 from common.health_check import RuntimeHealthCheck
-from common.observability import MetricsCollector, traced_create_task
+from common.observability import (
+    MetricsCollector,
+    get_instance_id,
+    get_logger,
+    traced_create_task,
+)
 from common.protocols import (
     AgentCallCounter,
     AgentCardResolver,
@@ -94,6 +96,8 @@ from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
 from room_files import LocalFileContentStore, RoomFiles
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from dal.runtime_store import RuntimeRepositoryStore
@@ -1787,7 +1791,6 @@ async def _create_index(
         await collection.create_index(keys, unique=unique, name=name, **kwargs)
         return True
     except Exception as exc:
-        logger = logging.getLogger(__name__)
         if unique and critical:
             logger.error(
                 "Critical index creation failed for %s.%s",
@@ -1882,7 +1885,7 @@ async def _ensure_text_index(
     name: str,
     weights: dict[str, int],
 ) -> bool:
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
     try:
         existing = await collection.index_information()
         desired_weights = dict(sorted(weights.items()))
@@ -2273,7 +2276,9 @@ def create_delivery_facade(
     resolved_config = config or DeliveryConfig()
     resolved_now = now or utcnow
     resolved_id_factory = id_factory or (lambda: uuid4().hex)
-    resolved_instance_id = instance_id or resolved_id_factory()
+    resolved_instance_id = instance_id or (
+        get_instance_id() if id_factory is None else resolved_id_factory()
+    )
     resolved_task_runner = task_runner or traced_create_task
 
     event_bus = CrossInstanceEventBus(

@@ -1,19 +1,19 @@
-import logging
-import sys
-import time
+# ruff: noqa: I001
+
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from loguru import logger
-from uvicorn.config import LOGGING_CONFIG
+
+# Logging must be configured before importing application runtime modules.
+from common.observability.bootstrap import settings as _logging_settings  # noqa: F401
+from common.config.settings import settings
 
 import api_gateway
 from api_gateway.registry import open_cors_path_prefixes
 from common.auth import bind_auth_config
-from common.config.settings import settings
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
+from common.middleware.request_logging import RequestLoggingMiddleware
 from common.middleware.request_size import RequestBodyLimitMiddleware
 from container import (
     create_application_runtime,
@@ -23,61 +23,17 @@ from container import (
     validate_runtime_bindings,
 )
 
-load_dotenv()
 bind_auth_config(
     clerk_secret_key_value=settings.clerk_secret_key,
     authorized_parties=tuple(settings.frontend_origins),
 )
 
 
-class InterceptHandler(logging.Handler):
-    def emit(self, record):
-        level = logger.level(record.levelname, no=record.levelno).name
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
-            frame, depth = frame.f_back, depth + 1
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+class _RequestLoggingFastAPI(FastAPI):
+    """Keep request correlation outside Starlette's server-error middleware."""
 
-
-class HighFrequencyAccessLogFilter(logging.Filter):
-    SUPPRESSED_PATHS = ("/relay/hub/", "/heartbeat")
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        if any(path in message for path in self.SUPPRESSED_PATHS):
-            return '" 2' not in message
-        return True
-
-
-logging_config = LOGGING_CONFIG.copy()
-logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
-
-logging.getLogger("uvicorn.access").addFilter(HighFrequencyAccessLogFilter())
-
-logger.remove()
-if settings.app_env == "development":
-    logger.add(
-        sys.stderr,
-        enqueue=False,
-        backtrace=True,
-        diagnose=True,
-        serialize=False,
-        level=settings.log_level,
-    )
-else:
-    logger.add(
-        f"logs/app_{time.strftime('%Y-%m-%d')}.log",
-        enqueue=True,
-        backtrace=True,
-        diagnose=True,
-        serialize=False,
-        rotation="100 MB",
-        retention="30 days",
-        compression="zip",
-        level=settings.log_level,
-    )
+    def build_middleware_stack(self):
+        return RequestLoggingMiddleware(super().build_middleware_stack())
 
 
 @asynccontextmanager
@@ -147,7 +103,10 @@ def create_app(
     agent_rate_limiter_factory=None,
     extra_routes=None,
 ) -> FastAPI:
-    app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
+    app = _RequestLoggingFastAPI(
+        lifespan=lifespan,
+        title="Multi-Agent AI System",
+    )
 
     app.state.platform_facade_factory = platform_facade_factory
     app.state.agent_rate_limiter_factory = agent_rate_limiter_factory
@@ -164,7 +123,9 @@ def create_app(
             "Cache-Control",
             "sentry-trace",
             "baggage",
+            "X-Request-ID",
         ],
+        expose_headers=["X-Request-ID"],
     )
     app.add_middleware(
         DiscoveryCORSMiddleware,
@@ -227,7 +188,14 @@ if settings.auth_mode == "mock":
 def main() -> None:
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        access_log=False,
+        log_config=None,
+    )
 
 
 if __name__ == "__main__":

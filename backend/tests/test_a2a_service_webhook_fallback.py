@@ -16,6 +16,7 @@ Covers reply_to_task (HITL path):
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -962,3 +963,61 @@ class TestSendMessageTrackedAgentPersistedFlag:
         assert result["content"] == "Public final answer from agent"
         assert result["status"] == "completed"
         assert result["persisted"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_streaming_closes_adapter_stream_on_outer_close():
+    from a2a_adapter.runtime_service import A2AService
+
+    closed = False
+
+    async def fake_stream(*_args, **_kwargs):
+        nonlocal closed
+        try:
+            yield {"kind": "message"}
+            await asyncio.Event().wait()
+        finally:
+            closed = True
+
+    service = A2AService()
+    service._record_call = AsyncMock()
+    with patch(
+        "a2a_adapter.runtime_service.adapter_stream_message",
+        fake_stream,
+    ):
+        stream = service.send_message_streaming(
+            _make_agent_card(),
+            _make_message(),
+            agent_id="agent-1",
+        )
+        assert await anext(stream) == {"kind": "message"}
+        await stream.aclose()
+
+    assert closed is True
+    service._record_call.assert_awaited_once_with("agent-1", success=True)
+
+
+@pytest.mark.asyncio
+async def test_send_message_closes_delegated_stream_on_outer_close():
+    from a2a_adapter.runtime_service import A2AService
+
+    closed = False
+
+    async def delegated_stream(*_args, **_kwargs):
+        nonlocal closed
+        try:
+            yield {"kind": "message"}
+            await asyncio.Event().wait()
+        finally:
+            closed = True
+
+    card = _make_agent_card()
+    card.capabilities.streaming = True
+    service = A2AService()
+    service.send_message_streaming = delegated_stream
+
+    stream = service.send_message(card, _make_message(), agent_id="agent-1")
+    assert await anext(stream) == {"kind": "message"}
+    await stream.aclose()
+
+    assert closed is True

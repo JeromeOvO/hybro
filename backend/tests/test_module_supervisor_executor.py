@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.observability import get_log_context
 from common.utils.time import utcnow
 from execution.orchestration.dispatch_payload import ResolvedDispatchPayload
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
@@ -626,7 +627,7 @@ async def test_supervisor_logs_planner_decision_with_refs(caplog):
         await se._record_v2_planner_action(state, action)
 
     assert any(
-        record.message == "supervisor_planner_decision"
+        record.message == "supervisor_planner_completed"
         and record.__dict__.get("run_id") == "run-1"
         and record.__dict__.get("room_id") == "room-1"
         and record.__dict__.get("user_message_id") == "msg-1"
@@ -634,6 +635,69 @@ async def test_supervisor_logs_planner_decision_with_refs(caplog):
         and record.__dict__.get("target_count") == 1
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_replay_logs_completion_once(caplog):
+    executor = _make_supervisor_executor()
+    state = OrchestrationRunState(
+        run_id="run-terminal",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Coordinate the selected agents",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.COMPLETED,
+    )
+    result = SupervisorRunResult(
+        status=RunStatus.COMPLETED,
+        run_id=state.run_id,
+        trajectory=None,
+    )
+    caplog.set_level("INFO", logger="execution.orchestration.supervisor_executor")
+
+    assert await executor._log_state_and_return("room-1", state, result) is result
+    assert await executor._log_state_and_return("room-1", state, result) is result
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "supervisor_run_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].run_id == "run-terminal"
+    assert records[0].outcome == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_nonterminal_run_logs_paused_instead_of_completed(caplog):
+    executor = _make_supervisor_executor()
+    state = OrchestrationRunState(
+        run_id="run-awaiting-user",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Wait for clarification",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.AWAITING_USER,
+    )
+    result = SupervisorRunResult(
+        status=RunStatus.PAUSED,
+        run_id=state.run_id,
+        trajectory=None,
+    )
+    caplog.set_level("INFO", logger="execution.orchestration.supervisor_executor")
+
+    assert await executor._log_state_and_return("room-1", state, result) is result
+
+    assert not any(
+        record.getMessage() == "supervisor_run_completed" for record in caplog.records
+    )
+    paused = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "supervisor_run_paused"
+    )
+    assert paused.run_id == "run-awaiting-user"
+    assert paused.outcome == RunStatus.PAUSED.value
 
 
 @pytest.mark.asyncio
@@ -754,6 +818,48 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
     assert state.candidate_scope is not None
     assert state.candidate_scope.snapshot_id == "scope-snapshot-1"
     assert state.candidate_scope.agent_ids == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_binds_loaded_orchestration_run_id_to_downstream_context(
+    monkeypatch,
+):
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    observed_context = {}
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "run-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+
+    async def execute_loop(**kwargs):
+        observed_context.update(get_log_context())
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            run_id=kwargs["state"].run_id,
+            trajectory=None,
+        )
+
+    monkeypatch.setattr(executor, "_execute_orchestration_loop", execute_loop)
+
+    await executor.run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert observed_context["run_id"] == "run-1"
+    assert observed_context["user_message_id"] == "msg-1"
+    assert get_log_context() == {}
 
 
 @pytest.mark.asyncio
@@ -1174,7 +1280,7 @@ async def test_supervisor_generic_failed_result_does_not_create_preflight_task()
 
 
 @pytest.mark.asyncio
-async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(
+async def test_dispatch_unexpected_exception_logs_only_safe_metadata(
     caplog,
 ):
     se = _make_supervisor_executor()
@@ -1206,7 +1312,19 @@ async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_resu
             None,
         )
 
-    assert private_exception in caplog.text
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.error_type == "RuntimeError"
+    assert len(record.error_fingerprint) == 16
+    assert "supervisor_executor.py:" in record.error_stack
+    assert ":dispatch_one" in record.error_stack
+    assert private_exception not in caplog.text
+    assert private_task not in caplog.text
+    assert private_exception not in record.error_stack
+    assert private_task not in record.error_stack
     assert len(results) == 1
     assert results[0].status == StepStatus.FAILED
     assert results[0].error_message == "Agent processing failed"
