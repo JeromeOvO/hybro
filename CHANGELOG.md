@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9](https://github.com/hybroai/hybro/compare/v0.2.8...v0.2.9) (2026-07-30)
+
+
+### Features
+
+* **backend:** unify structured observability ([d651c80](https://github.com/hybroai/hybro/commit/d651c80d9c4566efa6978dd74213665ac91296b1))
+* **backend:** unify structured observability ([2e4b2d9](https://github.com/hybroai/hybro/commit/2e4b2d90d547c51919113559615681d559e8e271))
+
+
+### Bug Fixes
+
+* **delivery:** log successful terminal retries ([3b5f49f](https://github.com/hybroai/hybro/commit/3b5f49f132946a6bbc6cc1135c826de07e2dd0fb))
+* **observability:** separate A2A transport events ([984c231](https://github.com/hybroai/hybro/commit/984c23104dac65bd0bce6cfe5062ebd69185b8a3))
+
 ## [0.2.8](https://github.com/hybroai/hybro/compare/v0.2.7...v0.2.8) (2026-07-29)
 
 
