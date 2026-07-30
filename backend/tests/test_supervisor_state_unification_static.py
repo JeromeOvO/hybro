@@ -79,7 +79,8 @@ def test_new_execution_files_do_not_assign_supervisor_trajectory():
 
 
 def test_frontend_does_not_read_supervisor_trajectory_directly():
-    frontend_root = Path("../frontend")
+    frontend_root = Path(__file__).resolve().parents[2] / "frontend"
+    assert frontend_root.is_dir(), f"frontend checkout not found: {frontend_root}"
     ignored_parts = {"node_modules", ".next", "dist", "build", "coverage"}
     matches: list[str] = []
     for path in frontend_root.rglob("*"):

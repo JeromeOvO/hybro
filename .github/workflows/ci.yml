@@ -12,6 +12,18 @@ jobs:
   backend-ci:
     name: Backend CI (Python / FastAPI)
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      HYBRO_TEST_REDIS_URL: redis://localhost:6379/0
     defaults:
       run:
         working-directory: backend
@@ -39,6 +51,9 @@ jobs:
 
       - name: Lint with Ruff
         run: uv run ruff check .
+
+      - name: Run Core Backend Baseline
+        run: uv run pytest -m core
 
       - name: Run Backend Tests
         run: uv run pytest

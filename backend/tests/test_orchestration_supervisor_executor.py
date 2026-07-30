@@ -1724,6 +1724,7 @@ async def test_run_uses_sidecar_scope_planner_store_and_planned_message_ids():
     assert "supervisor_trajectory" not in user_message.extend_info
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_platform_answers_directly_when_no_candidate_agent_is_suitable():
     user_message = RoomUserMessage(
@@ -10098,6 +10099,7 @@ async def test_run_replay_waits_when_planned_message_already_exists():
     assert state.status == OrchestrationStatus.WAITING_AGENT
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_run_dispatch_failure_without_message_id_is_visible_to_planner():
     user_message = RoomUserMessage(
@@ -10216,6 +10218,7 @@ async def test_run_synthesis_persists_system_message_content():
     assert system_db_msg.message_content.message_text == "Final summary"
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_run_existing_terminal_state_returns_idempotently():
     user_message = RoomUserMessage(

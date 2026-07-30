@@ -60,8 +60,17 @@ Run from `backend/`:
 ```sh
 uv run ruff format --check .
 uv run ruff check .
+uv run pytest -m core
 uv run pytest
 ```
+
+Real Redis integration tests are explicit:
+
+```sh
+HYBRO_TEST_REDIS_URL=redis://localhost:6379/0 uv run pytest -m integration
+```
+
+See [`tests/README.md`](tests/README.md) for test lanes and cleanup conventions.
 
 ## A2A inline file limits
 

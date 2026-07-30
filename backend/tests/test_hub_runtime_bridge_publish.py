@@ -487,6 +487,7 @@ async def test_publish_ignores_unsupported_legacy_event_types() -> None:
     assert await journal.find_replayable() == []
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_publish_stable_response_seq_suppresses_duplicate_internal_dispatch() -> (
     None
@@ -1179,6 +1180,7 @@ async def test_publish_skips_unauthorized_event_before_journal_write() -> None:
     assert dispatcher.events == []
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_publish_terminal_task_status_maps_to_terminal_agent_event() -> None:
     dispatcher = Dispatcher()

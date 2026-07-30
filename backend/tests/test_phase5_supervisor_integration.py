@@ -1988,6 +1988,7 @@ async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info
     }
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_evidence():
     app = _make_phase5_app()

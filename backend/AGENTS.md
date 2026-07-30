@@ -21,7 +21,7 @@ Use Python 3.12+ and prefer explicit, typed, async-aware code for I/O paths. Ruf
 
 ## Testing Guidelines
 
-Pytest is configured in `pyproject.toml` with `tests/` as the test root, `test_*.py` files, `Test*` classes, and `test_*` functions. Async tests run with `pytest-asyncio` in auto mode. Use markers when helpful: `unit`, `integration`, `slow`, and `asyncio`. Add focused tests next to related coverage patterns, for example `tests/test_api_gateway_*.py` for gateway behavior or `tests/test_module_*.py` for module boundary checks.
+Pytest is configured in `pyproject.toml` with `tests/` as the test root, `test_*.py` files, `Test*` classes, and `test_*` functions. Async tests run with `pytest-asyncio` in auto mode. Supported markers are `core` for the critical product-flow baseline, `integration` for tests requiring an explicitly configured external service, and `asyncio` for explicit async marking where needed. Add focused tests next to related coverage patterns, for example `tests/test_api_gateway_*.py` for gateway behavior or `tests/test_module_*.py` for module boundary checks. See `tests/README.md` for test lanes and cleanup conventions.
 
 ## Architecture Documentation
 

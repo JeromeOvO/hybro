@@ -729,6 +729,7 @@ async def test_start_orchestration_skips_when_ack_disables_dispatch():
     assert facade._inflight == set()
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_resolve_hitl_updates_orchestration_state_after_successful_response():
     hitl_manager = MagicMock()
@@ -949,6 +950,7 @@ async def test_resolve_hitl_records_policy_followup_without_queue_resume():
     deps["room_message_center"].process_room_user_message.assert_not_called()
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_cancel_preserves_order_and_requested_by_user_id():
     order = []

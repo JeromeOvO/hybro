@@ -33,7 +33,7 @@ from common.types import (
 from delivery.task_notifier import TaskUpdateNotifier
 from execution.dispatch.task_notifications import _notify_task_update_impl
 from models.room import MessageContent, RoomAgentMessage
-from tests.delivery_adapter_fakes import make_delivery_facade
+from tests.fakes.delivery import make_delivery_facade
 
 # =============================================================================
 # SSE Stream Tests
