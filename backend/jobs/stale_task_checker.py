@@ -25,6 +25,7 @@ from common.a2a_constants import (
     CommonTaskState,
     is_terminal_state,
 )
+from common.a2a_task_projection import public_persisted_task_data
 from common.config import settings
 from common.observability import safe_exception_metadata, traced_create_task
 from common.types import Task
@@ -37,7 +38,6 @@ from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.run_store import OrchestrationStoreConflict
-from execution.task_tracking import public_persisted_task_data
 from jobs.constants import STALE_TASK_CHECKER
 from models.orchestration import OrchestrationEventType, OrchestrationRunEvent
 from models.request import OrchestrationRequest

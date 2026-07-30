@@ -256,8 +256,8 @@ def test_container_uses_owner_runtime_modules_for_delivery_redis_and_relay() -> 
 
 
 def test_relay_and_hub_route_inventory_matches_fixture() -> None:
-    from api.hub import router as hub_router
-    from api.relay import router as relay_router
+    from api_gateway.routes.hub_routes import router as hub_router
+    from api_gateway.routes.relay_routes import router as relay_router
 
     actual = [
         {

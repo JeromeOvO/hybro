@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from api.a2a_tasks import (
+from api_gateway.routes.a2a_task_routes import (
     get_task_status,
     list_room_tasks,
     list_user_pending_tasks,

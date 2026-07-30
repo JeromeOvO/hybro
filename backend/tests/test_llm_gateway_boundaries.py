@@ -8,7 +8,6 @@ PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("container.py"),
     Path("main.py"),
     Path("__main__.py"),
-    Path("api"),
     Path("api_gateway"),
     Path("agent"),
     Path("common"),
@@ -219,7 +218,7 @@ def test_llm_settings_are_not_read_by_feature_runtime_modules():
     )
     scan_roots = [
         Path("execution"),
-        Path("api"),
+        Path("api_gateway"),
         Path("agent"),
         Path("room"),
         Path("context_memory"),

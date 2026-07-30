@@ -159,7 +159,7 @@ class TestContentSummary:
 
 class TestPreDedupGuard:
     def test_extract_attachments_rejects_over_limit(self):
-        from api.room_center import _extract_attachments
+        from api_gateway.routes.room_routes import _extract_attachments
 
         attachments = [
             {"file_id": f"f{i}"} for i in range(MAX_ATTACHMENT_REFS_PER_REQUEST + 1)

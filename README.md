@@ -62,8 +62,12 @@ docker compose up -d --build
 - **API Server**: http://localhost:8000
 
 ## Architecture
+This monorepo is the source of truth for the product. In particular, `backend/`
+is the canonical backend; the retired standalone `multi-agents-backend`
+repository is not used by this repository's Docker Compose or CI.
+
 The repository is split into two primary components:
-- `backend/`: A FastAPI application that serves as the orchestration engine, utilizing Redis for real-time pub/sub and MongoDB for persistence.
+- `backend/`: A FastAPI orchestration engine using MongoDB for persistence and optional Redis services for cross-process coordination.
 - `frontend/`: A Next.js 16 (Turbopack) application for chat, agent discovery, agent management, Hub status, and inspection.
 
 ## Contributing

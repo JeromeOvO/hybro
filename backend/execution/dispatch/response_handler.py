@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
+from common.a2a_task_projection import public_artifact_data, public_part_data
 from common.config.settings import settings
 from common.observability import traced_create_task
 from common.utils.a2a_helpers import (
@@ -24,11 +25,7 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.result_ingestor import AgentResultRead
-from execution.task_tracking import (
-    public_artifact_data,
-    public_part_data,
-    resolve_public_task_label,
-)
+from execution.task_tracking import resolve_public_task_label
 
 if TYPE_CHECKING:
     from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort

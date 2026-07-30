@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from agent.routing_safety import sanitize_routing_agent_ids
+from common.a2a_task_projection import (
+    public_artifact_data,
+    public_message_data,
+    public_persisted_task_data,
+)
 from common.config.settings import settings
 from common.dto import (
     AgentRoutingCandidate,
@@ -54,9 +59,6 @@ from execution.orchestration.candidate_scope import (
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from execution.task_tracking import (
     extract_public_completed_status_text,
-    public_artifact_data,
-    public_message_data,
-    public_persisted_task_data,
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )

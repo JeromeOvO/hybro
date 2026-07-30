@@ -219,34 +219,8 @@ def test_main_does_not_import_old_api_route_modules():
     assert violations == []
 
 
-def test_old_api_route_modules_are_compatibility_shims_only():
-    route_modules = {
-        "a2a_tasks.py",
-        "agent.py",
-        "agent_viewset.py",
-        "agent_group.py",
-        "files.py",
-        "hitl.py",
-        "hub.py",
-        "inspection_center.py",
-        "memory_center.py",
-        "relay.py",
-        "room_center.py",
-        "sse.py",
-        "viewset.py",
-        "webhooks.py",
-    }
-
-    violations = []
-    for filename in sorted(route_modules):
-        path = Path("api") / filename
-        source = path.read_text()
-        if "Compatibility shim" not in source:
-            violations.append(f"{path}: missing compatibility shim marker")
-        if "APIRouter(" in source or "@router." in source:
-            violations.append(f"{path}: still declares routes")
-
-    assert violations == []
+def test_legacy_api_route_package_is_removed():
+    assert not Path("api").exists()
 
 
 def test_room_route_owner_protocol_covers_room_route_calls():
@@ -273,7 +247,6 @@ def test_api_gateway_packages_are_registered_for_distribution():
     packages = set(setuptools_config["packages"])
 
     assert {
-        "api",
         "api_gateway",
         "api_gateway.routes",
         "api_gateway.viewsets",

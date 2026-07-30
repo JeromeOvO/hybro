@@ -22,6 +22,10 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from common.a2a_constants import SSEProcessingStatus
+from common.a2a_task_projection import (
+    public_part_data,
+    public_persisted_task_data,
+)
 from common.types import (
     Task,
     TaskState,
@@ -32,8 +36,6 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from execution.task_tracking import (
-    public_part_data,
-    public_persisted_task_data,
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )

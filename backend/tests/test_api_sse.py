@@ -16,7 +16,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from api.sse import (
+from api_gateway.routes.sse_routes import (
     cancel_message,
     get_room_sse_status,
     stream_room_messages,

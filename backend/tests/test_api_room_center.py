@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
-from api.room_center import (
+from api_gateway.routes.room_routes import (
     create_new_room,
     inquiry_active_runs,
     inquiry_room_messages,

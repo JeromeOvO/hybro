@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from api.agent_group import (
+from api_gateway.routes.agent_group_routes import (
     create_agent_group,
     delete_agent_group,
     get_agent_group,

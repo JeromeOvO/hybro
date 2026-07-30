@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from api.memory_center import (
+from api_gateway.routes.memory_routes import (
     add_chat_context,
     delete_chat_context_by_session_id,
     get_chat_context_by_session_id,

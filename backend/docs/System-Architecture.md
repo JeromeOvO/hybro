@@ -1,16 +1,15 @@
 # System Architecture
 
 This document describes the current architecture and core workflows of the
-`multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-26 and focuses on the code that is currently present, not on older
-design documents that may have existed previously.
+canonical backend under the Hybro monorepo's `backend/` directory. The retired
+standalone `multi-agents-backend` repository is not the runtime source described
+here. This document focuses on code currently present in the monorepo.
 
 ## High-Level Shape
 
 The backend is a FastAPI monolith that coordinates:
 
 - A web app API for rooms, agents, messages, HITL, files, and SSE.
-- A public/API-key gateway for agent discovery and direct agent calls.
 - A Hub relay path for locally connected hub agents.
 - A2A agent communication, including synchronous, streaming, and webhook-based
   long-running task updates.
@@ -29,7 +28,6 @@ flowchart TD
     APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
     APIGateway --> OwnerPorts[owner protocols / facades]
     APIGateway --> Execution[execution facade]
-    APIGateway --> Platform[platform facade]
 
     Container[container.py composition root] --> ExecutionPorts[Execution ports]
     Execution --> ExecutionPorts
@@ -51,8 +49,7 @@ flowchart TD
     ResponseHandler --> Mongo[(MongoDB)]
     ResponseHandler --> Delivery[delivery facade / SSE]
     RoomServices --> ContextMemory[context_memory facade]
-    Platform --> Mongo
-    Platform --> RoomFiles[room_files / local filesystem]
+    RoomServices --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
@@ -159,14 +156,12 @@ Important route groups:
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
 - `files_routes.py`: file upload for room message attachments.
-- `discovery_routes.py`: API-key agent discovery.
-- `platform_gateway_routes.py`: API-key gateway send/stream/card endpoints.
 - `relay_routes.py`: hub daemon registration, event stream, publish, sync, status.
 - `webhook_routes.py`: A2A task webhook callbacks.
 - `a2a_task_routes.py`: long-running A2A task inspection.
 
-Most frontend-facing routes use Clerk auth. Discovery, gateway, and relay routes
-use API-key auth from `common.api_key_auth`.
+Most frontend-facing routes use Clerk auth. Relay routes use API-key auth from
+`common.api_key_auth`.
 
 ### `common`
 
@@ -181,6 +176,9 @@ use API-key auth from `common.api_key_auth`.
   side-effect-free compatibility import for the logging API.
 - `common.observability`: process logging, correlation context, tracing, and
   metrics helpers. See [Observability.md](Observability.md).
+- `common.a2a_task_projection`: common-owned, persistence-safe public projection
+  of A2A tasks, messages, parts, and artifacts. API routes and runtime modules
+  share this privacy boundary without importing one another's implementations.
 
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
@@ -635,24 +633,12 @@ lives in `delivery`. Delivery never calls back into Execution or removed-package
 business services; lifecycle recording happens before typed delivery events are
 emitted.
 
-### `platform_module`
+### `room_files`
 
-`platform_module.PlatformFacade` groups public platform-facing capabilities:
-
-- `PlatformGateway`: API-key agent discovery, card masking, synchronous calls,
-  and streaming calls.
-- `PlatformDiscovery`: discovery service abstraction.
-- `PlatformFileStorage`: compatibility facade over room-owned file uploads and
-  stable authenticated content URLs.
-- `PlatformContentStorage`: binary/full-content storage used by context memory.
-- Gateway/discovery/agent rate limiters backed by Mongo collections.
-
-This module is used by:
-
-- `/gateway/*` routes for external agent messaging.
-- `/discovery/*` routes for external agent search.
-- `/files/upload` for authenticated room file uploads.
-- Context memory compaction content storage.
+`room_files` owns authenticated room uploads, file metadata, local content,
+artifact materialization, cleanup, and room-deletion coordination. Route and
+runtime consumers use its storage protocols; filesystem paths do not cross the
+module boundary.
 
 ### `hub_runtime_bridge` and Relay
 
@@ -931,7 +917,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - The supervisor compares the persisted goal with accumulated context and
      prefers suitable Agents from the complete selector-defined scope.
    - If no scoped Agent is suitable, use `platform_answer` to stream a direct
-     natural Platform response without exposing Agent routing or capabilities.
+     natural HYBRO response without exposing Agent routing or capabilities.
    - The Supervisor can delegate to one Agent or coordinate multiple Agents in
      parallel or sequence.
    - Execution performs final synthesis after `complete` and marks the run
@@ -1067,35 +1053,6 @@ Hub-connected local agents use API-key authenticated relay endpoints.
 
 This design lets hub agents participate in the normal room execution pipeline
 while keeping hub transport details isolated from queue/supervisor orchestration.
-
-## Gateway and Discovery Workflow
-
-The public API-key surface is separate from the frontend room workflow.
-
-Discovery:
-
-```text
-POST /api/v1/discovery/agents
-POST /api/v1/gateway/agents/discover
-```
-
-Messaging:
-
-```text
-POST /api/v1/gateway/agents/{agent_id}/message/send
-POST /api/v1/gateway/agents/{agent_id}/message/stream
-GET  /api/v1/gateway/agents/{agent_id}/card
-```
-
-The platform gateway:
-
-1. Authenticates API keys.
-2. Applies per-key and global rate limits.
-3. Resolves visible/public agents.
-4. Masks AgentCard URLs so clients call the gateway, not private backend URLs.
-5. Checks per-agent rate limits.
-6. Uses `AgentTransport` from `a2a_adapter` to call agents.
-7. Returns A2A-shaped responses or SSE stream frames.
 
 ## SSE and Cancellation Workflow
 
@@ -1366,7 +1323,7 @@ Focused tests are organized by module and workflow:
 - `tests/test_delivery_*`: SSE, event bus, cancellation, delivery protocols.
 - `tests/test_execution_*` and related orchestration tests: execution flows.
 - `tests/test_hub_runtime_bridge_*`: hub relay behavior.
-- `tests/test_platform_*`: gateway, files, rate limits, platform protocols.
+- `tests/test_api_gateway_*` and `tests/test_files_routes.py`: gateway boundaries and file routes.
 - `tests/test_service_*`: service-level runtime compatibility and behavior.
 
 For architecture-sensitive changes, run the closest focused tests first, then
