@@ -177,7 +177,6 @@ docstring-code-format = true
 [tool.setuptools]
 py-modules = ["main", "container"]
 packages = [
-    "api",
     "agent",
     "agent.repository",
     "room",

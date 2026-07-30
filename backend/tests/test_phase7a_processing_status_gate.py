@@ -19,10 +19,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("api", "jobs", "execution", "room")
-OBSOLETE_CALL_IDS = {
-    "api.sse.cancel_message.canceled",
-}
+PRODUCTION_ROOTS = ("api_gateway", "jobs", "execution", "room")
+OBSOLETE_CALL_IDS: set[str] = set()
 DELETED_PACKAGE_PATH_PREFIXES = ("config/", "infrastructure/", "modules/", "services/")
 EXECUTION_STATUS_HELPERS = {"emit_room_processing_status"}
 

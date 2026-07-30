@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from api.hitl import (
+from api_gateway.routes.hitl_routes import (
     cancel_hitl_request,
     get_pending_hitl_requests,
     respond_to_hitl_request,

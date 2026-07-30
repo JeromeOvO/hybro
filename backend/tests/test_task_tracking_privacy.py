@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.a2a_task_projection import public_persisted_task_data
 from common.observability.logging import StructuredFormatter
 from common.types import (
     Artifact,
@@ -18,10 +19,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
-from execution.task_tracking import (
-    A2ATaskTrackingService,
-    public_persisted_task_data,
-)
+from execution.task_tracking import A2ATaskTrackingService
 from models.room import MessageContent, RoomAgentMessage
 
 

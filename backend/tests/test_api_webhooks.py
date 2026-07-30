@@ -26,7 +26,7 @@ from a2a.types import (
 )
 from fastapi import HTTPException
 
-from api import webhooks
+from api_gateway.routes import webhook_routes as webhooks
 from common.protocols import WebhookReceiver
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.response_handler import AgentResponseHandler

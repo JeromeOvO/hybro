@@ -1,6 +1,13 @@
 # Modular Decoupling Design Document
 
-> **Status**: Historical architecture record; storage/provider details are superseded by `System-Architecture.md`
+> [!WARNING]
+> **Archived design record.** References to the standalone
+> `multi-agents-backend` repository, `platform_module`, Pinecone, S3, and phased
+> compatibility surfaces are not current runtime facts. The canonical backend is
+> `backend/` in the Hybro monorepo; see
+> [System Architecture](System-Architecture.md) for current behavior.
+
+> **Status**: Historical architecture record; superseded by `System-Architecture.md`
 > **Date**: 2026-06-26
 > **Scope**: Refactor hybro-multi-agents-backend into interface-driven modular architecture
 > **Constraint**: All existing features remain unchanged; no new technology stack; zero backend breaking changes (except explicitly decommissioned legacy workflow endpoints after Phase 0d deprecation)

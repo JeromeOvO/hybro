@@ -2,10 +2,11 @@
 
 ## Project Structure & Module Organization
 
-This is a Python FastAPI backend for HybroAI's multi-agent system. The app entry points are `main.py`, `__main__.py`, and the console script `multi-agents-backend`. Route adapters live in `api/` and `api_gateway/`; domain modules are organized by capability, including `agent/`, `room/`, `execution/`, `delivery/`, `context_memory/`, `hub_runtime_bridge/`, `platform_module/`, and `llm_gateway/`. Shared contracts are in `common/`, persistence adapters in `dal/` and `database/`, background tasks in `jobs/`, helpers in `scripts/`, and architecture notes in `docs/` and `docs/System-Architecture.md`. Tests live in `tests/`.
+This directory is the canonical Python FastAPI backend in the Hybro monorepo; the retired standalone `multi-agents-backend` repository is not the current runtime source. The app entry points are `main.py`, `__main__.py`, and the console script `multi-agents-backend`. HTTP route adapters live only in `api_gateway/`; do not recreate the removed `api/` compatibility package. Domain modules are organized by capability, including `agent/`, `room/`, `execution/`, `delivery/`, `context_memory/`, `hub_runtime_bridge/`, and `llm_gateway/`. Shared contracts are in `common/`, persistence adapters in `dal/`, room-owned content storage in `room_files/`, background tasks in `jobs/`, helpers in `scripts/`, and current architecture notes in `docs/System-Architecture.md`. `docs/MODULAR_DECOUPLING_DESIGN.md` is an archived design record. Tests live in `tests/`.
 
 ## Build, Test, and Development Commands
 
+- From the monorepo root, `docker compose up -d --build` starts the local product stack.
 - `uv sync`: install dependencies from `uv.lock`.
 - `uv sync --extra dev`: install runtime and development test dependencies.
 - `uvicorn main:app --reload`: run the API locally at `http://localhost:8000`.

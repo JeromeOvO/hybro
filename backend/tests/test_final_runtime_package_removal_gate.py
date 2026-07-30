@@ -18,7 +18,6 @@ RUNTIME_SCAN_ROOTS = (
     "__main__.py",
     "container.py",
     "a2a_adapter",
-    "api",
     "api_gateway",
     "agent",
     "common",

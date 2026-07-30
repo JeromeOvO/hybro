@@ -72,7 +72,7 @@ class TestRoomLifecycleFlow:
         Each step calls the REAL endpoint function; only the runtime dependencies
         behind the endpoint are mocked.
         """
-        from api.room_center import (
+        from api_gateway.routes.room_routes import (
             create_new_room,
             inquiry_room_messages,
             inquiry_room_setting,
@@ -200,7 +200,7 @@ class TestRoomLifecycleFlow:
         """Verify that a non-owner is blocked at every ownership-gated step."""
         from fastapi import HTTPException
 
-        from api.room_center import (
+        from api_gateway.routes.room_routes import (
             inquiry_active_runs,
             inquiry_room_messages,
             inquiry_room_setting,
@@ -266,7 +266,11 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_register_query_and_delete_agent_flow(self, flow_user):
         """register_agent -> get_agent -> delete_agent through real endpoints."""
-        from api.agent import delete_agent, get_agent, register_agent
+        from api_gateway.routes.agent_routes import (
+            delete_agent,
+            get_agent,
+            register_agent,
+        )
 
         agent_id = "flow-agent-001"
 
@@ -505,7 +509,7 @@ class TestA2ATaskFlow:
     @pytest.mark.asyncio
     async def test_task_status_polling_flow(self, flow_user):
         """get_task_status through the real endpoint."""
-        from api.a2a_tasks import get_task_status
+        from api_gateway.routes.a2a_task_routes import get_task_status
 
         msg_id = "task-flow-msg"
         mock_task = Task(
@@ -539,7 +543,7 @@ class TestA2ATaskFlow:
     @pytest.mark.asyncio
     async def test_list_user_pending_tasks(self, flow_user):
         """list_user_pending_tasks through the real endpoint."""
-        from api.a2a_tasks import list_user_pending_tasks
+        from api_gateway.routes.a2a_task_routes import list_user_pending_tasks
 
         msgs = []
         for i in range(3):
@@ -583,7 +587,7 @@ class TestMessageCancellationFlow:
 
     @pytest.mark.asyncio
     async def test_cancel_message_flow(self, flow_user):
-        from api.sse import cancel_message
+        from api_gateway.routes.sse_routes import cancel_message
 
         room_id = "cancel-flow-room"
         msg_id = "cancel-flow-msg"
@@ -666,7 +670,7 @@ class TestErrorHandlingFlow:
     async def test_ownership_blocks_unauthorized_user(self):
         from fastapi import HTTPException
 
-        from api.room_center import verify_room_ownership
+        from api_gateway.routes.room_routes import verify_room_ownership
 
         other_user = ClerkUser(
             user_id="unauthorized",

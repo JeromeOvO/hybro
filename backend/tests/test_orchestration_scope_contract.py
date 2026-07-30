@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from api.room_center import send_message
+from api_gateway.routes.room_routes import send_message
 from common.config.settings import settings
 from common.dto import ExecutionAck, ExecutionRequest
 from execution.facade import ExecutionFacade

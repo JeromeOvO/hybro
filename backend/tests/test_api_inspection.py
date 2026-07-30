@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from api.inspection_center import inspect_a2a_connection, inspect_agent
+from api_gateway.routes.inspection_routes import inspect_a2a_connection, inspect_agent
 
 
 class TestInspectAgent:

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from common.a2a_constants import is_terminal_state
+from common.a2a_task_projection import public_persisted_task_data
 from common.dto import (
     AgentInfo,
     AgentMessageInput,
@@ -30,7 +31,6 @@ from common.types import MessageRole as Role
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
-from execution.task_tracking import public_persisted_task_data
 from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
