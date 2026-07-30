@@ -8,6 +8,7 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "a2a-adapter[langchain]>=0.1.4",
     "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
 ]
 
 [project.scripts]

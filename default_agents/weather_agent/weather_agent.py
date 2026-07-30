@@ -9,8 +9,10 @@ The agent accepts a city name and returns weather information.
 """
 
 import os
+from datetime import date
 from typing import Any
 
+import requests
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
@@ -22,11 +24,100 @@ from langchain_core.runnables import RunnableSerializable
 load_dotenv()
 
 
+# ============ Real weather provider (Open-Meteo) ============
+# Open-Meteo is a free, no-API-key weather service. We geocode the city name,
+# then fetch current conditions / a daily forecast for those coordinates.
+
+GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+_HTTP_TIMEOUT = 10  # seconds
+_MAX_FORECAST_DAYS = 16  # Open-Meteo daily forecast horizon
+
+# WMO weather interpretation codes -> human-readable description.
+WMO_CODES = {
+    0: "clear sky",
+    1: "mainly clear",
+    2: "partly cloudy",
+    3: "overcast",
+    45: "fog",
+    48: "depositing rime fog",
+    51: "light drizzle",
+    53: "moderate drizzle",
+    55: "dense drizzle",
+    56: "light freezing drizzle",
+    57: "dense freezing drizzle",
+    61: "slight rain",
+    63: "moderate rain",
+    65: "heavy rain",
+    66: "light freezing rain",
+    67: "heavy freezing rain",
+    71: "slight snow",
+    73: "moderate snow",
+    75: "heavy snow",
+    77: "snow grains",
+    80: "slight rain showers",
+    81: "moderate rain showers",
+    82: "violent rain showers",
+    85: "slight snow showers",
+    86: "heavy snow showers",
+    95: "thunderstorm",
+    96: "thunderstorm with slight hail",
+    99: "thunderstorm with heavy hail",
+}
+
+
+def _c_to_f(celsius: float) -> int:
+    return round(celsius * 9 / 5 + 32)
+
+
+def _describe_code(code: Any) -> str:
+    try:
+        return WMO_CODES.get(int(code), "unknown conditions")
+    except (TypeError, ValueError):
+        return "unknown conditions"
+
+
+# 16-point compass, 22.5° per sector starting at north.
+_COMPASS = (
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+)
+
+
+def _describe_direction(degrees: Any) -> str | None:
+    """Convert a wind bearing in degrees to a compass point, or None if unusable."""
+    try:
+        return _COMPASS[round(float(degrees) / 22.5) % 16]
+    except (TypeError, ValueError):
+        return None
+
+
+def _geocode(city: str) -> tuple[float, float, str] | None:
+    """Resolve a city name to (latitude, longitude, label), or None if unknown."""
+    resp = requests.get(
+        GEOCODE_URL,
+        params={"name": city, "count": 1, "language": "en", "format": "json"},
+        timeout=_HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    results = (resp.json() or {}).get("results") or []
+    if not results:
+        return None
+    top = results[0]
+    label = ", ".join(
+        part for part in (top.get("name"), top.get("admin1"), top.get("country")) if part
+    )
+    return top["latitude"], top["longitude"], label or city
+
+
 # ============ Tools ============
 
 @tool
 def get_weather(city: str) -> str:
-    """Get the current weather for a city.
+    """Get the current, real weather conditions for a city.
+
+    Uses the Open-Meteo API (no key required). Unknown or misspelled cities are
+    reported as not found rather than returning fabricated conditions.
 
     Args:
         city: The name of the city to get weather for (e.g., "New York", "London", "Tokyo")
@@ -34,26 +125,70 @@ def get_weather(city: str) -> str:
     Returns:
         A string describing the current weather conditions
     """
-    # Fake weather data for demo purposes
-    # In production, this would call a real weather API
-    weather_data = {
-        "new york": "sunny, 72°F (22°C)",
-        "london": "cloudy, 59°F (15°C)",
-        "tokyo": "rainy, 68°F (20°C)",
-        "paris": "partly cloudy, 64°F (18°C)",
-        "sydney": "clear, 77°F (25°C)",
-    }
+    try:
+        geo = _geocode(city)
+    except requests.RequestException as exc:
+        return f"Sorry, I couldn't reach the weather service for {city} ({exc})."
+    if geo is None:
+        return (
+            f"I couldn't find a place called '{city}'. "
+            "Please check the spelling or try a nearby city."
+        )
 
-    city_lower = city.lower()
-    if city_lower in weather_data:
-        return f"The weather in {city} is currently {weather_data[city_lower]}."
+    lat, lon, label = geo
+    try:
+        resp = requests.get(
+            FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": (
+                    "temperature_2m,weather_code,wind_speed_10m,"
+                    "relative_humidity_2m,wind_direction_10m"
+                ),
+                "timezone": "auto",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        current = (resp.json() or {}).get("current") or {}
+    except requests.RequestException as exc:
+        return f"Sorry, I couldn't reach the weather service for {label} ({exc})."
+
+    temp_c = current.get("temperature_2m")
+    if temp_c is None:
+        return f"Weather data for {label} is currently unavailable."
+
+    desc = _describe_code(current.get("weather_code"))
+
+    # Only report fields the API actually returned - never substitute defaults.
+    wind = current.get("wind_speed_10m")
+    direction = _describe_direction(current.get("wind_direction_10m"))
+    if wind is None:
+        wind_str = ""
+    elif direction is None:
+        wind_str = f", wind {wind} km/h"
     else:
-        return f"The weather in {city} is currently mild, around 65°F (18°C) with clear skies."
+        wind_str = f", wind {wind} km/h from the {direction}"
+
+    humidity = current.get("relative_humidity_2m")
+    humidity_str = f", humidity {humidity}%" if humidity is not None else ""
+
+    observed = current.get("time")
+    observed_str = f" (observed {observed})" if observed else ""
+
+    return (
+        f"The weather in {label} is currently {desc}, "
+        f"{temp_c}°C ({_c_to_f(temp_c)}°F){wind_str}{humidity_str}{observed_str}."
+    )
 
 
 @tool
 def get_forecast(city: str, days: int = 3) -> str:
-    """Get the weather forecast for a city for the next few days.
+    """Get the real multi-day weather forecast for a city.
+
+    Uses the Open-Meteo API (no key required) and honors the requested number of
+    days (clamped to Open-Meteo's 1–16 day range).
 
     Args:
         city: The name of the city
@@ -62,7 +197,59 @@ def get_forecast(city: str, days: int = 3) -> str:
     Returns:
         A string with the weather forecast
     """
-    return f"Weather forecast for {city} over the next {days} days: Day 1 - Sunny, Day 2 - Partly cloudy, Day 3 - Clear skies."
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 3
+    days = max(1, min(days, _MAX_FORECAST_DAYS))
+
+    try:
+        geo = _geocode(city)
+    except requests.RequestException as exc:
+        return f"Sorry, I couldn't reach the weather service for {city} ({exc})."
+    if geo is None:
+        return (
+            f"I couldn't find a place called '{city}'. "
+            "Please check the spelling or try a nearby city."
+        )
+
+    lat, lon, label = geo
+    try:
+        resp = requests.get(
+            FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "forecast_days": days,
+                "timezone": "auto",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        daily = (resp.json() or {}).get("daily") or {}
+    except requests.RequestException as exc:
+        return f"Sorry, I couldn't reach the weather service for {label} ({exc})."
+
+    dates = daily.get("time") or []
+    if not dates:
+        return f"Forecast data for {label} is currently unavailable."
+
+    codes = daily.get("weather_code") or []
+    highs = daily.get("temperature_2m_max") or []
+    lows = daily.get("temperature_2m_min") or []
+
+    lines = []
+    for i, date in enumerate(dates[:days]):
+        desc = _describe_code(codes[i] if i < len(codes) else None)
+        hi = highs[i] if i < len(highs) else "?"
+        lo = lows[i] if i < len(lows) else "?"
+        lines.append(f"{date}: {desc}, high {hi}°C, low {lo}°C")
+
+    return (
+        f"Weather forecast for {label} over the next {len(lines)} day(s):\n"
+        + "\n".join(lines)
+    )
 
 
 # ============ Tool Execution ============
@@ -115,6 +302,28 @@ def _get_llm(model: str, temperature: float):
     return _LLM_CACHE[key]
 
 
+# ============ System Prompt ============
+
+def _system_prompt() -> str:
+    """Build the system prompt, grounding the model in today's date."""
+    return f"""You are a weather assistant. Today's date is {date.today().isoformat()}.
+
+You have access to these tools:
+- get_weather: Get current weather for a city
+- get_forecast: Get weather forecast for a city
+
+Always call a tool to answer a weather question. Then report ONLY what that
+tool returned:
+- Never invent, estimate, or add a value the tool did not return. If the tool
+  gives no humidity, wind, or observation time, omit those - do not guess.
+- Report conditions exactly as worded. If the tool says "fog", say "fog"; never
+  substitute a nicer description such as "sunny".
+- Keep forecast dates exactly as returned. Never relabel them "Day 1/2/3".
+- Converting °C to °F is fine. Inventing any other value is not.
+- If a tool reports an error or an unknown city, relay that plainly. Never
+  answer from memory instead."""
+
+
 # ============ Agent Chain ============
 
 class WeatherAgentChain(RunnableSerializable[dict, dict]):
@@ -142,11 +351,7 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
     def _run_agent_loop(self, user_input: str, is_async: bool = False) -> str:
         """Run the agent loop and return the response content."""
         messages = [
-            ("system", """You are a helpful weather assistant. You have access to these tools:
-- get_weather: Get current weather for a city
-- get_forecast: Get weather forecast for a city
-
-Always use the tools to get accurate weather information. Be friendly and helpful."""),
+            ("system", _system_prompt()),
             ("human", user_input),
         ]
 
@@ -169,11 +374,7 @@ Always use the tools to get accurate weather information. Be friendly and helpfu
     async def _arun_agent_loop(self, user_input: str) -> str:
         """Async run the agent loop and return the response content."""
         messages = [
-            ("system", """You are a helpful weather assistant. You have access to these tools:
-- get_weather: Get current weather for a city
-- get_forecast: Get weather forecast for a city
-
-Always use the tools to get accurate weather information. Be friendly and helpful."""),
+            ("system", _system_prompt()),
             ("human", user_input),
         ]
 

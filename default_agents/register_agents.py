@@ -5,8 +5,13 @@ registers every enabled agent with the backend. Idempotent: re-running treats
 "already registered" as success.
 
 Environment:
-  BACKEND_URL   Base URL of the backend (default: http://backend:8000)
-  API_PREFIX    API prefix (default: /api/v1)
+  BACKEND_URL             Base URL of the backend (default: http://backend:8000)
+  API_PREFIX              API prefix (default: /api/v1)
+  AGENT_REGISTRAR_TOKEN   Shared service token sent as the X-Service-Token header
+                          so this one-shot registrar can call the protected
+                          /agent/registerAgent endpoint. Must match the backend's
+                          DEFAULT_AGENT_REGISTRAR_TOKEN. Without it every request
+                          is rejected with HTTP 401.
 """
 
 from __future__ import annotations
@@ -22,6 +27,11 @@ import yaml
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000").rstrip("/")
 API_PREFIX = os.getenv("API_PREFIX", "/api/v1")
 MANIFEST_PATH = Path(os.getenv("AGENTS_MANIFEST", "/app/agents.yaml"))
+
+# Service token that authenticates this registrar to the protected backend
+# endpoint. Sent as the X-Service-Token header; must match the backend's
+# DEFAULT_AGENT_REGISTRAR_TOKEN.
+REGISTRAR_TOKEN = os.getenv("AGENT_REGISTRAR_TOKEN", "").strip()
 
 # Readiness polling
 BACKEND_TIMEOUT_S = int(os.getenv("BACKEND_TIMEOUT_S", "180"))
@@ -82,8 +92,11 @@ def wait_for_agent(agent_url: str) -> bool:
 
 def register(agent_url: str) -> bool:
     endpoint = f"{BACKEND_URL}{API_PREFIX}/agent/registerAgent"
+    headers = {"X-Service-Token": REGISTRAR_TOKEN} if REGISTRAR_TOKEN else {}
     try:
-        resp = requests.post(endpoint, json={"agent_url": agent_url}, timeout=30)
+        resp = requests.post(
+            endpoint, json={"agent_url": agent_url}, headers=headers, timeout=30
+        )
     except requests.RequestException as exc:
         _log(f"registration request failed for {agent_url}: {exc}")
         return False
@@ -97,6 +110,14 @@ def register(agent_url: str) -> bool:
         _log(f"already registered {agent_url} (ok)")
         return True
 
+    if resp.status_code == 401:
+        _log(
+            f"failed to register {agent_url}: HTTP 401 (unauthorized). "
+            "Set AGENT_REGISTRAR_TOKEN for the registrar to match the backend's "
+            "DEFAULT_AGENT_REGISTRAR_TOKEN."
+        )
+        return False
+
     _log(f"failed to register {agent_url}: HTTP {resp.status_code} - {resp.text[:300]}")
     return False
 
@@ -106,6 +127,12 @@ def main() -> int:
     if not agents:
         _log("no enabled agents in manifest; nothing to do")
         return 0
+
+    if not REGISTRAR_TOKEN:
+        _log(
+            "WARNING: AGENT_REGISTRAR_TOKEN is not set; the backend will reject "
+            "registration with HTTP 401. Set it to match DEFAULT_AGENT_REGISTRAR_TOKEN."
+        )
 
     if not wait_for_backend():
         return 1

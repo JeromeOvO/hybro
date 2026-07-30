@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -12,36 +11,45 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
+# Resolve config.json relative to this file so it is found regardless of the
+# process working directory.
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
+
 
 class StoryAgent:
     """story Agent."""
 
     def __init__(self):
-        """Initialize the story dialogue model"""
-        try:
-            with open('config.json') as f:
-                config = json.load(f)
-            if not os.getenv(config['api_key']):
-                print(f'{config["api_key"]} environment variable not set.')
-                sys.exit(1)
-            api_key = os.getenv(config['api_key'])
+        """Construct the agent WITHOUT validating credentials."""
+        
+        self._model: ChatOpenAI | None = None
 
-            self.model = ChatOpenAI(
-                model=config['model_name'] or 'gpt-4o',
-                base_url=config['base_url'] or None,
-                api_key=api_key,  # type: ignore
-                temperature=0.7,  # Control the generation randomness (0-2, higher values indicate greater randomness)
-            )
-        except FileNotFoundError:
-            print('Error: The configuration file config.json cannot be found.')
-            sys.exit()
-        except KeyError as e:
-            print(f'The configuration file is missing required fields: {e}')
-            sys.exit()
+    def _ensure_model(self) -> ChatOpenAI:
+        """Build (once) and return the chat model, validating config lazily."""
+        if self._model is not None:
+            return self._model
+
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+
+        api_key_var = config.get('api_key') or 'OPENAI_API_KEY'
+        api_key = os.getenv(api_key_var)
+        if not api_key:
+            raise RuntimeError(f'{api_key_var} environment variable not set.')
+
+        self._model = ChatOpenAI(
+            model=config.get('model_name') or 'gpt-4o',
+            base_url=config.get('base_url') or None,
+            api_key=api_key,  
+            temperature=0.9, 
+        )
+        return self._model
 
     async def stream(self, query: str) -> AsyncGenerator[dict[str, Any], None]:
         """Stream the response of the large model back to the client."""
         try:
+            model = self._ensure_model()
+
             # Initialize the conversation history (system messages can be added)
             messages = [
                 SystemMessage(
@@ -80,14 +88,14 @@ class StoryAgent:
             messages.append(HumanMessage(content=query))
 
             # Invoke the model in streaming mode to generate a response.
-            async for chunk in self.model.astream(messages):
+            async for chunk in model.astream(messages):
                 # Return the text content block.
                 if hasattr(chunk, 'content') and chunk.content:
                     yield {'content': chunk.content, 'done': False}
             yield {'content': '', 'done': True}
 
         except Exception as e:
-            print(f'error：{e!s}')
+            print(f'error: {e!s}')
             yield {
                 'content': 'Sorry, an error occurred while processing your request.',
                 'done': True,
