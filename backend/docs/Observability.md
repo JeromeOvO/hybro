@@ -45,10 +45,16 @@ execution events are:
 - `supervisor_run_started`
 - `supervisor_planner_completed`
 - `agent_call_completed`
+- `a2a_call_completed`
 - `llm_call_completed`
 - `supervisor_run_completed`
 - `delivery_completed`
 - `http_request_completed`
+
+`agent_call_completed` is owned by Supervisor dispatch and represents the
+logical agent operation. `a2a_call_completed` is owned by the A2A client facade
+and represents one transport-level request. Keeping these events distinct
+prevents a single dispatch from being counted twice.
 
 ## Privacy and Bounds
 

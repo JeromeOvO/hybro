@@ -425,7 +425,7 @@ def _log_a2a_completed(
         fields["error_type"] = error_type or "A2AResponseError"
         fields["error_code"] = error_code
     log_method = logger.error if outcome == "error" else logger.info
-    log_method("agent_call_completed", extra=fields)
+    log_method("a2a_call_completed", extra=fields)
 
 
 __all__ = [

@@ -140,7 +140,7 @@ async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
     record = next(
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     )
     assert record.agent == "agent-123"
     assert record.operation == "hitl_reply"
@@ -454,7 +454,7 @@ async def test_send_validation_failure_logs_safe_completion(caplog):
     record = next(
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     )
     assert record.operation == "message_send"
     assert record.outcome == "error"
@@ -494,7 +494,7 @@ async def test_send_normalization_failure_logs_safe_completion(monkeypatch, capl
     record = next(
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     )
     assert record.operation == "message_send"
     assert record.outcome == "error"
@@ -536,7 +536,7 @@ async def test_stream_early_close_logs_cancelled_completion(monkeypatch, caplog)
     records = [
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     ]
     assert len(records) == 1
     assert records[0].operation == "message_stream"
@@ -590,7 +590,7 @@ async def test_stream_task_cancellation_logs_cancelled_completion(
     records = [
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     ]
     assert len(records) == 1
     assert records[0].operation == "message_stream"
@@ -644,7 +644,7 @@ async def test_send_and_stream_jsonrpc_errors_are_logged_as_safe_failures(
     records = [
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     ]
     formatter = StructuredFormatter(
         output_format="json",
@@ -714,7 +714,7 @@ async def test_cancel_remote_task_logs_transport_failures(monkeypatch, caplog):
     record = next(
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     )
     assert record.agent == "Agent"
     assert record.error_type == "TimeoutError"
@@ -754,7 +754,7 @@ async def test_cancel_remote_task_logs_task_cancellation(monkeypatch, caplog):
     records = [
         record
         for record in caplog.records
-        if record.getMessage() == "agent_call_completed"
+        if record.getMessage() == "a2a_call_completed"
     ]
     assert len(records) == 1
     assert records[0].agent == "Agent"
