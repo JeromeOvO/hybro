@@ -523,10 +523,11 @@ class DeliveryFacade:
         agent_id: str | None = None,
     ) -> None:
         delivery_key = (room_id, message_id)
-        if delivery_key in self._terminal_delivery_logged:
-            self._delivery_started_at.pop(delivery_key, None)
-            return
-        self._terminal_delivery_logged[delivery_key] = True
+        if outcome != "delivery_failed":
+            if delivery_key in self._terminal_delivery_logged:
+                self._delivery_started_at.pop(delivery_key, None)
+                return
+            self._terminal_delivery_logged[delivery_key] = True
         started_at = self._delivery_started_at.pop(
             delivery_key,
             time.perf_counter(),

@@ -234,6 +234,28 @@ async def test_terminal_delivery_log_reports_failed_handoff(caplog):
 
 
 @pytest.mark.asyncio
+async def test_successful_retry_after_failed_handoff_logs_success(caplog):
+    publisher = FakeEventPublisher()
+    publisher.emit = AsyncMock(side_effect=[False, True])
+    facade = _bind(event_publisher=publisher)
+    caplog.set_level(logging.INFO, logger="delivery.facade")
+
+    await facade.send_task_update("room-1", "msg-retry", "completed")
+    await facade.send_task_update("room-1", "msg-retry", "completed")
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "delivery_completed"
+    ]
+    assert [record.outcome for record in records] == [
+        "delivery_failed",
+        "completed",
+    ]
+    assert ("room-1", "msg-retry") in facade._terminal_delivery_logged
+
+
+@pytest.mark.asyncio
 async def test_cancellation_helpers_delegate_to_transport():
     facade = _bind()
 
