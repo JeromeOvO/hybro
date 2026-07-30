@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.errors import TransientError
+from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.types import RoomSubscriptionLimitExceeded
@@ -179,7 +180,100 @@ async def test_publish_and_handle_cancellation_use_configured_channel():
     assert envelope["kind"] == "cancellation"
     assert envelope["origin"] == "worker-1"
     assert envelope["message_id"] == "msg-1"
+    assert envelope["trace_id"] is None
     assert cancelled == ["msg-2"]
+
+
+@pytest.mark.asyncio
+async def test_cross_instance_callbacks_replace_ambient_trace_context():
+    bus = make_bus(redis=FakeRedisPubSub())
+    observed: list[tuple[str, str | None]] = []
+
+    async def cancellation_callback(message_id: str) -> None:
+        observed.append((message_id, get_current_trace_id()))
+
+    async def internal_callback(envelope: dict) -> None:
+        observed.append((envelope["event_type"], get_current_trace_id()))
+
+    bus.set_cancellation_callback(cancellation_callback)
+    bus.set_internal_callback(internal_callback)
+
+    with trace_id_context("ambient-trace"):
+        await bus.handle_cancellation_message(
+            json.dumps(
+                {
+                    "kind": "cancellation",
+                    "origin": "worker-2",
+                    "message_id": "msg-1",
+                }
+            )
+        )
+        await bus.handle_internal_message(
+            json.dumps(
+                {
+                    "kind": "internal_event",
+                    "origin": "worker-2",
+                    "event_type": "event_without_trace",
+                }
+            )
+        )
+        assert get_current_trace_id() == "ambient-trace"
+
+    assert observed == [
+        ("msg-1", None),
+        ("event_without_trace", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_envelope_propagates_trace_context():
+    redis = FakeRedisPubSub()
+    bus = make_bus(redis=redis)
+    observed: list[str | None] = []
+    bus.set_cancellation_callback(
+        lambda _message_id: observed.append(get_current_trace_id())
+    )
+
+    with trace_id_context("trace-123"):
+        await bus.publish_cancellation("msg-1")
+
+    _, envelope = decode_publish(redis)
+    await bus.handle_cancellation_message(
+        json.dumps(
+            {
+                **envelope,
+                "origin": "worker-2",
+            }
+        )
+    )
+
+    assert envelope["trace_id"] == "trace-123"
+    assert observed == ["trace-123"]
+
+
+@pytest.mark.asyncio
+async def test_cross_instance_callbacks_reject_malformed_trace_context():
+    bus = make_bus(redis=FakeRedisPubSub())
+    observed: list[str | None] = []
+    bus.set_cancellation_callback(
+        lambda _message_id: observed.append(get_current_trace_id())
+    )
+
+    with trace_id_context("ambient-trace"):
+        for trace_id in ({"PRIVATE_TRACE": "payload"}, "x" * 129):
+            await bus.handle_cancellation_message(
+                json.dumps(
+                    {
+                        "kind": "cancellation",
+                        "origin": "worker-2",
+                        "message_id": "msg-1",
+                        "trace_id": trace_id,
+                    }
+                )
+            )
+        assert get_current_trace_id() == "ambient-trace"
+
+    assert observed == [None, None]
 
 
 @pytest.mark.asyncio

@@ -387,15 +387,24 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
     cleaned: list[dict] = []
     for p in parts:
         if not isinstance(p, dict):
-            logger.warning("Dropping non-dict artifact part: %r", p)
+            logger.warning(
+                "invalid_artifact_part_dropped",
+                extra={"part_type": type(p).__name__, "reason": "not_mapping"},
+            )
             continue
         root = p.get("root", p)
         if not isinstance(root, dict):
-            logger.warning("Dropping artifact part with non-dict root: %r", p)
+            logger.warning(
+                "invalid_artifact_part_dropped",
+                extra={"part_type": type(root).__name__, "reason": "root_not_mapping"},
+            )
             continue
         normalized_root = _normalize_part_root(root)
         if normalized_root is None:
-            logger.debug("Dropping unrecognizable artifact part: %r", p)
+            logger.debug(
+                "invalid_artifact_part_dropped",
+                extra={"reason": "unrecognized_shape"},
+            )
             continue
         if "root" in p and p.get("root") is root:
             cleaned.append({**p, "root": normalized_root})

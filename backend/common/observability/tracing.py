@@ -4,10 +4,7 @@ from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager, nullcontext
 from typing import Any, ContextManager, Protocol, runtime_checkable
 
-_trace_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "hybro_trace_id",
-    default=None,
-)
+from common.observability.logging import bind_log_context, get_log_context
 
 
 @runtime_checkable
@@ -38,16 +35,13 @@ def traced_create_task(
 
 
 def get_current_trace_id() -> str | None:
-    return _trace_id.get()
+    return get_log_context().get("trace_id")
 
 
 @contextmanager
 def trace_id_context(trace_id: str | None) -> Iterator[None]:
-    token = _trace_id.set(trace_id)
-    try:
+    with bind_log_context(trace_id=trace_id):
         yield
-    finally:
-        _trace_id.reset(token)
 
 
 __all__ = [

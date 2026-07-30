@@ -26,6 +26,7 @@ from common.a2a_constants import (
     is_terminal_state,
 )
 from common.config import settings
+from common.observability import safe_exception_metadata, traced_create_task
 from common.types import Task
 from common.utils.a2a_helpers import (
     artifacts_to_dicts,
@@ -264,7 +265,7 @@ class StaleTaskChecker:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = traced_create_task(self._run_loop(), name="stale-task-checker")
         logger.info(
             f"Stale task checker started (interval: {self.check_interval_minutes}min)"
         )
@@ -285,8 +286,11 @@ class StaleTaskChecker:
         while self._running:
             try:
                 await self._run_one_iteration()
-            except Exception as e:
-                logger.error(f"Error in stale task checker: {e}", exc_info=True)
+            except Exception as exc:
+                logger.error(
+                    "stale_task_checker_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
 
             # Wait for next check
             await asyncio.sleep(self.check_interval_minutes * 60)
@@ -318,7 +322,11 @@ class StaleTaskChecker:
         stale_messages = await self._store.get_stale_task_messages(
             self.stale_check_minutes, non_terminal_state_values
         )
-        logger.info(f"Found {len(stale_messages)} stale tasks to check")
+        stale_log = logger.info if stale_messages else logger.debug
+        stale_log(
+            "stale_task_scan_completed",
+            extra={"result_count": len(stale_messages)},
+        )
 
         for msg in stale_messages:
             await self._process_stale_task(msg)
@@ -327,7 +335,11 @@ class StaleTaskChecker:
         expired_messages = await self._store.get_expired_task_messages(
             self.task_expiry_hours, non_terminal_state_values
         )
-        logger.info(f"Found {len(expired_messages)} expired tasks to auto-fail")
+        expired_log = logger.info if expired_messages else logger.debug
+        expired_log(
+            "expired_task_scan_completed",
+            extra={"result_count": len(expired_messages)},
+        )
 
         for msg in expired_messages:
             await self._auto_fail_expired_task(msg)
@@ -359,10 +371,13 @@ class StaleTaskChecker:
         for msg in non_tracked_stale:
             try:
                 await self._auto_fail_non_tracked_task(msg)
-            except Exception as e:
+            except Exception as exc:
                 logger.error(
-                    f"Failed to auto-fail non-tracked task {msg.message_id}: {e}",
-                    exc_info=True,
+                    "non_tracked_task_auto_fail_failed",
+                    extra={
+                        "message_id": msg.message_id,
+                        **safe_exception_metadata(exc),
+                    },
                 )
 
         # 6. Recover supervisor trajectories stuck in "running" status.
@@ -663,8 +678,14 @@ class StaleTaskChecker:
                     f"Task for message {message_id} still in state: {new_state}"
                 )
 
-        except Exception as e:
-            logger.warning(f"Failed to poll stale task for message {message_id}: {e}")
+        except Exception as exc:
+            logger.warning(
+                "stale_task_poll_failed",
+                extra={
+                    "message_id": message_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
             # Don't fail the task yet - might be transient network issue
             # Touch timestamp to prevent immediate re-check
             await self._store.touch_task_message(message_id)
@@ -673,8 +694,11 @@ class StaleTaskChecker:
         """Get task status from agent."""
         try:
             return await fetch_remote_task(agent_card, task_id)
-        except Exception as e:
-            logger.error(f"Failed to get task from agent: {e}")
+        except Exception as exc:
+            logger.error(
+                "remote_task_fetch_failed",
+                extra={"error_type": type(exc).__name__},
+            )
             return None
 
     HITL_EXPIRY_HOURS = 24
@@ -933,9 +957,14 @@ class StaleTaskChecker:
                 )
                 task.add_done_callback(lambda _task: self._recovery_semaphore.release())
 
-            except Exception as e:
+            except Exception as exc:
                 logger.error(
-                    f"Failed to trigger recovery for user message {user_message_id}: {e}"
+                    "orphan_recovery_schedule_failed",
+                    extra={
+                        "room_id": room_id,
+                        "user_message_id": user_message_id,
+                        **safe_exception_metadata(exc),
+                    },
                 )
 
     async def _recover_stuck_supervisor_trajectories(self) -> None:

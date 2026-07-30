@@ -157,8 +157,11 @@ class InMemoryTaskManager(TaskManager):
                 task_notification_params.id,
                 task_notification_params.pushNotificationConfig,
             )
-        except Exception as e:
-            logger.error(f"Error while setting push notification info: {e}")
+        except Exception as exc:
+            logger.error(
+                "push_notification_config_update_failed",
+                extra={"error_type": type(exc).__name__},
+            )
             return JSONRPCResponse(
                 id=request.id,
                 error=InternalError(
@@ -178,8 +181,11 @@ class InMemoryTaskManager(TaskManager):
 
         try:
             notification_info = await self.get_push_notification_info(task_params.id)
-        except Exception as e:
-            logger.error(f"Error while getting push notification info: {e}")
+        except Exception as exc:
+            logger.error(
+                "push_notification_config_read_failed",
+                extra={"error_type": type(exc).__name__},
+            )
             return GetTaskPushNotificationResponse(
                 id=request.id,
                 error=InternalError(

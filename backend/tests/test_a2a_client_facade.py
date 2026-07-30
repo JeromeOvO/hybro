@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from types import SimpleNamespace
 
@@ -7,8 +8,10 @@ from a2a.types import (
     JSONRPCError,
     JSONRPCErrorResponse,
 )
+from pydantic import ValidationError
 
 from a2a_adapter import client_facade, remote_task
+from common.observability.logging import StructuredFormatter
 from common.types import AgentCard, Message, Task
 
 
@@ -62,6 +65,7 @@ class _TaskResult:
 @pytest.mark.asyncio
 async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
     monkeypatch,
+    caplog,
 ):
     captured = {}
 
@@ -112,9 +116,11 @@ async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
         "referenceTaskIds": ["parent-task"],
     }
 
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
     result = await client_facade.send_hitl_reply(
         "https://agent.example/a2a",
         message_data,
+        agent_id="agent-123",
         blocking=False,
         timeout=1,
     )
@@ -131,6 +137,13 @@ async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
         "error": None,
     }
     assert not isinstance(result["result"], Message)
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.agent == "agent-123"
+    assert record.operation == "hitl_reply"
 
 
 @pytest.mark.asyncio
@@ -167,7 +180,7 @@ async def test_send_hitl_reply_falls_back_to_docker_host_for_loopback_url(
         "parts": [{"kind": "text", "text": "approved"}],
     }
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         result = await client_facade.send_hitl_reply(
             "http://127.0.0.1:9060",
             message_data,
@@ -179,7 +192,7 @@ async def test_send_hitl_reply_falls_back_to_docker_host_for_loopback_url(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -254,7 +267,7 @@ async def test_fetch_agent_card_with_fallback_retries_host_gateway_for_loopback_
 
     monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         result = await client_facade.fetch_agent_card_with_fallback(
             "http://127.0.0.1:9060",
             timeout=1,
@@ -265,7 +278,7 @@ async def test_fetch_agent_card_with_fallback_retries_host_gateway_for_loopback_
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -396,7 +409,7 @@ async def test_send_message_falls_back_to_docker_host_for_loopback_card(
         "parts": [{"kind": "text", "text": "hello"}],
     }
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         result = await client_facade.send_message(card, message, timeout=1)
 
     assert result["kind"] == "task"
@@ -404,7 +417,7 @@ async def test_send_message_falls_back_to_docker_host_for_loopback_card(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 def test_normalize_response_returns_plain_error_dict():
@@ -420,6 +433,235 @@ def test_normalize_response_returns_plain_error_dict():
         "error": {"code": -32000, "message": "Agent offline", "data": None},
         "result": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_send_validation_failure_logs_safe_completion(caplog):
+    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
+
+    with pytest.raises(ValidationError):
+        await client_facade.send_message(
+            {},
+            {
+                "kind": "message",
+                "role": "user",
+                "messageId": "msg-1",
+                "parts": [{"kind": "text", "text": "hello"}],
+            },
+            timeout=1,
+        )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.operation == "message_send"
+    assert record.outcome == "error"
+    assert record.error_type
+
+
+@pytest.mark.asyncio
+async def test_send_normalization_failure_logs_safe_completion(monkeypatch, caplog):
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def send_message(self, request):
+            return SimpleNamespace(root=SimpleNamespace())
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
+
+    with pytest.raises(AttributeError):
+        await client_facade.send_message(
+            _sdk_card_data(),
+            {
+                "kind": "message",
+                "role": "user",
+                "messageId": "msg-1",
+                "parts": [{"kind": "text", "text": "hello"}],
+            },
+            timeout=1,
+        )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.operation == "message_send"
+    assert record.outcome == "error"
+    assert record.error_type == "AttributeError"
+
+
+@pytest.mark.asyncio
+async def test_stream_early_close_logs_cancelled_completion(monkeypatch, caplog):
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def send_message_streaming(self, request):
+            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
+            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+    stream = client_facade.stream_message(
+        _sdk_card_data(),
+        {
+            "kind": "message",
+            "role": "user",
+            "messageId": "msg-1",
+            "parts": [{"kind": "text", "text": "hello"}],
+        },
+        timeout=1,
+    )
+
+    assert (await anext(stream))["kind"] == "task"
+    await stream.aclose()
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].operation == "message_stream"
+    assert records[0].outcome == "cancelled"
+    assert records[0].error_type == "GeneratorExit"
+
+
+@pytest.mark.asyncio
+async def test_stream_task_cancellation_logs_cancelled_completion(
+    monkeypatch,
+    caplog,
+):
+    started = asyncio.Event()
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def send_message_streaming(self, request):
+            started.set()
+            await asyncio.Event().wait()
+            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+
+    async def consume() -> None:
+        async for _ in client_facade.stream_message(
+            _sdk_card_data(),
+            {
+                "kind": "message",
+                "role": "user",
+                "messageId": "msg-1",
+                "parts": [{"kind": "text", "text": "hello"}],
+            },
+            timeout=1,
+        ):
+            pass
+
+    task = asyncio.create_task(consume())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].operation == "message_stream"
+    assert records[0].outcome == "cancelled"
+    assert records[0].error_type == "CancelledError"
+
+
+@pytest.mark.asyncio
+async def test_send_and_stream_jsonrpc_errors_are_logged_as_safe_failures(
+    monkeypatch,
+    caplog,
+):
+    private_message = "PRIVATE_A2A_RESPONSE_SENTINEL"
+    response = SimpleNamespace(
+        root=JSONRPCErrorResponse(
+            id="req-1",
+            error=JSONRPCError(code=-32000, message=private_message),
+        )
+    )
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def send_message(self, request):
+            return response
+
+        async def send_message_streaming(self, request):
+            yield response
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    card = _sdk_card_data()
+    message = {
+        "kind": "message",
+        "role": "user",
+        "messageId": "msg-1",
+        "parts": [{"kind": "text", "text": "hello"}],
+    }
+    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
+
+    sent = await client_facade.send_message(card, message, timeout=1)
+    streamed = [
+        event async for event in client_facade.stream_message(card, message, timeout=1)
+    ]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    ]
+    formatter = StructuredFormatter(
+        output_format="json",
+        environment="test",
+        service_version="test",
+    )
+    assert sent["error"]["message"] == private_message
+    assert streamed == [sent]
+    assert len(records) == 2
+    assert {record.operation for record in records} == {
+        "message_send",
+        "message_stream",
+    }
+    assert all(record.outcome == "error" for record in records)
+    assert all(record.error_type == "A2AJSONRPCError" for record in records)
+    assert all(record.error_code == -32000 for record in records)
+    assert all(private_message not in formatter.format(record) for record in records)
 
 
 @pytest.mark.asyncio
@@ -461,7 +703,7 @@ async def test_cancel_remote_task_logs_transport_failures(monkeypatch, caplog):
             pass
 
         async def cancel_task(self, request):
-            raise TimeoutError("timed out")
+            raise TimeoutError("PRIVATE_A2A_EXCEPTION_SENTINEL")
 
     monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
     card = _sdk_card_data()
@@ -469,7 +711,56 @@ async def test_cancel_remote_task_logs_transport_failures(monkeypatch, caplog):
     caplog.set_level(logging.WARNING, logger=client_facade.__name__)
 
     assert await client_facade.cancel_remote_task(card, "task-1", timeout=1) is False
-    assert "Failed to cancel remote A2A task task-1" in caplog.text
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.agent == "Agent"
+    assert record.error_type == "TimeoutError"
+    assert len(record.error_fingerprint) == 16
+    assert "client_facade.py:" in record.error_stack
+    assert "PRIVATE_A2A_EXCEPTION_SENTINEL" not in record.error_stack
+
+
+@pytest.mark.asyncio
+async def test_cancel_remote_task_logs_task_cancellation(monkeypatch, caplog):
+    started = asyncio.Event()
+    monkeypatch.setattr(
+        client_facade.httpx,
+        "AsyncClient",
+        lambda *, timeout: _AsyncClientContext(),
+    )
+
+    class _A2AClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def cancel_task(self, request):
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+
+    task = asyncio.create_task(
+        client_facade.cancel_remote_task(_sdk_card_data(), "task-1", timeout=1)
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].agent == "Agent"
+    assert records[0].operation == "task_cancel"
+    assert records[0].outcome == "cancelled"
+    assert records[0].error_type == "CancelledError"
 
 
 @pytest.mark.asyncio
@@ -548,7 +839,7 @@ async def test_fetch_remote_task_falls_back_to_docker_host_for_loopback_card(
         skills=[{"id": "s", "name": "Skill"}],
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         task = await remote_task.fetch_remote_task(card, "task-1", timeout=1)
 
     assert isinstance(task, Task)
@@ -557,4 +848,4 @@ async def test_fetch_remote_task_falls_back_to_docker_host_for_loopback_card(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text

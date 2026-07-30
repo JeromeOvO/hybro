@@ -60,5 +60,35 @@ class TerminalStatusDeduplicator:
         self.cache[dedup_key] = normalized_status
         return True
 
+    async def release(
+        self,
+        *,
+        room_id: str,
+        message_id: str | None,
+        status: str,
+    ) -> None:
+        """Release a reservation when the claimed terminal event was not delivered."""
+
+        normalized_status = status.strip().lower()
+        if (
+            not message_id
+            or normalized_status not in self.config.terminal_processing_statuses
+        ):
+            return
+
+        dedup_key = f"{room_id}:{message_id}"
+        if self.cache.get(dedup_key) != normalized_status:
+            return
+        self.cache.pop(dedup_key, None)
+
+        if self.redis_kv is None:
+            return
+        redis_key = f"{self.config.redis_terminal_key_prefix}{dedup_key}"
+        try:
+            if await self.redis_kv.get(redis_key) == normalized_status:
+                await self.redis_kv.delete(redis_key)
+        except Exception:
+            return
+
 
 __all__ = ["TerminalStatusDeduplicator"]

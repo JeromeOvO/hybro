@@ -19,6 +19,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TypeVar
 
+from common.observability.tracing import traced_create_task
+
 T = TypeVar("T")
 
 
@@ -102,7 +104,10 @@ class CancellationToken:
         CancellationError
             If the token is signalled before *coro* completes.
         """
-        cancel_task = asyncio.create_task(self._event.wait())
+        cancel_task = traced_create_task(
+            self._event.wait(),
+            name="cancellation-token-wait",
+        )
         work_task = asyncio.ensure_future(coro)
 
         try:

@@ -12,7 +12,7 @@ from common.dto import (
     RoomMemoryInfo,
     UserMemory,
 )
-from common.observability import NoopTracingProvider
+from common.observability import NoopTracingProvider, traced_create_task
 from common.protocols import (
     ContentStorageRepository,
     LLMGateway,
@@ -500,7 +500,7 @@ class ContextMemoryFacade:
 
 
 def _background_task(coro: Awaitable[Any]) -> None:
-    task = asyncio.create_task(coro)
+    task = traced_create_task(coro, name="context-memory-background-task")
     task.add_done_callback(_log_background_task_exception)
 
 

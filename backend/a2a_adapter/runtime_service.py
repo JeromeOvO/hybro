@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -134,9 +135,15 @@ class A2AService:
                 )
             )
 
-        except Exception as e:
-            logger.error(f"Failed to get agent card from url: {e}", exc_info=True)
-            raise A2AServiceError() from e
+        except Exception as exc:
+            logger.error(
+                "agent_card_fetch_failed",
+                extra={
+                    "agent_url": agent_url,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise A2AServiceError() from exc
 
     def has_streaming_capability(self, agent_card: AgentCard) -> bool:
         """
@@ -370,7 +377,14 @@ class A2AService:
         """
         success = False
         try:
-            logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
+            logger.debug(
+                "a2a_sync_send_started",
+                extra={
+                    "agent": agent_card.name,
+                    "agent_url": agent_card.url,
+                    "operation": "message_send",
+                },
+            )
             response = await adapter_send_message(
                 agent_card,
                 message,
@@ -385,16 +399,31 @@ class A2AService:
                     if isinstance(error_payload, dict)
                     else str(error_payload)
                 )
-                logger.error(f"a2a_service: Agent error: {error_msg}")
+                logger.error(
+                    "a2a_sync_send_rejected",
+                    extra={
+                        "agent": agent_card.name,
+                        "operation": "message_send",
+                        "outcome": "error",
+                    },
+                )
                 raise A2AServiceError(error_msg)
             success = True
             return response
 
         except A2AServiceError:
             raise
-        except Exception as e:
-            logger.error(f"Failed to send sync message: {e}", exc_info=True)
-            raise A2AServiceError(str(e)) from e
+        except Exception as exc:
+            logger.error(
+                "a2a_sync_send_failed",
+                extra={
+                    "agent": agent_card.name,
+                    "operation": "message_send",
+                    "outcome": "error",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise A2AServiceError(str(exc)) from exc
         finally:
             await self._record_call(agent_id, success=success)
 
@@ -424,15 +453,25 @@ class A2AService:
         """
         success = False
         try:
-            logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
-            async for response in adapter_stream_message(
-                agent_card,
-                message,
-                accepted_output_modes=self._resolve_accepted_modes(agent_card),
-                timeout=self._default_request_timeout,
-            ):
-                success = response.get("kind") != "error"
-                yield response
+            logger.debug(
+                "a2a_stream_started",
+                extra={
+                    "agent": agent_card.name,
+                    "agent_url": agent_card.url,
+                    "operation": "message_stream",
+                },
+            )
+            async with aclosing(
+                adapter_stream_message(
+                    agent_card,
+                    message,
+                    accepted_output_modes=self._resolve_accepted_modes(agent_card),
+                    timeout=self._default_request_timeout,
+                )
+            ) as response_stream:
+                async for response in response_stream:
+                    success = response.get("kind") != "error"
+                    yield response
         finally:
             await self._record_call(agent_id, success=success)
 
@@ -461,15 +500,24 @@ class A2AService:
         """
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
-            logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
-            async for event in self.send_message_streaming(
-                agent_card, message, agent_id=agent_id
-            ):
-                yield event
+            logger.debug(
+                "a2a_streaming_transport_selected",
+                extra={"agent_url": agent_card.url},
+            )
+            async with aclosing(
+                self.send_message_streaming(
+                    agent_card,
+                    message,
+                    agent_id=agent_id,
+                )
+            ) as event_stream:
+                async for event in event_stream:
+                    yield event
 
         else:
             logger.debug(
-                f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
+                "a2a_sync_transport_selected",
+                extra={"agent_url": agent_card.url},
             )
             try:
                 event = await self.send_message_sync(
@@ -503,7 +551,10 @@ class A2AService:
             return inspection_center_response
 
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+            logger.error(
+                "a2a_inspection_send_failed",
+                extra={"error_type": type(e).__name__},
+            )
             return InsepectionCenterConnectionValidationResponse(
                 agent_url=aegnt_card.url,
                 agent_card=aegnt_card,
@@ -537,9 +588,17 @@ class A2AService:
         if response.get("kind") == "error":
             raise A2AServiceError()
 
-        logger.info(f"process_a2a_response: response: {response}")
         response_data = self._facade_result_to_model(response)
-        logger.info(f"process_a2a_response: response_data: {response_data}")
+        logger.debug(
+            "a2a_response_parsed",
+            extra={
+                "response_kind": response.get("kind"),
+                "result_type": (
+                    type(response_data).__name__ if response_data is not None else None
+                ),
+                "outcome": "success" if response_data is not None else "empty",
+            },
+        )
         return response_data
 
     async def cancel_remote_task(

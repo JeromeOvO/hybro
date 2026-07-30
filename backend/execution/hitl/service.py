@@ -20,6 +20,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from common.dto import HITLRequestEvent, HITLResolvedEvent
+from common.observability import traced_create_task
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.hitl.exceptions import (
@@ -938,7 +939,10 @@ class HITLService:
                     await self._handle_supervisor_response(request, user_input)
 
         async def _route_with_heartbeat() -> bool:
-            heartbeat_task = asyncio.create_task(_lease_heartbeat())
+            heartbeat_task = traced_create_task(
+                _lease_heartbeat(),
+                name=f"hitl-lease-heartbeat-{request_id}",
+            )
             try:
                 await _route_current_response()
             except ContinuationLostError as exc:

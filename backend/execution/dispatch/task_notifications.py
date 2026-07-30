@@ -233,18 +233,19 @@ async def _notify_task_update_impl(
                 f"art[{i}]={len(a.parts) if a.parts else 0}p,kinds=[{_summarize_kinds(a.parts)}]"
                 for i, a in enumerate(task.artifacts)
             )
-        logger.info(
-            "notify_task_update: DB task for %s: id=%s, db_state=%s, "
-            "artifacts=%d (%s), has_message_text=%s",
-            message_id,
-            task.id[:30] if task.id else "None",
-            _task_state,
-            _art_count,
-            _parts_detail or "none",
-            bool(
-                room_agent_message.message_content
-                and room_agent_message.message_content.message_text
-            ),
+        logger.debug(
+            "task_artifact_shape_observed",
+            extra={
+                "message_id": message_id,
+                "task_id": task.id[:30] if task.id else None,
+                "task_state": _task_state,
+                "artifact_count": _art_count,
+                "artifact_shape": _parts_detail or "none",
+                "has_message_text": bool(
+                    room_agent_message.message_content
+                    and room_agent_message.message_content.message_text
+                ),
+            },
         )
     else:
         logger.warning(
@@ -271,19 +272,24 @@ async def _notify_task_update_impl(
                 parts = extracted.file_parts + extracted.data_parts
             if not content:
                 for i, artifact in enumerate(task.artifacts):
-                    logger.warning(
-                        "Artifact %d: parts=%d",
-                        i,
-                        len(artifact.parts) if artifact.parts else 0,
+                    logger.debug(
+                        "empty_artifact_observed",
+                        extra={
+                            "artifact_index": i,
+                            "part_count": (
+                                len(artifact.parts) if artifact.parts else 0
+                            ),
+                        },
                     )
-            logger.info(
-                "notify_task_update: extraction result for %s: "
-                "content=%s, text_parts=%d, file_parts=%d, data_parts=%d",
-                message_id,
-                repr(str(content)[:80]) if content else "None",
-                len(extracted.text_parts),
-                len(extracted.file_parts),
-                len(extracted.data_parts),
+            logger.debug(
+                "task_artifact_extraction_completed",
+                extra={
+                    "message_id": message_id,
+                    "has_content": bool(content),
+                    "text_part_count": len(extracted.text_parts),
+                    "file_part_count": len(extracted.file_parts),
+                    "data_part_count": len(extracted.data_parts),
+                },
             )
         elif state == TaskState.completed:
             logger.warning(

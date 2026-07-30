@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -53,17 +54,19 @@ async def stream_with_docker_host_url_fallback[T](
 ) -> AsyncGenerator[T, None]:
     yielded_any = False
     try:
-        async for item in operation(url):
-            yielded_any = True
-            yield item
+        async with aclosing(operation(url)) as stream:
+            async for item in stream:
+                yielded_any = True
+                yield item
     except Exception as exc:
         if yielded_any:
             raise
         fallback_url = docker_host_fallback_url_for_error(url, exc)
         if fallback_url is None:
             raise
-        async for item in operation(fallback_url):
-            yield item
+        async with aclosing(operation(fallback_url)) as fallback_stream:
+            async for item in fallback_stream:
+                yield item
 
 
 async def stream_with_docker_host_fallback[T](
@@ -71,14 +74,16 @@ async def stream_with_docker_host_fallback[T](
     operation: Callable[[Any], AsyncGenerator[T, None]],
 ) -> AsyncGenerator[T, None]:
     try:
-        async for item in operation(card):
-            yield item
+        async with aclosing(operation(card)) as stream:
+            async for item in stream:
+                yield item
     except Exception as exc:
         fallback_card = _fallback_card(card, exc)
         if fallback_card is None:
             raise
-        async for item in operation(fallback_card):
-            yield item
+        async with aclosing(operation(fallback_card)) as fallback_stream:
+            async for item in fallback_stream:
+                yield item
 
 
 def _fallback_card(card: Any, exc: Exception) -> Any | None:
@@ -94,10 +99,9 @@ def docker_host_fallback_url_for_error(url: str, exc: Exception) -> str | None:
     fallback_url = docker_host_fallback_url(url)
     if fallback_url is None or not _is_network_connection_error(exc):
         return None
-    logger.warning(
-        "Retrying A2A request via host gateway: %s instead of %s",
-        fallback_url,
-        url,
+    logger.debug(
+        "a2a_docker_host_fallback_selected",
+        extra={"fallback_url": fallback_url, "original_url": url},
     )
     return fallback_url
 

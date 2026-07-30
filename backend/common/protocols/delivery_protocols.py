@@ -7,7 +7,7 @@ from common.protocols.json_types import JsonValue
 
 @runtime_checkable
 class EventPublisher(Protocol):
-    async def emit(self, event: DeliveryEvent) -> None: ...
+    async def emit(self, event: DeliveryEvent) -> bool | None: ...
     async def emit_internal(
         self,
         event: InternalEvent,

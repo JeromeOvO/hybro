@@ -75,12 +75,21 @@ async def stream_room_messages(
                     if message:
                         yield f"data: {message}\n\n"
 
-                except Exception as e:
-                    logger.error(f"Error in SSE stream for room {room_id}: {e}")
+                except Exception as exc:
+                    logger.error(
+                        "sse_stream_failed",
+                        extra={
+                            "room_id": room_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     break
 
-        except Exception as e:
-            logger.error(f"SSE connection error for room {room_id}: {e}")
+        except Exception as exc:
+            logger.error(
+                "sse_connection_failed",
+                extra={"room_id": room_id, "error_type": type(exc).__name__},
+            )
 
         finally:
             # clean up connection
@@ -203,7 +212,10 @@ async def cancel_message(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling message {message_id}: {e}")
+        logger.error(
+            "message_cancellation_failed",
+            extra={"message_id": message_id, "error_type": type(e).__name__},
+        )
         raise HTTPException(
             status_code=500, detail=f"Failed to cancel message: {str(e)}"
         ) from e

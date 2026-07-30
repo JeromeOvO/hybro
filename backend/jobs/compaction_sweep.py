@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from common.observability import traced_create_task
 from common.utils.logger import get_logger
 from context_memory.protocols import ContextMemoryCompactionPort
 from jobs.constants import COMPACTION_SWEEP
@@ -72,7 +73,7 @@ class CompactionSweep:
             logger.info("Compaction sweep skipped — compaction is disabled")
             return
         self._running = True
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = traced_create_task(self._run_loop(), name="compaction-sweep")
         logger.info(
             "Compaction sweep started (interval: %d min)", self.interval_minutes
         )
@@ -164,7 +165,8 @@ class CompactionSweep:
                     queue.task_done()
 
         workers = [
-            asyncio.create_task(_worker()) for _ in range(MAX_CONCURRENT_COMPACTIONS)
+            traced_create_task(_worker(), name=f"compaction-worker-{index}")
+            for index in range(MAX_CONCURRENT_COMPACTIONS)
         ]
 
         for room_id in await deps.list_room_ids_with_memory():

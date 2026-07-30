@@ -50,27 +50,40 @@ class EventPublisherImpl:
         self._internal_event_adapter = TypeAdapter(InternalEvent)
         self._stopping = False
 
-    async def emit(self, event: DeliveryEvent) -> None:
+    async def emit(self, event: DeliveryEvent) -> bool:
+        terminal_reserved = False
         try:
             if not await self._should_deliver_typed(event):
                 self._increment(
                     "hybro_delivery_events_deduplicated_total",
                     {"event_type": "processing_status"},
                 )
-                return
+                return False
+            terminal_reserved = self._is_terminal_typed(event)
             timestamp = event.timestamp or self._now()
             frame = to_sse_frame(event, timestamp=timestamp)
             trace_id = getattr(event, "trace_id", None) or get_current_trace_id()
             self._inject_typed_trace_id(frame, trace_id)
         except Exception as exc:
+            if terminal_reserved:
+                await self._release_typed_delivery(event)
             await self._dead_letter("translate", event, exc)
-            return
+            return False
 
         self._increment(
             "hybro_delivery_events_emitted_total",
             {"event_type": frame["type"]},
         )
-        await self._deliver_frontend(event.room_id, frame, event, "sse_fanout")
+        delivered = await self._deliver_frontend(
+            event.room_id,
+            frame,
+            event,
+            "sse_fanout",
+            trace_id=trace_id,
+        )
+        if not delivered:
+            await self._release_typed_delivery(event)
+        return delivered
 
     async def emit_internal(
         self,
@@ -125,16 +138,24 @@ class EventPublisherImpl:
         frame: dict[str, Any],
         payload: Any,
         failure_stage: str,
-    ) -> None:
+        *,
+        trace_id: str | None,
+    ) -> bool:
+        local_delivered = False
         try:
             await self.sse_transport.broadcast_frame_to_room(room_id, frame)
+            local_delivered = True
         except Exception:
             pass
 
-        try:
-            await self.event_bus.publish_sse(room_id, frame)
-        except Exception as exc:
-            await self._dead_letter(failure_stage, payload, exc)
+        remote_delivered = False
+        with trace_id_context(trace_id):
+            try:
+                await self.event_bus.publish_sse(room_id, frame)
+                remote_delivered = True
+            except Exception as exc:
+                await self._dead_letter(failure_stage, payload, exc)
+        return local_delivered or remote_delivered
 
     async def _should_deliver_typed(self, event: DeliveryEvent) -> bool:
         if (
@@ -147,6 +168,24 @@ class EventPublisherImpl:
                 status=event.status,
             )
         return True
+
+    async def _release_typed_delivery(self, event: DeliveryEvent) -> None:
+        if not self._is_terminal_typed(event):
+            return
+        release = getattr(self.deduplicator, "release", None)
+        if release is None:
+            return
+        await release(
+            room_id=event.room_id,
+            message_id=event.message_id,
+            status=event.status,
+        )
+
+    def _is_terminal_typed(self, event: DeliveryEvent) -> bool:
+        return (
+            isinstance(event, ProcessingStatusEvent)
+            and event.status in self.config.terminal_processing_statuses
+        )
 
     def _schedule_internal_handlers(self, event: InternalEvent) -> list[asyncio.Task]:
         if self._stopping:

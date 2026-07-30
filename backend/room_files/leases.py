@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from common.observability import traced_create_task
 from common.utils.time import utcnow
 from room_files.errors import FileConflictError
 
@@ -114,7 +115,10 @@ class RoomWriteLeases:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"room-file-lease-{room_id}",
+        )
         try:
             yield lease_id
             if stopped.is_set():

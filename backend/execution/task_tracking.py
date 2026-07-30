@@ -283,6 +283,7 @@ class A2ATaskTrackingService:
                 context_id=context_id,
                 user_input=user_input,
             ),
+            agent_id=msg.agent_id,
             push_notification_config=push_config,
             blocking=hitl_blocking,
             timeout=hitl_timeout,
@@ -514,9 +515,11 @@ class A2ATaskTrackingService:
         text: str,
     ) -> None:
         logger.error(
-            "Persisting safe failed task for message %s; raw failure detail retained in logs",
-            message_id,
-            extra={"raw_failure_detail": text},
+            "failed_task_sanitized",
+            extra={
+                "message_id": message_id,
+                "failure_detail_present": bool(text),
+            },
         )
         failed_task = Task(
             id=SyntheticTaskId.FAILED,

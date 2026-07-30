@@ -12,6 +12,7 @@ from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.dto import RoomMessageSummary
 from common.message_commit_events import publish_message_committed
+from common.observability import traced_create_task
 from common.protocols import ContextMemoryRuntime, EventPublisher, RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
@@ -911,7 +912,7 @@ class RoomMessageCenter:
         # the message orphaned.  Touching the timestamp here resets the clock
         # so processing won't be reclaimed prematurely.
         await self.message_writer.refresh_processing_claim(room_user_message_id)
-        claim_heartbeat = asyncio.create_task(
+        claim_heartbeat = traced_create_task(
             self._heartbeat_processing_claim(room_user_message_id),
             name=f"processing-claim-heartbeat:{room_user_message_id}",
         )

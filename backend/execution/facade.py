@@ -14,7 +14,7 @@ from common.dto import (
     HubAgentResponseInternal,
     RunInfo,
 )
-from common.observability import traced_create_task
+from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -605,13 +605,21 @@ class ExecutionFacade:
             user_id=request.sender_id,
             client_request_id=request.client_request_id,
         )
-        task = self._spawn_orchestration(
-            self._room_message_center.process_room_user_message(orchestration_request),
-            name=f"execution-orchestrate-{ack.message_id}",
-            room_id=request.room_id,
-            message_id=ack.message_id,
+        with bind_log_context(
             client_request_id=request.client_request_id,
-        )
+            room_id=request.room_id,
+            user_message_id=ack.message_id,
+            message_id=ack.message_id,
+        ):
+            task = self._spawn_orchestration(
+                self._room_message_center.process_room_user_message(
+                    orchestration_request
+                ),
+                name=f"execution-orchestrate-{ack.message_id}",
+                room_id=request.room_id,
+                message_id=ack.message_id,
+                client_request_id=request.client_request_id,
+            )
         await task
 
     def schedule_recovery_orchestration(
@@ -623,13 +631,19 @@ class ExecutionFacade:
         message_id = (
             request.room_user_message_id or request.room_agent_message_id or "unknown"
         )
-        return self._spawn_orchestration(
-            self._room_message_center.process_room_user_message(request),
-            name=f"execution-recovery-{reason}-{message_id}",
-            room_id=request.room_id,
-            message_id=message_id,
+        with bind_log_context(
             client_request_id=request.client_request_id,
-        )
+            room_id=request.room_id,
+            user_message_id=message_id,
+            message_id=message_id,
+        ):
+            return self._spawn_orchestration(
+                self._room_message_center.process_room_user_message(request),
+                name=f"execution-recovery-{reason}-{message_id}",
+                room_id=request.room_id,
+                message_id=message_id,
+                client_request_id=request.client_request_id,
+            )
 
     def _spawn_orchestration(
         self,
