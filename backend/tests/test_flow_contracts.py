@@ -43,6 +43,8 @@ from models.response import (
 )
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
+pytestmark = pytest.mark.core
+
 # =============================================================================
 # Fixtures
 # =============================================================================

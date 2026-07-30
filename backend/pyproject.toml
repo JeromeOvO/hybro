@@ -66,16 +66,14 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
-    "-v",
     "--tb=short",
     "--strict-markers",
     "--asyncio-mode=auto",
 ]
 markers = [
     "asyncio: mark test as async",
-    "unit: mark test as a unit test",
-    "integration: mark test as an integration test",
-    "slow: mark test as slow running",
+    "core: critical local product-flow regression baseline",
+    "integration: requires an explicitly configured external service",
 ]
 asyncio_mode = "auto"
 

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from delivery.facade import DeliveryFacade
-from tests.delivery_adapter_fakes import (
+from tests.fakes.delivery import (
     FakeDeliveryCompat,
     FakeEventPublisher,
     make_delivery_facade,
@@ -163,6 +163,7 @@ async def test_send_methods_emit_typed_events():
     assert events[5].retry_after_seconds == 5
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_terminal_delivery_log_is_emitted_once_per_message(caplog):
     facade = _bind()

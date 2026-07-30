@@ -1,12 +1,14 @@
 """
 Integration tests for distributed room locks against a real Redis instance.
 
-These tests require a running Redis server at localhost:6379.
-Run with:  pytest -m integration tests/test_distributed_room_lock_integration.py
+These tests require ``HYBRO_TEST_REDIS_URL`` to point at a disposable Redis.
+Run with:  HYBRO_TEST_REDIS_URL=redis://localhost:6379/0 pytest -m integration
 Skip with: pytest -m "not integration"
 """
 
 import asyncio
+import os
+from uuid import uuid4
 
 import pytest
 import redis.asyncio as aioredis
@@ -17,7 +19,7 @@ from execution.orchestration.room_message_center import (
     RoomMessageCenter,
 )
 
-REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = os.getenv("HYBRO_TEST_REDIS_URL")
 LOCK_PREFIX = "room:lock:"
 
 
@@ -34,18 +36,25 @@ def _make_rmc(redis_client) -> RoomMessageCenter:
     return rmc
 
 
+@pytest.fixture(scope="session")
+def redis_namespace() -> str:
+    """Isolate this test session from concurrent local or CI runs."""
+    return f"integration-{uuid4().hex}"
+
+
 @pytest.fixture()
-async def redis():
-    """Provide a connected Redis client and clean up test keys afterwards."""
+async def redis(redis_namespace: str):
+    """Provide a connected Redis client and clean up only this session's keys."""
+    if not REDIS_URL:
+        pytest.skip("HYBRO_TEST_REDIS_URL is not configured")
     client = aioredis.from_url(REDIS_URL, decode_responses=True)
     try:
         await client.ping()
-    except Exception:
+    except Exception as exc:
         await client.aclose()
-        pytest.skip("Redis not available at localhost:6379")
+        pytest.fail(f"Configured test Redis is unavailable: {exc}")
     yield client
-    # Clean up any test lock keys
-    keys = [k async for k in client.scan_iter(f"{LOCK_PREFIX}integration-*")]
+    keys = [key async for key in client.scan_iter(f"{LOCK_PREFIX}{redis_namespace}-*")]
     if keys:
         await client.delete(*keys)
     await client.aclose()
@@ -60,9 +69,9 @@ async def redis():
 class TestRealRedisLockPrimitives:
     """Low-level acquire/release against a live Redis."""
 
-    async def test_acquire_creates_key_with_ttl(self, redis):
+    async def test_acquire_creates_key_with_ttl(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-ttl-check"
+        room = f"{redis_namespace}-ttl-check"
 
         acquired = await rmc._acquire_distributed_lock(room, "owner-1", ttl=30)
         assert acquired is True
@@ -76,9 +85,9 @@ class TestRealRedisLockPrimitives:
         # cleanup
         await redis.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_acquire_blocked_by_existing_key(self, redis):
+    async def test_acquire_blocked_by_existing_key(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-blocked"
+        room = f"{redis_namespace}-blocked"
 
         await redis.set(f"{LOCK_PREFIX}{room}", "other-owner", ex=30)
 
@@ -87,9 +96,9 @@ class TestRealRedisLockPrimitives:
 
         await redis.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_lua_release_only_deletes_own_key(self, redis):
+    async def test_lua_release_only_deletes_own_key(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-lua-release"
+        room = f"{redis_namespace}-lua-release"
 
         await redis.set(f"{LOCK_PREFIX}{room}", "real-owner", ex=30)
 
@@ -108,9 +117,9 @@ class TestRealRedisLockPrimitives:
 class TestRealRedisRoomLockFlow:
     """Full _acquire_room_lock / _release_room_lock against live Redis."""
 
-    async def test_acquire_and_release_round_trip(self, redis):
+    async def test_acquire_and_release_round_trip(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-round-trip"
+        room = f"{redis_namespace}-round-trip"
 
         owner = await rmc._acquire_room_lock(room, timeout=5)
         assert owner is not None
@@ -125,9 +134,9 @@ class TestRealRedisRoomLockFlow:
         value = await redis.get(f"{LOCK_PREFIX}{room}")
         assert value is None
 
-    async def test_ttl_is_hold_duration_not_timeout(self, redis):
+    async def test_ttl_is_hold_duration_not_timeout(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-ttl-value"
+        room = f"{redis_namespace}-ttl-value"
 
         owner = await rmc._acquire_room_lock(room, timeout=5)
         assert owner is not None
@@ -140,11 +149,13 @@ class TestRealRedisRoomLockFlow:
 
         await rmc._release_room_lock(room, owner)
 
-    async def test_second_acquire_blocks_until_first_releases(self, redis):
+    async def test_second_acquire_blocks_until_first_releases(
+        self, redis, redis_namespace
+    ):
         """Two RMC instances (simulating two workers) contend on same room."""
         rmc1 = _make_rmc(redis)
         rmc2 = _make_rmc(redis)
-        room = "integration-contention"
+        room = f"{redis_namespace}-contention"
         order = []
 
         async def worker(label: str, rmc: RoomMessageCenter):
@@ -167,9 +178,9 @@ class TestRealRedisRoomLockFlow:
             f"{second}-releasing",
         ]
 
-    async def test_timeout_when_key_held_by_another(self, redis):
+    async def test_timeout_when_key_held_by_another(self, redis, redis_namespace):
         rmc = _make_rmc(redis)
-        room = "integration-timeout"
+        room = f"{redis_namespace}-timeout"
 
         # Simulate another worker holding the lock
         await redis.set(f"{LOCK_PREFIX}{room}", "other-worker", ex=60)
@@ -179,10 +190,10 @@ class TestRealRedisRoomLockFlow:
 
         await redis.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_lock_reused_across_acquires(self, redis):
+    async def test_lock_reused_across_acquires(self, redis, redis_namespace):
         """Lock object stays in dict after release and is reused."""
         rmc = _make_rmc(redis)
-        room = "integration-reuse"
+        room = f"{redis_namespace}-reuse"
 
         owner1 = await rmc._acquire_room_lock(room, timeout=5)
         lock_obj = rmc._room_locks[room]

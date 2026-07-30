@@ -638,6 +638,7 @@ async def test_task_tracking_uses_public_label_policy_without_leaking_private_ta
 class TestHandleSyncResponseSuccess:
     """handle_sync_response returns extracted content for a message-type response."""
 
+    @pytest.mark.core
     @pytest.mark.asyncio
     async def test_handle_sync_response_success(self):
         proc = _make_processor()
@@ -794,6 +795,7 @@ class TestHandleStreamingCancellation:
     """When the cancellation token is set during streaming, the processor
     transitions to canceled and attempts remote task cancellation."""
 
+    @pytest.mark.core
     @pytest.mark.asyncio
     async def test_handle_streaming_cancellation(self):
         proc = _make_processor()

@@ -60,6 +60,7 @@ async def test_non_terminal_statuses_are_never_deduped():
     assert redis.calls == []
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_first_terminal_status_passes_and_second_l1_hit_suppresses():
     redis = FakeRedisKV(setnx_result=True)

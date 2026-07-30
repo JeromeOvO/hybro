@@ -15,7 +15,7 @@ import pytest
 from common.config import settings
 from common.utils.time import utcnow
 from delivery.sse.connection import SSEConnection
-from tests.delivery_adapter_fakes import make_delivery_facade
+from tests.fakes.delivery import make_delivery_facade
 
 # =============================================================================
 # SSEConnection Tests

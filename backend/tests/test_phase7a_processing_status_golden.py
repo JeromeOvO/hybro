@@ -11,7 +11,7 @@ from common.dto import RunEventNotification
 from delivery.facade import DeliveryFacade
 from execution.orchestration.room_message_center import RoomMessageCenter
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
-from tests.delivery_adapter_fakes import make_delivery_facade
+from tests.fakes.delivery import make_delivery_facade
 
 ROOT = Path(__file__).resolve().parents[1]
 
