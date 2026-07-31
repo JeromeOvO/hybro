@@ -547,6 +547,38 @@ class TestCancelMessage:
         assert result["outcome"] == "already_terminal"
 
     @pytest.mark.asyncio
+    async def test_persisted_marker_with_pending_finalization_is_accepted(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        from common.dto import CancellationAck
+
+        deps = patch_sse_deps
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = sample_user_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+        deps["execution_engine"].cancel.return_value = CancellationAck(
+            status="cancellation_pending",
+            cancellation_applied=False,
+            reconciled=False,
+        )
+
+        result = await cancel_message(
+            sample_user_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result == {
+            "success": True,
+            "message_id": sample_user_message.message_id,
+            "message": "Message cancellation accepted and pending reconciliation",
+            "status": "cancellation_pending",
+            "outcome": "pending_reconciliation",
+        }
+
+    @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):
         """Should raise 404 when message doesn't exist."""
         mock_db_service.get_room_user_message_by_message_id.return_value = None

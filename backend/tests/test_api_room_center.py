@@ -127,6 +127,67 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
 
 
 @pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_idempotent_terminal_replay():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "completed",
+        },
+        processing_claimed_at=None,
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_concurrent_target_winner():
+    runtime = RoomServices()
+    original = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "processing",
+        },
+        processing_claimed_at=datetime.now(UTC),
+    )
+    persisted = original.model_copy(deep=True)
+    persisted.extend_info["orchestration_status"] = "completed"
+    persisted.processing_claimed_at = None
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(
+            side_effect=[original, persisted]
+        ),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    assert runtime._store.get_room_user_message_by_message_id.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_orchestration_status_update_ignores_non_orchestration_message():
     runtime = RoomServices()
     user_message = RoomUserMessage(

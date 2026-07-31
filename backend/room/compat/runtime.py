@@ -4479,16 +4479,34 @@ class RoomServices:
             or user_message.extend_info.get("orchestration_run_id")
         ):
             return True
-        user_message.extend_info["orchestration_status"] = status
-        if status in {
+        terminal = status in {
             terminal_status.value for terminal_status in TERMINAL_ORCHESTRATION_STATUSES
-        }:
+        }
+        already_projected = user_message.extend_info.get(
+            "orchestration_status"
+        ) == status and (not terminal or user_message.processing_claimed_at is None)
+        if already_projected:
+            return True
+
+        user_message.extend_info["orchestration_status"] = status
+        if terminal:
             user_message.processing_claimed_at = None
+        updated = await self._store.update_room_user_message_by_message_id(
+            message_id,
+            user_message,
+        )
+        if updated:
+            return True
+
+        # Mongo reports a no-op write as unmodified. A concurrent or replayed
+        # projection is successful when the persisted envelope is already at
+        # the requested state.
+        persisted = await self._store.get_room_user_message_by_message_id(message_id)
         return bool(
-            await self._store.update_room_user_message_by_message_id(
-                message_id,
-                user_message,
-            )
+            persisted is not None
+            and isinstance(persisted.extend_info, dict)
+            and persisted.extend_info.get("orchestration_status") == status
+            and (not terminal or persisted.processing_claimed_at is None)
         )
 
     async def handle_a2a_response_for_room(

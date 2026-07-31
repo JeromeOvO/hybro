@@ -199,6 +199,14 @@ async def cancel_message(
             raise HTTPException(
                 status_code=500, detail="Failed to persist cancellation to database"
             )
+        if isinstance(success, CancellationAck) and not success.reconciled:
+            return {
+                "success": True,
+                "message_id": message_id,
+                "message": "Message cancellation accepted and pending reconciliation",
+                "status": success.status,
+                "outcome": "pending_reconciliation",
+            }
         if isinstance(success, CancellationAck) and not success.cancellation_applied:
             return {
                 "success": True,

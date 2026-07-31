@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 
 from common.dto import (
+    CancellationAck,
     ExecutionAck,
     ExecutionRequest,
     HubAgentResponseInternal,
@@ -1191,12 +1192,16 @@ async def test_cancel_conflict_does_not_report_success_for_nonterminal_run():
     )
     facade, deps = _make_facade(orchestration_run_store=run_store)
 
-    assert not await facade.cancel(
+    ack = await facade.cancel(
         "room-1",
         "msg-1",
         requested_by_user_id="user-1",
     )
 
+    assert isinstance(ack, CancellationAck)
+    assert ack.status == "cancellation_pending"
+    assert ack.cancellation_applied is False
+    assert ack.reconciled is False
     deps["cancellation_store"].cancel_message.assert_awaited_once()
     deps["cancellation_state"].cancel_message_and_broadcast.assert_awaited_once_with(
         "msg-1"

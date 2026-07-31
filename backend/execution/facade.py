@@ -794,7 +794,11 @@ class ExecutionFacade:
                 extra={"room_id": room_id, "message_id": message_id},
                 exc_info=True,
             )
-            return False
+            return CancellationAck(
+                status="cancellation_pending",
+                cancellation_applied=False,
+                reconciled=False,
+            )
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         return await self._run_reader.get_run(run_id)
