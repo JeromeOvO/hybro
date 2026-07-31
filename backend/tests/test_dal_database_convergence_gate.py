@@ -19,6 +19,7 @@ DEFAULT_EXCLUDE_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     "logs",
+    "hybro_backend.egg-info",
     "multi_agents_backend.egg-info",
 }
 LEGACY_RUNTIME_FILES = (

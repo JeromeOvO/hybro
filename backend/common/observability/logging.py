@@ -115,7 +115,7 @@ _configured_handler: logging.Handler | None = None
 
 
 def _package_version() -> str:
-    for package in ("multi-agents-backend", "hybro"):
+    for package in ("hybro-backend", "hybro"):
         try:
             return version(package)
         except PackageNotFoundError:

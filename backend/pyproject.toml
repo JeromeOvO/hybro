@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "multi-agents-backend"
-version = "0.2.6"
-description = "Multi-Agents Backend"
+name = "hybro-backend"
+version = "0.2.10"
+description = "Hybro backend"
 requires-python = ">=3.12"
 dependencies = [
     # Web framework
@@ -46,7 +46,7 @@ dependencies = [
 ]
 
 [project.scripts]
-multi-agents-backend = "main:main"
+hybro-backend = "main:main"
 discover = "scripts.discovery_cli:main"
 
 [project.optional-dependencies]
