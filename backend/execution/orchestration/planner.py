@@ -1,4 +1,4 @@
-"""Planner adapter boundary for v2 orchestration."""
+"""Planner adapter boundary for orchestration."""
 
 from __future__ import annotations
 
@@ -286,7 +286,7 @@ class OrchestrationPlanner(Protocol):
 
 
 class RoomSupervisorPlannerAdapter:
-    """Adapt existing supervisor JSON decisions to validated v2 planner actions."""
+    """Adapt existing supervisor JSON decisions to validated orchestration planner actions."""
 
     def __init__(
         self,
@@ -331,7 +331,7 @@ class RoomSupervisorPlannerAdapter:
         self,
         context: OrchestrationPlannerContext,
     ) -> Mapping[str, Any]:
-        """Delegate prompt execution to RoomSupervisorService without v2 schema text."""
+        """Delegate prompt execution to RoomSupervisorService without rollout schema text."""
 
         system_prompt = (
             "You are HYBRO, the primary user-facing assistant in a chat room. "
@@ -474,7 +474,7 @@ class RoomSupervisorPlannerAdapter:
             "lineage, or disposition records; Execution owns those decisions.\n\n"
             "Valid action values are delegate, platform_answer, complete, ask_user, "
             "fail, plus "
-            "legacy aliases done and clarify. Include unused arrays "
+            "provider aliases done and clarify. Include unused arrays "
             "as [] and unused nullable fields as null."
         )
         user_prompt = json.dumps(

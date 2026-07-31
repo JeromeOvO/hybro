@@ -5,7 +5,7 @@ Periodically scans all active rooms and runs lossless compaction on any
 room whose conversation history exceeds the configured thresholds.
 
 This catches rooms that grow without triggering inline compaction — e.g.
-V1 orchestration rooms, rooms with high-frequency direct chat, or rooms
+supervisor orchestration rooms, rooms with high-frequency direct chat, or rooms
 where the inline trigger was skipped due to an error.
 
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for compaction design.

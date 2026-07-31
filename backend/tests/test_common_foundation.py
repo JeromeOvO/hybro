@@ -487,8 +487,6 @@ def test_delivery_event_schemas_match_design_doc():
             "group_index",
             "related_message_id",
             "client_request_id",
-            "orchestration_run_id",
-            "orchestration_schema_version",
         },
         HITLResolvedEvent: {
             "room_id",
@@ -502,8 +500,6 @@ def test_delivery_event_schemas_match_design_doc():
             "error_message",
             "related_message_id",
             "client_request_id",
-            "orchestration_run_id",
-            "orchestration_schema_version",
         },
         TaskSubmittedEvent: {
             "room_id",
@@ -892,7 +888,6 @@ def test_protocol_methods_match_design_doc():
         protocols.RuntimeTaskLifecycleStore: {
             "cancel_message",
             "check_task_limits",
-            "claim_stuck_supervisor_trajectory",
             "enable_task_tracking_on_message",
             "find_stale_non_terminal_runs",
             "generate_webhook_token",
@@ -906,7 +901,6 @@ def test_protocol_methods_match_design_doc():
             "get_pending_task_messages_for_user",
             "get_room_ids_with_non_terminal_runs",
             "get_stale_task_messages",
-            "get_stuck_supervisor_trajectory_messages",
             "get_task_messages_for_room",
             "hash_webhook_token",
             "is_message_cancelled",

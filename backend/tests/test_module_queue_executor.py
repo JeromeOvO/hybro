@@ -590,7 +590,7 @@ class TestProcessQueue:
 
     @pytest.mark.asyncio
     async def test_resume_from_continuation_failure_records_before_terminal_emit(self):
-        """V1 resume failure runs caller-owned notification before terminal emit."""
+        """Queue resume failure runs caller-owned notification before terminal emit."""
         qe = _make_queue_executor()
         order: list[str] = []
         continuation = {

@@ -27,19 +27,19 @@ from models.orchestration import (
 )
 
 
-def test_legacy_expected_output_loads_with_outcome_contract_defaults():
+def test_derived_expected_output_loads_with_outcome_contract_defaults():
     output = DispatchExpectedOutput.model_validate(
         {"kind": "artifact", "required": True, "description": None}
     )
 
     assert output.output_key is not None
-    assert output.output_key.startswith("legacy:")
+    assert output.output_key.startswith("derived:")
     assert output.artifact_name is None
     assert output.required_fields == []
     assert output.allow_partial is True
 
 
-def test_legacy_expected_output_key_is_stable_across_whitespace():
+def test_derived_expected_output_key_is_stable_across_whitespace():
     first = DispatchExpectedOutput(
         kind="artifact",
         description="Produce a quote summary.",
@@ -191,7 +191,7 @@ def _run_state(**overrides):
     return OrchestrationRunState(**values)
 
 
-def test_run_state_defaults_are_v2_and_non_terminal():
+def test_run_state_defaults_are_orchestration_and_non_terminal():
     state = _run_state()
 
     assert state.schema_version == 2
@@ -217,7 +217,7 @@ def test_planner_action_schema_rejects_unknown_actions():
     with pytest.raises(ValueError, match="action"):
         PlannerAction(
             action="done",
-            reasoning="legacy terminal",
+            reasoning="prior terminal",
         )
 
 

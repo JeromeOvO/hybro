@@ -282,45 +282,7 @@ class TestStaleTaskCheckerSemaphore:
         get_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_supervisor_recovery_uses_execution_scheduler(self, monkeypatch):
-        from jobs import stale_task_checker as mod
-        from jobs.stale_task_checker import StaleRecoveryDeps, StaleTaskChecker
-
-        checker = StaleTaskChecker()
-        scheduled = []
-
-        def schedule_recovery(request, *, reason):
-            scheduled.append((request, reason))
-            return MagicMock(add_done_callback=MagicMock())
-
-        checker.set_execution_recovery_deps(
-            StaleRecoveryDeps(schedule_recovery=schedule_recovery)
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stuck_supervisor_trajectory_messages",
-            AsyncMock(return_value=[{"message_id": "msg-1", "room_id": "room-1"}]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "is_message_cancelled",
-            AsyncMock(return_value=False),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "claim_stuck_supervisor_trajectory",
-            AsyncMock(return_value=True),
-        )
-
-        await checker._recover_stuck_supervisor_trajectories()
-
-        assert len(scheduled) == 1
-        request, reason = scheduled[0]
-        assert reason == "supervisor"
-        assert request.room_user_message_id == "msg-1"
-
-    @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_uses_sidecar_run_store(self):
+    async def test_orchestration_recovery_uses_sidecar_run_store(self):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -382,12 +344,14 @@ class TestStaleTaskCheckerSemaphore:
         assert event.type == OrchestrationEventType.RUN_RECOVERED
         assert len(scheduled) == 1
         request, reason = scheduled[0]
-        assert reason == "orchestration_v2"
+        assert reason == "orchestration"
         assert request.room_id == "room-1"
         assert request.room_user_message_id == "msg-1"
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_skips_fresh_processing_claim(self):
+    async def test_orchestration_recovery_skips_fresh_processing_claim(
+        self,
+    ):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -445,7 +409,7 @@ class TestStaleTaskCheckerSemaphore:
         run_store.append_event.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_fails_closed_without_claim_reader(
+    async def test_orchestration_recovery_fails_closed_without_claim_reader(
         self, caplog
     ):
         from jobs.stale_task_checker import (
@@ -502,7 +466,7 @@ class TestStaleTaskCheckerSemaphore:
         assert "processing-claim reader is not bound" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_skips_awaiting_user_runs(self):
+    async def test_orchestration_recovery_skips_awaiting_user_runs(self):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -559,7 +523,9 @@ class TestStaleTaskCheckerSemaphore:
         run_store.append_event.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_recovers_hitl_artifact_creating_runs(self):
+    async def test_orchestration_recovery_recovers_hitl_artifact_creating_runs(
+        self,
+    ):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -614,7 +580,7 @@ class TestStaleTaskCheckerSemaphore:
         run_store.save_state.assert_awaited_once()
         assert len(scheduled) == 1
         request, reason = scheduled[0]
-        assert reason == "orchestration_v2"
+        assert reason == "orchestration"
         assert request.room_user_message_id == "msg-1"
 
     def test_container_binds_processing_claim_reader_to_stale_task_store(self):
@@ -636,59 +602,6 @@ class TestStaleTaskCheckerSemaphore:
         assert bindings["get_room_user_message_by_message_id"] == (
             "message_store.get_room_user_message_by_message_id"
         )
-
-    @pytest.mark.asyncio
-    async def test_stale_checker_uses_bound_hitl_recovery_deps(self, monkeypatch):
-        from jobs import stale_task_checker as mod
-        from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
-
-        checker = StaleTaskChecker()
-        recover = AsyncMock()
-        checker.set_hitl_deps(
-            StaleHITLDeps(
-                recover_stale_processing=recover,
-                cancel_requests_for_message=AsyncMock(),
-            )
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stale_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_expired_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_orphaned_agent_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_room_ids_with_non_terminal_runs",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_non_tracked_stale_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stuck_supervisor_trajectory_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "find_stale_non_terminal_runs",
-            AsyncMock(return_value=[]),
-        )
-
-        await checker.check_stale_tasks()
-
-        recover.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_mark_task_failed_cancels_hitl_through_bound_deps(self, monkeypatch):

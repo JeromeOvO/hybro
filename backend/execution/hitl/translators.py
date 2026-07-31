@@ -38,11 +38,6 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         display_message_id=getattr(request, "display_message_id", None),
         client_request_id=getattr(request, "client_request_id", None),
         orchestration_run_id=getattr(request, "orchestration_run_id", None),
-        orchestration_schema_version=getattr(
-            request,
-            "orchestration_schema_version",
-            None,
-        ),
         group_id=getattr(request, "group_id", None),
         group_total=getattr(request, "group_total", None),
         group_index=getattr(request, "group_index", None),

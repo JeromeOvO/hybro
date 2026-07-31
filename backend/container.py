@@ -690,12 +690,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_stuck_supervisor_trajectory_messages=(
-                    task_store.get_stuck_supervisor_trajectory_messages
-                ),
-                claim_stuck_supervisor_trajectory=(
-                    task_store.claim_stuck_supervisor_trajectory
-                ),
             )
             debate_message_store = SimpleNamespace(
                 get_room_agent_message_by_message_id=(
@@ -1288,9 +1282,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 StaleRunWatchdogEventDeps,
             )
 
-            def run_dual_write_enabled() -> bool:
-                return runtime.settings.feature_run_dual_write
-
             async def emit_watchdog_run_event(
                 *,
                 room_id: str,
@@ -1349,7 +1340,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
                     emit_run_event=emit_watchdog_run_event,
                     emit_processing_status=emit_watchdog_processing_status,
-                    run_dual_write_enabled=run_dual_write_enabled,
                 )
             )
         compaction_sweep.set_leader_election(_leader)
@@ -1376,15 +1366,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         _bg_started = True
         await agent_health_service.start()
 
+        await stale_task_checker.start()
+        await stale_task_checker.check_stale_tasks()
         if runtime.settings.webhook_signing_key:
-            await stale_task_checker.start()
-            await stale_task_checker.check_stale_tasks()
             logger.info(
-                "A2A long-running tasks support initialized (using room_agent_messages)"
+                "A2A push-notification support initialized (using room_agent_messages)"
             )
         else:
             logger.warning(
-                "WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled"
+                "WEBHOOK_SIGNING_KEY not set - A2A push notifications disabled; "
+                "durable orchestration recovery remains enabled"
             )
 
         await compaction_sweep.start()

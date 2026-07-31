@@ -713,7 +713,7 @@ def test_first_legacy_text_only_completed_result_returns_fulfilled():
     intent.expected_outputs = []
 
     outcome = evaluator.evaluate(
-        _state(), _state(), intent, _output("agent-msg-1", "legacy result"), {}
+        _state(), _state(), intent, _output("agent-msg-1", "prior result"), {}
     )
 
     assert outcome.status == "fulfilled"
@@ -784,7 +784,7 @@ def test_repeated_legacy_text_with_same_normalized_fingerprint_returns_no_progre
     intent.expected_outputs = []
     first_after = _state()
     first = evaluator.evaluate(
-        _state(), first_after, intent, _output("agent-msg-1", "legacy result"), {}
+        _state(), first_after, intent, _output("agent-msg-1", "prior result"), {}
     )
     first_after.delegation_outcomes.append(first)
     duplicate_intent = _intent("agent-msg-2", "intent-2")
@@ -794,7 +794,7 @@ def test_repeated_legacy_text_with_same_normalized_fingerprint_returns_no_progre
         first_after,
         first_after.model_copy(deep=True),
         duplicate_intent,
-        _output("agent-msg-2", "  legacy   result  "),
+        _output("agent-msg-2", "  prior   result  "),
         {},
     )
 

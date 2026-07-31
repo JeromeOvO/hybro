@@ -253,7 +253,7 @@ class TestRequestInput:
         mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_legacy_request_omits_absent_v2_run_links_when_persisted(
+    async def test_legacy_request_omits_absent_orchestration_run_links_when_persisted(
         self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
     ):
         hitl_service._persistence = mock_hitl_db_service
@@ -269,7 +269,6 @@ class TestRequestInput:
 
         persisted_doc = mock_hitl_db_service.create_hitl_request.await_args.args[0]
         assert "orchestration_run_id" not in persisted_doc
-        assert "orchestration_schema_version" not in persisted_doc
 
     @pytest.mark.asyncio
     async def test_emits_sse_event_on_creation(
@@ -1627,7 +1626,7 @@ class TestRequestInput:
         continuation.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_blocking_followup_hitl_preserves_v2_run_links(
+    async def test_blocking_followup_hitl_preserves_orchestration_run_links(
         self,
         hitl_service,
         mock_hitl_db_service,
@@ -1648,7 +1647,6 @@ class TestRequestInput:
             "continuation_message_id": "agent-paused-msg",
             "display_message_id": "agent-paused-msg",
             "orchestration_run_id": "run-msg-1",
-            "orchestration_schema_version": 2,
             "status": HITLStatus.PENDING.value,
             "expires_at": "2026-07-03T00:00:00Z",
             "created_at": "2026-07-02T00:00:00Z",
@@ -1691,7 +1689,6 @@ class TestRequestInput:
             mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args.args[0]
         )
         assert followup_doc["orchestration_run_id"] == "run-msg-1"
-        assert followup_doc["orchestration_schema_version"] == 2
         mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
         continuation.resume_queue_from_continuation.assert_not_awaited()
 
@@ -1759,7 +1756,6 @@ class TestRequestInput:
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
         )
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._agent_reply = SimpleNamespace(
@@ -1810,7 +1806,6 @@ class TestRequestInput:
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
         )
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._agent_reply = SimpleNamespace(
@@ -2344,7 +2339,6 @@ class TestHandleResponseErrors:
             continuation_message_id="user-msg-456",
             display_message_id="clarifier-msg-1",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
             status=HITLStatus.PENDING,
         )
 
@@ -2398,7 +2392,6 @@ class TestHandleResponseErrors:
             prompt="Which account?",
             continuation_message_id="user-msg-456",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
             status=HITLStatus.PENDING,
         )
         request_doc = request.model_dump(mode="json")

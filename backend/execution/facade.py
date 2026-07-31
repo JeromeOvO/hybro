@@ -27,6 +27,7 @@ from execution.hitl.translators import (
 )
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import (
+    DuplicateEventIdConflict,
     OrchestrationRunStore,
     OrchestrationStoreConflict,
 )
@@ -42,6 +43,7 @@ from execution.ports import (
     RunReadPort,
     TaskFactory,
 )
+from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from execution.translators import room_response_to_execution_ack
 from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
@@ -526,7 +528,6 @@ class ExecutionFacade:
             or request.selected_agent_ids is not None
             or request.candidate_scope_mode is not None
             or request.candidate_scope_group_id is not None
-            or request.orchestration_schema_version is not None
         ):
             extend_info["mode"] = request.mode
         if request.selected_agent_ids is not None:
@@ -535,10 +536,6 @@ class ExecutionFacade:
             extend_info["candidate_scope_mode"] = request.candidate_scope_mode
         if request.candidate_scope_group_id is not None:
             extend_info["candidate_scope_group_id"] = request.candidate_scope_group_id
-        if request.orchestration_schema_version is not None:
-            extend_info["orchestration_schema_version"] = (
-                request.orchestration_schema_version
-            )
         return extend_info or None
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
@@ -692,6 +689,8 @@ class ExecutionFacade:
                 current is not None
                 and current.status in TERMINAL_ORCHESTRATION_STATUSES
             ):
+                if current.status == OrchestrationStatus.CANCELED:
+                    await self._append_cancellation_terminal_event(current)
                 logger.info(
                     "cancellation ignored for terminal orchestration",
                     extra={
@@ -709,8 +708,8 @@ class ExecutionFacade:
             return False
         await self._cancellation_state.cancel_message_and_broadcast(message_id)
         await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
-        sidecar_canceled = await self._cancel_orchestration_sidecar(message_id)
-        if sidecar_canceled:
+        orchestration_canceled = await self._cancel_orchestration_run(message_id)
+        if orchestration_canceled:
             try:
                 projected = (
                     await self._room_center.update_user_message_orchestration_status(
@@ -749,8 +748,8 @@ class ExecutionFacade:
             logger.warning("agent task cleanup failed for cancellation", exc_info=True)
         return True
 
-    async def _cancel_orchestration_sidecar(self, user_message_id: str) -> bool:
-        """Terminalize the paused orchestration state when a run is canceled."""
+    async def _cancel_orchestration_run(self, user_message_id: str) -> bool:
+        """Terminalize durable orchestration state when a run is canceled."""
         if self._orchestration_run_store is None:
             return False
         for _ in range(3):
@@ -760,7 +759,10 @@ class ExecutionFacade:
             if current is None:
                 return False
             if current.status in TERMINAL_ORCHESTRATION_STATUSES:
-                return current.status == OrchestrationStatus.CANCELED
+                if current.status == OrchestrationStatus.CANCELED:
+                    await self._append_cancellation_terminal_event(current)
+                    return True
+                return False
             updated = deepcopy(current)
             updated.status = OrchestrationStatus.CANCELED
             updated.terminal_reason = "request canceled"
@@ -772,18 +774,41 @@ class ExecutionFacade:
             updated.state_version = current.state_version + 1
             updated.updated_at = utcnow()
             try:
-                await self._orchestration_run_store.save_state(
+                saved = await self._orchestration_run_store.save_state(
                     updated,
                     expected_version=current.state_version,
                 )
+                await self._append_cancellation_terminal_event(saved)
                 return True
             except OrchestrationStoreConflict:
                 continue
         logger.warning(
-            "failed to terminalize orchestration sidecar after cancellation",
+            "failed to terminalize orchestration run after cancellation",
             extra={"user_message_id": user_message_id},
         )
         return False
+
+    async def _append_cancellation_terminal_event(
+        self,
+        state: OrchestrationRunState,
+    ) -> None:
+        if self._orchestration_run_store is None:
+            return
+        event = OrchestrationRunEvent(
+            event_id=(f"{state.run_id}:run-terminal:canceled:{state.state_version}"),
+            run_id=state.run_id,
+            room_id=state.room_id,
+            type=OrchestrationEventType.RUN_TERMINAL,
+            state_version=state.state_version,
+            payload={
+                "status": OrchestrationStatus.CANCELED.value,
+                "reason": state.terminal_reason,
+            },
+        )
+        try:
+            await self._orchestration_run_store.append_event(event)
+        except DuplicateEventIdConflict:
+            return
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         return await self._run_reader.get_run(run_id)
@@ -792,43 +817,19 @@ class ExecutionFacade:
         return await self._run_reader.get_runs_for_room(room_id)
 
     async def cancel_inflight_tasks(self) -> int:
-        task_metadata = {
-            task: (self._inflight_metadata.get(task) or {})
-            for task in set(self._inflight)
-            if not task.done()
-        }
-        for task in task_metadata:
-            task.cancel()
-        if task_metadata:
-            await asyncio.gather(*task_metadata, return_exceptions=True)
+        """Interrupt local execution without terminalizing durable runs.
 
-        canceled_count = 0
-        for task, metadata in task_metadata.items():
-            if not task.cancelled():
-                continue
-            room_id = metadata.get("room_id")
-            message_id = metadata.get("message_id")
-            if not room_id or not message_id:
-                continue
-            try:
-                await emit_processing_status(
-                    room_id=room_id,
-                    status="canceled",
-                    message_id=message_id,
-                    lifecycle_message_id=message_id,
-                    run_lifecycle=self._run_lifecycle,
-                    event_publisher=self._event_publisher,
-                    run_event_enabled=self._run_event_enabled,
-                    client_request_id_resolver=self._client_request_id_resolver,
-                    client_request_id=metadata.get("client_request_id"),
-                )
-            except Exception:
-                logger.warning(
-                    "execution shutdown failed to mark orchestration canceled",
-                    exc_info=True,
-                )
-            canceled_count += 1
-        return canceled_count
+        Graceful process shutdown is an infrastructure interruption, not a user
+        cancellation. Non-terminal orchestration remains recoverable after the
+        next process starts, so this method must not emit a public terminal state.
+        """
+        tasks = {task for task in set(self._inflight) if not task.done()}
+        for task in tasks:
+            task.cancel(GRACEFUL_SHUTDOWN_CANCEL_REASON)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        return sum(task.cancelled() for task in tasks)
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)

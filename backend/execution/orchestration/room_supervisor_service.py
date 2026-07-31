@@ -590,15 +590,6 @@ class RoomSupervisorService:
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
 
-        if trajectory.hitl_user_reply:
-            lines.append(
-                f"\n### User's Clarification Reply\n{trajectory.hitl_user_reply}"
-            )
-        elif trajectory.clarify_user_reply:
-            lines.append(
-                f"\n### User's Clarification Reply\n{trajectory.clarify_user_reply}"
-            )
-
         # Warn about consecutive same-agent re-delegations
         all_entries = trajectory.entries
         if len(all_entries) >= 2:
@@ -871,19 +862,19 @@ class RoomSupervisorService:
 
     @staticmethod
     def parse_planner_action(response_json: dict) -> PlannerAction:
-        """Parse an existing supervisor JSON decision into a v2 planner action."""
+        """Parse an existing supervisor JSON decision into an orchestration planner action."""
 
-        return RoomSupervisorService._parse_legacy_action_as_planner_action(
+        return RoomSupervisorService._parse_provider_action_as_planner_action(
             response_json
         )
 
     @staticmethod
-    def _parse_legacy_action_as_planner_action(
+    def _parse_provider_action_as_planner_action(
         response_json: dict,
     ) -> PlannerAction:
-        """Adapt legacy supervisor JSON action names to a strict v2 action.
+        """Adapt provider action aliases to a strict orchestration action.
 
-        Unlike ``_parse_supervisor_action``, this v2 path raises for unknown or
+        Unlike ``_parse_supervisor_action``, this orchestration path raises for unknown or
         malformed action values instead of coercing them to DONE.
         """
 
@@ -901,8 +892,8 @@ class RoomSupervisorService:
             "clarify": PlannerActionType.ASK_USER,
             "done": PlannerActionType.COMPLETE,
             "delegate": PlannerActionType.DELEGATE,
-            # Legacy providers used "synthesize" to mean that agent work was
-            # complete. V2 normalizes it to COMPLETE; Execution owns the final
+            # Some providers use "synthesize" to mean that agent work was
+            # complete. Orchestration normalizes it to COMPLETE; Execution owns the final
             # synthesis step and only then marks the run terminal.
             "synthesize": PlannerActionType.COMPLETE,
         }

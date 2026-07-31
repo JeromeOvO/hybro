@@ -18,7 +18,6 @@ from dal.runtime_store.parts.webhook_tokens import (
 )
 from models.room import RoomAgentMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
-from models.supervisor import TrajectoryStatus
 
 logger = get_logger(__name__)
 
@@ -523,49 +522,6 @@ class TaskLifecycleRuntimeStorePart:
             ) is not None
         except Exception:
             logger.error("Failed to save user-message continuation", exc_info=True)
-            return False
-
-    async def get_stuck_supervisor_trajectory_messages(
-        self,
-        older_than_minutes: int,
-        limit: int = 100,
-    ) -> list[dict]:
-        try:
-            threshold = utcnow() - timedelta(minutes=older_than_minutes)
-            return await self._room_user_messages.find(
-                {
-                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                    "extend_info.supervisor": True,
-                    "message_created_at": {"$lt": threshold},
-                },
-                projection={"message_id": 1, "room_id": 1, "_id": 0},
-                limit=limit,
-            )
-        except Exception:
-            logger.error(
-                "Failed to get stuck supervisor trajectory messages",
-                exc_info=True,
-            )
-            return []
-
-    async def claim_stuck_supervisor_trajectory(self, message_id: str) -> bool:
-        try:
-            doc = await self._room_user_messages.find_one_and_update(
-                {
-                    "message_id": message_id,
-                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                },
-                {
-                    "$set": {
-                        "extend_info.supervisor_trajectory.status": (
-                            TrajectoryStatus.RECOVERING
-                        ),
-                    }
-                },
-            )
-            return doc is not None
-        except Exception:
-            logger.error("Failed to claim stuck supervisor trajectory", exc_info=True)
             return False
 
     async def _find_agent_messages(

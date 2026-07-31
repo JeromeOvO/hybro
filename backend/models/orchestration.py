@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, computed_field, field_validator, model_va
 
 from common.utils.time import utcnow
 
+ORCHESTRATION_RUN_SCHEMA_VERSION = 2
+
 
 class OrchestrationStatus(StrEnum):
     CREATED = "created"
@@ -128,7 +130,7 @@ class DispatchExpectedOutput(BaseModel):
             separators=(",", ":"),
         )
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        self.output_key = f"legacy:{digest[:20]}"
+        self.output_key = f"derived:{digest[:20]}"
         return self
 
 
@@ -478,7 +480,7 @@ class OrchestrationRunState(BaseModel):
     candidate_scope: CandidateScopeSnapshot | None = None
     client_request_id: str | None = None
     status: OrchestrationStatus = OrchestrationStatus.CREATED
-    schema_version: int = 2
+    schema_version: int = ORCHESTRATION_RUN_SCHEMA_VERSION
     state_version: int = 0
     facts: list[dict[str, Any]] = Field(default_factory=list)
     open_questions: list[dict[str, Any]] = Field(
@@ -518,6 +520,16 @@ class OrchestrationRunState(BaseModel):
     blockers: list[BlockerRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _supported_schema_version(cls, value: int) -> int:
+        if value != ORCHESTRATION_RUN_SCHEMA_VERSION:
+            raise ValueError(
+                "unsupported orchestration run schema_version "
+                f"{value}; expected {ORCHESTRATION_RUN_SCHEMA_VERSION}"
+            )
+        return value
 
 
 class OrchestrationRunEvent(BaseModel):

@@ -1217,13 +1217,12 @@ class TestInquiryRoomMessages:
         assert response.success is True
 
     @pytest.mark.asyncio
-    async def test_returns_public_user_message_payload_without_private_extend_info(
+    async def test_returns_public_user_history_without_private_orchestration_state(
         self, mock_user, sample_room, patch_room_center_deps
     ):
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
-
-        private_sentinel = "PRIVATE_SENTINEL_user_extend_info_history_boundary"
+        private_sentinel = "PRIVATE_SENTINEL_user_history_boundary"
         public_extend_info = {
             "quoted_text": "Public quoted excerpt",
             "quoted_sender_name": "Agent One",
@@ -1244,10 +1243,6 @@ class TestInquiryRoomMessages:
                 "orchestration_run_id": private_sentinel,
                 "candidate_scope_snapshot_id": private_sentinel,
                 "candidate_agent_ids": [private_sentinel],
-                "supervisor_trajectory": {
-                    "status": "running",
-                    "entries": [{"prompt": private_sentinel}],
-                },
                 "agent_registry": [{"agent_id": private_sentinel}],
                 "conversation_context": private_sentinel,
                 "room_config": {"explicit_mentions": [private_sentinel]},

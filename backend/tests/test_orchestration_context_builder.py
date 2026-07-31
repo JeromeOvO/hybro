@@ -231,7 +231,7 @@ def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
 
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
-        candidate_scope=[_candidate("agent-1", "Legacy Agent")],
+        candidate_scope=[_candidate("agent-1", "Candidate Agent")],
         message_text="Use the saved scope",
     )
 
@@ -294,7 +294,7 @@ def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
 
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
-        candidate_scope=[_candidate("agent-2", "Legacy Agent")],
+        candidate_scope=[_candidate("agent-2", "Candidate Agent")],
         message_text="Use the selected agent",
     )
 
@@ -341,7 +341,7 @@ def test_candidate_scope_partial_snapshot_preserves_all_agent_ids_in_order():
 
 def test_context_builder_prefers_run_state_candidate_scope():
     state = _run_state(
-        candidate_agent_ids=["legacy-agent"],
+        candidate_agent_ids=["candidate-agent"],
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             source="explicit_selection",
@@ -353,7 +353,7 @@ def test_context_builder_prefers_run_state_candidate_scope():
 
     context = build_orchestration_planner_context(
         run_state=state,
-        candidate_scope=["legacy-agent"],
+        candidate_scope=["candidate-agent"],
         message_text="Need a quote",
     )
 
@@ -1064,7 +1064,7 @@ async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_keeps_v2_validation_outside_prompt_text():
+async def test_planner_adapter_keeps_orchestration_validation_outside_prompt_text():
     seen_prompt_values: list[str] = []
 
     async def raw_action(context):

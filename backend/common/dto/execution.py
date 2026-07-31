@@ -32,7 +32,6 @@ class ExecutionRequest(FrozenDTO):
     selected_agent_ids: list[str] | None = None
     candidate_scope_mode: str | None = None
     candidate_scope_group_id: str | None = None
-    orchestration_schema_version: int | None = None
     parent_message_id: str | None = None
     client_request_id: str | None = None
     mode: Literal["direct", "supervisor", "debate"] = "direct"
@@ -102,7 +101,6 @@ class HITLRequest(FrozenDTO):
     display_message_id: str | None = None
     client_request_id: str | None = None
     orchestration_run_id: str | None = None
-    orchestration_schema_version: int | None = None
     prompt_type: Literal["text", "choice", "confirmation"] = "text"
     choices: list[str] | None = None
     group_id: str | None = None

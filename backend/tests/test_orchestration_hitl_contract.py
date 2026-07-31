@@ -52,25 +52,22 @@ def _persistence_mock():
     return persistence
 
 
-def test_hitl_request_model_preserves_optional_v2_run_link_fields():
+def test_hitl_request_model_preserves_optional_orchestration_run_link_fields():
     request = HITLRequest(
         room_id="room-1",
         user_message_id="user-msg-1",
         source="supervisor",
         prompt="Clarify?",
         orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
     assert request.orchestration_run_id == "run-msg-1"
-    assert request.orchestration_schema_version == 2
     payload = request.model_dump(mode="json")
     assert payload["orchestration_run_id"] == "run-msg-1"
-    assert payload["orchestration_schema_version"] == 2
 
 
 @pytest.mark.asyncio
-async def test_v2_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
+async def test_orchestration_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
     service = HITLService()
     persistence = _persistence_mock()
     delivery = MagicMock()
@@ -93,22 +90,19 @@ async def test_v2_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
         continuation_message_id="cont-msg-1",
         display_message_id="display-msg-1",
         orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
     assert result is not None
     assert captured_docs[0]["orchestration_run_id"] == "run-msg-1"
-    assert captured_docs[0]["orchestration_schema_version"] == 2
 
     event = delivery.emit.await_args.args[0]
     assert isinstance(event, HITLRequestEvent)
     assert event.message_id == "display-msg-1"
     assert event.related_message_id == "user-msg-1"
-    assert event.orchestration_run_id == "run-msg-1"
-    assert event.orchestration_schema_version == 2
+    assert "orchestration_run_id" not in event.model_dump()
 
 
-def test_hitl_sse_frame_strips_v2_run_links_when_present():
+def test_hitl_delivery_event_has_no_orchestration_run_link():
     event = HITLRequestEvent(
         room_id="room-1",
         request_id="hitl-1",
@@ -117,16 +111,15 @@ def test_hitl_sse_frame_strips_v2_run_links_when_present():
         prompt="Clarify the scope",
         prompt_type="text",
         related_message_id="user-msg-1",
-        orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
+    assert "orchestration_run_id" not in HITLRequestEvent.model_fields
+    assert "orchestration_run_id" not in event.model_dump()
     frame = to_sse_frame(event, timestamp=NOW)
 
     assert frame["data"]["message_id"] == "display-msg-1"
     assert frame["data"]["related_message_id"] == "user-msg-1"
     assert "orchestration_run_id" not in frame["data"]
-    assert "orchestration_schema_version" not in frame["data"]
     assert "lifecycle_message_id" not in frame["data"]
 
 

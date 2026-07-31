@@ -564,18 +564,6 @@ class RuntimeRepositoryStore:
             message_id, continuation_data
         )
 
-    async def get_stuck_supervisor_trajectory_messages(
-        self,
-        older_than_minutes: int,
-        limit: int = 100,
-    ) -> list[dict]:
-        return await self._task_delegate().get_stuck_supervisor_trajectory_messages(
-            older_than_minutes, limit
-        )
-
-    async def claim_stuck_supervisor_trajectory(self, message_id: str) -> bool:
-        return await self._task_delegate().claim_stuck_supervisor_trajectory(message_id)
-
     async def get_room_memory_by_room_id(
         self, room_id: str
     ) -> RuntimeRoomMemory | None:

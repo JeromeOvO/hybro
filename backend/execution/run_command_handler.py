@@ -1,4 +1,4 @@
-"""Single writer for `runs` / `run_events` (v1 orchestration run_id == trigger user message_id)."""
+"""Single writer for public `runs` / `run_events` projections."""
 
 from __future__ import annotations
 
@@ -38,16 +38,8 @@ class _UnboundRunEventRepository:
         raise RuntimeError(_UNBOUND_MESSAGE)
 
 
-def feature_run_dual_write_enabled() -> bool:
-    return settings.feature_run_dual_write
-
-
-def _feature_run_dual_write_enabled() -> bool:
-    return feature_run_dual_write_enabled()
-
-
 class RunCommandHandler:
-    """Append-only run lifecycle + materialized head (orchestration runs only in v1)."""
+    """Append-only public run lifecycle and materialized head projection."""
 
     def __init__(
         self,
@@ -77,7 +69,7 @@ class RunCommandHandler:
         _lease_held: bool = False,
     ) -> dict[str, Any] | None:
         """Persist lifecycle from processing_status semantics. Returns last run_event payload for SSE."""
-        if not _feature_run_dual_write_enabled() or not room_id or not message_id:
+        if not room_id or not message_id:
             return None
         if self._room_files is not None and not _lease_held:
             async with self._room_files.write_lease(room_id, "run-processing-status"):
@@ -180,8 +172,6 @@ class RunCommandHandler:
         terminal_summary: dict[str, Any] | None = None,
         _lease_held: bool = False,
     ) -> dict[str, Any] | None:
-        if not _feature_run_dual_write_enabled():
-            return None
         if not isinstance(target_state, RunState):
             raise TypeError("target_state must be a public RunState")
         if self._room_files is not None and not _lease_held:
@@ -373,8 +363,6 @@ class RunCommandHandler:
         the head forward instead — avoiding the DuplicateKeyError loop that
         previously left the run stuck forever.
         """
-        if not _feature_run_dual_write_enabled():
-            return None
         if self._room_files is not None and not _lease_held:
             async with self._room_files.write_lease(room_id, "run-watchdog"):
                 return await self.append_run_timeout_failure(

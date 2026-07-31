@@ -90,10 +90,7 @@ class InMemoryRunEventRepository:
 @pytest.mark.asyncio
 async def test_project_run_state_is_idempotent_by_causation_id(monkeypatch):
     import execution.run_lifecycle_service as mod
-    from common.config import settings
     from execution.run_lifecycle_service import run_lifecycle_service
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     handler = AsyncMock()
     handler.project_run_state = AsyncMock(return_value={"run_id": "run-1"})
@@ -117,10 +114,7 @@ async def test_project_run_state_is_idempotent_by_causation_id(monkeypatch):
 async def test_project_run_state_reuses_existing_event_for_same_causation_id(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     existing_event = {
         "event_id": "evt-1",
@@ -172,46 +166,11 @@ async def test_project_run_state_reuses_existing_event_for_same_causation_id(
 
 
 @pytest.mark.asyncio
-async def test_project_run_state_skips_when_dual_write_is_disabled(monkeypatch):
-    from common.config import settings
-    from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", False)
-
-    run_repo = AsyncMock()
-    event_repo = AsyncMock()
-    handler = RunCommandHandler(
-        run_repository=run_repo,
-        run_event_repository=event_repo,
-    )
-
-    result = await handler.project_run_state(
-        room_id="room-1",
-        run_id="run-1",
-        trigger_message_id="msg-1",
-        target_state=RunState.PROCESSING,
-        terminal_reason=None,
-        causation_id="orch-event-1",
-        client_request_id="cr-1",
-    )
-
-    assert result is None
-    run_repo.find_one.assert_not_awaited()
-    run_repo.insert_one.assert_not_awaited()
-    run_repo.update_one.assert_not_awaited()
-    event_repo.find_one.assert_not_awaited()
-    event_repo.insert_one.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_project_run_state_rejects_orchestration_status_before_repository_access(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
     from models.orchestration import OrchestrationStatus
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     run_repo = AsyncMock()
     event_repo = AsyncMock()
@@ -257,10 +216,7 @@ async def test_project_run_state_binds_causation_when_head_is_already_at_target(
     target_state,
     expected_event_type,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     run_repo = InMemoryRunRepository()
     event_repo = InMemoryRunEventRepository()
@@ -340,10 +296,7 @@ async def test_run_lifecycle_adapter_delegates_project_run_state():
 async def test_project_run_state_retains_public_run_id_when_trigger_differs(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     run_repo = InMemoryRunRepository()
     event_repo = InMemoryRunEventRepository()
@@ -382,10 +335,7 @@ async def test_project_run_state_retains_public_run_id_when_trigger_differs(
 async def test_project_run_state_causation_replay_does_not_advance_seq(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     run_repo = InMemoryRunRepository()
     event_repo = InMemoryRunEventRepository()
@@ -425,10 +375,7 @@ async def test_project_run_state_causation_replay_does_not_advance_seq(
 async def test_project_run_state_terminal_projection_keeps_head_consistent(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     run_repo = InMemoryRunRepository()
     event_repo = InMemoryRunEventRepository()
@@ -485,10 +432,7 @@ async def test_project_run_state_terminal_projection_keeps_head_consistent(
 async def test_project_run_state_replay_repairs_stale_head_without_appending(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     existing_event = {
         "event_id": "evt-existing",
@@ -547,10 +491,7 @@ async def test_project_run_state_replay_repairs_stale_head_without_appending(
 async def test_project_run_state_active_replay_repairs_started_at_without_appending(
     monkeypatch,
 ):
-    from common.config import settings
     from execution.run_command_handler import RunCommandHandler
-
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
 
     existing_event = {
         "event_id": "evt-existing",

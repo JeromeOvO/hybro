@@ -189,8 +189,9 @@ class TestMultiEventSequenceSkipPersist:
         h._task_writer.update_task_state_on_message.assert_not_awaited()
         assert h._message_writer.accumulate_artifact_on_message.await_count == 2
 
-        # Orchestration resume still fires
-        h._rmc.resume_queue_from_continuation.assert_awaited_once()
+        # Direct transport returns the result to the active executor; recursive
+        # room-lock recovery must not fire from the response handler.
+        h._rmc.resume_queue_from_continuation.assert_not_awaited()
 
 
 # =========================================================================
@@ -280,7 +281,7 @@ class TestErrorEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_not_awaited()
-        h._rmc.resume_queue_from_continuation.assert_awaited_once()
+        h._rmc.resume_queue_from_continuation.assert_not_awaited()
 
 
 # =========================================================================
@@ -330,4 +331,4 @@ class TestCanceledEventParity:
             await h.handle(event)
 
         h._task_writer.update_task_state_on_message.assert_not_awaited()
-        h._rmc.resume_queue_from_continuation.assert_awaited_once()
+        h._rmc.resume_queue_from_continuation.assert_not_awaited()

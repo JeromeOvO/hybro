@@ -198,7 +198,6 @@ class HITLService:
         continuation_message_id: str | None = None,
         display_message_id: str | None = None,
         orchestration_run_id: str | None = None,
-        orchestration_schema_version: int | None = None,
         expires_in_hours: float = 24.0,
         group_id: str | None = None,
         group_total: int | None = None,
@@ -282,7 +281,6 @@ class HITLService:
             display_message_id=resolved_display_message_id,
             client_request_id=resolved_client_request_id,
             orchestration_run_id=orchestration_run_id,
-            orchestration_schema_version=orchestration_schema_version,
             expires_at=utcnow() + timedelta(hours=expires_in_hours),
             group_id=group_id,
             group_total=group_total,
@@ -1188,7 +1186,6 @@ class HITLService:
             "room_id": request.room_id,
             "user_message_id": request.user_message_id,
             "orchestration_run_id": request.orchestration_run_id,
-            "orchestration_schema_version": request.orchestration_schema_version,
             "source": request.source,
             "response": user_input,
             "user_input": user_input,
@@ -1365,7 +1362,6 @@ class HITLService:
                 continuation_message_id=request.continuation_message_id,
                 display_message_id=request.display_message_id,
                 orchestration_run_id=request.orchestration_run_id,
-                orchestration_schema_version=request.orchestration_schema_version,
             )
             if new_request is None:
                 logger.warning(
@@ -1460,7 +1456,7 @@ class HITLService:
             "task_state": task_state,
             "response_text": task_result_text,
             "resume_execution": False,
-            "legacy_resume_triggered": True,
+            "queue_resume_triggered": True,
         }
 
     # ------------------------------------------------------------------
@@ -1470,41 +1466,11 @@ class HITLService:
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
-        """Resume supervisor loop with user's answer injected into trajectory."""
-        if request.orchestration_run_id:
-            return
-        continuation = await self.persistence.get_pending_continuation_on_message(
-            request.continuation_message_id
-        )
-        if not continuation:
+        """Validate durable supervisor linkage before facade-owned recovery."""
+        del user_input
+        if not request.orchestration_run_id:
             raise ContinuationLostError(
-                f"No continuation found for message {request.continuation_message_id} — "
-                "the supervisor reply could not schedule orchestration recovery"
-            )
-
-        if continuation.get("supervisor"):
-            traj = continuation.get("trajectory", {})
-            traj["hitl_user_reply"] = user_input
-            traj["hitl_original_message_id"] = continuation.get("user_message_id")
-            continuation["trajectory"] = traj
-
-            saved = await self.persistence.save_continuation_on_user_message(
-                request.continuation_message_id, continuation
-            )
-            if not saved:
-                raise RuntimeError(
-                    f"Failed to persist patched continuation for message "
-                    f"{request.continuation_message_id} — user reply would be lost"
-                )
-
-        resumed = await self.continuation.resume_queue_from_continuation(
-            request.continuation_message_id,
-            task_result_text=None,
-        )
-        if not resumed:
-            raise RuntimeError(
-                f"Supervisor resume failed for message {request.continuation_message_id} — "
-                "continuation is preserved for retry"
+                "Supervisor HITL request is missing orchestration_run_id"
             )
 
     # ------------------------------------------------------------------
@@ -1959,8 +1925,6 @@ class HITLService:
                     group_index=request.group_index,
                     related_message_id=data["related_message_id"],
                     client_request_id=data.get("client_request_id"),
-                    orchestration_run_id=request.orchestration_run_id,
-                    orchestration_schema_version=request.orchestration_schema_version,
                 )
             )
             return
@@ -1981,8 +1945,6 @@ class HITLService:
                 related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),
-                orchestration_run_id=request.orchestration_run_id,
-                orchestration_schema_version=request.orchestration_schema_version,
             )
         )
 

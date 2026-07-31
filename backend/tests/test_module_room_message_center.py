@@ -10,7 +10,6 @@ Tests cover:
 
 import ast
 import asyncio
-from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -19,10 +18,10 @@ import pytest
 from a2a.types import TaskState
 
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
-from common.dto import MessageCommitted
 from execution.orchestration.room_message_center import RoomMessageCenter
+from execution.orchestration.run_store import InMemoryOrchestrationRunStore
+from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from models.agent import AgentStatus
-from models.hitl import InterruptKind
 from models.orchestration import (
     AgentOutputRecord,
     DispatchIntent,
@@ -30,7 +29,7 @@ from models.orchestration import (
     OrchestrationStatus,
 )
 from models.response import OrchestrationResponse
-from models.room import MessageContent, Room, RoomUserMessage
+from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from models.supervisor import (
     ActionType,
     RunStatus,
@@ -144,6 +143,59 @@ class TestRoomFacadeBinding:
 
 
 @pytest.mark.asyncio
+async def test_async_agent_callback_reenters_durable_orchestration_without_continuation():
+    store = InMemoryOrchestrationRunStore()
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="Coordinate this",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.WAITING_AGENT,
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="run-1:step-1",
+                step_target_id="run-1:step-1:target-1",
+                dispatch_intent_id="run-1:step-1:target-1:intent",
+                planned_agent_message_id="agent-msg-1",
+                agent_id="agent-1",
+                task="Handle this",
+                task_hash="hash",
+            )
+        ],
+    )
+    await store.create_run(state)
+    agent_message = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-msg-1",
+        agent_id="agent-1",
+        user_id="user-1",
+        related_message_id="user-msg-1",
+        message_content=MessageContent(message_text="Webhook result"),
+    )
+    rmc = object.__new__(RoomMessageCenter)
+    rmc.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(return_value=None)
+    )
+    rmc.message_reader = SimpleNamespace(
+        get_room_agent_message_by_message_id=AsyncMock(return_value=agent_message)
+    )
+    rmc.orchestration_run_store = store
+    rmc.process_room_user_message = AsyncMock(
+        return_value=OrchestrationResponse(room_id="room-1", success=True)
+    )
+
+    resumed = await rmc.resume_queue_from_continuation("agent-msg-1")
+
+    assert resumed is True
+    request = rmc.process_room_user_message.await_args.args[0]
+    assert request.room_id == "room-1"
+    assert request.room_user_message_id == "user-msg-1"
+    assert request.is_recovery is True
+    assert request.reuse_processing_claim is True
+
+
+@pytest.mark.asyncio
 async def test_failed_supervisor_result_projects_terminal_summary_to_client_boundaries():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     summary = {
@@ -158,7 +210,6 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
         message_content=MessageContent(message_text="Produce a quote."),
         extend_info={
             "orchestration": True,
-            "orchestration_schema_version": 2,
             "orchestration_run_id": "run-1",
         },
     )
@@ -268,6 +319,39 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
     )
 
 
+@pytest.mark.asyncio
+async def test_graceful_shutdown_interrupt_leaves_turn_recoverable():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="user-msg-1",
+        is_recovery=False,
+    )
+    rmc.message_writer = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
+    rmc._release_room_lock = AsyncMock()
+    rmc._process_room_user_message_locked = AsyncMock(
+        side_effect=asyncio.CancelledError(GRACEFUL_SHUTDOWN_CANCEL_REASON)
+    )
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    rmc.delivery = SimpleNamespace(clear_cancellation=MagicMock())
+    rmc._turn_event_appender = SimpleNamespace(append=AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await rmc.process_room_user_message(request)
+
+    assert exc_info.value.args == (GRACEFUL_SHUTDOWN_CANCEL_REASON,)
+    rmc._turn_event_appender.append.assert_not_awaited()
+    rmc._notify_all_non_terminal_tasks_failed.assert_not_awaited()
+    rmc._emit_processing_status.assert_not_awaited()
+    rmc.delivery.clear_cancellation.assert_not_called()
+    rmc._release_room_lock.assert_awaited_once()
+
+
 # =============================================================================
 # _find_paused_agent Tests
 # =============================================================================
@@ -303,212 +387,6 @@ def _make_trajectory_with_paused(agent_id="a1", agent_name="Agent1", msg_id="msg
     t = SupervisorTrajectory()
     t.entries = [entry]
     return t
-
-
-class TestFindPausedAgent:
-    def test_finds_paused_agent(self):
-        t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        aid, aname = RoomMessageCenter._find_paused_agent(t, "msg-p1")
-        assert aid == "a1"
-        assert aname == "Alpha"
-
-    def test_returns_none_when_not_found(self):
-        t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        aid, aname = RoomMessageCenter._find_paused_agent(t, "msg-other")
-        assert aid is None
-        assert aname is None
-
-    def test_returns_none_on_empty_trajectory(self):
-        t = SupervisorTrajectory()
-        aid, aname = RoomMessageCenter._find_paused_agent(t, "msg-p1")
-        assert aid is None
-        assert aname is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "interrupt_kind",
-    [InterruptKind.PUSH_NOTIFICATION, InterruptKind.HITL_AGENT],
-)
-async def test_resume_supervisor_agent_interrupt_publishes_agent_message_committed(
-    interrupt_kind,
-):
-    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
-    rmc.event_publisher = RecordingEventPublisher()
-    rmc.message_reader = SimpleNamespace(
-        get_room_user_message_by_message_id=AsyncMock(return_value=None)
-    )
-    rmc.memory_reader = SimpleNamespace(
-        get_room_memory_by_room_id=AsyncMock(return_value=None)
-    )
-    rmc.context_memory_runtime = None
-    rmc.room_reader = SimpleNamespace(
-        get_room_by_room_id=AsyncMock(
-            return_value=SimpleNamespace(
-                room_agent_set={"a1": "Alpha"},
-                extend_info={},
-            )
-        )
-    )
-    rmc.agent_lookup = SimpleNamespace(
-        get_agent_by_agent_id=AsyncMock(return_value=None)
-    )
-    token = SimpleNamespace(is_cancelled=False)
-    rmc.delivery = SimpleNamespace(
-        get_token=MagicMock(return_value=None),
-        create_token=MagicMock(return_value=token),
-    )
-
-    async def run_supervisor(**kwargs):
-        return SupervisorRunResult(
-            status=RunStatus.COMPLETED,
-            trajectory=kwargs["resumed_trajectory"],
-        )
-
-    rmc.supervisor_executor = SimpleNamespace(run=AsyncMock(side_effect=run_supervisor))
-    rmc._handle_supervisor_run_result = AsyncMock()
-    rmc._log_room_memory_stats = AsyncMock()
-    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
-    rmc._emit_processing_status = AsyncMock()
-    rmc._turn_event_appender = None
-
-    trajectory = _make_trajectory_with_paused("a1", "Alpha", "paused-msg")
-    continuation = {
-        "room_id": "room-1",
-        "user_message_id": "umsg-1",
-        "message_text": "original user task",
-        "interrupt_kind": interrupt_kind.value,
-        "trajectory": trajectory.model_dump(mode="json"),
-        "room_config": {},
-        "agent_registry": [],
-    }
-
-    status = await rmc._resume_supervisor(
-        continuation,
-        paused_message_id="paused-msg",
-        task_result_text="agent result",
-    )
-
-    assert status == RunStatus.COMPLETED
-    committed_events = [
-        event
-        for event in rmc.event_publisher.internal_events
-        if isinstance(event, MessageCommitted)
-    ]
-    assert len(committed_events) == 1
-    event = committed_events[0]
-    assert event.room_id == "room-1"
-    assert event.message_id == "paused-msg"
-    assert event.message_type == "agent"
-    assert event.agent_id == "a1"
-    assert event.agent_name == "Alpha"
-    assert event.was_successful is True
-
-
-# =============================================================================
-# _extract_clarify_question Tests
-# =============================================================================
-
-
-class TestExtractClarifyQuestion:
-    def test_extracts_clarify_question(self):
-        from datetime import datetime
-
-        entry = TrajectoryEntry(
-            step_number=1,
-            action=SupervisorAction(
-                action=ActionType.CLARIFY,
-                reasoning="Need more info",
-                targets=[],
-                clarification_question="What do you mean?",
-            ),
-            results=[],
-            started_at=datetime(2026, 1, 1),
-        )
-        t = SupervisorTrajectory()
-        t.entries = [entry]
-        assert RoomMessageCenter._extract_clarify_question(t) == "What do you mean?"
-
-    def test_returns_none_when_no_clarify(self):
-        from datetime import datetime
-
-        entry = TrajectoryEntry(
-            step_number=1,
-            action=SupervisorAction(
-                action=ActionType.DELEGATE,
-                reasoning="Go",
-                targets=[{"agent_id": "a1", "agent_name": "Alpha", "task": "x"}],
-            ),
-            results=[],
-            started_at=datetime(2026, 1, 1),
-        )
-        t = SupervisorTrajectory()
-        t.entries = [entry]
-        assert RoomMessageCenter._extract_clarify_question(t) is None
-
-    def test_returns_none_on_empty_trajectory(self):
-        t = SupervisorTrajectory()
-        assert RoomMessageCenter._extract_clarify_question(t) is None
-
-    def test_returns_last_clarify_when_multiple(self):
-        from datetime import datetime
-
-        e1 = TrajectoryEntry(
-            step_number=1,
-            action=SupervisorAction(
-                action=ActionType.CLARIFY,
-                reasoning="First",
-                targets=[],
-                clarification_question="First question?",
-            ),
-            results=[],
-            started_at=datetime(2026, 1, 1),
-        )
-        e2 = TrajectoryEntry(
-            step_number=2,
-            action=SupervisorAction(
-                action=ActionType.CLARIFY,
-                reasoning="Second",
-                targets=[],
-                clarification_question="Second question?",
-            ),
-            results=[],
-            started_at=datetime(2026, 1, 1),
-        )
-        t = SupervisorTrajectory()
-        t.entries = [e1, e2]
-        assert RoomMessageCenter._extract_clarify_question(t) == "Second question?"
-
-
-# =============================================================================
-# _append_paused_result_to_trajectory Tests
-# =============================================================================
-
-
-class TestAppendPausedResult:
-    def test_replaces_paused_result_with_success(self):
-        t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        RoomMessageCenter._append_paused_result_to_trajectory(
-            t, "msg-p1", "Agent completed the task"
-        )
-        result = t.entries[0].results[0]
-        assert result.status == StepStatus.SUCCESS
-        assert result.response_text == "Agent completed the task"
-        assert result.success is True
-        assert result.error_message is None
-
-    def test_replaces_paused_result_with_failure_when_no_text(self):
-        t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        RoomMessageCenter._append_paused_result_to_trajectory(t, "msg-p1", None)
-        result = t.entries[0].results[0]
-        assert result.status == StepStatus.FAILED
-        assert result.success is False
-        assert result.error_message is not None
-
-    def test_no_change_when_message_id_not_found(self):
-        t = _make_trajectory_with_paused("a1", "Alpha", "msg-p1")
-        RoomMessageCenter._append_paused_result_to_trajectory(t, "msg-other", "text")
-        assert t.entries[0].results[0].status == StepStatus.PAUSED
 
 
 # =============================================================================
@@ -848,7 +726,7 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
     center.supervisor_executor = Executor()
     center.supervisor_planning_error_cls = Exception
     center.build_turn_content = None
-    center._build_v2_supervisor_inputs = AsyncMock(
+    center._build_supervisor_inputs = AsyncMock(
         return_value=(
             [SimpleNamespace(agent_id="agent-1", agent_name="Agent One")],
             SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
@@ -864,7 +742,6 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
         message_content=SimpleNamespace(message_text="Need quote", attachments=[]),
         extend_info={
             "orchestration": True,
-            "orchestration_schema_version": 2,
             "orchestration_run_id": "msg-1",
             "candidate_scope_mode": "explicit_selection",
             "candidate_agent_ids": ["agent-1"],
@@ -893,7 +770,6 @@ async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs(
         user_id="user-1",
         message_content=MessageContent(message_text="Need quote"),
         extend_info={
-            "orchestration_schema_version": 2,
             "orchestration_run_id": "msg-1",
             "candidate_agent_ids": ["agent-1", "agent-2"],
         },
@@ -993,7 +869,6 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
         user_id="user-1",
         message_content=MessageContent(message_text="Need quote"),
         extend_info={
-            "orchestration_schema_version": 2,
             "orchestration_run_id": "msg-1",
             "candidate_agent_ids": ["agent-1", "agent-2"],
         },
@@ -1050,62 +925,6 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
 
 
 @pytest.mark.asyncio
-async def test_state_run_result_unsticks_original_clarify_message():
-    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
-    user_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="resume-msg",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Account A"),
-        extend_info={},
-    )
-    original_message = RoomUserMessage(
-        room_id="room-1",
-        message_id="original-msg",
-        user_id="user-1",
-        message_content=MessageContent(message_text="Coordinate this"),
-        extend_info={"supervisor_trajectory": {"status": "clarifying"}},
-    )
-    state = _completed_state_with_agent_outputs()
-    state.status = OrchestrationStatus.WAITING_AGENT
-    rmc.message_reader = SimpleNamespace(
-        get_room_user_message_by_message_id=AsyncMock(
-            side_effect=lambda message_id: {
-                "resume-msg": user_message,
-                "original-msg": original_message,
-            }.get(message_id)
-        )
-    )
-    rmc.message_writer = SimpleNamespace(
-        update_room_user_message_by_message_id=AsyncMock()
-    )
-    rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
-    rmc._turn_event_appender = None
-    rmc.delivery = SimpleNamespace(remove_token=MagicMock())
-
-    await rmc._handle_supervisor_run_result(
-        SupervisorRunResult(
-            status=RunStatus.PAUSED,
-            trajectory=None,
-            run_id=state.run_id,
-            run_state=state,
-        ),
-        room_id="room-1",
-        user_message_id="resume-msg",
-        original_clarify_message_id="original-msg",
-        user_message=user_message,
-    )
-
-    assert original_message.extend_info["supervisor_trajectory"]["status"] == (
-        OrchestrationStatus.WAITING_AGENT.value
-    )
-    assert any(
-        call.args[0] == "original-msg"
-        for call in rmc.message_writer.update_room_user_message_by_message_id.await_args_list
-    )
-
-
-@pytest.mark.asyncio
 async def test_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     user_message = RoomUserMessage(
@@ -1115,7 +934,6 @@ async def test_orchestration_envelope_routes_to_supervisor_executor():
         message_content=MessageContent(message_text="Coordinate this"),
         extend_info={
             "orchestration": True,
-            "orchestration_schema_version": 2,
             "orchestration_run_id": "message-1",
             "candidate_scope_mode": "explicit_selection",
             "candidate_agent_ids": ["agent-1", "agent-2"],
@@ -1304,39 +1122,6 @@ def test_supervisor_corrupted_data_notifies_before_failed_processing_status():
     )
 
 
-def test_supervisor_clarify_resume_failed_has_no_required_post_emit_side_effects():
-    fn = _function_node("_process_supervisor")
-    send_line = _call_line(
-        "_process_supervisor",
-        "_emit_processing_status",
-        "Clarify resume failed",
-    )
-    return_line = min(
-        node.lineno
-        for node in ast.walk(fn)
-        if isinstance(node, ast.Return) and node.lineno > send_line
-    )
-    blocking_calls = {
-        "update_room_by_room_id",
-        "update_room_user_message_by_message_id",
-        "_notify_all_non_terminal_tasks_failed",
-        "_persist_failed_trajectory",
-        "emit_synthesis_message",
-    }
-    post_emit_calls = []
-    for node in ast.walk(fn):
-        if (
-            not isinstance(node, ast.Call)
-            or node.lineno <= send_line
-            or node.lineno >= return_line
-        ):
-            continue
-        name = node.func.attr if isinstance(node.func, ast.Attribute) else None
-        if name in blocking_calls:
-            post_emit_calls.append((node.lineno, ast.unparse(node)))
-    assert not post_emit_calls
-
-
 def test_supervisor_planning_failure_notifies_before_failed_processing_status():
     _assert_before(
         "_process_supervisor",
@@ -1352,48 +1137,6 @@ def test_supervisor_execution_failure_notifies_before_failed_processing_status()
         "_notify_all_non_terminal_tasks_failed",
         (),
         ("Supervisor execution failed unexpectedly",),
-    )
-
-
-def test_supervisor_resume_deserialization_failure_notifies_before_failed_status():
-    _assert_before(
-        "_resume_supervisor",
-        "_notify_all_non_terminal_tasks_failed",
-        (),
-        ("Supervisor resume: corrupted trajectory data",),
-    )
-
-
-def test_supervisor_resume_room_lookup_failure_notifies_before_failed_status():
-    _assert_before(
-        "_resume_supervisor",
-        "_notify_all_non_terminal_tasks_failed",
-        (),
-        ("Supervisor resume: room not found",),
-    )
-
-
-def test_supervisor_resume_executor_failure_notifies_before_failed_status():
-    _assert_before(
-        "_resume_supervisor",
-        "_notify_all_non_terminal_tasks_failed",
-        (),
-        ("Supervisor resume: executor failed",),
-    )
-
-
-def test_supervisor_resume_canceled_appends_and_notifies_before_canceled_status():
-    _assert_before(
-        "_resume_supervisor",
-        "append",
-        ("turn_canceled",),
-        ("SSEProcessingStatus.CANCELED",),
-    )
-    _assert_before(
-        "_resume_supervisor",
-        "_notify_all_non_terminal_tasks_failed",
-        (),
-        ("SSEProcessingStatus.CANCELED",),
     )
 
 
@@ -1474,154 +1217,3 @@ def test_supervisor_terminal_post_loop_side_effects_complete_before_terminal_sta
         ),
     )
     assert integration_line < first_terminal_emit
-
-
-def test_clarifying_soft_complete_appends_turn_completed_before_frontend_completed_status():
-    _assert_before(
-        "_handle_supervisor_run_result",
-        "append",
-        ("turn_completed",),
-        ("SSEProcessingStatus.COMPLETED",),
-        emit_occurrence=2,
-    )
-
-
-@pytest.mark.asyncio
-async def test_supervisor_resume_race_condition():
-    """
-    Tests that resume_queue_from_continuation correctly handles concurrent resumes
-    for the same room by locking before doing a destructive read, avoiding stale trajectory state.
-    """
-    from datetime import datetime
-
-    from models.supervisor import DelegateTarget
-
-    continuation_store = AsyncMock()
-    now = datetime.now(UTC)
-    trajectory = SupervisorTrajectory(
-        room_id="room-1",
-        entries=[
-            TrajectoryEntry(
-                step_number=1,
-                started_at=now,
-                action=SupervisorAction(
-                    action=ActionType.DELEGATE,
-                    reasoning="go",
-                    targets=[
-                        DelegateTarget(agent_id="a1", agent_name="A1", task="t"),
-                        DelegateTarget(agent_id="a2", agent_name="A2", task="t"),
-                    ],
-                ),
-                results=[
-                    StepResult(
-                        step_number=1,
-                        agent_id="a1",
-                        agent_name="A1",
-                        task="t",
-                        response_text="",
-                        status=StepStatus.PAUSED,
-                        agent_message_id="msg-1",
-                        paused_message_id="msg-1",
-                    ),
-                    StepResult(
-                        step_number=1,
-                        agent_id="a2",
-                        agent_name="A2",
-                        task="t",
-                        response_text="",
-                        status=StepStatus.PAUSED,
-                        agent_message_id="msg-2",
-                        paused_message_id="msg-2",
-                    ),
-                ],
-            )
-        ],
-    )
-
-    # Initial state shared by both
-    continuation_state = {
-        "room_id": "room-1",
-        "supervisor": True,
-        "agent_registry": [],
-        "room_config": {},
-        "trajectory": trajectory.model_dump(mode="json"),
-    }
-
-    # Simulate get_pending_continuation_on_message being called concurrently and returning the same state.
-    async def mock_get_pending(msg_id):
-        await asyncio.sleep(0.01)  # force yield
-        return continuation_state.copy()
-
-    continuation_store.get_pending_continuation_on_message.side_effect = (
-        mock_get_pending
-    )
-
-    # Track when get_and_clear is called to verify they get sequential, updated state
-    cleared_msgs = set()
-
-    async def mock_get_and_clear(msg_id):
-        if msg_id in cleared_msgs:
-            return None
-        cleared_msgs.add(msg_id)
-        return continuation_state.copy()
-
-    continuation_store.get_and_clear_continuation_on_message.side_effect = (
-        mock_get_and_clear
-    )
-    continuation_store.get_and_clear_continuation_on_user_message.return_value = None
-
-    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
-    rmc.continuation_store = continuation_store
-
-    # Real asyncio lock for the room
-    room_locks = {}
-
-    async def mock_acquire(room_id):
-        if room_id not in room_locks:
-            room_locks[room_id] = asyncio.Lock()
-        await room_locks[room_id].acquire()
-        return "owner"
-
-    async def mock_release(room_id, owner, acquired_at=None):
-        room_locks[room_id].release()
-
-    rmc._acquire_room_lock = AsyncMock(side_effect=mock_acquire)
-    rmc._release_room_lock = AsyncMock(side_effect=mock_release)
-
-    async def mock_resume_supervisor(continuation, msg_id, result_text):
-        traj = SupervisorTrajectory.model_validate(continuation["trajectory"])
-        # Complete the agent that resumed
-        for entry in traj.entries:
-            for res in entry.results:
-                if res.agent_message_id == msg_id:
-                    res.status = StepStatus.SUCCESS
-
-        # Save mutated state back so the next lock owner sees it
-        continuation_state["trajectory"] = traj.model_dump(mode="json")
-        return (
-            RunStatus.PAUSED
-            if any(
-                r.status == StepStatus.PAUSED for e in traj.entries for r in e.results
-            )
-            else RunStatus.COMPLETED
-        )
-
-    rmc._resume_supervisor = AsyncMock(side_effect=mock_resume_supervisor)
-
-    # Run both concurrently
-    results = await asyncio.gather(
-        rmc.resume_queue_from_continuation("msg-1", "result 1"),
-        rmc.resume_queue_from_continuation("msg-2", "result 2"),
-    )
-
-    # Both should return successfully
-    assert all(results)
-
-    # Both messages should have been processed
-    assert len(cleared_msgs) == 2
-
-    # The final state in continuation_state should have both agents SUCCESS
-    final_traj = SupervisorTrajectory.model_validate(continuation_state["trajectory"])
-    assert all(
-        r.status == StepStatus.SUCCESS for e in final_traj.entries for r in e.results
-    )

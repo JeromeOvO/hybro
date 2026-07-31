@@ -94,7 +94,6 @@ class StaleRunWatchdogEventDeps:
     append_run_timeout_failure: Callable[..., Awaitable[dict[str, Any] | None]]
     emit_run_event: Callable[..., Awaitable[None]]
     emit_processing_status: Callable[..., Awaitable[None]]
-    run_dual_write_enabled: Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -383,9 +382,8 @@ class StaleTaskChecker:
         # 6. Recover supervisor trajectories stuck in "running" status.
         #    This handles mid-loop crashes where the server restarted while
         #    SupervisorExecutor.run() was in-flight.
-        await self._recover_stuck_supervisor_trajectories()
 
-        # 6b. Recover v2 durable orchestration runs that no longer keep a full
+        # 6b. Recover orchestration durable orchestration runs that no longer keep a full
         # supervisor trajectory on the user message.
         await self._recover_stuck_orchestration_runs()
 
@@ -434,17 +432,6 @@ class StaleTaskChecker:
             try:
                 tid = doc.get("trigger_message_id") or run_id
                 client_request_id = doc.get("client_request_id")
-                if not event_deps.run_dual_write_enabled():
-                    self._increment_counter("run_watchdog_forced_failure_total")
-                    await event_deps.emit_processing_status(
-                        room_id=room_id,
-                        status="failed",
-                        message_id=str(tid),
-                        client_request_id=client_request_id,
-                        details="Run watchdog: stale non-terminal run timed out",
-                    )
-                    continue
-
                 payload = await event_deps.append_run_timeout_failure(
                     room_id, run_id, stale_minutes=stale_mins
                 )
@@ -967,107 +954,19 @@ class StaleTaskChecker:
                     },
                 )
 
-    async def _recover_stuck_supervisor_trajectories(self) -> None:
-        """Recover supervisor trajectories stuck in "running" status.
-
-        When the server crashes mid-loop, ``_checkpoint_trajectory`` has
-        already persisted the trajectory with ``status="running"`` to the
-        user message's ``extend_info.supervisor_trajectory``.  On restart,
-        we scan for these and re-trigger ``process_room_user_message`` so
-        ``_process_supervisor`` picks up the checkpointed trajectory.
-
-        Only messages older than ``orphan_threshold_minutes`` are recovered
-        to avoid racing with actively running trajectories.
-        """
-        stuck_messages = await self._store.get_stuck_supervisor_trajectory_messages(
-            self.orphan_threshold_minutes
-        )
-
-        if not stuck_messages:
-            return
-        if self._execution_recovery_deps is None:
-            logger.warning(
-                "supervisor_recovery: skipped because Execution recovery dependencies are not bound"
-            )
-            return
-
-        logger.info(
-            "supervisor_recovery: found %d stuck supervisor trajectories to recover",
-            len(stuck_messages),
-        )
-
-        for doc in stuck_messages:
-            message_id = doc.get("message_id")
-            room_id = doc.get("room_id")
-            if not message_id or not room_id:
-                continue
-
-            # Check capacity BEFORE claiming — claiming mutates state
-            # (RUNNING → RECOVERING) so we must not claim if we can't schedule.
-            if self._recovery_semaphore.locked():
-                logger.info(
-                    "Recovery slots full, deferring remaining supervisor recoveries to next cycle"
-                )
-                break
-
-            # Respect persistent cancellation before claiming: if the user
-            # canceled during the crash window, the in-memory token was lost
-            # but the cancelled_messages DB record survives.
-            if await self._store.is_message_cancelled(message_id):
-                logger.info(
-                    "supervisor_recovery: skipping message %s — cancelled by user",
-                    message_id,
-                )
-                continue
-
-            # Atomically claim this trajectory so no other worker (or
-            # subsequent check cycle) can recover it concurrently.
-            claimed = await self._store.claim_stuck_supervisor_trajectory(message_id)
-            if not claimed:
-                logger.info(
-                    "supervisor_recovery: message %s already claimed by another worker",
-                    message_id,
-                )
-                continue
-
-            try:
-                logger.info(
-                    "supervisor_recovery: re-triggering message %s in room %s",
-                    message_id,
-                    room_id,
-                )
-                request = OrchestrationRequest(
-                    room_id=room_id,
-                    room_user_message_id=message_id,
-                    room_related_message_id="",
-                    is_recovery=True,
-                )
-                await self._recovery_semaphore.acquire()
-                task = self._execution_recovery_deps.schedule_recovery(
-                    request,
-                    reason="supervisor",
-                )
-                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
-            except Exception as e:
-                logger.error(
-                    "supervisor_recovery: failed to trigger recovery for %s: %s",
-                    message_id,
-                    e,
-                )
-
     async def _recover_stuck_orchestration_runs(self) -> None:
-        """Recover stale v2 sidecar orchestration runs.
+        """Recover stale durable orchestration runs.
 
-        V2 supervisor checkpoints keep durable progress in
-        ``OrchestrationRunState`` rather than ``user_message.extend_info``.
-        This watchdog claims stale non-terminal sidecar runs with optimistic
+        Supervisor checkpoints keep durable progress in ``OrchestrationRunState``
+        rather than ``user_message.extend_info``. This watchdog claims stale
+        non-terminal runs with optimistic
         concurrency and reuses the normal recovery orchestration path.
         """
         if self._orchestration_run_recovery_deps is None:
             return
         if self._execution_recovery_deps is None:
             logger.warning(
-                "orchestration_v2_recovery: skipped because Execution recovery dependencies are not bound"
+                "orchestration_recovery: skipped because Execution recovery dependencies are not bound"
             )
             return
 
@@ -1076,7 +975,7 @@ class StaleTaskChecker:
         try:
             states = await run_store.list_recoverable()
         except Exception as e:
-            logger.error("orchestration_v2_recovery: failed to list runs: %s", e)
+            logger.error("orchestration_recovery: failed to list runs: %s", e)
             return
 
         for state in states:
@@ -1084,18 +983,18 @@ class StaleTaskChecker:
                 continue
             if state.status.value == "awaiting_user":
                 logger.info(
-                    "orchestration_v2_recovery: skipping run %s — awaiting user input",
+                    "orchestration_recovery: skipping run %s — awaiting user input",
                     state.run_id,
                 )
                 continue
             if self._recovery_semaphore.locked():
                 logger.info(
-                    "Recovery slots full, deferring remaining v2 orchestration recoveries"
+                    "Recovery slots full, deferring remaining orchestration recoveries"
                 )
                 break
             if await self._store.is_message_cancelled(state.user_message_id):
                 logger.info(
-                    "orchestration_v2_recovery: skipping run %s — cancelled by user",
+                    "orchestration_recovery: skipping run %s — cancelled by user",
                     state.run_id,
                 )
                 continue
@@ -1107,7 +1006,7 @@ class StaleTaskChecker:
             )
             if not callable(get_user_message):
                 logger.error(
-                    "orchestration_v2_recovery: skipping run %s because the "
+                    "orchestration_recovery: skipping run %s because the "
                     "processing-claim reader is not bound",
                     state.run_id,
                 )
@@ -1124,13 +1023,13 @@ class StaleTaskChecker:
                     and ensure_utc(processing_claimed_at) > cutoff
                 ):
                     logger.info(
-                        "orchestration_v2_recovery: skipping live run %s",
+                        "orchestration_recovery: skipping live run %s",
                         state.run_id,
                     )
                     continue
             except Exception:
                 logger.warning(
-                    "orchestration_v2_recovery: failed to inspect processing "
+                    "orchestration_recovery: failed to inspect processing "
                     "claim for %s; skipping recovery",
                     state.run_id,
                     exc_info=True,
@@ -1148,13 +1047,13 @@ class StaleTaskChecker:
                 )
             except OrchestrationStoreConflict:
                 logger.info(
-                    "orchestration_v2_recovery: run %s already claimed",
+                    "orchestration_recovery: run %s already claimed",
                     state.run_id,
                 )
                 continue
             except Exception as e:
                 logger.error(
-                    "orchestration_v2_recovery: failed to claim run %s: %s",
+                    "orchestration_recovery: failed to claim run %s: %s",
                     state.run_id,
                     e,
                 )
@@ -1175,18 +1074,18 @@ class StaleTaskChecker:
                 )
             except OrchestrationStoreConflict:
                 logger.info(
-                    "orchestration_v2_recovery: recovery event already recorded for %s",
+                    "orchestration_recovery: recovery event already recorded for %s",
                     saved.run_id,
                 )
             except Exception:
                 logger.debug(
-                    "orchestration_v2_recovery: failed to append recovery event",
+                    "orchestration_recovery: failed to append recovery event",
                     exc_info=True,
                 )
 
             try:
                 logger.info(
-                    "orchestration_v2_recovery: re-triggering run %s message %s",
+                    "orchestration_recovery: re-triggering run %s message %s",
                     saved.run_id,
                     saved.user_message_id,
                 )
@@ -1200,7 +1099,7 @@ class StaleTaskChecker:
                 try:
                     task = self._execution_recovery_deps.schedule_recovery(
                         request,
-                        reason="orchestration_v2",
+                        reason="orchestration",
                     )
                 except Exception:
                     self._recovery_semaphore.release()
@@ -1208,7 +1107,7 @@ class StaleTaskChecker:
                 task.add_done_callback(lambda _task: self._recovery_semaphore.release())
             except Exception as e:
                 logger.error(
-                    "orchestration_v2_recovery: failed to trigger recovery for %s: %s",
+                    "orchestration_recovery: failed to trigger recovery for %s: %s",
                     saved.run_id,
                     e,
                 )

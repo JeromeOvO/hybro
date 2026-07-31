@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, call
@@ -21,8 +22,10 @@ from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
     OrchestrationStoreConflict,
 )
+from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from execution.translators import room_response_to_execution_ack
 from models.orchestration import (
+    OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
     PendingAgentContinuation,
@@ -1024,6 +1027,29 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
         "msg-1",
         "canceled",
     )
+    terminal_events = [
+        event
+        for event in run_store._events_by_run["run-1"]
+        if event.type == OrchestrationEventType.RUN_TERMINAL
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0].event_id == "run-1:run-terminal:canceled:1"
+    assert terminal_events[0].payload == {
+        "status": "canceled",
+        "reason": "request canceled",
+    }
+
+    assert await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+    terminal_events = [
+        event
+        for event in run_store._events_by_run["run-1"]
+        if event.type == OrchestrationEventType.RUN_TERMINAL
+    ]
+    assert len(terminal_events) == 1
 
 
 @pytest.mark.asyncio
@@ -1089,14 +1115,18 @@ async def test_run_methods_delegate_to_ports():
 
 
 @pytest.mark.asyncio
-async def test_cancel_inflight_tasks_awaits_cancelled_tasks():
+async def test_cancel_inflight_tasks_interrupts_without_public_cancellation():
     async def wait_forever():
         try:
             await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            cancellation_reasons.append(exc.args)
+            raise
         finally:
             marker.append("cleanup")
 
     marker = []
+    cancellation_reasons = []
     facade, deps = _make_facade()
     task = facade._spawn_orchestration(
         wait_forever(),
@@ -1110,15 +1140,91 @@ async def test_cancel_inflight_tasks_awaits_cancelled_tasks():
     assert await facade.cancel_inflight_tasks() == 1
     assert task.cancelled()
     assert marker == ["cleanup"]
+    assert cancellation_reasons == [(GRACEFUL_SHUTDOWN_CANCEL_REASON,)]
     assert facade._inflight == set()
     assert facade._inflight_metadata == {}
-    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
-        "room-1",
-        "canceled",
-        "msg-1",
-        client_request_id="cr-1",
-        details=None,
-        error_message=None,
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_interruption_remains_recoverable_after_restart():
+    from jobs.stale_task_checker import (
+        StaleOrchestrationRunRecoveryDeps,
+        StaleRecoveryDeps,
+        StaleTaskChecker,
+        StaleTaskCheckerDeps,
+    )
+
+    run_store = InMemoryOrchestrationRunStore()
+    await run_store.create_run(
+        OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Recover after restart",
+            candidate_agent_ids=["agent-1"],
+            status=OrchestrationStatus.DISPATCHING,
+            updated_at=utcnow() - timedelta(minutes=10),
+        )
+    )
+    facade, deps = _make_facade(orchestration_run_store=run_store)
+
+    async def wait_forever():
+        await asyncio.Event().wait()
+
+    facade._spawn_orchestration(
+        wait_forever(),
+        name="execution-test",
+        room_id="room-1",
+        message_id="msg-1",
+    )
+    await asyncio.sleep(0)
+    assert await facade.cancel_inflight_tasks() == 1
+
+    interrupted = await run_store.get_run("run-1")
+    assert interrupted is not None
+    assert interrupted.status == OrchestrationStatus.DISPATCHING
+    assert run_store._events_by_run.get("run-1", []) == []
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+
+    scheduled = []
+
+    def schedule_recovery(request, *, reason):
+        scheduled.append((request, reason))
+        return MagicMock(add_done_callback=MagicMock())
+
+    checker = StaleTaskChecker(orphan_threshold_minutes=2)
+    checker.set_runtime_deps(
+        StaleTaskCheckerDeps(
+            store=SimpleNamespace(
+                is_message_cancelled=AsyncMock(return_value=False),
+                get_room_user_message_by_message_id=AsyncMock(return_value=None),
+            ),
+            rooms_collection=None,
+            notify_task_update=AsyncMock(),
+            increment_counter=MagicMock(),
+            a2a_service=SimpleNamespace(),
+        )
+    )
+    checker.set_execution_recovery_deps(
+        StaleRecoveryDeps(schedule_recovery=schedule_recovery)
+    )
+    checker.set_orchestration_run_recovery_deps(
+        StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
+    )
+
+    await checker._recover_stuck_orchestration_runs()
+
+    assert len(scheduled) == 1
+    recovery_request, reason = scheduled[0]
+    assert reason == "orchestration"
+    assert recovery_request.room_user_message_id == "msg-1"
+    recovered = await run_store.get_run("run-1")
+    assert recovered is not None
+    assert recovered.status == OrchestrationStatus.DISPATCHING
+    assert recovered.state_version == 1
+    assert run_store._events_by_run["run-1"][0].type == (
+        OrchestrationEventType.RUN_RECOVERED
     )
 
 
