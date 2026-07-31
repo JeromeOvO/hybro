@@ -403,31 +403,51 @@ async def test_list_recoverable_filters_terminal_statuses_and_respects_limit():
 
 
 @pytest.mark.asyncio
-async def test_reconstruct_from_envelope_builds_schema_v2_state_without_trajectory():
-    store = InMemoryOrchestrationRunStore()
-    envelope = {
-        "candidate_agent_ids": ["researcher", "analyst"],
-        "client_request_id": "client-42",
-        "supervisor_trajectory": {"status": "legacy-running"},
-    }
-
-    state = await store.reconstruct_from_envelope(
-        run_id="run-42",
-        room_id="room-7",
-        user_message_id="message-9",
-        envelope=envelope,
-        goal="Summarize the latest account notes",
+async def test_list_recoverable_filters_waiting_user_before_limit_for_all_stores():
+    waiting_states = [
+        _state(
+            run_id=f"waiting-{index:03d}",
+            user_message_id=f"waiting-message-{index:03d}",
+            status=OrchestrationStatus.AWAITING_USER,
+            updated_at=BASE_TIME - timedelta(minutes=200 - index),
+        )
+        for index in range(101)
+    ]
+    running = _state(
+        run_id="recoverable-after-waiting",
+        user_message_id="recoverable-message",
+        status=OrchestrationStatus.RUNNING,
+        updated_at=BASE_TIME,
     )
 
-    assert state.run_id == "run-42"
-    assert state.room_id == "room-7"
-    assert state.user_message_id == "message-9"
-    assert state.goal == "Summarize the latest account notes"
-    assert state.candidate_agent_ids == ["researcher", "analyst"]
-    assert state.client_request_id == "client-42"
-    assert state.schema_version == 2
-    assert state.state_version == 0
-    assert state.status == OrchestrationStatus.CREATED
+    memory_store = InMemoryOrchestrationRunStore()
+    for state in [*waiting_states, running]:
+        await memory_store.create_run(state)
+    assert [
+        state.run_id for state in await memory_store.list_recoverable(limit=100)
+    ] == ["recoverable-after-waiting"]
+
+    mongo = FakeMongo()
+    mongo_store = MongoOrchestrationRunStore(mongo)
+    for state in [*waiting_states, running]:
+        await mongo_store.create_run(state)
+    assert [
+        state.run_id for state in await mongo_store.list_recoverable(limit=100)
+    ] == ["recoverable-after-waiting"]
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_rejects_unsupported_persisted_schema_version():
+    mongo = FakeMongo()
+    document = _state().model_dump(mode="json")
+    document["schema_version"] = 99
+    mongo.collection("orchestration_runs").docs.append(document)
+    store = MongoOrchestrationRunStore(mongo)
+
+    with pytest.raises(
+        ValueError, match="unsupported orchestration run schema_version"
+    ):
+        await store.get_run("run-1")
 
 
 @pytest.mark.asyncio
@@ -496,7 +516,7 @@ async def test_reconstruct_from_envelope_reads_room_agent_set_snapshots():
 
 
 @pytest.mark.asyncio
-async def test_mongo_reconstruct_from_envelope_parity_for_legacy_scope():
+async def test_mongo_reconstruct_from_envelope_scope_parity():
     mongo = FakeMongo()
     store = MongoOrchestrationRunStore(mongo)
 

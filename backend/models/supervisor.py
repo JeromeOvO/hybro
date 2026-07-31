@@ -195,19 +195,11 @@ class TrajectoryStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
-    CLARIFYING = "clarifying"  # deprecated: kept for legacy trajectory deserialization
-    # Transient state used by the DB layer when claiming a stuck trajectory
-    # for recovery; never set by the executor itself.
-    RECOVERING = "recovering"
     AWAITING_INPUT = "awaiting_input"
 
 
 class SupervisorTrajectory(BaseModel):
-    """Full execution trajectory for a user message.
-
-    Stored in ``user_message.extend_info.supervisor_trajectory`` for
-    auditability.
-    """
+    """Transient planner/executor view derived during one process turn."""
 
     trajectory_id: str = Field(default_factory=lambda: uuid4().hex)
     entries: list[TrajectoryEntry] = Field(default_factory=list)
@@ -217,30 +209,9 @@ class SupervisorTrajectory(BaseModel):
 
     debate_agent_ids: list[str] | None = None
 
-    clarify_user_reply: str | None = None
-    """The user's reply to a CLARIFY question.  Set by the clarify-resume
-    path before calling ``SupervisorExecutor.run(resumed_trajectory=...)``.
-    The supervisor prompt formatter includes this so the LLM knows the
-    user answered."""
-
-    clarify_original_message_id: str | None = None
-    """The ``user_message_id`` of the message that originally triggered the
-    clarification workflow. Used only during the clarify-resume path so
-    we can cross-reference the original question if needed."""
-
     system_agent_message_id: str | None = None
     """The message ID of the orchestrator task (system:hybro). Stored here so it
     can be reused across PAUSED interrupts when the loop resumes."""
-
-    hitl_user_reply: str | None = None
-    """The user's reply to a CLARIFY question (pre-plan or mid-loop).
-    Set by _handle_supervisor_response() before calling
-    resume_queue_from_continuation(). Replaces clarify_user_reply for
-    new HITL flows. Resume code reads both for backward compat."""
-
-    hitl_original_message_id: str | None = None
-    """The user_message_id of the message whose loop was paused by CLARIFY.
-    Replaces clarify_original_message_id for new HITL flows."""
 
 
 # =========================================================================
@@ -253,7 +224,6 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELED = "canceled"
     PAUSED = "paused"
-    CLARIFYING = "clarifying"  # deprecated: kept for legacy backward compat
     AWAITING_INPUT = "awaiting_input"
 
 

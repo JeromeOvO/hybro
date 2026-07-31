@@ -14,7 +14,6 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification
 
 import asyncio
 import copy
-import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,7 +34,7 @@ from models.memory import (
     RoomSummary,
     TurnRole,
 )
-from models.orchestration import PlannerAction
+from models.orchestration import OrchestrationStatus, PlannerAction
 from models.processing import ProcessingResult, ProcessingStatus
 from models.room import MessageContent, RoomUserMessage
 from models.supervisor import (
@@ -873,7 +872,7 @@ class TestMaxContextCharsEnforcement:
 # =========================================================================
 
 
-class TestParseV2ActionCaseInsensitive:
+class TestParseProviderActionCaseInsensitive:
     """Tests for case-insensitive action parsing in _parse_supervisor_action.
 
     The LLM may return action strings in any case (DELEGATE, delegate, Delegate).
@@ -995,7 +994,7 @@ class TestParseV2ActionCaseInsensitive:
 # =========================================================================
 
 
-class TestParseV2ActionClarifySanitization:
+class TestParseProviderActionClarifySanitization:
     """Tests that _parse_supervisor_action sanitizes prompt_type and choices from LLM output."""
 
     @pytest.fixture
@@ -1155,7 +1154,7 @@ class TestTrajectoryStatusSerialization:
 # =========================================================================
 
 
-class TestHandleV2RunResultUnifiedSummary:
+class TestHandleRunResultUnifiedSummary:
     """Verify that _handle_supervisor_run_result routes to _emit_unified_summary
     with correct arguments for both synthesis and non-synthesis paths."""
 
@@ -1630,6 +1629,7 @@ class _FakePhase5App:
         self.room_center.task_notifier = AsyncMock()
         self.room_center.task_notification_store = AsyncMock()
         self.room_center.supervisor_executor = self._executor
+        self.room_center.orchestration_run_store = self.run_store
         self.room_center.agent_resolver_service = AsyncMock()
         self.room_center.supervisor_planning_error_cls = RuntimeError
         self.room_center.a2a_transport = None
@@ -1705,7 +1705,6 @@ class _FakePhase5App:
         message: str,
         message_id: str | None = None,
         dispatch: dict | None = None,
-        legacy_supervisor_trajectory: dict | None = None,
         extend_info: dict | None = None,
     ):
         room_message_id = message_id or f"msg-{uuid4().hex}"
@@ -1730,7 +1729,6 @@ class _FakePhase5App:
             )
         extend_payload = {
             "orchestration": True,
-            "orchestration_schema_version": 2,
             "orchestration_run_id": room_message_id,
             "candidate_scope_mode": candidate_scope_mode,
             "candidate_scope_group_id": candidate_scope_group_id,
@@ -1752,11 +1750,6 @@ class _FakePhase5App:
             message_content=MessageContent(message_text=message),
             extend_info=extend_payload,
         )
-        if legacy_supervisor_trajectory is not None:
-            user_message.extend_info["supervisor_trajectory"] = (
-                legacy_supervisor_trajectory
-            )
-
         self.room_store._set_user_message(user_message)
 
         await self.room_center._process_supervisor(
@@ -1773,219 +1766,6 @@ class _FakePhase5App:
 
 def _make_phase5_app():
     return _FakePhase5App()
-
-
-# =========================================================================
-# Test: _parse_supervisor_action multi-question CLARIFY parsing
-# =========================================================================
-
-
-class TestParseV2ActionMultiQuestion:
-    """Tests that _parse_supervisor_action correctly parses the questions array."""
-
-    @pytest.fixture
-    def service(self):
-        from execution.orchestration.room_supervisor_service import (
-            RoomSupervisorService,
-        )
-
-        return RoomSupervisorService()
-
-    def test_parses_valid_questions_array(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need more info",
-                "questions": [
-                    {"prompt": "Travel dates?", "prompt_type": "text"},
-                    {
-                        "prompt": "Budget?",
-                        "prompt_type": "choice",
-                        "choices": ["Low", "High"],
-                    },
-                    {"prompt": "Proceed?", "prompt_type": "confirmation"},
-                ],
-            }
-        )
-        assert action.questions is not None
-        assert len(action.questions) == 3
-        assert action.questions[0].prompt == "Travel dates?"
-        assert action.questions[0].prompt_type == "text"
-        assert action.questions[1].choices == ["Low", "High"]
-        assert action.questions[2].prompt_type == "confirmation"
-
-    def test_falls_back_to_clarification_question_when_no_questions(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need info",
-                "clarification_question": "What dates?",
-            }
-        )
-        assert action.questions is None
-        assert action.clarification_question == "What dates?"
-
-    def test_ignores_questions_with_invalid_prompts(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need info",
-                "questions": [
-                    {"prompt": 123},
-                    {"prompt": "Valid question?", "prompt_type": "text"},
-                ],
-            }
-        )
-        assert action.questions is not None
-        assert len(action.questions) == 1
-        assert action.questions[0].prompt == "Valid question?"
-
-    def test_sanitizes_invalid_prompt_type_in_questions(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need info",
-                "questions": [
-                    {"prompt": "Q1?", "prompt_type": "invalid_type"},
-                    {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
-                ],
-            }
-        )
-        assert action.questions is not None
-        assert len(action.questions) == 2
-        assert action.questions[0].prompt_type is None
-        assert action.questions[1].choices is None
-
-    def test_empty_questions_array_yields_none(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need info",
-                "questions": [],
-            }
-        )
-        assert action.questions is None
-
-    def test_questions_array_not_a_list_yields_none(self, service):
-        action = service._parse_supervisor_action(
-            {
-                "action": "clarify",
-                "reasoning": "need info",
-                "questions": "not a list",
-            }
-        )
-        assert action.questions is None
-
-
-@pytest.mark.asyncio
-async def test_state_driven_supervisor_builds_planner_context_without_trajectory_text():
-    app = _make_phase5_app()
-    app.stub_planner_actions(
-        [
-            {
-                "action": "ask_user",
-                "reasoning": "Need one missing value before delegation.",
-                "questions": [
-                    {
-                        "prompt": "What coverage limit do you need?",
-                        "prompt_type": "text",
-                    },
-                ],
-            }
-        ]
-    )
-
-    legacy_sentinel = f"legacy-sentinel-{uuid4().hex}"
-    legacy_payload = {
-        "trajectory": {
-            "trajectory_text": f"{legacy_sentinel}: stale trajectory text",
-            "trajectory_summary": f"{legacy_sentinel}: stale trajectory summary",
-        },
-        "trajectory_summary": f"{legacy_sentinel}: fallback trajectory summary",
-        "trajectory_text": f"{legacy_sentinel}: question history",
-    }
-
-    result = await app.send_supervisor_message(
-        room_id="room-1",
-        user_id="user-1",
-        message="Get a quote.",
-        legacy_supervisor_trajectory=legacy_payload,
-        dispatch={
-            "message_target_mode": "saved_group",
-            "target_group_id": "group-1",
-        },
-    )
-
-    state = await app.run_store.get_latest_by_user_message_id(result.message_id)
-    assert state is not None
-    assert state.status.value == "awaiting_user"
-    assert state.decision_log
-
-    captured_payload = app.planner.last_context_payload
-    assert captured_payload is not None
-    assert isinstance(captured_payload, dict)
-    assert "state_context" in captured_payload
-    assert isinstance(captured_payload["state_context"], dict)
-    assert captured_payload.get("message") == {"text": "Get a quote."}
-    payload_text = json.dumps(captured_payload, ensure_ascii=False, sort_keys=True)
-    assert legacy_sentinel not in payload_text
-    assert '"trajectory"' not in payload_text
-    assert '"trajectory_summary"' not in payload_text
-    assert '"trajectory_text"' not in payload_text
-
-    message_record = await app.room_store.get_room_user_message_by_message_id(
-        result.message_id
-    )
-    assert message_record is not None
-    assert message_record.extend_info is not None
-    assert "supervisor_trajectory" not in message_record.extend_info
-
-
-@pytest.mark.asyncio
-async def test_new_supervisor_run_persists_lightweight_orchestration_extend_info():
-    app = _make_phase5_app()
-    app.stub_planner_actions(
-        [
-            {
-                "action": "ask_user",
-                "reasoning": "Need one missing value before delegation.",
-                "questions": [
-                    {
-                        "prompt": "What coverage limit do you need?",
-                        "prompt_type": "text",
-                    }
-                ],
-            }
-        ]
-    )
-
-    response = await app.send_supervisor_message(
-        room_id="room-1",
-        user_id="user-1",
-        message="Collect the needed quote information.",
-        extend_info={
-            "orchestration": True,
-            "orchestration_run_id": "msg-1",
-            "candidate_scope_mode": "explicit_selection",
-            "candidate_agent_ids": ["agent-1"],
-        },
-    )
-
-    message = await app.room_store.get_room_user_message_by_message_id(
-        response.message_id
-    )
-    assert message is not None
-    assert message.extend_info is not None
-    assert "supervisor_trajectory" not in message.extend_info
-    assert message.extend_info["orchestration_run_id"] == response.message_id
-    assert message.extend_info["candidate_scope_snapshot_id"] is not None
-    assert message.extend_info["candidate_scope_source"] == "explicit_selection"
-    assert message.extend_info["client_request_id"] == "client-1"
-    assert message.extend_info["orchestration_status"] in {
-        "running",
-        "completed",
-        "awaiting_user",
-    }
 
 
 @pytest.mark.core
@@ -2091,3 +1871,183 @@ async def test_supervisor_autonomous_loop_delegates_ingests_and_completes_with_e
     )
     assert message_record is not None
     assert "supervisor_trajectory" not in message_record.extend_info
+
+
+@pytest.mark.core
+@pytest.mark.asyncio
+async def test_push_notification_terminal_result_reenters_and_completes_durable_run():
+    app = _make_phase5_app()
+    run_id = "run-push-notification"
+    agent_message_id = f"{run_id}:step-1:target-1:message"
+    app.stub_planner_actions(
+        [
+            {
+                "action": "delegate",
+                "reasoning": "Dispatch the long-running agent.",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "agent_name": "Agent One",
+                        "task": "Handle the long-running request.",
+                    }
+                ],
+            },
+            {
+                "action": "synthesize",
+                "reasoning": "The callback result is ready.",
+                "synthesis_instruction": "Summarize the result.",
+            },
+        ]
+    )
+    app.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.PAUSED,
+            message_id=agent_message_id,
+        )
+    )
+
+    await app.send_supervisor_message(
+        room_id="room-1",
+        user_id="user-1",
+        message="Run this asynchronously.",
+        message_id=run_id,
+        extend_info={"candidate_agent_ids": ["agent-1"]},
+    )
+
+    paused = await app.run_store.get_run(run_id)
+    assert paused is not None
+    assert paused.status == OrchestrationStatus.WAITING_AGENT
+    await app.room_store.update_task_state_on_message(
+        agent_message_id,
+        "completed",
+        message_text="Terminal webhook result",
+    )
+
+    async def recover(_request):
+        user_message = await app.room_store.get_room_user_message_by_message_id(run_id)
+        return await app.room_center._process_supervisor(
+            user_message=user_message,
+            room_id="room-1",
+            room_user_message_id=run_id,
+            user_id="user-1",
+            quoted_text=None,
+            token=None,
+        )
+
+    app.room_center.process_room_user_message = AsyncMock(side_effect=recover)
+    resumed = await app.room_center.resume_queue_from_continuation(agent_message_id)
+
+    assert resumed is True
+    completed = await app.run_store.get_run(run_id)
+    assert completed is not None
+    assert completed.status == OrchestrationStatus.COMPLETED
+    assert completed.agent_outputs[0].status == "completed"
+    assert completed.agent_outputs[0].text == "Terminal webhook result"
+    assert app.planner.contexts[-1].state_context.agent_outputs[0]["text"] == (
+        "Terminal webhook result"
+    )
+    assert "supervisor_trajectory" not in (
+        app.room_store.user_messages[run_id].extend_info or {}
+    )
+
+
+# =========================================================================
+# Test: _parse_supervisor_action multi-question CLARIFY parsing
+# =========================================================================
+
+
+class TestParseProviderActionMultiQuestion:
+    """Tests that _parse_supervisor_action correctly parses the questions array."""
+
+    @pytest.fixture
+    def service(self):
+        from execution.orchestration.room_supervisor_service import (
+            RoomSupervisorService,
+        )
+
+        return RoomSupervisorService()
+
+    def test_parses_valid_questions_array(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need more info",
+                "questions": [
+                    {"prompt": "Travel dates?", "prompt_type": "text"},
+                    {
+                        "prompt": "Budget?",
+                        "prompt_type": "choice",
+                        "choices": ["Low", "High"],
+                    },
+                    {"prompt": "Proceed?", "prompt_type": "confirmation"},
+                ],
+            }
+        )
+        assert action.questions is not None
+        assert len(action.questions) == 3
+        assert action.questions[0].prompt == "Travel dates?"
+        assert action.questions[0].prompt_type == "text"
+        assert action.questions[1].choices == ["Low", "High"]
+        assert action.questions[2].prompt_type == "confirmation"
+
+    def test_falls_back_to_clarification_question_when_no_questions(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "clarification_question": "What dates?",
+            }
+        )
+        assert action.questions is None
+        assert action.clarification_question == "What dates?"
+
+    def test_ignores_questions_with_invalid_prompts(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [
+                    {"prompt": 123},
+                    {"prompt": "Valid question?", "prompt_type": "text"},
+                ],
+            }
+        )
+        assert action.questions is not None
+        assert len(action.questions) == 1
+        assert action.questions[0].prompt == "Valid question?"
+
+    def test_sanitizes_invalid_prompt_type_in_questions(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [
+                    {"prompt": "Q1?", "prompt_type": "invalid_type"},
+                    {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
+                ],
+            }
+        )
+        assert action.questions is not None
+        assert len(action.questions) == 2
+        assert action.questions[0].prompt_type is None
+        assert action.questions[1].choices is None
+
+    def test_empty_questions_array_yields_none(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": [],
+            }
+        )
+        assert action.questions is None
+
+    def test_questions_array_not_a_list_yields_none(self, service):
+        action = service._parse_supervisor_action(
+            {
+                "action": "clarify",
+                "reasoning": "need info",
+                "questions": "not a list",
+            }
+        )
+        assert action.questions is None

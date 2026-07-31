@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from execution.orchestration.candidate_scope import (
-    candidate_scope_from_legacy_envelope,
+    candidate_scope_from_envelope,
     normalize_candidate_scope,
 )
 from models.orchestration import CandidateAgentSnapshot, CandidateScopeSnapshot
@@ -164,8 +164,8 @@ def test_normalize_candidate_scope_agent_profile_preserves_metadata():
     assert scope.agents[0].success_rate == 0.8
 
 
-def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():
-    scope = candidate_scope_from_legacy_envelope(
+def test_candidate_scope_from_envelope_uses_candidate_agent_ids():
+    scope = candidate_scope_from_envelope(
         room_id="room-1",
         envelope={
             "candidate_scope_snapshot_id": "scope-snapshot-1",
@@ -182,8 +182,8 @@ def test_candidate_scope_from_legacy_envelope_uses_candidate_agent_ids():
     assert scope.authorization_basis.kind == "explicit_selection"
 
 
-def test_candidate_scope_from_legacy_envelope_filters_registry_to_candidate_ids():
-    scope = candidate_scope_from_legacy_envelope(
+def test_candidate_scope_from_envelope_filters_registry_to_candidate_ids():
+    scope = candidate_scope_from_envelope(
         room_id="room-1",
         envelope={
             "candidate_scope_mode": "saved_group",
@@ -211,9 +211,9 @@ def test_normalize_candidate_scope_rejects_unknown_source():
         )
 
 
-def test_legacy_candidate_scope_rejects_unknown_source():
+def test_candidate_scope_envelope_rejects_unknown_source():
     with pytest.raises(ValueError, match="unsupported candidate scope source"):
-        candidate_scope_from_legacy_envelope(
+        candidate_scope_from_envelope(
             room_id="room-1",
             envelope={
                 "candidate_scope_mode": "saved_groups",

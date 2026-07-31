@@ -12,7 +12,6 @@ from common.a2a_task_projection import (
     public_message_data,
     public_persisted_task_data,
 )
-from common.config.settings import settings
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -50,7 +49,7 @@ from common.utils.context_utils import (
     migrate_legacy_memory,
 )
 from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
+from common.utils.time import utcnow
 from context_memory.projection import _human_size, build_turn_content
 from execution.orchestration.candidate_scope import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
@@ -65,6 +64,7 @@ from execution.task_tracking import (
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import MemoryContent, RoomMemory
+from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -1811,17 +1811,6 @@ class RoomServices:
         return dict(info)
 
     @classmethod
-    def _is_orchestration_request(
-        cls,
-        request: RoomCenterUserMessageRequest,
-    ) -> bool:
-        info = cls._orchestration_request_info(request)
-        return (
-            info.get("mode") == "supervisor"
-            and info.get("orchestration_schema_version") == 2
-        )
-
-    @classmethod
     def _selected_agent_ids_from_request(
         cls,
         request: RoomCenterUserMessageRequest,
@@ -2020,21 +2009,32 @@ class RoomServices:
             selected_by_user_id=request.user_id,
         )
 
+        existing_extend_info = (
+            user_message.extend_info
+            if isinstance(user_message.extend_info, dict)
+            else {}
+        )
         envelope = {
-            "orchestration": True,
-            "orchestration_schema_version": 2,
-            "orchestration_run_id": user_message.message_id,
-            "orchestration_status": "created",
-            "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
-            "candidate_scope_source": candidate_scope.source,
-            "candidate_scope_mode": candidate_scope.source,
-            "candidate_agent_ids": list(candidate_scope.agent_ids),
-            "candidate_scope_snapshot_version": candidate_scope.revision,
-            "mentioned_agent_ids": [
-                mention["agent_id"] for mention in (explicit_mentions or [])
-            ],
-            "client_request_id": client_request_id,
+            key: value
+            for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
+            if isinstance((value := existing_extend_info.get(key)), str)
         }
+        envelope.update(
+            {
+                "orchestration": True,
+                "orchestration_run_id": user_message.message_id,
+                "orchestration_status": "created",
+                "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
+                "candidate_scope_source": candidate_scope.source,
+                "candidate_scope_mode": candidate_scope.source,
+                "candidate_agent_ids": list(candidate_scope.agent_ids),
+                "candidate_scope_snapshot_version": candidate_scope.revision,
+                "mentioned_agent_ids": [
+                    mention["agent_id"] for mention in (explicit_mentions or [])
+                ],
+                "client_request_id": client_request_id,
+            }
+        )
         if candidate_scope.group_id:
             envelope["candidate_scope_group_id"] = candidate_scope.group_id
 
@@ -2055,229 +2055,6 @@ class RoomServices:
             len(selected_agent_set),
         )
         return ParseResult(success=True)
-
-    async def _prepare_for_supervisor(
-        self,
-        room: Room,
-        user_message: RoomUserMessage,
-        message_text: str,
-        agents: list | None,
-        selected_agent_set: dict,
-        is_debate_mode: bool,
-        room_memory: "RoomMemory | None",
-        token: CancellationToken | None = None,
-        explicit_mentions: list[dict] | None = None,
-    ) -> ParseResult:
-        """Prepare extend_info for supervisor execution.
-
-        This method:
-        - Does NOT call the supervisor LLM
-        - Does NOT create any ``RoomAgentMessage`` records
-        - ONLY stores the data needed for ``SupervisorExecutor.run()``
-        - Builds budget-aware supervisor context via ContextAssemblyService (§11.1)
-
-        Agent messages are created one at a time inside
-        ``SupervisorExecutor._dispatch_targets``.
-        """
-        from models.supervisor import RoomConfig
-
-        if token and token.is_cancelled:
-            logger.info(
-                "RoomServices: Message parsing cancelled (supervisor) for %s",
-                user_message.message_id,
-            )
-            self.delivery.clear_cancellation(user_message.message_id)
-            return ParseResult(success=False, canceled=True)
-
-        agent_registry = self._build_agent_registry(agents, selected_agent_set)
-
-        room_config = RoomConfig(
-            is_debate_mode=is_debate_mode,
-            room_agent_set=selected_agent_set,
-            explicit_mentions=explicit_mentions or [],
-        )
-
-        # Build budget-aware context via ContextAssemblyService (§11.1)
-        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-        conversation_context = await self._build_supervisor_conversation_context(
-            room=room,
-            room_memory=room_memory,
-            message_text=message_text,
-            agent_registry=agent_dicts,
-            log_context="",
-        )
-
-        user_message.extend_info = {
-            **(user_message.extend_info or {}),
-            "supervisor": True,
-            "agent_registry": agent_dicts,
-            "room_config": room_config.model_dump(mode="json"),
-            "conversation_context": conversation_context,
-            "explicit_mentions": explicit_mentions or [],
-        }
-        await self._store.update_room_user_message_by_message_id(
-            user_message.message_id, user_message
-        )
-
-        logger.info(
-            "RoomServices: supervisor data prepared for message %s (%d agents)",
-            user_message.message_id,
-            len(agent_registry),
-        )
-
-        return ParseResult(success=True)
-
-    # ------------------------------------------------------------------
-    # Supervisor clarify-resume preparation (Phase 4, §7.4)
-    # ------------------------------------------------------------------
-
-    CLARIFY_TTL_SECONDS: int = 3600  # 1 hour
-
-    async def _prepare_clarify_resume(
-        self,
-        room: Room,
-        user_message: RoomUserMessage,
-        message_text: str,
-        pending_clarify_msg_id: str,
-        agents: list | None,
-        selected_agent_set: dict,
-        is_debate_mode: bool,
-        room_memory: "RoomMemory | None",
-        explicit_mentions: list[dict] | None = None,
-    ) -> bool:
-        """Check whether a pending CLARIFY can be resumed and prepare extend_info.
-
-        Returns ``True`` if the user message was prepared for clarify-resume
-        (``extend_info`` updated with ``supervisor_clarify_resume``).
-        Returns ``False`` if the pending clarification is stale, missing, or
-        otherwise invalid — the caller should fall through to a fresh supervisor run.
-        """
-        from models.supervisor import (
-            RoomConfig,
-            SupervisorTrajectory,
-            TrajectoryStatus,
-        )
-
-        original_msg = await self._store.get_room_user_message_by_message_id(
-            pending_clarify_msg_id
-        )
-        if not original_msg or not isinstance(original_msg.extend_info, dict):
-            logger.warning(
-                "RoomServices: clarify resume — original message %s not found "
-                "or missing extend_info, clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        traj_data = original_msg.extend_info.get("supervisor_trajectory")
-        if not traj_data:
-            logger.warning(
-                "RoomServices: clarify resume — no trajectory on message %s, "
-                "clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        try:
-            trajectory = SupervisorTrajectory(**traj_data)
-        except Exception as e:
-            logger.warning(
-                "RoomServices: clarify resume — failed to deserialize trajectory: %s",
-                e,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        if trajectory.status != "clarifying":
-            logger.info(
-                "RoomServices: clarify resume — trajectory status is %s (not 'clarifying'), "
-                "treating as fresh request",
-                trajectory.status,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        # TTL check: if the last entry's started_at is older than CLARIFY_TTL_SECONDS,
-        # the clarification has gone stale.
-        if not trajectory.entries:
-            logger.warning(
-                "RoomServices: clarify resume — trajectory has no entries for "
-                "message %s, clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        last_entry = trajectory.entries[-1]
-        age = (utcnow() - ensure_utc(last_entry.started_at)).total_seconds()
-        if age > self.CLARIFY_TTL_SECONDS:
-            logger.info(
-                "RoomServices: clarify resume — stale (%.0fs > %ds), "
-                "treating as fresh request",
-                age,
-                self.CLARIFY_TTL_SECONDS,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        # All checks passed — prepare the user message for clarify-resume.
-        # Set the user's reply on the trajectory so the supervisor sees it.
-        trajectory.clarify_user_reply = message_text
-        trajectory.status = TrajectoryStatus.RUNNING
-
-        agent_registry = self._build_agent_registry(agents, selected_agent_set)
-
-        room_config = RoomConfig(
-            is_debate_mode=is_debate_mode,
-            room_agent_set=selected_agent_set,
-            explicit_mentions=explicit_mentions or [],
-        )
-
-        # Build budget-aware context via ContextMemoryRuntime (§11.1)
-        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-        conversation_context = await self._build_supervisor_conversation_context(
-            room=room,
-            room_memory=room_memory,
-            message_text=message_text,
-            agent_registry=agent_dicts,
-            log_context=" in clarify-resume",
-        )
-
-        user_message.extend_info = {
-            **(user_message.extend_info or {}),
-            "supervisor": True,
-            "supervisor_clarify_resume": True,
-            "clarify_original_message_id": pending_clarify_msg_id,
-            "resumed_trajectory": trajectory.model_dump(mode="json"),
-            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
-            "room_config": room_config.model_dump(mode="json"),
-            "conversation_context": conversation_context,
-            "explicit_mentions": explicit_mentions or [],
-        }
-        await self._store.update_room_user_message_by_message_id(
-            user_message.message_id, user_message
-        )
-
-        # Clear the pending flag on the room
-        await self._clear_pending_clarification(room)
-
-        logger.info(
-            "RoomServices: Supervisor clarify resume prepared for message %s "
-            "(original: %s, %d agents)",
-            user_message.message_id,
-            pending_clarify_msg_id,
-            len(agent_registry),
-        )
-
-        return True
-
-    async def _clear_pending_clarification(self, room: Room) -> None:
-        """Remove the ``pending_clarification_message_id`` flag from the room."""
-        if isinstance(room.extend_info, dict):
-            room.extend_info.pop("pending_clarification_message_id", None)
-            await self._store.update_room_by_room_id(room.room_id, room)
 
     async def parse_user_message(
         self,
@@ -2480,7 +2257,7 @@ class RoomServices:
         pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
         required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
-        orchestration_requested = self._is_orchestration_request(request)
+        orchestration_requested = use_supervisor
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
@@ -2722,21 +2499,9 @@ class RoomServices:
         pre_resolved_scope = context.pre_resolved_scope
         pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
-        v2_orchestration_requested = use_supervisor and self._is_orchestration_request(
-            request
-        )
-        v2_orchestration_active = (
-            v2_orchestration_requested and settings.execution_orchestration_v2
-        )
-        pending_clarify_msg_id = (
-            room.extend_info.get("pending_clarification_message_id")
-            if isinstance(room.extend_info, dict)
-            else None
-        )
-        # Validated candidate scope is safe for the legacy supervisor; the
-        # feature flag gates only lightweight envelope/runtime activation.
+        orchestration_active = use_supervisor
         selected_scope_locked = (
-            v2_orchestration_requested and pre_resolved_selected_scope is not None
+            orchestration_active and pre_resolved_selected_scope is not None
         )
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
@@ -2872,26 +2637,24 @@ class RoomServices:
             user_message.message_id,
             client_request_id,
             use_supervisor,
-            v2_orchestration_active,
+            orchestration_active,
             target_group,
             len(selected_agent_set),
             auto_assign,
             dispatch_strategy.value,
         )
 
-        # Fetch room memory for legacy context assembly. Orchestration requests
-        # persist only the lightweight orchestration envelope here.
+        # Queue/debate preparation may need a small routing context. Supervisor
+        # orchestration assembles its own context from the durable run state.
         room_memory = None
-        if (
-            use_supervisor and (not v2_orchestration_active or pending_clarify_msg_id)
-        ) or (not use_supervisor and len(selected_agent_set) > 1):
+        if not use_supervisor and len(selected_agent_set) > 1:
             room_memory = await self._store.get_room_memory_by_room_id(request.room_id)
             if room_memory and room_memory.memory_content:
                 room_memory.memory_content = migrate_legacy_memory(
                     room_memory.memory_content
                 )
 
-        # Build conversation_context for non-supervisor paths (V1 decomposer, mentions, etc.)
+        # Build conversation context only for queue/debate message preparation.
         conversation_context = None
         if room_memory and room_memory.memory_content:
             conversation_context = build_minimal_context(
@@ -2908,44 +2671,16 @@ class RoomServices:
             qblock = f"\n\n[User quoted excerpt for routing]\n{ext_q.strip()[:2000]}"
             conversation_context = (conversation_context or "") + qblock
 
-        # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
+        # Supervisor: lightweight durable preparation without an LLM call or
+        # pre-generated agent messages.
         if use_supervisor:
-            clarify_resume_prepared = False
-            if pending_clarify_msg_id:
-                clarify_resume_prepared = await self._prepare_clarify_resume(
-                    room=room,
-                    user_message=user_message,
-                    message_text=message_text,
-                    pending_clarify_msg_id=pending_clarify_msg_id,
-                    agents=agents,
-                    selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
-                    explicit_mentions=pre_resolved_mentions,
-                )
-
-            if clarify_resume_prepared:
-                parse_result = ParseResult(success=True)
-            elif v2_orchestration_active:
-                parse_result = await self._prepare_orchestration_envelope(
-                    request=request,
-                    user_message=user_message,
-                    selected_agent_set=selected_agent_set,
-                    explicit_mentions=pre_resolved_mentions,
-                    client_request_id=client_request_id,
-                )
-            else:
-                parse_result = await self._prepare_for_supervisor(
-                    room=room,
-                    user_message=user_message,
-                    message_text=message_text,
-                    agents=agents,
-                    selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
-                    token=token,
-                    explicit_mentions=pre_resolved_mentions,
-                )
+            parse_result = await self._prepare_orchestration_envelope(
+                request=request,
+                user_message=user_message,
+                selected_agent_set=selected_agent_set,
+                explicit_mentions=pre_resolved_mentions,
+                client_request_id=client_request_id,
+            )
         else:
             parse_result = await self.parse_user_message(
                 request.room_id,
@@ -2996,7 +2731,7 @@ class RoomServices:
             user_message.message_id,
             client_request_id,
             use_supervisor,
-            v2_orchestration_active,
+            orchestration_active,
         )
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -3638,7 +3373,7 @@ class RoomServices:
         """
         # Skip for direct chat — only 1 agent is working, awareness is misleading.
         # task_description=None is set precisely for direct-chat scenarios in both
-        # legacy and Supervisor paths.
+        # queue and Supervisor paths.
         if task_description is None:
             return None
 
@@ -4738,13 +4473,40 @@ class RoomServices:
         if user_message is None:
             return False
         if not isinstance(user_message.extend_info, dict):
-            user_message.extend_info = {}
+            return False
+        if not (
+            user_message.extend_info.get("orchestration") is True
+            or user_message.extend_info.get("orchestration_run_id")
+        ):
+            return True
+        terminal = status in {
+            terminal_status.value for terminal_status in TERMINAL_ORCHESTRATION_STATUSES
+        }
+        already_projected = user_message.extend_info.get(
+            "orchestration_status"
+        ) == status and (not terminal or user_message.processing_claimed_at is None)
+        if already_projected:
+            return True
+
         user_message.extend_info["orchestration_status"] = status
+        if terminal:
+            user_message.processing_claimed_at = None
+        updated = await self._store.update_room_user_message_by_message_id(
+            message_id,
+            user_message,
+        )
+        if updated:
+            return True
+
+        # Mongo reports a no-op write as unmodified. A concurrent or replayed
+        # projection is successful when the persisted envelope is already at
+        # the requested state.
+        persisted = await self._store.get_room_user_message_by_message_id(message_id)
         return bool(
-            await self._store.update_room_user_message_by_message_id(
-                message_id,
-                user_message,
-            )
+            persisted is not None
+            and isinstance(persisted.extend_info, dict)
+            and persisted.extend_info.get("orchestration_status") == status
+            and (not terminal or persisted.processing_claimed_at is None)
         )
 
     async def handle_a2a_response_for_room(

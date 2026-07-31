@@ -11,6 +11,7 @@ from api_gateway.dependencies import (
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
+from common.dto import CancellationAck
 from common.protocols import ExecutionEngine, SSERouteTransport, SSEStateReader
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -180,7 +181,7 @@ async def cancel_message(
             else None
         )
         terminal_status = _PUBLIC_TERMINAL_ORCHESTRATION_STATUS.get(persisted_status)
-        if terminal_status is not None:
+        if terminal_status is not None and terminal_status != "canceled":
             return {
                 "success": True,
                 "message_id": message_id,
@@ -198,6 +199,25 @@ async def cancel_message(
             raise HTTPException(
                 status_code=500, detail="Failed to persist cancellation to database"
             )
+        if isinstance(success, CancellationAck) and not success.reconciled:
+            return {
+                "success": True,
+                "message_id": message_id,
+                "message": "Message cancellation accepted and pending reconciliation",
+                "status": success.status,
+                "outcome": "pending_reconciliation",
+            }
+        if isinstance(success, CancellationAck) and not success.cancellation_applied:
+            return {
+                "success": True,
+                "message_id": message_id,
+                "message": "Message processing had already finished",
+                "status": _PUBLIC_TERMINAL_ORCHESTRATION_STATUS.get(
+                    success.status,
+                    success.status,
+                ),
+                "outcome": "already_terminal",
+            }
 
         logger.info(f"Message {message_id} cancelled by user {user.user_id}")
 

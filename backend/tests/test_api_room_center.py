@@ -102,6 +102,7 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
         user_id="user-1",
         message_content=MessageContent(message_text="Run this"),
         extend_info={"orchestration_run_id": "run-1"},
+        processing_claimed_at=datetime.now(UTC),
     )
     runtime._store = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
@@ -118,10 +119,98 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
         "orchestration_run_id": "run-1",
         "orchestration_status": "canceled",
     }
+    assert user_message.processing_claimed_at is None
     runtime._store.update_room_user_message_by_message_id.assert_awaited_once_with(
         "user-message-1",
         user_message,
     )
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_idempotent_terminal_replay():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "completed",
+        },
+        processing_claimed_at=None,
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_concurrent_target_winner():
+    runtime = RoomServices()
+    original = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "processing",
+        },
+        processing_claimed_at=datetime.now(UTC),
+    )
+    persisted = original.model_copy(deep=True)
+    persisted.extend_info["orchestration_status"] = "completed"
+    persisted.processing_claimed_at = None
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(
+            side_effect=[original, persisted]
+        ),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    assert runtime._store.get_room_user_message_by_message_id.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_update_ignores_non_orchestration_message():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Queue this"),
+        extend_info={},
+        processing_claimed_at=datetime.now(UTC),
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=True),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "canceled",
+    )
+
+    assert updated is True
+    assert user_message.processing_claimed_at is not None
+    runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1217,13 +1306,12 @@ class TestInquiryRoomMessages:
         assert response.success is True
 
     @pytest.mark.asyncio
-    async def test_returns_public_user_message_payload_without_private_extend_info(
+    async def test_returns_public_user_history_without_private_orchestration_state(
         self, mock_user, sample_room, patch_room_center_deps
     ):
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
-
-        private_sentinel = "PRIVATE_SENTINEL_user_extend_info_history_boundary"
+        private_sentinel = "PRIVATE_SENTINEL_user_history_boundary"
         public_extend_info = {
             "quoted_text": "Public quoted excerpt",
             "quoted_sender_name": "Agent One",
@@ -1244,10 +1332,6 @@ class TestInquiryRoomMessages:
                 "orchestration_run_id": private_sentinel,
                 "candidate_scope_snapshot_id": private_sentinel,
                 "candidate_agent_ids": [private_sentinel],
-                "supervisor_trajectory": {
-                    "status": "running",
-                    "entries": [{"prompt": private_sentinel}],
-                },
                 "agent_registry": [{"agent_id": private_sentinel}],
                 "conversation_context": private_sentinel,
                 "room_config": {"explicit_mentions": [private_sentinel]},

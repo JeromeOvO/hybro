@@ -332,16 +332,21 @@ Execution also defines a durable orchestration run-state foundation. The
 versioned `OrchestrationRunState` model, pure reducer transitions, and
 `OrchestrationRunStore` contract support optimistic state writes, append-only
 events, recovery queries, and envelope reconstruction. Public run lifecycle
-projection accepts an explicit public `RunState`, is idempotent by causation id,
-and remains behind the existing run dual-write feature gate. A projection with
-a new causation id records that binding even when the public head is already at
-the requested active state; repeated processing projections use `RUN_RESUMED`
-rather than emitting another start event. Mapping orchestration-specific
-statuses into public run states is performed by the state-driven supervisor loop
-while legacy supervisor execution remains available for requests that do not
-activate the versioned runtime.
+projection accepts an explicit public `RunState` and is idempotent by causation
+id. Public projection is unconditional: `OrchestrationRunState` is the execution
+source of truth, while `runs` and `run_events` are public lifecycle projections.
+A projection with a new causation id records that binding even when the public
+head is already at the requested active state; repeated processing projections
+use `RUN_RESUMED` rather than emitting another start event. Mapping
+orchestration-specific statuses into public run states is performed by the
+single state-driven supervisor loop. Graceful process shutdown is treated as an
+infrastructure interruption rather than a user cancellation: local execution
+tasks stop without emitting terminal public state or terminalizing the durable
+run, and stale recovery resumes them after restart. Explicit user cancellation
+remains the only path that permanently marks both durable and public run state
+as canceled.
 
-Versioned supervisor requests can also carry an explicit candidate scope from
+Supervisor requests carry an explicit candidate scope from
 the API boundary into a lightweight orchestration envelope. Scope normalization
 rejects unknown, inaccessible, or inconsistent agent selections before planner
 execution. The frontend selector defines this scope: `all_agents` snapshots every
@@ -374,15 +379,11 @@ domain-specific next steps. An execution-failure fallback must still distinguish
 and disclose that operational failure. An empty candidate scope is therefore a
 valid Supervisor input, not a pending synthetic A2A task.
 
-The versioned planner action schema and pure action validator enforce
-candidate membership, step-budget, required-target, and prior-output rules while
-the existing supervisor loop remains the default runtime path. Lightweight v2
-envelope activation and state-driven execution are disabled by default behind
-`EXECUTION_ORCHESTRATION_V2`; candidate-scope validation still applies before
-the feature gate so disabled requests safely retain the legacy runtime path.
-`FEATURE_ORCHESTRATION_V2` remains accepted as a deployment migration alias,
-with the new environment variable taking precedence. Pending legacy
-clarifications resume before a new v2 envelope can be created.
+The planner action schema and pure action validator enforce candidate
+membership, step-budget, required-target, and prior-output rules. Every
+Supervisor room request creates a lightweight durable orchestration envelope;
+there is no rollout selector or alternate supervisor execution path. The client
+selects scope and mode but does not select an orchestration schema version.
 
 The orchestration boundary also defines deterministic planner context and agent
 result ingestion. `build_orchestration_planner_context` projects quoted content,
@@ -403,27 +404,28 @@ bound. Sparse or identical terminal replays preserve richer output and do not
 advance the run-state version. The state-driven supervisor loop consumes these
 boundaries to plan, reduce, persist, and resume each versioned step.
 
-HITL records, execution DTOs, delivery events, live SSE frames, and catch-up
-responses preserve optional `orchestration_run_id` and
-`orchestration_schema_version` links without changing legacy payloads. Supervisor
-HITL requests propagate these links from the orchestration state, and grouped
-cancellation or expiry terminalizes each pending sibling while retaining its
-own linkage metadata. This contract remains compatible with legacy HITL records
-that do not contain orchestration fields.
+HITL records preserve the optional `orchestration_run_id` needed to resume the
+durable run. Delivery events and public SSE frames do not expose private
+orchestration linkage. Grouped cancellation or expiry terminalizes each pending
+sibling while retaining its own run linkage metadata.
 
-For activated v2 envelopes, `RoomMessageCenter` routes execution through
-`SupervisorExecutor.run_v2`. Each planner action is reduced into optimistic,
+`RoomMessageCenter` routes every durable orchestration envelope through
+`SupervisorExecutor.run`. Each planner action is reduced into optimistic,
 versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
 Durable run-store queries and the stale-task checker can claim and resume stale
-sidecar runs after process interruption. A processing-claim heartbeat prevents
-recovery from preempting live turns, optimistic write conflicts exit cleanly for
-the winning writer to continue, and deterministic supervisor HITL artifacts can
-finish materializing from an `INGESTING` checkpoint without re-planning. Legacy
-supervisor requests continue to use the existing loop.
+runs after process interruption. The checker also recovers old unclaimed or
+stale claimed Supervisor envelopes that were interrupted before durable run
+creation; terminal envelopes are excluded before the bounded query limit, and
+terminal projection clears the processing claim. The canonical entry point then
+claims or reclaims the message and creates the run normally. A processing-claim
+heartbeat prevents recovery
+from preempting live turns, optimistic write conflicts exit cleanly for the
+winning writer to continue, and deterministic supervisor HITL artifacts can
+finish materializing from an `INGESTING` checkpoint without re-planning.
 
-The v2 planner receives a bounded resource catalog for user attachments and
+The orchestration planner receives a bounded resource catalog for user attachments and
 generated projections. Resource references are explicit: planner targets select
 context, artifact, or attachment refs, dispatch validates those refs against the
 run state and Agent Card input modes, and only selected payloads are materialized
@@ -476,8 +478,8 @@ each iteration the planner compares that goal with the bounded state-context
 projection of facts, artifacts, agent outputs, and open questions. It either
 chooses the next business action or declares the goal complete. Completion is
 LLM-judged; Execution only enforces mechanical blockers such as pending HITL,
-active dispatches, unresolved questions, and open runtime failures. Legacy
-`synthesize` decisions are normalized to `complete`.
+active dispatches, unresolved questions, and open runtime failures. The
+provider action alias `synthesize` is normalized to `complete`.
 
 `complete` is not itself a terminal side effect. Execution first runs final
 synthesis, streams the user-facing response, and only then persists the run as
@@ -900,7 +902,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - loads quoted context when present,
    - creates or reuses a cancellation token,
    - chooses one of two execution paths:
-     - Supervisor path for `extend_info.supervisor`.
+     - Supervisor path for the durable orchestration envelope identified by
+       `extend_info.orchestration`, `orchestration_run_id`, and its candidate scope.
      - Queue path for pre-created agent messages.
 
 8. Queue path:
@@ -1071,14 +1074,17 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` persists cancellation in MongoDB.
-3. Delivery/SSE cancellation state is updated and broadcast.
-4. Pending HITL requests for the message are cancelled.
-5. Any paused orchestration sidecar is terminalized as canceled; pending HITL
-   ids, continuations, and open-question state are cleared.
-6. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
-7. Best-effort remote agent task cleanup is attempted.
-8. Executors observe cancellation tokens at checkpoints and stop gracefully.
+2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
+3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
+   nonterminal durable run while preserving a concurrently completed result.
+4. The finalizer updates the message projection, broadcasts the cancellation
+   token, cancels HITL, emits terminal public lifecycle/SSE, and cleans agent
+   tasks.
+5. The marker is marked reconciled only after every idempotent effect succeeds.
+6. The stale-task checker scans only pending markers and invokes the same typed
+   finalizer after crashes or partial failures. Old no-run markers settle only
+   after the orphan threshold, leaving time to catch a late-created run.
+7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
 typed SSE frames and cancellation state cross worker boundaries.

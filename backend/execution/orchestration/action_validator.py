@@ -1,4 +1,4 @@
-"""Validation for v2 planner actions."""
+"""Validation for orchestration planner actions."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class PlannerActionValidationError(ValueError):
 
 
 class PlannerActionValidator:
-    """Validate v2 planner actions against runtime orchestration constraints."""
+    """Validate orchestration planner actions against runtime orchestration constraints."""
 
     @staticmethod
     def validate(

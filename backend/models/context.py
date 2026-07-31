@@ -10,7 +10,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.1 for design details.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -26,9 +26,8 @@ class SessionContext(BaseModel):
 
     Created when user sends message → Destroyed after all agents respond.
 
-    NOTE: There is no SupervisorPlan — uses an adaptive loop.
-    The trajectory (all actions + results so far) is the single source of truth.
-    It lives in user_message.extend_info.supervisor_trajectory (SupervisorTrajectory).
+    NOTE: There is no SupervisorPlan — the adaptive loop uses the durable
+    OrchestrationRunState as its single source of truth.
 
     See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.1 for specification.
     """
@@ -42,14 +41,8 @@ class SessionContext(BaseModel):
     user_message_id: str
     created_at: datetime = Field(default_factory=utcnow)
 
-    # Supervisor state (if multi-agent)
-    # The trajectory is the single source of truth for the adaptive loop.
-    supervisor_trajectory: Any | None = None  # Actually SupervisorTrajectory
-
-    # Snapshot of room history passed to the supervisor LLM prompt.
-    # Built once in _prepare_for_supervisor() and FROZEN for the loop duration.
-    # Agent results written during the loop are NOT reflected here — they come
-    # through trajectory_summary in the supervisor prompt instead.
+    # Snapshot of room history passed to the supervisor LLM prompt. Agent
+    # results are read from the durable orchestration state on every step.
     conversation_context: str | None = None
 
     # Token tracking

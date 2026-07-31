@@ -6,11 +6,8 @@ from pydantic import ValidationError
 from common.config.settings import Settings
 
 RUNTIME_CONFIG_ENV_VARS = (
-    "FEATURE_RUN_DUAL_WRITE",
     "FEATURE_RUN_EVENT_SSE",
     "FEATURE_RUN_WATCHDOG",
-    "FEATURE_ORCHESTRATION_V2",
-    "EXECUTION_ORCHESTRATION_V2",
     "ORCHESTRATION_OUTCOME_GUARDRAILS",
     "SUPERVISOR_MAX_STEPS",
     "RUN_WATCHDOG_STALE_MINUTES",
@@ -22,21 +19,6 @@ RUNTIME_CONFIG_ENV_VARS = (
 def _clear_runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in RUNTIME_CONFIG_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-
-
-def test_runtime_config_unification_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_runtime_config_env(monkeypatch)
-    settings = Settings(_env_file=None)
-
-    assert settings.feature_run_dual_write is True
-    assert settings.feature_run_event_sse is False
-    assert settings.feature_run_watchdog is True
-    assert settings.execution_orchestration_v2 is False
-    assert settings.orchestration_outcome_guardrails is True
-    assert settings.supervisor_max_steps == 8
-    assert settings.run_watchdog_stale_minutes == 90
-    assert settings.agent_health_check_interval == 3600
-    assert settings.compaction_concurrency == 5
 
 
 def test_orchestration_outcome_guardrails_defaults_on(monkeypatch):
@@ -73,50 +55,6 @@ def test_orchestration_outcome_guardrails_reads_environment(
     settings = Settings(_env_file=None)
 
     assert settings.orchestration_outcome_guardrails is True
-
-
-def test_execution_orchestration_v2_accepts_legacy_env_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_runtime_config_env(monkeypatch)
-    monkeypatch.setenv("FEATURE_ORCHESTRATION_V2", "true")
-
-    settings = Settings(_env_file=None)
-
-    assert settings.execution_orchestration_v2 is True
-
-
-def test_execution_orchestration_v2_prefers_new_env_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_runtime_config_env(monkeypatch)
-    monkeypatch.setenv("FEATURE_ORCHESTRATION_V2", "true")
-    monkeypatch.setenv("EXECUTION_ORCHESTRATION_V2", "false")
-
-    settings = Settings(_env_file=None)
-
-    assert settings.execution_orchestration_v2 is False
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("", True),
-        ("0", False),
-        ("false", False),
-        ("no", False),
-        ("off", False),
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("on", True),
-        ("garbage", True),
-    ],
-)
-def test_feature_run_dual_write_parses_legacy_values(raw: str, expected: bool) -> None:
-    settings = Settings(_env_file=None, feature_run_dual_write=raw)
-
-    assert settings.feature_run_dual_write is expected
 
 
 @pytest.mark.parametrize(

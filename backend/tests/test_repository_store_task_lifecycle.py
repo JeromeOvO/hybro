@@ -347,7 +347,19 @@ class TestRepositoryStoreHITL:
         assert pending == [{"request_id": "h1"}]
         assert hitl_requests.insert_one_calls == [{"request_id": "h1"}]
         assert hitl_requests.find_calls == [
-            ({"user_message_id": "u1", "status": "pending"}, {"limit": 50})
+            (
+                {
+                    "user_message_id": "u1",
+                    "$or": [
+                        {"status": "pending"},
+                        {
+                            "status": "canceled",
+                            "cancellation_reconciled": {"$ne": True},
+                        },
+                    ],
+                },
+                {"limit": 50},
+            )
         ]
 
     @pytest.mark.asyncio
@@ -466,6 +478,15 @@ class TestRepositoryStoreHITL:
             ([("room_id", 1), ("status", 1)], {}),
             ([("expires_at", 1), ("status", 1)], {}),
             ([("user_message_id", 1), ("status", 1)], {}),
+            (
+                [
+                    ("group_id", 1),
+                    ("status", 1),
+                    ("group_index", 1),
+                    ("request_id", 1),
+                ],
+                {},
+            ),
             ([("continuation_message_id", 1)], {}),
             (
                 [("room_id", 1), ("display_message_id", 1)],

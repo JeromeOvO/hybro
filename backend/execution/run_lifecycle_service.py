@@ -1,4 +1,4 @@
-"""Backward-compatible facade for run persistence (delegates to RunCommandHandler)."""
+"""Facade for public run lifecycle persistence."""
 
 from __future__ import annotations
 
@@ -6,11 +6,7 @@ from typing import Any
 
 from common.protocols import EventPublisher
 from execution.events import run_event_notification_from_payload
-from execution.run_command_handler import (
-    RunCommandHandler,
-    feature_run_dual_write_enabled,
-    run_event_sse_enabled,
-)
+from execution.run_command_handler import RunCommandHandler, run_event_sse_enabled
 from execution.run_command_handler import (
     run_command_handler as _default_run_command_handler,
 )
@@ -29,8 +25,6 @@ class RunLifecycleService:
         client_request_id: str | None = None,
         details: dict[str, Any] | str | None = None,
     ) -> dict[str, Any] | None:
-        if not feature_run_dual_write_enabled():
-            return None
         detail_text = (
             details.get("message") or details.get("error")
             if isinstance(details, dict)
@@ -56,8 +50,6 @@ class RunLifecycleService:
         client_request_id: str | None = None,
         terminal_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        if not feature_run_dual_write_enabled():
-            return None
         return await run_command_handler.project_run_state(
             room_id=room_id,
             run_id=run_id,

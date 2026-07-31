@@ -290,7 +290,7 @@ def test_hitl_status_translation_preserves_status_source_and_error():
 
 
 def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
-    private_keys = {"orchestration_run_id", "orchestration_schema_version"}
+    private_keys = {"orchestration_run_id"}
     for source in ("agent", "supervisor"):
         request_event = HITLRequestEvent(
             room_id="room-1",
@@ -308,8 +308,6 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
             group_index=0,
             related_message_id="user-msg-1",
             client_request_id="client-req-1",
-            orchestration_run_id="PRIVATE_RUN_ID_SENTINEL",
-            orchestration_schema_version=987654321,
             trace_id="trace-1",
         )
         resolved_event = HITLResolvedEvent(
@@ -320,8 +318,6 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
             status="resolved",
             related_message_id="user-msg-1",
             client_request_id="client-req-1",
-            orchestration_run_id="PRIVATE_RUN_ID_SENTINEL",
-            orchestration_schema_version=987654321,
             trace_id="trace-1",
         )
 

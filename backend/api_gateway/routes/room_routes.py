@@ -389,18 +389,6 @@ async def send_message(
             status_code=400,
         )
 
-    orchestration_schema_version = request_data.get("orchestration_schema_version")
-    if orchestration_schema_version is not None and (
-        isinstance(orchestration_schema_version, bool)
-        or not isinstance(orchestration_schema_version, int)
-    ):
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error="orchestration_schema_version must be an integer",
-            status_code=400,
-        )
     if not isinstance(client_request_id, str) or not client_request_id.strip():
         return RoomCenterUserMessageResponse(
             message_id=None,
@@ -424,11 +412,7 @@ async def send_message(
         isinstance(room.extend_info, dict)
         and room.extend_info.get("use_supervisor", False) is True
     )
-    is_v2_supervisor_orchestration = (
-        mode == "supervisor"
-        and orchestration_schema_version == 2
-        and room_uses_supervisor
-    )
+    is_supervisor_orchestration = mode == "supervisor" and room_uses_supervisor
 
     message_target_mode = request_data.get("message_target_mode")
     target_group_id = request_data.get("target_group_id")
@@ -498,7 +482,7 @@ async def send_message(
     if (
         mentioned_agent_ids
         and message_target_mode is not None
-        and not is_v2_supervisor_orchestration
+        and not is_supervisor_orchestration
     ):
         return RoomCenterUserMessageResponse(
             message_id=None,
@@ -559,7 +543,7 @@ async def send_message(
                 ),
                 status_code=400,
             )
-    elif is_v2_supervisor_orchestration and selected_agent_ids:
+    elif is_supervisor_orchestration and selected_agent_ids:
         if has_target_group_id:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -598,7 +582,6 @@ async def send_message(
             "room_id": room_id,
             "client_request_id": client_request_id,
             "mode": mode,
-            "orchestration_schema_version": orchestration_schema_version,
             "room_supervisor": room_uses_supervisor,
             "target_mode": message_target_mode,
             "target_group_id": target_group_id,
@@ -629,7 +612,6 @@ async def send_message(
         selected_agent_ids=selected_agent_ids,
         candidate_scope_mode=candidate_scope_mode,
         candidate_scope_group_id=candidate_scope_group_id,
-        orchestration_schema_version=orchestration_schema_version,
         parent_message_id=related_message_id or None,
         mode=mode,
     )

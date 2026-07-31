@@ -1,4 +1,4 @@
-"""Structured planner context for v2 orchestration run state."""
+"""Structured planner context for orchestration run state."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class MissingRequiredQuoteError(ValueError):
 
 
 class CandidateAgentContext(BaseModel):
-    """Planner-facing view of one sidecar-selected candidate agent."""
+    """Planner-facing view of one run-selected candidate agent."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -38,7 +38,7 @@ class CandidateAgentContext(BaseModel):
 
 
 class CandidateScopeContext(BaseModel):
-    """Candidate scope supplied by the orchestration sidecar."""
+    """Candidate scope supplied by the orchestration run."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -247,7 +247,7 @@ def build_orchestration_planner_context(
     room_background: str | None = None,
     available_resources: Sequence[Any] | None = None,
 ) -> OrchestrationPlannerContext:
-    """Build a deterministic planner context from sidecar state and turn data."""
+    """Build a deterministic planner context from durable run state and turn data."""
 
     quote_context = _build_quote_context(quote)
     if quote_required and quote_context is None:

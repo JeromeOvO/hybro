@@ -6,7 +6,7 @@ save/resume for webhook-paused queues, per-item dispatch to the
 
 Agent assignment is delegated to the injected ``AgentDispatcher``.
 
-Since Phase 5 (V1 deprecation), the Supervisor review hook has been removed.
+The Supervisor review hook has been removed; the Supervisor review hook has been removed.
 Supervisor-enabled rooms use ``SupervisorExecutor`` exclusively.
 """
 

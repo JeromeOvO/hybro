@@ -44,10 +44,9 @@ from execution.orchestration.action_validator import (
 )
 from execution.orchestration.blocker_resolver import (
     resolve_agent_observed_blockers,
-    validate_hitl_answered_blockers,
 )
 from execution.orchestration.candidate_scope import (
-    candidate_scope_from_legacy_envelope,
+    candidate_scope_from_envelope,
     normalize_candidate_scope,
 )
 from execution.orchestration.context_builder import build_orchestration_planner_context
@@ -362,7 +361,7 @@ class SupervisorExecutor:
 
     @property
     def guardrails_enabled(self) -> bool:
-        """Use injected production configuration while preserving legacy callers."""
+        """Use injected production configuration while preserving existing callers."""
         configured = getattr(self, "_guardrails_enabled", None)
         if configured is None:
             return _settings.orchestration_outcome_guardrails
@@ -432,7 +431,7 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _compat_trajectory_from_state(
+    def _trajectory_from_state(
         state: OrchestrationRunState,
     ) -> SupervisorTrajectory:
         trajectory = SupervisorTrajectory()
@@ -885,19 +884,20 @@ class SupervisorExecutor:
         token: CancellationToken | None = None,
         request_user_id: str | None = None,
         quoted_text: str | None = None,
-        allow_awaiting_user_recovery: bool = False,
         user_message=None,
     ) -> SupervisorRunResult:
         """Execute the supervisor loop using persisted orchestration run state."""
 
-        terminal_result = await self._v2_terminal_result_if_done(room_id, state)
+        terminal_result = await self._orchestration_terminal_result_if_done(
+            room_id, state
+        )
         if terminal_result is not None:
             return terminal_result
         if (
             state.status == OrchestrationStatus.INGESTING
             and state.pending_hitl_request_ids
         ):
-            pending_action = self._v2_pending_hitl_planner_action(state)
+            pending_action = self._orchestration_pending_hitl_planner_action(state)
             if pending_action is not None:
                 return await self._run_ask_user_action(
                     state=state,
@@ -912,7 +912,7 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                     resume_pending_artifacts=True,
                 )
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason=(
@@ -942,9 +942,8 @@ class SupervisorExecutor:
             state.status == OrchestrationStatus.AWAITING_USER
             and not self._has_current_step_recoverable_intents(state)
             and not self._has_open_pending_hitl(state)
-            and not allow_awaiting_user_recovery
         ):
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="awaiting_user_without_open_hitl",
@@ -958,8 +957,8 @@ class SupervisorExecutor:
                 ),
             )
 
-        state = await self._ensure_v2_running_state(state)
-        state = await self._ensure_v2_system_task(
+        state = await self._ensure_orchestration_running_state(state)
+        state = await self._ensure_orchestration_system_task(
             room_id=room_id,
             user_message_id=user_message_id,
             request_user_id=request_user_id,
@@ -979,7 +978,7 @@ class SupervisorExecutor:
                 "status": _log_value(state.status),
             },
         )
-        state, recovered_status = await self._recover_v2_inflight_dispatch(
+        state, recovered_status = await self._recover_orchestration_inflight_dispatch(
             state=state,
             agent_registry=agent_registry,
             room_config=room_config,
@@ -1004,7 +1003,7 @@ class SupervisorExecutor:
 
         while state.steps_used <= state.step_budget:
             if token and token.is_cancelled:
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.CANCELED,
                     reason="request canceled",
@@ -1037,7 +1036,7 @@ class SupervisorExecutor:
             (
                 resource_attachments,
                 attachment_source_message_ids,
-            ) = await self._v2_resource_attachments(
+            ) = await self._orchestration_resource_attachments(
                 room_id=room_id,
                 user_message_id=user_message_id,
                 user_message=user_message,
@@ -1048,7 +1047,9 @@ class SupervisorExecutor:
                     room_id=room_id,
                     user_message_id=user_message_id,
                     attachments=resource_attachments,
-                    candidate_agents=self._v2_candidate_scope(state, agent_registry),
+                    candidate_agents=self._orchestration_candidate_scope(
+                        state, agent_registry
+                    ),
                     attachment_source_message_ids=attachment_source_message_ids,
                 )
             )
@@ -1063,7 +1064,9 @@ class SupervisorExecutor:
             )
             context = build_orchestration_planner_context(
                 run_state=state,
-                candidate_scope=self._v2_candidate_scope(state, agent_registry),
+                candidate_scope=self._orchestration_candidate_scope(
+                    state, agent_registry
+                ),
                 message_text=message_text,
                 quote=quoted_text,
                 room_background=conversation_context,
@@ -1090,7 +1093,7 @@ class SupervisorExecutor:
                 len(state.pending_hitl_request_ids),
                 _join_log_ids(_artifact_keys_for_log(state)),
             )
-            await self._append_v2_event(
+            await self._append_orchestration_event(
                 state,
                 OrchestrationEventType.PLANNER_CONTEXT_BUILT,
                 payload={
@@ -1111,7 +1114,7 @@ class SupervisorExecutor:
                     await token.race(plan_coro) if token else await plan_coro
                 )
             except CancellationError:
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.CANCELED,
                     reason="request canceled",
@@ -1149,7 +1152,7 @@ class SupervisorExecutor:
                         if exc.code == "step_budget_exhausted"
                         else OrchestrationStatus.FAILED
                     )
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         terminal_status,
                         reason=str(exc),
@@ -1159,7 +1162,7 @@ class SupervisorExecutor:
                         state,
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
-                state, exhausted = await self._record_v2_planner_rejection(
+                state, exhausted = await self._record_orchestration_planner_rejection(
                     state,
                     error_code=getattr(exc, "code", "planner_output_invalid"),
                     error_message=str(exc),
@@ -1174,7 +1177,7 @@ class SupervisorExecutor:
                         details="Unable to continue the workflow.",
                         stage="unable_to_continue",
                     )
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
                         reason=str(exc),
@@ -1243,7 +1246,7 @@ class SupervisorExecutor:
                         if exc.code == "step_budget_exhausted"
                         else OrchestrationStatus.FAILED
                     )
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         terminal_status,
                         reason=str(exc),
@@ -1254,7 +1257,7 @@ class SupervisorExecutor:
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
                 if exc.code == "recovery_retry_exhausted":
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
                         reason=str(exc),
@@ -1264,7 +1267,7 @@ class SupervisorExecutor:
                         state,
                         self._state_run_result(status=RunStatus.FAILED, state=state),
                     )
-                state, exhausted = await self._record_v2_planner_rejection(
+                state, exhausted = await self._record_orchestration_planner_rejection(
                     state,
                     error_code=exc.code,
                     error_message=str(exc),
@@ -1272,7 +1275,7 @@ class SupervisorExecutor:
                     stage="state_validation",
                 )
                 if exhausted or state.steps_used >= state.step_budget:
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
                         reason=str(exc),
@@ -1326,7 +1329,9 @@ class SupervisorExecutor:
                     len(planner_action.questions),
                     len(state.blockers),
                 )
-            state = await self._record_v2_planner_action(state, planner_action)
+            state = await self._record_orchestration_planner_action(
+                state, planner_action
+            )
 
             match planner_action.action:
                 case PlannerActionType.DELEGATE:
@@ -1425,7 +1430,7 @@ class SupervisorExecutor:
                         ) -> None:
                             updated.completion_evidence = evidence
 
-                        state = await self._mark_v2_terminal(
+                        state = await self._mark_orchestration_terminal(
                             state,
                             OrchestrationStatus.COMPLETED,
                             reason=planner_action.reasoning,
@@ -1477,7 +1482,7 @@ class SupervisorExecutor:
                         details="Unable to continue the workflow.",
                         stage="unable_to_continue",
                     )
-                    state = await self._mark_v2_terminal(
+                    state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
                         reason=(
@@ -1495,7 +1500,7 @@ class SupervisorExecutor:
                         ),
                     )
 
-        state = await self._mark_v2_terminal(
+        state = await self._mark_orchestration_terminal(
             state,
             OrchestrationStatus.BUDGET_EXHAUSTED,
             reason="step budget exhausted",
@@ -1715,7 +1720,7 @@ class SupervisorExecutor:
 
         updated = state.model_copy(deep=True)
         updated.participant_snapshot = self._debate_participant_snapshot(
-            self._v2_candidate_scope(updated, agent_registry),
+            self._orchestration_candidate_scope(updated, agent_registry),
             debate_rounds=self._configured_debate_rounds(),
         )
         if updated.participant_snapshot is None:
@@ -1783,7 +1788,7 @@ class SupervisorExecutor:
             goal=message_text,
         )
         if agent_registry:
-            state.candidate_scope = candidate_scope_from_legacy_envelope(
+            state.candidate_scope = candidate_scope_from_envelope(
                 room_id=room_id,
                 envelope=envelope,
                 selected_agent_set=agent_registry,
@@ -1840,7 +1845,7 @@ class SupervisorExecutor:
                 )
             raise
 
-    async def _ensure_v2_running_state(
+    async def _ensure_orchestration_running_state(
         self,
         state: OrchestrationRunState,
     ) -> OrchestrationRunState:
@@ -1862,14 +1867,14 @@ class SupervisorExecutor:
             updated,
             expected_version=expected_version,
         )
-        await self._append_v2_event(
+        await self._append_orchestration_event(
             saved,
             OrchestrationEventType.STATE_REDUCED,
             payload={"status": saved.status.value},
         )
         return saved
 
-    async def _ensure_v2_system_task(
+    async def _ensure_orchestration_system_task(
         self,
         *,
         room_id: str,
@@ -1881,7 +1886,7 @@ class SupervisorExecutor:
             return state
 
         sys_message_id = state.summary_message_id or f"sys-{user_message_id}"
-        state = await self._save_v2_state(
+        state = await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.STATE_REDUCED,
             payload={"system_agent_message_id": sys_message_id},
@@ -1917,10 +1922,12 @@ class SupervisorExecutor:
                 client_request_id=state.client_request_id,
             )
         except Exception:
-            logger.warning("Failed to emit v2 system:hybro task", exc_info=True)
+            logger.warning(
+                "Failed to emit orchestration system:hybro task", exc_info=True
+            )
         return state
 
-    async def _record_v2_planner_action(
+    async def _record_orchestration_planner_action(
         self,
         state: OrchestrationRunState,
         planner_action: PlannerAction,
@@ -1964,7 +1971,7 @@ class SupervisorExecutor:
             updated.decision_log = reduced.decision_log
             resolve_open_planner_validation_failures(updated)
 
-        saved = await self._save_v2_state(
+        saved = await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.PLANNER_ACTION_PROPOSED,
             payload=planner_action.model_dump(mode="json"),
@@ -1972,7 +1979,7 @@ class SupervisorExecutor:
         )
         return saved
 
-    async def _record_v2_planner_rejection(
+    async def _record_orchestration_planner_rejection(
         self,
         state: OrchestrationRunState,
         *,
@@ -2006,7 +2013,7 @@ class SupervisorExecutor:
                 payload["action"] = planner_action.action.value
             outcome["exhausted"] = exhausted
 
-        saved = await self._save_v2_state(
+        saved = await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.PLANNER_ACTION_REJECTED,
             payload=payload,
@@ -2015,7 +2022,7 @@ class SupervisorExecutor:
         return saved, outcome["exhausted"]
 
     @staticmethod
-    def _v2_pending_hitl_planner_action(
+    def _orchestration_pending_hitl_planner_action(
         state: OrchestrationRunState,
     ) -> PlannerAction | None:
         for decision in reversed(state.decision_log):
@@ -2048,8 +2055,8 @@ class SupervisorExecutor:
         user_message,
         resource_fingerprints: Mapping[str, str] | None = None,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
-        trajectory = self._compat_trajectory_from_state(state)
-        action = self._v2_supervisor_action(planner_action, agent_registry)
+        trajectory = self._trajectory_from_state(state)
+        action = self._orchestration_supervisor_action(planner_action, agent_registry)
         state = await self._supersede_unresolved_input_required_outputs(
             state,
             chosen_targets=planner_action.targets,
@@ -2063,7 +2070,7 @@ class SupervisorExecutor:
         trajectory.entries.append(entry)
 
         intents = [
-            self._v2_dispatch_intent(
+            self._orchestration_dispatch_intent(
                 run_id=state.run_id,
                 step_number=step_number,
                 target_index=index,
@@ -2098,7 +2105,7 @@ class SupervisorExecutor:
                     "error_code": exhausted_failure.error_code,
                 },
             )
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason="recoverable failure retry budget exhausted",
@@ -2132,13 +2139,13 @@ class SupervisorExecutor:
             _join_log_ids([target.agent_id for target in action.targets]),
             _join_log_ids([intent.dispatch_intent_id for intent in intents]),
         )
-        state = await self._save_v2_state(
+        state = await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.DISPATCH_INTENT_RECORDED,
             payload={
                 "dispatch_intent_ids": [intent.dispatch_intent_id for intent in intents]
             },
-            mutate=lambda updated: self._apply_v2_dispatch_intents(
+            mutate=lambda updated: self._apply_orchestration_dispatch_intents(
                 updated,
                 intents,
             ),
@@ -2240,12 +2247,12 @@ class SupervisorExecutor:
                 or result.agent_message_id in follow_up_hitl_message_ids
             ]
             if not self.guardrails_enabled:
-                # Preserve legacy live-dispatch behavior while keeping recovery
+                # Preserve live-dispatch behavior while keeping recovery
                 # scoped to input requests that actually require user action.
                 hitl_required = awaiting
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
-                state = await self._ingest_v2_results(
+                state = await self._ingest_orchestration_results(
                     state,
                     results,
                     status=OrchestrationStatus.WAITING_AGENT,
@@ -2270,7 +2277,7 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
                 return state, awaiting_status
-            state = await self._ingest_v2_results(
+            state = await self._ingest_orchestration_results(
                 state,
                 results,
                 status=OrchestrationStatus.RUNNING,
@@ -2296,7 +2303,7 @@ class SupervisorExecutor:
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
-            state = await self._ingest_v2_results(
+            state = await self._ingest_orchestration_results(
                 state,
                 results,
                 status=OrchestrationStatus.WAITING_AGENT,
@@ -2306,7 +2313,7 @@ class SupervisorExecutor:
                 eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
                 conditional_result_viable=blocker_conditional_result_viable,
             )
-            saved = await self._save_interrupted_state(
+            saved = await self._checkpoint_interrupt(
                 kind=InterruptKind.PUSH_NOTIFICATION,
                 trajectory=trajectory,
                 paused_results=paused,
@@ -2321,15 +2328,15 @@ class SupervisorExecutor:
             )
             if not saved:
                 trajectory.status = TrajectoryStatus.FAILED
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.FAILED,
-                    reason="failed to save paused v2 continuation",
+                    reason="failed to save paused orchestration continuation",
                 )
                 return state, RunStatus.FAILED
             return state, RunStatus.PAUSED
 
-        state = await self._ingest_v2_results(
+        state = await self._ingest_orchestration_results(
             state,
             results,
             status=OrchestrationStatus.RUNNING,
@@ -2348,7 +2355,7 @@ class SupervisorExecutor:
         )
         return state, None
 
-    async def _recover_v2_inflight_dispatch(
+    async def _recover_orchestration_inflight_dispatch(
         self,
         *,
         state: OrchestrationRunState,
@@ -2363,7 +2370,7 @@ class SupervisorExecutor:
         quoted_text: str | None,
         user_message,
     ) -> tuple[OrchestrationRunState, RunStatus | None]:
-        trajectory = self._compat_trajectory_from_state(state)
+        trajectory = self._trajectory_from_state(state)
         step_number = state.steps_used + 1
         step_id = f"{state.run_id}:step-{step_number}"
         current_intents = [
@@ -2384,36 +2391,43 @@ class SupervisorExecutor:
         unresolved = False
 
         for intent in current_intents:
-            result = self._v2_result_from_output_record(
+            committed_result = (
+                await self._orchestration_result_from_committed_agent_message(
+                    intent,
+                    agent_names,
+                    step_number,
+                )
+            )
+            # A blocking HITL reply can commit a terminal task result while the
+            # durable output still says awaiting_input. The committed terminal
+            # result is newer and must win; otherwise prefer the richer durable
+            # projection and use the committed message as a fallback.
+            if committed_result is not None and committed_result.status in {
+                StepStatus.SUCCESS,
+                StepStatus.FAILED,
+            }:
+                results.append(committed_result)
+                continue
+
+            result = self._orchestration_result_from_output_record(
                 intent,
                 outputs_by_message_id.get(intent.planned_agent_message_id),
                 agent_names,
                 step_number,
             )
             if result is None:
-                result = await self._v2_result_from_committed_agent_message(
-                    intent,
-                    agent_names,
-                    step_number,
-                )
-            if result is None:
-                msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    intent.planned_agent_message_id
-                )
-                result = self._v2_result_from_agent_message(
-                    intent,
-                    msg,
-                    agent_names,
-                    step_number,
-                )
-                if msg is None and intent.status == "planned":
-                    replay_intents.append(intent)
-                elif result is not None:
-                    results.append(result)
-                else:
-                    unresolved = True
-            else:
+                result = committed_result
+            if result is not None:
                 results.append(result)
+                continue
+
+            msg = await self.message_reader.get_room_agent_message_by_message_id(
+                intent.planned_agent_message_id
+            )
+            if msg is None and intent.status == "planned":
+                replay_intents.append(intent)
+            else:
+                unresolved = True
 
         if replay_intents:
             replay_targets = [
@@ -2442,14 +2456,14 @@ class SupervisorExecutor:
 
         if unresolved:
             if results:
-                state = await self._ingest_v2_results(
+                state = await self._ingest_orchestration_results(
                     state,
                     results,
                     status=OrchestrationStatus.WAITING_AGENT,
                     advance_step=False,
                 )
             if state.status != OrchestrationStatus.WAITING_AGENT:
-                state = await self._save_v2_state(
+                state = await self._save_orchestration_state(
                     state,
                     event_type=OrchestrationEventType.STATE_REDUCED,
                     payload={"status": OrchestrationStatus.WAITING_AGENT.value},
@@ -2494,7 +2508,7 @@ class SupervisorExecutor:
             ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
-                state = await self._ingest_v2_results(
+                state = await self._ingest_orchestration_results(
                     state,
                     results,
                     status=OrchestrationStatus.WAITING_AGENT,
@@ -2502,7 +2516,7 @@ class SupervisorExecutor:
                 )
                 if paused:
                     trajectory.status = TrajectoryStatus.AWAITING_INPUT
-                    saved = await self._save_interrupted_state(
+                    saved = await self._checkpoint_interrupt(
                         kind=InterruptKind.PUSH_NOTIFICATION,
                         trajectory=trajectory,
                         paused_results=paused,
@@ -2517,10 +2531,10 @@ class SupervisorExecutor:
                     )
                     if not saved:
                         trajectory.status = TrajectoryStatus.FAILED
-                        state = await self._mark_v2_terminal(
+                        state = await self._mark_orchestration_terminal(
                             state,
                             OrchestrationStatus.FAILED,
-                            reason="failed to save paused v2 recovery continuation",
+                            reason="failed to save paused orchestration recovery continuation",
                         )
                         return state, RunStatus.FAILED
                 state, awaiting_status = await self._run_agent_awaiting_input_action(
@@ -2539,7 +2553,7 @@ class SupervisorExecutor:
                 )
                 return state, awaiting_status
             if awaiting:
-                state = await self._ingest_v2_results(
+                state = await self._ingest_orchestration_results(
                     state,
                     results,
                     status=OrchestrationStatus.RUNNING,
@@ -2549,13 +2563,13 @@ class SupervisorExecutor:
 
         if paused:
             trajectory.status = TrajectoryStatus.RUNNING
-            state = await self._ingest_v2_results(
+            state = await self._ingest_orchestration_results(
                 state,
                 results,
                 status=OrchestrationStatus.WAITING_AGENT,
                 advance_step=False,
             )
-            saved = await self._save_interrupted_state(
+            saved = await self._checkpoint_interrupt(
                 kind=InterruptKind.PUSH_NOTIFICATION,
                 trajectory=trajectory,
                 paused_results=paused,
@@ -2570,15 +2584,15 @@ class SupervisorExecutor:
             )
             if not saved:
                 trajectory.status = TrajectoryStatus.FAILED
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.FAILED,
-                    reason="failed to save paused v2 recovery continuation",
+                    reason="failed to save paused orchestration recovery continuation",
                 )
                 return state, RunStatus.FAILED
             return state, RunStatus.PAUSED
 
-        entry = self._v2_recovered_trajectory_entry(
+        entry = self._orchestration_recovered_trajectory_entry(
             step_number=step_number,
             intents=current_intents,
             results=results,
@@ -2596,7 +2610,7 @@ class SupervisorExecutor:
                     message_id=result.agent_message_id,
                 )
 
-        state = await self._ingest_v2_results(
+        state = await self._ingest_orchestration_results(
             state,
             results,
             status=OrchestrationStatus.RUNNING,
@@ -2605,7 +2619,7 @@ class SupervisorExecutor:
         return state, None
 
     @staticmethod
-    def _v2_result_from_output_record(
+    def _orchestration_result_from_output_record(
         intent: DispatchIntent,
         output: AgentOutputRecord | None,
         agent_names: dict[str, str],
@@ -2643,7 +2657,7 @@ class SupervisorExecutor:
             requires_policy=output.requires_policy,
         )
 
-    async def _v2_result_from_committed_agent_message(
+    async def _orchestration_result_from_committed_agent_message(
         self,
         intent: DispatchIntent,
         agent_names: dict[str, str],
@@ -2652,7 +2666,7 @@ class SupervisorExecutor:
         msg = await self.message_reader.get_room_agent_message_by_message_id(
             intent.planned_agent_message_id
         )
-        return self._v2_result_from_agent_message(
+        return self._orchestration_result_from_agent_message(
             intent,
             msg,
             agent_names,
@@ -2660,7 +2674,7 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _v2_result_from_agent_message(
+    def _orchestration_result_from_agent_message(
         intent: DispatchIntent,
         msg,
         agent_names: dict[str, str],
@@ -2695,6 +2709,7 @@ class SupervisorExecutor:
         last_state = getattr(msg, "last_notified_state", None)
         if last_state is None:
             last_state = _field_from_task(task, "status", "state")
+        last_state = getattr(last_state, "value", last_state)
         if not isinstance(last_state, str):
             return None
         normalized_state = last_state.strip().lower()
@@ -2771,7 +2786,7 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _v2_recovered_trajectory_entry(
+    def _orchestration_recovered_trajectory_entry(
         *,
         step_number: int,
         intents: list[DispatchIntent],
@@ -2782,7 +2797,7 @@ class SupervisorExecutor:
             step_number=step_number,
             action=SupervisorAction(
                 action=ActionType.DELEGATE,
-                reasoning="Recovered in-flight v2 dispatch from committed agent messages",
+                reasoning="Recovered in-flight orchestration dispatch from committed agent messages",
                 targets=[
                     SupervisorExecutor._delegate_target_from_intent(
                         intent,
@@ -2995,7 +3010,7 @@ class SupervisorExecutor:
                 )
             except OrchestrationStoreConflict:
                 return None
-            await self._append_v2_event(
+            await self._append_orchestration_event(
                 saved,
                 OrchestrationEventType.CONTINUATION_CLAIMED,
                 payload={
@@ -3125,7 +3140,7 @@ class SupervisorExecutor:
             except OrchestrationStoreConflict:
                 continue
             if status in {"resolved", "abandoned"}:
-                await self._append_v2_event(
+                await self._append_orchestration_event(
                     saved,
                     (
                         OrchestrationEventType.CONTINUATION_RESOLVED
@@ -3238,7 +3253,7 @@ class SupervisorExecutor:
                     failure.status = "abandoned"
                     failure.updated_at = utcnow()
 
-        saved = await self._save_v2_state(
+        saved = await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.STATE_REDUCED,
             payload={
@@ -3760,7 +3775,6 @@ class SupervisorExecutor:
             ),
             display_message_id=result.agent_message_id,
             orchestration_run_id=state.run_id,
-            orchestration_schema_version=state.schema_version,
         )
         request_id = getattr(request, "request_id", request)
         if not isinstance(request_id, str) or not request_id:
@@ -3790,7 +3804,7 @@ class SupervisorExecutor:
                     }
                 )
 
-        await self._save_v2_state(
+        await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.HITL_REQUESTED,
             payload={
@@ -3884,10 +3898,10 @@ class SupervisorExecutor:
         )
         if not continuation_message_id:
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="v2 agent HITL result missing continuation message id",
+                reason="orchestration agent HITL result missing continuation message id",
             )
             return state, RunStatus.FAILED
 
@@ -3901,7 +3915,7 @@ class SupervisorExecutor:
                 await cancel_request(request_id, room_id)
             except Exception:
                 logger.warning(
-                    "Failed to cancel orphaned v2 agent HITL request %s",
+                    "Failed to cancel orphaned orchestration agent HITL request %s",
                     request_id,
                 )
                 return False
@@ -3952,7 +3966,6 @@ class SupervisorExecutor:
                 continuation_message_id=continuation_message_id,
                 display_message_id=display_message_id,
                 orchestration_run_id=state.run_id,
-                orchestration_schema_version=state.schema_version,
             )
         except Exception as exc:
             request_id = getattr(exc, "request_id", None)
@@ -3964,26 +3977,26 @@ class SupervisorExecutor:
                 if not canceled:
                     failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to create v2 agent HITL request",
+                reason="failed to create orchestration agent HITL request",
                 mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
         if request is None:
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to create v2 agent HITL request",
+                reason="failed to create orchestration agent HITL request",
             )
             return state, RunStatus.FAILED
 
         awaiting_result.status_message = public_agent_input_prompt(hitl_prompt)
 
         try:
-            saved = await self._save_interrupted_state(
+            saved = await self._checkpoint_interrupt(
                 kind=InterruptKind.HITL_AGENT,
                 trajectory=trajectory,
                 message_id=continuation_message_id,
@@ -4007,10 +4020,10 @@ class SupervisorExecutor:
                 if not canceled:
                     failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to save v2 agent HITL continuation",
+                reason="failed to save orchestration agent HITL continuation",
                 mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
@@ -4025,10 +4038,10 @@ class SupervisorExecutor:
                 if not canceled:
                     failed_cancel_request_ids.append(request.request_id)
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to save v2 agent HITL continuation",
+                reason="failed to save orchestration agent HITL continuation",
                 mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
@@ -4054,7 +4067,7 @@ class SupervisorExecutor:
             self._clear_stale_pending_hitl_request_ids(updated)
 
         try:
-            state = await self._save_v2_state(
+            state = await self._save_orchestration_state(
                 state,
                 event_type=OrchestrationEventType.HITL_REQUESTED,
                 payload={
@@ -4072,10 +4085,10 @@ class SupervisorExecutor:
                 message_id=continuation_message_id,
             )
             trajectory.status = TrajectoryStatus.FAILED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to persist v2 agent HITL state",
+                reason="failed to persist orchestration agent HITL state",
                 mutate=failed_agent_cleanup_mutation(failed_cancel_request_ids),
             )
             return state, RunStatus.FAILED
@@ -4088,7 +4101,9 @@ class SupervisorExecutor:
                 lifecycle_message_id=user_message_id,
             )
         except Exception:
-            logger.debug("SSE v2 agent HITL notification failed", exc_info=True)
+            logger.debug(
+                "SSE orchestration agent HITL notification failed", exc_info=True
+            )
 
         return state, RunStatus.AWAITING_INPUT
 
@@ -4128,310 +4143,7 @@ class SupervisorExecutor:
                 exc_info=True,
             )
 
-    @staticmethod
-    def _supervisor_hitl_questions_from_resumed_trajectory(
-        resumed_trajectory: SupervisorTrajectory | None,
-    ) -> list[dict[str, Any]]:
-        if resumed_trajectory is None:
-            return []
-
-        recovered: list[dict[str, Any]] = []
-        for entry in resumed_trajectory.entries:
-            action = entry.action
-            if action.action != ActionType.CLARIFY:
-                continue
-            questions = list(action.questions or [])
-            if not questions and action.clarification_question:
-                questions.append(
-                    ClarifyQuestion(
-                        prompt=action.clarification_question,
-                        prompt_type=action.prompt_type,
-                        choices=action.choices,
-                    )
-                )
-            for question in questions:
-                if not question.prompt:
-                    continue
-                recovered.append(
-                    {
-                        "source": "supervisor",
-                        "step": entry.step_number,
-                        "prompt": question.prompt,
-                        "prompt_type": question.prompt_type,
-                        "choices": question.choices,
-                        "blocker_keys": list(question.blocker_keys),
-                        "required_obligation_keys": list(
-                            question.required_obligation_keys
-                        ),
-                        "blocker_obligations": {
-                            blocker_key: list(obligations)
-                            for blocker_key, obligations in (
-                                question.blocker_obligations.items()
-                            )
-                        },
-                        "status": "open",
-                        "created_at": (
-                            entry.started_at.isoformat()
-                            if entry.started_at
-                            else utcnow().isoformat()
-                        ),
-                    }
-                )
-        return recovered
-
-    @classmethod
-    def _recoverable_supervisor_hitl_questions(
-        cls,
-        state: OrchestrationRunState,
-        resumed_trajectory: SupervisorTrajectory | None,
-    ) -> list[dict[str, Any]]:
-        recovered = [
-            dict(question)
-            for question in state.open_questions
-            if isinstance(question, Mapping)
-            and question.get("source") == "supervisor"
-            and question.get("status") in {"open", "creating"}
-            and not question.get("resolved")
-        ]
-        if len(recovered) == 1:
-            return recovered
-        trajectory_questions = cls._supervisor_hitl_questions_from_resumed_trajectory(
-            resumed_trajectory
-        )
-        if len(trajectory_questions) != 1:
-            return []
-        if not recovered:
-            return trajectory_questions
-        recovered_prompt = trajectory_questions[0].get("prompt")
-        matching = [
-            question
-            for question in recovered
-            if question.get("prompt") == recovered_prompt
-        ]
-        return matching if len(matching) == 1 else []
-
-    async def _resolve_v2_hitl_if_answered(
-        self,
-        state: OrchestrationRunState,
-        *,
-        user_message=None,
-        resumed_trajectory: SupervisorTrajectory | None = None,
-    ) -> OrchestrationRunState:
-        if state.status in TERMINAL_ORCHESTRATION_STATUSES:
-            return state
-        answer = self._hitl_answer_from_run_request(
-            user_message=user_message,
-            resumed_trajectory=resumed_trajectory,
-        )
-        if not answer:
-            return state
-
-        resolved_request_ids = self._hitl_request_ids_to_resolve_from_answer(
-            state,
-            request_id=self._hitl_request_id_from_run_request(
-                user_message=user_message,
-                resumed_trajectory=resumed_trajectory,
-            ),
-        )
-        recovered_supervisor_questions: list[dict[str, Any]] = []
-        if not resolved_request_ids:
-            recovered_supervisor_questions = (
-                self._recoverable_supervisor_hitl_questions(
-                    state,
-                    resumed_trajectory,
-                )
-            )
-            if not recovered_supervisor_questions:
-                return state
-
-        resolved_at = utcnow().isoformat()
-        resolved_recoverable_status = (
-            OrchestrationStatus.WAITING_AGENT
-            if self._has_current_step_recoverable_intents(state)
-            else OrchestrationStatus.RUNNING
-        )
-
-        def resolve_hitl(updated: OrchestrationRunState) -> None:
-            prompts: list[str] = []
-            recovered_prompts: list[str] = []
-            for recovered_question in recovered_supervisor_questions:
-                prompt = recovered_question.get("prompt")
-                if isinstance(prompt, str) and prompt:
-                    recovered_prompts.append(prompt)
-            resolved_existing = False
-            for question in updated.open_questions:
-                if resolved_request_ids:
-                    matches_question = (
-                        question.get("request_id") in resolved_request_ids
-                    )
-                else:
-                    recovered_question = recovered_supervisor_questions[0]
-                    matches_question = (
-                        question.get("source") == "supervisor"
-                        and question.get("status") in {"open", "creating"}
-                        and not question.get("resolved")
-                        and question.get("prompt") == recovered_question.get("prompt")
-                        and question.get("step") == recovered_question.get("step")
-                    )
-                if not matches_question:
-                    continue
-                question["status"] = "resolved"
-                question["resolved"] = True
-                question["answer"] = answer
-                question["resolved_at"] = resolved_at
-                resolved_existing = True
-                prompt = question.get("prompt")
-                if isinstance(prompt, str) and prompt:
-                    prompts.append(prompt)
-            if not resolved_request_ids and not resolved_existing:
-                for recovered_question in recovered_supervisor_questions:
-                    resolved_question = dict(recovered_question)
-                    resolved_question["status"] = "resolved"
-                    resolved_question["resolved"] = True
-                    resolved_question["answer"] = answer
-                    resolved_question["resolved_at"] = resolved_at
-                    updated.open_questions.append(resolved_question)
-                prompts.extend(recovered_prompts)
-            answer_fact = {
-                "fact_id": (f"{state.run_id}:hitl-reply:{state.state_version + 1}"),
-                "source": "hitl_user_reply",
-                "text": answer,
-                "request_ids": resolved_request_ids,
-                "question_prompts": prompts,
-                "created_at": resolved_at,
-            }
-            updated.facts.append(answer_fact)
-            validate_hitl_answered_blockers(
-                updated,
-                resolved_request_ids=set(resolved_request_ids),
-                answer_fact=answer_fact,
-            )
-            updated.goal_progress = rebuild_goal_progress(updated).goal_progress
-            updated.pending_hitl_request_ids = [
-                request_id
-                for request_id in updated.pending_hitl_request_ids
-                if request_id not in resolved_request_ids
-            ]
-            self._clear_stale_pending_hitl_request_ids(updated)
-            if self._has_open_pending_hitl(updated):
-                updated.status = OrchestrationStatus.AWAITING_USER
-            else:
-                updated.status = resolved_recoverable_status
-
-        resolved_state = await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_RESOLVED,
-            payload={
-                "request_ids": resolved_request_ids,
-                "answer_recorded": True,
-            },
-            mutate=resolve_hitl,
-        )
-        if resumed_trajectory is not None:
-            resumed_trajectory.hitl_user_reply = None
-            resumed_trajectory.clarify_user_reply = None
-        return resolved_state
-
-    @classmethod
-    def _hitl_request_id_from_run_request(
-        cls,
-        *,
-        user_message=None,
-        resumed_trajectory: SupervisorTrajectory | None = None,
-    ) -> str | None:
-        extend_info = getattr(user_message, "extend_info", None)
-        if isinstance(extend_info, Mapping):
-            for envelope in cls._hitl_answer_envelopes(extend_info):
-                for key in ("hitl_request_id", "hitl_id"):
-                    value = envelope.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
-        if resumed_trajectory is not None:
-            value = getattr(resumed_trajectory, "hitl_request_id", None)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
-
-    @staticmethod
-    def _hitl_request_ids_to_resolve_from_answer(
-        state: OrchestrationRunState,
-        *,
-        request_id: str | None,
-    ) -> list[str]:
-        pending_request_ids = list(state.pending_hitl_request_ids)
-        if not pending_request_ids:
-            return []
-        if request_id and request_id in pending_request_ids:
-            return [request_id]
-        pending_set = set(pending_request_ids)
-        open_pending_questions = [
-            question
-            for question in state.open_questions
-            if isinstance(question, Mapping)
-            and question.get("status") == "open"
-            and question.get("request_id") in pending_set
-        ]
-        if (
-            open_pending_questions
-            and len(open_pending_questions) == len(pending_set)
-            and all(
-                question.get("source") == "supervisor"
-                for question in open_pending_questions
-            )
-        ):
-            return pending_request_ids
-        if len(pending_request_ids) == 1:
-            return pending_request_ids
-        return []
-
-    @classmethod
-    def _hitl_answer_from_run_request(
-        cls,
-        *,
-        user_message=None,
-        resumed_trajectory: SupervisorTrajectory | None = None,
-    ) -> str | None:
-        if resumed_trajectory is not None:
-            for value in (
-                resumed_trajectory.hitl_user_reply,
-                resumed_trajectory.clarify_user_reply,
-            ):
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        extend_info = getattr(user_message, "extend_info", None)
-        if isinstance(extend_info, Mapping):
-            for envelope in cls._hitl_answer_envelopes(extend_info):
-                answer = cls._hitl_answer_from_mapping(envelope)
-                if answer:
-                    return answer
-        return None
-
-    @staticmethod
-    def _hitl_answer_envelopes(
-        extend_info: Mapping[str, Any],
-    ) -> list[Mapping[str, Any]]:
-        envelopes: list[Mapping[str, Any]] = [extend_info]
-        for key in ("orchestration", "orchestration_run", "resumed_trajectory"):
-            nested = extend_info.get(key)
-            if isinstance(nested, Mapping):
-                envelopes.append(nested)
-        return envelopes
-
-    @staticmethod
-    def _hitl_answer_from_mapping(envelope: Mapping[str, Any]) -> str | None:
-        for key in (
-            "hitl_user_reply",
-            "clarify_user_reply",
-            "hitl_reply",
-            "user_reply",
-            "user_input",
-        ):
-            value = envelope.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
-
-    async def _v2_terminal_result_if_done(
+    async def _orchestration_terminal_result_if_done(
         self,
         room_id: str,
         state: OrchestrationRunState,
@@ -4448,369 +4160,6 @@ class SupervisorExecutor:
             state,
             result,
         )
-
-    async def _sync_v2_resumed_trajectory(
-        self,
-        state: OrchestrationRunState,
-        trajectory: SupervisorTrajectory,
-        *,
-        agent_registry: list[AgentProfile] | None = None,
-        room_config: RoomConfig | None = None,
-        room_id: str | None = None,
-        user_message_id: str | None = None,
-        message_text: str | None = None,
-        conversation_context: str | None = None,
-        request_user_id: str | None = None,
-        quoted_text: str | None = None,
-    ) -> tuple[OrchestrationRunState, RunStatus | None]:
-        """Ingest completed legacy resume entries into the sidecar run state."""
-        if not trajectory.entries:
-            return state, None
-
-        synced = state
-        for entry in sorted(trajectory.entries, key=lambda item: item.step_number):
-            if entry.action.action != ActionType.DELEGATE:
-                continue
-            if not entry.results:
-                continue
-            if entry.step_number <= synced.steps_used:
-                continue
-
-            self._resolve_v2_pending_results_from_outputs(synced, entry)
-            pending = [
-                result
-                for result in entry.results
-                if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
-            ]
-            _follow_up_hitl_message_ids: set[str] = set()
-            if any(result.status == StepStatus.AWAITING_INPUT for result in pending):
-                (
-                    synced,
-                    resolved_results,
-                    _follow_up_hitl_message_ids,
-                ) = await self._resolve_agent_input_required_results(
-                    state=synced,
-                    results=entry.results,
-                    user_message=SimpleNamespace(
-                        room_id=room_id or state.room_id,
-                        message_id=user_message_id or state.user_message_id,
-                        user_id=request_user_id,
-                    ),
-                )
-                entry.results = resolved_results
-                pending = [
-                    result
-                    for result in entry.results
-                    if result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
-                ]
-            can_rehydrate_agent_hitl = (
-                agent_registry is not None
-                and room_config is not None
-                and room_id is not None
-                and user_message_id is not None
-                and message_text is not None
-                and getattr(self, "hitl_coordinator", None) is not None
-            )
-            # When full resume context is available, the trajectory has already
-            # exhausted its automatic continuation opportunity. Rehydrate any
-            # remaining input request as HITL. Partial state-only recovery keeps
-            # plain A2A input pending for a later fully bound resume.
-            hitl_required_pending = [
-                result
-                for result in pending
-                if result.status == StepStatus.AWAITING_INPUT
-                and (
-                    can_rehydrate_agent_hitl
-                    or self._awaiting_result_requires_hitl(result)
-                    or result.agent_message_id in _follow_up_hitl_message_ids
-                )
-            ]
-            plain_awaiting_pending = [
-                result
-                for result in pending
-                if result.status == StepStatus.AWAITING_INPUT
-                and result not in hitl_required_pending
-            ]
-            has_awaiting_input = bool(hitl_required_pending)
-            has_paused_pending = bool(plain_awaiting_pending) or any(
-                result.status == StepStatus.PAUSED for result in pending
-            )
-            terminal_results = [
-                result
-                for result in entry.results
-                if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
-            ]
-            if terminal_results:
-                synced = await self._clear_resolved_agent_hitl_for_terminal_results(
-                    synced,
-                    terminal_results,
-                )
-                has_open_pending_hitl = self._has_open_pending_hitl(synced)
-                next_status = (
-                    OrchestrationStatus.AWAITING_USER
-                    if has_awaiting_input and has_open_pending_hitl
-                    else (
-                        OrchestrationStatus.WAITING_AGENT
-                        if has_paused_pending
-                        else OrchestrationStatus.RUNNING
-                    )
-                )
-                should_advance = not pending
-
-                synced = await self._ingest_v2_results(
-                    synced,
-                    terminal_results,
-                    status=next_status,
-                    advance_step=should_advance,
-                    clear_pending_hitl_request_ids=should_advance,
-                )
-
-            if pending:
-                synced_output_ids = {
-                    output.agent_message_id for output in synced.agent_outputs
-                }
-                pending_to_ingest: list[StepResult] = []
-                for result in pending:
-                    result_message_id = (
-                        result.agent_message_id or result.paused_message_id
-                    )
-                    if result_message_id and result_message_id in synced_output_ids:
-                        continue
-                    pending_to_ingest.append(result)
-                pending_status = (
-                    OrchestrationStatus.AWAITING_USER
-                    if has_awaiting_input and self._has_open_pending_hitl(synced)
-                    else (
-                        OrchestrationStatus.WAITING_AGENT
-                        if has_paused_pending
-                        else OrchestrationStatus.RUNNING
-                    )
-                )
-                if pending_to_ingest:
-                    synced = await self._ingest_v2_results(
-                        synced,
-                        pending_to_ingest,
-                        status=pending_status,
-                        advance_step=False,
-                    )
-                blocking_run_status = (
-                    RunStatus.AWAITING_INPUT if has_awaiting_input else RunStatus.PAUSED
-                )
-                if synced.status != pending_status:
-                    synced = await self._save_v2_state(
-                        synced,
-                        event_type=OrchestrationEventType.STATE_REDUCED,
-                        payload={"status": pending_status.value},
-                        mutate=lambda updated, status=pending_status: setattr(
-                            updated,
-                            "status",
-                            status,
-                        ),
-                    )
-                can_rehydrate_hitl = (
-                    has_awaiting_input
-                    and agent_registry is not None
-                    and room_config is not None
-                    and room_id is not None
-                    and user_message_id is not None
-                    and message_text is not None
-                    and self.hitl_coordinator is not None
-                )
-                if can_rehydrate_hitl:
-                    (
-                        synced,
-                        awaiting_status,
-                    ) = await self._run_agent_awaiting_input_action(
-                        state=synced,
-                        results=entry.results,
-                        awaiting=hitl_required_pending,
-                        trajectory=trajectory,
-                        agent_registry=agent_registry,
-                        room_config=room_config,
-                        room_id=room_id,
-                        user_message_id=user_message_id,
-                        message_text=message_text,
-                        conversation_context=conversation_context,
-                        request_user_id=request_user_id,
-                        quoted_text=quoted_text,
-                    )
-                    return synced, awaiting_status
-                if blocking_run_status is None:
-                    return synced, None
-                return synced, blocking_run_status
-
-        return synced, None
-
-    async def _clear_resolved_agent_hitl_for_terminal_results(
-        self,
-        state: OrchestrationRunState,
-        terminal_results: list[StepResult],
-    ) -> OrchestrationRunState:
-        resolved_request_ids = self._resolved_agent_hitl_request_ids_for_results(
-            state,
-            terminal_results,
-        )
-        if not resolved_request_ids:
-            return state
-
-        resolved_at = utcnow().isoformat()
-        response_by_message_id: dict[str, str] = {}
-        for result in terminal_results:
-            for message_id in (result.agent_message_id, result.paused_message_id):
-                if message_id:
-                    response_by_message_id[message_id] = result.response_text or ""
-
-        def resolve_hitl(updated: OrchestrationRunState) -> None:
-            for question in updated.open_questions:
-                if not isinstance(question, Mapping):
-                    continue
-                request_id = question.get("request_id")
-                if request_id not in resolved_request_ids:
-                    continue
-                question["status"] = "resolved"
-                question["resolved"] = True
-                question["resolved_at"] = resolved_at
-                display_message_id = question.get("display_message_id")
-                if isinstance(display_message_id, str):
-                    answer = response_by_message_id.get(display_message_id)
-                    if answer:
-                        question["answer"] = answer
-            updated.pending_hitl_request_ids = [
-                request_id
-                for request_id in updated.pending_hitl_request_ids
-                if request_id not in resolved_request_ids
-            ]
-            self._clear_stale_pending_hitl_request_ids(updated)
-
-        return await self._save_v2_state(
-            state,
-            event_type=OrchestrationEventType.HITL_RESOLVED,
-            payload={
-                "request_ids": sorted(resolved_request_ids),
-                "answer_recorded": False,
-                "source": "agent_terminal_result",
-            },
-            mutate=resolve_hitl,
-        )
-
-    @staticmethod
-    def _resolved_agent_hitl_request_ids_for_results(
-        state: OrchestrationRunState,
-        terminal_results: list[StepResult],
-    ) -> set[str]:
-        if not state.pending_hitl_request_ids:
-            return set()
-        terminal_message_ids = {
-            message_id
-            for result in terminal_results
-            for message_id in (result.agent_message_id, result.paused_message_id)
-            if message_id
-        }
-        terminal_agent_ids = {
-            result.agent_id for result in terminal_results if result.agent_id
-        }
-        pending_request_ids = set(state.pending_hitl_request_ids)
-        fallback_request_ids_by_agent: dict[str, set[str]] = {}
-        for question in state.open_questions:
-            if not isinstance(question, Mapping):
-                continue
-            request_id = question.get("request_id")
-            agent_id = question.get("agent_id")
-            if (
-                not isinstance(request_id, str)
-                or request_id not in pending_request_ids
-                or not isinstance(agent_id, str)
-                or question.get("source") != "agent"
-                or question.get("status") != "open"
-            ):
-                continue
-            has_message_id = any(
-                isinstance(question.get(key), str) and question.get(key)
-                for key in ("display_message_id", "continuation_message_id")
-            )
-            if not has_message_id:
-                fallback_request_ids_by_agent.setdefault(agent_id, set()).add(
-                    request_id
-                )
-        resolved: set[str] = set()
-        for question in state.open_questions:
-            if not isinstance(question, Mapping):
-                continue
-            request_id = question.get("request_id")
-            if not isinstance(request_id, str) or request_id not in pending_request_ids:
-                continue
-            if question.get("source") != "agent" or question.get("status") != "open":
-                continue
-            message_ids = {
-                value
-                for value in (
-                    question.get("display_message_id"),
-                    question.get("continuation_message_id"),
-                )
-                if isinstance(value, str) and value
-            }
-            if message_ids & terminal_message_ids:
-                resolved.add(request_id)
-                continue
-            agent_id = question.get("agent_id")
-            if (
-                isinstance(agent_id, str)
-                and agent_id in terminal_agent_ids
-                and fallback_request_ids_by_agent.get(agent_id) == {request_id}
-            ):
-                resolved.add(request_id)
-        return resolved
-
-    @staticmethod
-    def _resolve_v2_pending_results_from_outputs(
-        state: OrchestrationRunState,
-        entry: TrajectoryEntry,
-    ) -> None:
-        outputs_by_message_id = {
-            output.agent_message_id: output for output in state.agent_outputs
-        }
-        for index, result in enumerate(entry.results):
-            if result.status not in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
-                continue
-            message_id = result.agent_message_id or result.paused_message_id
-            if not message_id:
-                continue
-            output = outputs_by_message_id.get(message_id)
-            if output is None:
-                continue
-            output_status = SupervisorExecutor._step_status_from_state_output_status(
-                output.status
-            )
-            if output_status is None:
-                continue
-            if output_status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT):
-                continue
-            error_message = output.error
-            if output_status == StepStatus.FAILED and not error_message:
-                error_message = f"Agent output status: {output.status}"
-            entry.results[index] = StepResult(
-                step_number=entry.step_number,
-                agent_id=result.agent_id,
-                agent_name=result.agent_name,
-                task=result.task,
-                response_text=output.text or "",
-                success=output_status == StepStatus.SUCCESS,
-                status=output_status,
-                error_message=error_message,
-                agent_message_id=message_id,
-                completed_at=utcnow(),
-                a2a_task_id=output.a2a_task_id,
-                a2a_context_id=output.a2a_context_id,
-                status_message=output.status_message,
-                interactive_state=output.interactive_state,
-                requires_auth=output.requires_auth,
-                requires_policy=output.requires_policy,
-            )
-        if not any(
-            result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
-            for result in entry.results
-        ):
-            entry.completed_at = entry.completed_at or utcnow()
 
     async def _run_ask_user_action(
         self,
@@ -4830,8 +4179,8 @@ class SupervisorExecutor:
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
 
-        trajectory = self._compat_trajectory_from_state(state)
-        action = self._v2_supervisor_action(planner_action, agent_registry)
+        trajectory = self._trajectory_from_state(state)
+        action = self._orchestration_supervisor_action(planner_action, agent_registry)
         step_number = (
             state.steps_used if resume_pending_artifacts else state.steps_used + 1
         )
@@ -4880,7 +4229,7 @@ class SupervisorExecutor:
                     updated.pending_hitl_request_ids.append(request_id)
 
         if not resume_pending_artifacts:
-            state = await self._save_v2_state(
+            state = await self._save_orchestration_state(
                 state,
                 event_type=OrchestrationEventType.HITL_REQUESTED,
                 payload={
@@ -4901,7 +4250,7 @@ class SupervisorExecutor:
                         await cancel_request(request_id, room_id)
                     except Exception:
                         logger.warning(
-                            "Failed to cancel orphaned v2 HITL request %s",
+                            "Failed to cancel orphaned orchestration HITL request %s",
                             request_id,
                         )
                         failed_request_ids.append(request_id)
@@ -4919,7 +4268,7 @@ class SupervisorExecutor:
                         failed_message_ids.append(message_id)
                 except Exception:
                     logger.warning(
-                        "Failed to delete orphaned v2 HITL agent message %s",
+                        "Failed to delete orphaned orchestration HITL agent message %s",
                         message_id,
                     )
                     failed_message_ids.append(message_id)
@@ -5121,7 +4470,7 @@ class SupervisorExecutor:
                         blocker_keys=blocker_keys,
                     )
 
-                state = await self._save_v2_state(
+                state = await self._save_orchestration_state(
                     state,
                     event_type=OrchestrationEventType.HITL_REQUESTED,
                     payload={
@@ -5149,10 +4498,9 @@ class SupervisorExecutor:
                     group_total=len(questions) if group_id else None,
                     group_index=qi if group_id else None,
                     orchestration_run_id=state.run_id,
-                    orchestration_schema_version=state.schema_version,
                 )
                 if request is None:
-                    raise RuntimeError("failed to create v2 HITL request")
+                    raise RuntimeError("failed to create orchestration HITL request")
                 created_request_ids.append(request.request_id)
                 prompt_by_request_id[request.request_id] = question.prompt
                 extra_by_request_id[request.request_id] = {
@@ -5186,7 +4534,7 @@ class SupervisorExecutor:
                         blocker_keys=blocker_keys,
                     )
 
-                state = await self._save_v2_state(
+                state = await self._save_orchestration_state(
                     state,
                     event_type=OrchestrationEventType.HITL_REQUESTED,
                     payload={
@@ -5234,10 +4582,10 @@ class SupervisorExecutor:
                 ) -> None:
                     mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.FAILED,
-                    reason="failed to create v2 supervisor HITL request",
+                    reason="failed to create orchestration supervisor HITL request",
                     mutate=mark_failed_create,
                 )
                 return await self._log_state_and_return(
@@ -5250,7 +4598,7 @@ class SupervisorExecutor:
                 )
 
         try:
-            saved = await self._save_interrupted_state(
+            saved = await self._checkpoint_interrupt(
                 kind=InterruptKind.HITL_SUPERVISOR,
                 trajectory=trajectory,
                 room_id=room_id,
@@ -5277,10 +4625,10 @@ class SupervisorExecutor:
             ) -> None:
                 mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to save v2 supervisor HITL continuation",
+                reason="failed to save orchestration supervisor HITL continuation",
                 mutate=mark_failed_continuation_save,
             )
             return await self._log_state_and_return(
@@ -5297,10 +4645,10 @@ class SupervisorExecutor:
             ) -> None:
                 mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason="failed to save v2 HITL continuation",
+                reason="failed to save orchestration HITL continuation",
                 mutate=mark_failed_unsaved_continuation,
             )
             return await self._log_state_and_return(
@@ -5375,7 +4723,7 @@ class SupervisorExecutor:
             self._clear_stale_pending_hitl_request_ids(updated)
 
         try:
-            state = await self._save_v2_state(
+            state = await self._save_orchestration_state(
                 state,
                 event_type=OrchestrationEventType.HITL_REQUESTED,
                 payload={
@@ -5391,13 +4739,13 @@ class SupervisorExecutor:
             )
             cleanup_failures = await cleanup_created_artifacts()
             trajectory.status = TrajectoryStatus.FAILED
-            failed_reason = "failed to persist v2 supervisor HITL state"
+            failed_reason = "failed to persist orchestration supervisor HITL state"
 
             def mark_failed_cleanup(updated: OrchestrationRunState) -> None:
                 mark_failed_supervisor_cleanup(updated, cleanup_failures)
 
             try:
-                state = await self._mark_v2_terminal(
+                state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.FAILED,
                     reason=failed_reason,
@@ -5417,7 +4765,7 @@ class SupervisorExecutor:
                 )
                 state = fallback_state
                 logger.warning(
-                    "Failed to persist failed v2 supervisor HITL state",
+                    "Failed to persist failed orchestration supervisor HITL state",
                     exc_info=True,
                 )
             return await self._log_state_and_return(
@@ -5437,7 +4785,9 @@ class SupervisorExecutor:
                 lifecycle_message_id=user_message_id,
             )
         except Exception:
-            logger.debug("SSE v2 awaiting input notification failed", exc_info=True)
+            logger.debug(
+                "SSE orchestration awaiting input notification failed", exc_info=True
+            )
 
         return await self._log_state_and_return(
             room_id,
@@ -5455,7 +4805,7 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         user_message,
     ) -> str:
-        attachments, _ = await self._v2_resource_attachments(
+        attachments, _ = await self._orchestration_resource_attachments(
             room_id=state.room_id,
             user_message_id=state.user_message_id,
             user_message=user_message,
@@ -5517,7 +4867,7 @@ class SupervisorExecutor:
         try:
             PlannerActionValidator.validate(planner_action, run_state=state)
         except PlannerActionValidationError as exc:
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
                 reason=str(exc),
@@ -5531,10 +4881,10 @@ class SupervisorExecutor:
                 ),
             )
 
-        trajectory = self._compat_trajectory_from_state(state)
+        trajectory = self._trajectory_from_state(state)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
-            action=self._v2_supervisor_action(planner_action, []),
+            action=self._orchestration_supervisor_action(planner_action, []),
             started_at=utcnow(),
         )
         trajectory.entries.append(entry)
@@ -5576,7 +4926,7 @@ class SupervisorExecutor:
             synthesis = await token.race(synth_coro) if token else await synth_coro
         except CancellationError:
             trajectory.status = TrajectoryStatus.CANCELED
-            state = await self._mark_v2_terminal(
+            state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.CANCELED,
                 reason="request canceled",
@@ -5612,7 +4962,7 @@ class SupervisorExecutor:
                 )
             except Exception:
                 logger.warning(
-                    "Failed to emit v2 agent_response for supervisor synthesis",
+                    "Failed to emit orchestration agent_response for supervisor synthesis",
                     exc_info=True,
                 )
 
@@ -5622,7 +4972,7 @@ class SupervisorExecutor:
         def record_completion_evidence(updated: OrchestrationRunState) -> None:
             updated.completion_evidence = planner_action.completion_evidence
 
-        state = await self._mark_v2_terminal(
+        state = await self._mark_orchestration_terminal(
             state,
             OrchestrationStatus.COMPLETED,
             reason=planner_action.reasoning,
@@ -5638,7 +4988,7 @@ class SupervisorExecutor:
             ),
         )
 
-    async def _save_v2_state(
+    async def _save_orchestration_state(
         self,
         state: OrchestrationRunState,
         *,
@@ -5655,7 +5005,7 @@ class SupervisorExecutor:
             updated,
             expected_version=expected_version,
         )
-        await self._append_v2_event(saved, event_type, payload=payload)
+        await self._append_orchestration_event(saved, event_type, payload=payload)
         return saved
 
     async def _ingest_agent_results_serially(
@@ -5671,7 +5021,7 @@ class SupervisorExecutor:
                 next_state,
                 expected_version=expected_version,
             )
-            await self._append_v2_event(
+            await self._append_orchestration_event(
                 current,
                 OrchestrationEventType.AGENT_RESULT_INGESTED,
                 payload={
@@ -5695,7 +5045,7 @@ class SupervisorExecutor:
             )
 
     @staticmethod
-    def _v2_fallback_intent_for_result(
+    def _orchestration_fallback_intent_for_result(
         result: StepResult,
         fallback_intents: list[DispatchIntent],
     ) -> DispatchIntent | None:
@@ -5722,21 +5072,21 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _v2_output_message_id_for_result(
+    def _orchestration_output_message_id_for_result(
         result: StepResult,
         fallback_intents: list[DispatchIntent],
     ) -> str | None:
         if result.agent_message_id:
             return result.agent_message_id
 
-        fallback = SupervisorExecutor._v2_fallback_intent_for_result(
+        fallback = SupervisorExecutor._orchestration_fallback_intent_for_result(
             result,
             fallback_intents,
         )
         return fallback.planned_agent_message_id if fallback else None
 
     @staticmethod
-    def _v2_artifacts_for_result(
+    def _orchestration_artifacts_for_result(
         state: OrchestrationRunState,
         output_message_id: str | None,
     ) -> list[dict[str, Any]]:
@@ -5756,21 +5106,23 @@ class SupervisorExecutor:
             and artifact.get("artifact_key") in artifact_keys
         ]
 
-    async def _v2_artifacts_for_output_message(
+    async def _orchestration_artifacts_for_output_message(
         self,
         state: OrchestrationRunState,
         output_message_id: str | None,
     ) -> list[dict[str, Any]]:
         if not output_message_id:
             return []
-        persisted_artifacts = await self._v2_persisted_artifacts_for_agent_message(
-            output_message_id
+        persisted_artifacts = (
+            await self._orchestration_persisted_artifacts_for_agent_message(
+                output_message_id
+            )
         )
         if persisted_artifacts:
             return persisted_artifacts
-        return self._v2_artifacts_for_result(state, output_message_id)
+        return self._orchestration_artifacts_for_result(state, output_message_id)
 
-    async def _v2_persisted_artifacts_for_agent_message(
+    async def _orchestration_persisted_artifacts_for_agent_message(
         self,
         output_message_id: str,
     ) -> list[dict[str, Any]]:
@@ -5784,10 +5136,10 @@ class SupervisorExecutor:
         message = await get_message(output_message_id)
         if message is None:
             return []
-        return self._v2_artifacts_from_agent_message(message)
+        return self._orchestration_artifacts_from_agent_message(message)
 
     @classmethod
-    def _v2_intent_resource_fingerprints(
+    def _orchestration_intent_resource_fingerprints(
         cls,
         state: OrchestrationRunState,
         intent: DispatchIntent,
@@ -5795,12 +5147,12 @@ class SupervisorExecutor:
         return sorted(
             set(
                 intent.selected_resource_fingerprints
-                or cls._v2_selected_resource_fingerprints(state, intent)
+                or cls._orchestration_selected_resource_fingerprints(state, intent)
             )
         )
 
     @staticmethod
-    def _v2_artifacts_from_agent_message(message) -> list[dict[str, Any]]:
+    def _orchestration_artifacts_from_agent_message(message) -> list[dict[str, Any]]:
         message_content = getattr(message, "message_content", None)
         task = getattr(message_content, "message_task", None)
         if task is None:
@@ -5813,7 +5165,7 @@ class SupervisorExecutor:
         return artifacts_to_dicts(artifacts if isinstance(artifacts, list) else None)
 
     @staticmethod
-    def _apply_v2_result_metadata(
+    def _apply_orchestration_result_metadata(
         state: OrchestrationRunState,
         result: StepResult,
         *,
@@ -5834,7 +5186,7 @@ class SupervisorExecutor:
         state.steps_used = reduced.steps_used
 
     @staticmethod
-    def _v2_result_status_to_agent_result_status(
+    def _orchestration_result_status_to_agent_result_status(
         result: StepResult,
     ) -> str:
         if result.status == StepStatus.SUCCESS:
@@ -5842,7 +5194,7 @@ class SupervisorExecutor:
         return result.status.value
 
     @classmethod
-    def _v2_result_fingerprint(
+    def _orchestration_result_fingerprint(
         cls,
         result: StepResult,
         *,
@@ -5853,13 +5205,15 @@ class SupervisorExecutor:
         payload.update(
             {
                 "agent_message_id": output_message_id,
-                "status": cls._v2_result_status_to_agent_result_status(result),
+                "status": cls._orchestration_result_status_to_agent_result_status(
+                    result
+                ),
                 "artifacts": artifacts,
             }
         )
         return canonical_content_fingerprint(payload)
 
-    async def _ingest_v2_results(
+    async def _ingest_orchestration_results(
         self,
         state: OrchestrationRunState,
         results: list[StepResult],
@@ -5883,11 +5237,11 @@ class SupervisorExecutor:
         for index, result in enumerate(results):
             expected_version = current.state_version
             next_state = current.model_copy(deep=True)
-            matched_intent = self._v2_fallback_intent_for_result(
+            matched_intent = self._orchestration_fallback_intent_for_result(
                 result,
                 next_state.dispatch_intents,
             )
-            self._apply_v2_result_metadata(
+            self._apply_orchestration_result_metadata(
                 next_state,
                 result,
                 status=status,
@@ -5906,7 +5260,7 @@ class SupervisorExecutor:
                     if matched_intent is not None
                     else None
                 )
-                or self._v2_output_message_id_for_result(
+                or self._orchestration_output_message_id_for_result(
                     result,
                     fallback_intents=next_state.dispatch_intents,
                 )
@@ -5914,11 +5268,11 @@ class SupervisorExecutor:
             artifacts: list[dict[str, Any]] = []
             result_fingerprint: str | None = None
             if output_message_id:
-                artifacts = await self._v2_artifacts_for_output_message(
+                artifacts = await self._orchestration_artifacts_for_output_message(
                     current,
                     output_message_id,
                 )
-                result_fingerprint = self._v2_result_fingerprint(
+                result_fingerprint = self._orchestration_result_fingerprint(
                     result,
                     output_message_id=output_message_id,
                     artifacts=artifacts,
@@ -5928,7 +5282,9 @@ class SupervisorExecutor:
                     AgentResultRead(
                         agent_message_id=output_message_id,
                         agent_id=result.agent_id,
-                        status=self._v2_result_status_to_agent_result_status(result),
+                        status=self._orchestration_result_status_to_agent_result_status(
+                            result
+                        ),
                         text=result.response_text,
                         error=result.error_message,
                         error_code=result.error_code,
@@ -5973,7 +5329,7 @@ class SupervisorExecutor:
                         output,
                         selected_resource_fingerprints=(
                             matched_intent.selected_resource_fingerprints
-                            or self._v2_selected_resource_fingerprints(
+                            or self._orchestration_selected_resource_fingerprints(
                                 current, matched_intent
                             )
                         ),
@@ -6036,7 +5392,7 @@ class SupervisorExecutor:
                         )
                         if existing_continuation is None:
                             attempted_resource_fingerprints = (
-                                self._v2_intent_resource_fingerprints(
+                                self._orchestration_intent_resource_fingerprints(
                                     current,
                                     matched_intent,
                                 )
@@ -6066,13 +5422,15 @@ class SupervisorExecutor:
                 expected_version=expected_version,
             )
             if output_message_id and not raw_result_already_ingested:
-                await self._append_v2_event(
+                await self._append_orchestration_event(
                     current,
                     OrchestrationEventType.AGENT_RESULT_INGESTED,
                     payload={
                         "agent_message_id": output_message_id,
                         "agent_id": result.agent_id,
-                        "status": self._v2_result_status_to_agent_result_status(result),
+                        "status": self._orchestration_result_status_to_agent_result_status(
+                            result
+                        ),
                     },
                 )
             if outcome is not None:
@@ -6126,7 +5484,7 @@ class SupervisorExecutor:
                         len(outcome.unknowns),
                         len(outcome.remaining_required_obligations),
                     )
-                await self._append_v2_event(
+                await self._append_orchestration_event(
                     current,
                     OrchestrationEventType.OUTCOME_EVALUATED,
                     required=True,
@@ -6180,7 +5538,7 @@ class SupervisorExecutor:
 
         return current
 
-    async def _dispose_v2_goal_family(
+    async def _dispose_orchestration_goal_family(
         self,
         state: OrchestrationRunState,
         *,
@@ -6309,7 +5667,7 @@ class SupervisorExecutor:
             rebuilt = rebuild_goal_progress(updated)
             updated.goal_progress = rebuilt.goal_progress
 
-        return await self._save_v2_state(
+        return await self._save_orchestration_state(
             state,
             event_type=OrchestrationEventType.GOAL_FAMILY_DISPOSED,
             payload={
@@ -6325,7 +5683,7 @@ class SupervisorExecutor:
             mutate=mutate,
         )
 
-    async def _mark_v2_terminal(
+    async def _mark_orchestration_terminal(
         self,
         state: OrchestrationRunState,
         status: OrchestrationStatus,
@@ -6353,14 +5711,19 @@ class SupervisorExecutor:
         payload = {"status": saved.status.value, "reason": reason}
         if terminal_summary is not None:
             payload["terminal_summary"] = terminal_summary
-        await self._append_v2_event(
+        await self._append_orchestration_event(
             saved,
             OrchestrationEventType.RUN_TERMINAL,
+            event_id=(
+                f"{saved.run_id}:run-terminal:{saved.status.value}:"
+                f"{saved.state_version}"
+            ),
+            ignore_duplicate_event=True,
             payload=payload,
         )
         return saved
 
-    async def _append_v2_event(
+    async def _append_orchestration_event(
         self,
         state: OrchestrationRunState,
         event_type: OrchestrationEventType,
@@ -6394,14 +5757,14 @@ class SupervisorExecutor:
                 return
             if required:
                 raise
-            logger.debug("Failed to append v2 orchestration event", exc_info=True)
+            logger.debug("Failed to append orchestration event", exc_info=True)
         except Exception:
             if required:
                 raise
-            logger.debug("Failed to append v2 orchestration event", exc_info=True)
+            logger.debug("Failed to append orchestration event", exc_info=True)
 
     @staticmethod
-    def _v2_selected_resource_fingerprints(
+    def _orchestration_selected_resource_fingerprints(
         state: OrchestrationRunState,
         intent: DispatchIntent,
     ) -> list[str]:
@@ -6455,7 +5818,7 @@ class SupervisorExecutor:
         return sorted(fingerprints)
 
     @staticmethod
-    def _apply_v2_dispatch_intents(
+    def _apply_orchestration_dispatch_intents(
         state: OrchestrationRunState,
         intents: list[DispatchIntent],
     ) -> None:
@@ -6465,7 +5828,7 @@ class SupervisorExecutor:
         state.active_dispatches = reduced.active_dispatches
 
     @staticmethod
-    def _apply_v2_results(
+    def _apply_orchestration_results(
         state: OrchestrationRunState,
         results: list[StepResult],
         *,
@@ -6523,7 +5886,7 @@ class SupervisorExecutor:
             state.steps_used = min(state.steps_used + 1, state.step_budget)
 
     @staticmethod
-    def _v2_dispatch_intent(
+    def _orchestration_dispatch_intent(
         *,
         run_id: str,
         step_number: int,
@@ -6573,7 +5936,7 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _v2_supervisor_action(
+    def _orchestration_supervisor_action(
         planner_action: PlannerAction,
         agent_registry: list[AgentProfile],
     ) -> SupervisorAction:
@@ -6665,7 +6028,7 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _v2_candidate_scope(
+    def _orchestration_candidate_scope(
         state: OrchestrationRunState,
         agent_registry: list[AgentProfile],
     ) -> list[AgentProfile]:
@@ -6699,7 +6062,7 @@ class SupervisorExecutor:
     ) -> set[str]:
         return {
             agent.agent_id
-            for agent in self._v2_candidate_scope(state, agent_registry)
+            for agent in self._orchestration_candidate_scope(state, agent_registry)
             if agent.agent_id not in attempted_agent_ids
         }
 
@@ -7021,7 +6384,6 @@ class SupervisorExecutor:
         token: CancellationToken | None = None,
         request_user_id: str | None = None,
         quoted_text: str | None = None,
-        resumed_trajectory: SupervisorTrajectory | None = None,
         user_message=None,
     ) -> SupervisorRunResult:
         """Execute the full supervisor loop for a user message."""
@@ -7046,7 +6408,6 @@ class SupervisorExecutor:
             token=token,
             request_user_id=request_user_id,
             quoted_text=quoted_text,
-            resumed_trajectory=resumed_trajectory,
             user_message=user_message,
         )
 
@@ -7063,7 +6424,6 @@ class SupervisorExecutor:
         token: CancellationToken | None,
         request_user_id: str | None,
         quoted_text: str | None,
-        resumed_trajectory: SupervisorTrajectory | None,
         user_message,
     ) -> SupervisorRunResult:
         with bind_log_context(
@@ -7072,48 +6432,6 @@ class SupervisorExecutor:
             run_id=state.run_id,
             user_message_id=user_message_id,
         ):
-            resolved_hitl_reply = False
-            if resumed_trajectory is not None:
-                resolved_hitl_reply = bool(
-                    self._hitl_answer_from_run_request(
-                        user_message=user_message,
-                        resumed_trajectory=resumed_trajectory,
-                    )
-                )
-                state = await self._resolve_v2_hitl_if_answered(
-                    state,
-                    user_message=user_message,
-                    resumed_trajectory=resumed_trajectory,
-                )
-                state, blocking_resume_status = await self._sync_v2_resumed_trajectory(
-                    state,
-                    resumed_trajectory,
-                    agent_registry=agent_registry,
-                    room_config=room_config,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                    message_text=message_text,
-                    conversation_context=conversation_context,
-                    request_user_id=request_user_id,
-                    quoted_text=quoted_text,
-                )
-                should_return_waiting_input = (
-                    state.status == OrchestrationStatus.AWAITING_USER
-                    and self._has_open_pending_hitl(state)
-                )
-                if blocking_resume_status is not None and (
-                    blocking_resume_status != RunStatus.AWAITING_INPUT
-                    or should_return_waiting_input
-                ):
-                    return await self._log_state_and_return(
-                        room_id,
-                        state,
-                        self._state_run_result(
-                            status=blocking_resume_status,
-                            state=state,
-                        ),
-                    )
-
             try:
                 return await self._execute_orchestration_loop(
                     state=state,
@@ -7126,7 +6444,6 @@ class SupervisorExecutor:
                     token=token,
                     request_user_id=request_user_id,
                     quoted_text=quoted_text,
-                    allow_awaiting_user_recovery=resolved_hitl_reply,
                     user_message=user_message,
                 )
             except CancellationError:
@@ -7148,7 +6465,7 @@ class SupervisorExecutor:
             current = await self.run_store.get_run(run_id)
             if current is None or current.status in TERMINAL_ORCHESTRATION_STATUSES:
                 return
-            failed = await self._mark_v2_terminal(
+            failed = await self._mark_orchestration_terminal(
                 current,
                 OrchestrationStatus.FAILED,
                 reason=reason,
@@ -7203,7 +6520,7 @@ class SupervisorExecutor:
                 )
         return normalized
 
-    async def _v2_resource_attachments(
+    async def _orchestration_resource_attachments(
         self,
         *,
         room_id: str,
@@ -7862,6 +7179,24 @@ class SupervisorExecutor:
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)
+                strict_cancellation_reader = getattr(
+                    self.message_reader,
+                    "is_message_cancelled_strict",
+                    None,
+                )
+                cancellation_persisted = False
+                if callable(strict_cancellation_reader) and inspect.iscoroutinefunction(
+                    strict_cancellation_reader
+                ):
+                    cancellation_persisted = await strict_cancellation_reader(
+                        user_message_id
+                    )
+                if cancellation_persisted is True:
+                    if token is not None:
+                        token.cancel()
+                    raise CancellationError(user_message_id)
+                if token is not None:
+                    token.check()
                 if inserted is False:
                     existing = (
                         await self.message_reader.get_room_agent_message_by_message_id(
@@ -8413,7 +7748,7 @@ class SupervisorExecutor:
         return result
 
     # ------------------------------------------------------------------
-    # Per-step trajectory checkpoint (crash recovery)
+    # Per-step durable run reference checkpoint
     # ------------------------------------------------------------------
 
     async def _checkpoint_run_reference(
@@ -8427,7 +7762,6 @@ class SupervisorExecutor:
             user_message.extend_info = {}
         user_message.extend_info["orchestration_run_id"] = state.run_id
         user_message.extend_info["orchestration_status"] = state.status.value
-        user_message.extend_info.pop("supervisor_trajectory", None)
         if state.client_request_id:
             user_message.extend_info["client_request_id"] = state.client_request_id
         if state.candidate_scope is not None:
@@ -8535,7 +7869,7 @@ class SupervisorExecutor:
     # Unified interrupt state persistence
     # ------------------------------------------------------------------
 
-    async def _save_interrupted_state(
+    async def _checkpoint_interrupt(
         self,
         kind: InterruptKind,
         *,
@@ -8549,126 +7883,35 @@ class SupervisorExecutor:
         request_user_id: str | None,
         quoted_text: str | None = None,
         hitl_request_id: str | None = None,
-        # For PUSH_NOTIFICATION / HITL_AGENT: list of paused results
         paused_results: list[StepResult] | None = None,
-        # For HITL_AGENT / HITL_SUPERVISOR: single message_id
         message_id: str | None = None,
     ) -> bool:
-        """Serialize trajectory + run inputs for any interrupt kind.
+        """Confirm that an interrupt has enough durable identity to resume.
 
-        For PUSH_NOTIFICATION: saves on each paused_results[i].paused_message_id.
-        For HITL_AGENT: saves on message_id (the paused agent message).
-        For HITL_SUPERVISOR: saves on message_id (the user message).
-
-        Returns True if saved successfully.
+        Orchestration state is saved before this hook. No trajectory or supervisor
+        continuation is serialized; webhook and HITL recovery re-enter through the
+        durable run store.
         """
-        interrupted_state = {
-            "supervisor": True,
-            "interrupt_kind": kind.value,
-            "trajectory": trajectory.model_dump(mode="json"),
-            "room_id": room_id,
-            "user_message_id": user_message_id,
-            "message_text": message_text,
-            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
-            "room_config": room_config.model_dump(mode="json"),
-            "conversation_context": conversation_context,
-            "request_user_id": request_user_id,
-            "quoted_text": quoted_text,
-        }
-        if hitl_request_id is not None:
-            interrupted_state["hitl_request_id"] = hitl_request_id
-
-        # PUSH_NOTIFICATION: save on each paused agent message
-        if kind == InterruptKind.PUSH_NOTIFICATION and paused_results:
-            saved_any = False
-            for pr in paused_results:
-                if not pr.paused_message_id:
-                    logger.error(
-                        "SupervisorExecutor: PAUSED result has no paused_message_id — "
-                        "cannot save continuation. agent=%s",
-                        pr.agent_id,
-                    )
-                    continue
-                success = await self.continuation_store.save_continuation_on_message(
-                    pr.paused_message_id, interrupted_state
-                )
-                if success:
-                    saved_any = True
-                    logger.info(
-                        "supervisor_interrupted_state_saved",
-                        extra={
-                            "room_id": room_id,
-                            "message_id": pr.paused_message_id,
-                            "interrupt_kind": kind.value,
-                            "trajectory_id": trajectory.trajectory_id,
-                        },
-                    )
-                else:
-                    logger.error(
-                        "SupervisorExecutor: Failed to save interrupted state "
-                        "(kind=%s, message_id=%s)",
-                        kind.value,
-                        pr.paused_message_id,
-                    )
-            return saved_any
-
-        # HITL_AGENT: save on the agent message
-        if kind == InterruptKind.HITL_AGENT:
-            if not message_id:
-                logger.error("SupervisorExecutor: HITL_AGENT save missing message_id")
-                return False
-            success = await self.continuation_store.save_continuation_on_message(
-                message_id, interrupted_state
+        del (
+            self,
+            trajectory,
+            message_text,
+            agent_registry,
+            room_config,
+            conversation_context,
+            request_user_id,
+            quoted_text,
+            hitl_request_id,
+        )
+        if not room_id or not user_message_id:
+            return False
+        if kind == InterruptKind.PUSH_NOTIFICATION:
+            return bool(
+                paused_results
+                and any(result.paused_message_id for result in paused_results)
             )
-            if success:
-                logger.info(
-                    "supervisor_interrupted_state_saved",
-                    extra={
-                        "room_id": room_id,
-                        "message_id": message_id,
-                        "interrupt_kind": kind.value,
-                        "trajectory_id": trajectory.trajectory_id,
-                    },
-                )
-            else:
-                logger.error(
-                    "SupervisorExecutor: Failed to save interrupted state "
-                    "(kind=%s, message_id=%s)",
-                    kind.value,
-                    message_id,
-                )
-            return success
-
-        # HITL_SUPERVISOR: save on the user message
-        if kind == InterruptKind.HITL_SUPERVISOR:
-            if not message_id:
-                logger.error(
-                    "SupervisorExecutor: HITL_SUPERVISOR save missing message_id"
-                )
-                return False
-            success = await self.continuation_store.save_continuation_on_user_message(
-                message_id, interrupted_state
-            )
-            if success:
-                logger.info(
-                    "supervisor_interrupted_state_saved",
-                    extra={
-                        "room_id": room_id,
-                        "message_id": message_id,
-                        "interrupt_kind": kind.value,
-                        "trajectory_id": trajectory.trajectory_id,
-                    },
-                )
-            else:
-                logger.error(
-                    "SupervisorExecutor: Failed to save interrupted state "
-                    "(kind=%s, message_id=%s)",
-                    kind.value,
-                    message_id,
-                )
-            return success
-
-        logger.error("SupervisorExecutor: Unknown interrupt kind %s", kind)
+        if kind in {InterruptKind.HITL_AGENT, InterruptKind.HITL_SUPERVISOR}:
+            return bool(message_id)
         return False
 
     @staticmethod
@@ -8688,10 +7931,6 @@ class SupervisorExecutor:
         run_id = envelope.get("orchestration_run_id")
         if isinstance(run_id, str) and run_id.strip():
             kwargs["orchestration_run_id"] = run_id.strip()
-
-        schema_version = envelope.get("orchestration_schema_version")
-        if isinstance(schema_version, int):
-            kwargs["orchestration_schema_version"] = schema_version
 
         return kwargs
 

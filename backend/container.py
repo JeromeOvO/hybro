@@ -624,10 +624,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
                 get_hitl_request=hitl_store.get_hitl_request,
+                update_hitl_request=hitl_store.update_hitl_request,
                 claim_hitl_request=hitl_store.claim_hitl_request,
                 fenced_update_hitl_request=hitl_store.fenced_update_hitl_request,
                 count_pending_in_hitl_group=hitl_store.count_pending_in_hitl_group,
                 get_hitl_group_requests=hitl_store.get_hitl_group_requests,
+                get_pending_hitl_group_requests_strict=(
+                    hitl_store.get_pending_hitl_group_requests_strict
+                ),
+                get_unreconciled_terminal_hitl_group_requests_strict=(
+                    hitl_store.get_unreconciled_terminal_hitl_group_requests_strict
+                ),
                 release_hitl_group_routing=hitl_store.release_hitl_group_routing,
                 claim_hitl_group_routing=hitl_store.claim_hitl_group_routing,
                 reset_last_notified_state=message_store.reset_last_notified_state,
@@ -644,7 +651,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_pending_hitl_requests_for_message=(
                     hitl_store.get_pending_hitl_requests_for_message
                 ),
+                get_pending_hitl_requests_for_message_strict=(
+                    hitl_store.get_pending_hitl_requests_for_message_strict
+                ),
                 cas_update_hitl_request=hitl_store.cas_update_hitl_request,
+                cas_update_hitl_request_strict=(
+                    hitl_store.cas_update_hitl_request_strict
+                ),
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
                 ),
@@ -675,8 +688,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
                 touch_task_message=task_store.touch_task_message,
                 is_message_cancelled=task_store.is_message_cancelled,
+                is_message_cancelled_strict=task_store.is_message_cancelled_strict,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
+                ),
+                get_room_user_message_by_message_id_strict=(
+                    message_store.get_room_user_message_by_message_id_strict
                 ),
                 update_task_on_message=task_store.update_task_on_message,
                 get_and_clear_continuation_on_message=(
@@ -689,13 +706,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.get_room_ids_with_non_terminal_runs
                 ),
                 get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
+                get_stale_claimed_orchestration_messages=(
+                    message_store.get_stale_claimed_orchestration_messages
+                ),
+                update_orchestration_projection_if_status=(
+                    message_store.update_orchestration_projection_if_status
+                ),
+                list_pending_cancellation_markers=(
+                    task_store.list_pending_cancellation_markers
+                ),
+                mark_cancellation_reconciled=(task_store.mark_cancellation_reconciled),
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_stuck_supervisor_trajectory_messages=(
-                    task_store.get_stuck_supervisor_trajectory_messages
-                ),
-                claim_stuck_supervisor_trajectory=(
-                    task_store.claim_stuck_supervisor_trajectory
-                ),
             )
             debate_message_store = SimpleNamespace(
                 get_room_agent_message_by_message_id=(
@@ -770,6 +791,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_room_user_messages_by_room_id=(
                     message_store.get_room_user_messages_by_room_id
                 ),
+                is_message_cancelled_strict=(task_store.is_message_cancelled_strict),
             )
             execution_message_writer = SimpleNamespace(
                 accumulate_artifact_on_message=(
@@ -1282,14 +1304,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
+                StaleCancellationFinalizerDeps,
                 StaleHITLDeps,
                 StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
             )
-
-            def run_dual_write_enabled() -> bool:
-                return runtime.settings.feature_run_dual_write
 
             async def emit_watchdog_run_event(
                 *,
@@ -1338,6 +1358,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     orchestration_run_store=orchestration_run_store,
                 )
             )
+            stale_task_checker.set_cancellation_finalizer_deps(
+                StaleCancellationFinalizerDeps(
+                    finalize=execution_facade.finalize_pending_cancellation,
+                )
+            )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
                     recover_stale_processing=hitl_manager.recover_stale_processing,
@@ -1349,7 +1374,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
                     emit_run_event=emit_watchdog_run_event,
                     emit_processing_status=emit_watchdog_processing_status,
-                    run_dual_write_enabled=run_dual_write_enabled,
                 )
             )
         compaction_sweep.set_leader_election(_leader)
@@ -1376,15 +1400,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         _bg_started = True
         await agent_health_service.start()
 
+        await stale_task_checker.start()
+        await stale_task_checker.check_stale_tasks()
         if runtime.settings.webhook_signing_key:
-            await stale_task_checker.start()
-            await stale_task_checker.check_stale_tasks()
             logger.info(
-                "A2A long-running tasks support initialized (using room_agent_messages)"
+                "A2A push-notification support initialized (using room_agent_messages)"
             )
         else:
             logger.warning(
-                "WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled"
+                "WEBHOOK_SIGNING_KEY not set - A2A push notifications disabled; "
+                "durable orchestration recovery remains enabled"
             )
 
         await compaction_sweep.start()
@@ -1738,6 +1763,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
+    await _ensure_cancellation_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
@@ -2108,6 +2134,15 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
         [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
         name="room_task_created_sparse",
         sparse=True,
+    )
+
+
+async def _ensure_cancellation_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "cancelled_messages",
+        [("reconciliation_status", 1), ("message_id", 1)],
+        name="cancellation_reconciliation_message",
     )
 
 

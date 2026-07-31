@@ -891,7 +891,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, display_text or ""),
+            lambda: self._resume_orchestration_event(e, display_text or ""),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -975,7 +975,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+            lambda: self._resume_orchestration_event(e, "", failed=True),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -1049,7 +1049,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+            lambda: self._resume_orchestration_event(e, "", failed=True),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -1325,6 +1325,10 @@ class AgentResponseHandler:
             )
         )
         if not continuation:
+            # Durable supervisor runs do not serialize message continuations.
+            # Re-enter from the committed agent message so the canonical run
+            # can ingest the interactive state and create its HITL request.
+            await self._resume_orchestration_event(e, "")
             return
 
         if self.hitl_coordinator is None:
@@ -1772,6 +1776,24 @@ class AgentResponseHandler:
                 e.message_id,
                 exc_info=True,
             )
+
+    async def _resume_orchestration_event(
+        self,
+        event: AgentEvent,
+        response_text: str,
+        *,
+        failed: bool = False,
+    ) -> None:
+        # Direct transport finalizes synchronously inside the active supervisor
+        # dispatch. The outer executor ingests its ProcessingResult and continues;
+        # recursive recovery here would wait on the room lock it already holds.
+        if event.skip_persist:
+            return
+        await self._resume_orchestration(
+            event.message_id,
+            response_text,
+            failed=failed,
+        )
 
     async def _resume_orchestration(
         self,

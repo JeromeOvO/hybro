@@ -135,6 +135,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agent_memories",
         "agents",
         "conversation_content",
+        "cancelled_messages",
         "orchestration_run_events",
         "orchestration_runs",
         "room_agent_messages",
@@ -195,6 +196,12 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             "turn_notes.tags": 1,
             "turn_notes.one_liner": 1,
         },
+    )
+    assert _has_create_index(
+        collections["cancelled_messages"],
+        [("reconciliation_status", 1), ("message_id", 1)],
+        unique=False,
+        name="cancellation_reconciliation_message",
     )
     assert _has_create_index(
         collections["room_agent_messages"],

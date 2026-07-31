@@ -19,48 +19,7 @@ class FakeEventPublisher:
 
 
 @pytest.mark.asyncio
-async def test_record_processing_status_skips_when_dual_write_disabled(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", False)
-    import execution.run_lifecycle_service as mod
-
-    fake = AsyncMock()
-    fake.record_processing_status = AsyncMock(return_value=None)
-    mod.run_command_handler = fake
-    await mod.run_lifecycle_service.record_processing_status(
-        room_id="room-1",
-        status="processing",
-        message_id="msg-1",
-    )
-    fake.record_processing_status.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_project_run_state_skips_when_dual_write_disabled(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", False)
-    import execution.run_lifecycle_service as mod
-    from models.run import RunState
-
-    fake = AsyncMock()
-    fake.project_run_state = AsyncMock(return_value={"run_id": "run-1"})
-    mod.run_command_handler = fake
-
-    result = await mod.run_lifecycle_service.project_run_state(
-        room_id="room-1",
-        run_id="run-1",
-        trigger_message_id="msg-1",
-        target_state=RunState.PROCESSING,
-        terminal_reason=None,
-        causation_id="orch-event-1",
-        client_request_id="cr-1",
-    )
-
-    assert result is None
-    fake.project_run_state.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_record_processing_status_dual_write_default_allows_calls(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
+async def test_record_processing_status_public_projection_is_unconditional(monkeypatch):
     import execution.run_lifecycle_service as mod
     from common.a2a_constants import SSEProcessingStatus
 
@@ -84,7 +43,6 @@ async def test_record_processing_status_dual_write_default_allows_calls(monkeypa
 
 @pytest.mark.asyncio
 async def test_record_processing_status_returns_handler_payload(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     payload = {
@@ -113,7 +71,6 @@ async def test_record_processing_status_returns_handler_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bind_run_lifecycle_service_uses_injected_handler(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     original = mod.run_command_handler
@@ -150,7 +107,6 @@ async def test_bind_run_lifecycle_service_uses_injected_handler(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_record_and_maybe_emit_run_event_records_before_emit(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     calls: list[str] = []
@@ -188,7 +144,6 @@ async def test_record_and_maybe_emit_run_event_records_before_emit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_record_and_maybe_emit_run_event_uses_event_publisher(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     payload = {
@@ -248,7 +203,6 @@ def test_build_run_event_payload_includes_correlation_id():
 
 @pytest.mark.asyncio
 async def test_record_and_maybe_emit_run_event_skips_when_flag_disabled(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     payload = {"event_id": "evt-1", "run_id": "msg-1", "seq": 1, "type": "RUN_STARTED"}
@@ -269,7 +223,6 @@ async def test_record_and_maybe_emit_run_event_skips_when_flag_disabled(monkeypa
 
 @pytest.mark.asyncio
 async def test_record_and_maybe_emit_run_event_skips_when_payload_none(monkeypatch):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     event_publisher = FakeEventPublisher()
@@ -291,7 +244,6 @@ async def test_record_and_maybe_emit_run_event_skips_when_payload_none(monkeypat
 async def test_duplicate_terminal_payload_none_does_not_emit_second_run_event(
     monkeypatch,
 ):
-    monkeypatch.setattr(settings, "feature_run_dual_write", True)
     import execution.run_lifecycle_service as mod
 
     payload = {

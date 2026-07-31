@@ -61,13 +61,13 @@ def normalize_candidate_scope(
     )
 
 
-def candidate_scope_from_legacy_envelope(
+def candidate_scope_from_envelope(
     *,
     room_id: str,
     envelope: Mapping[str, Any] | None,
     selected_agent_set: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> CandidateScopeSnapshot:
-    """Build a candidate scope snapshot from legacy orchestration envelope fields."""
+    """Build a candidate scope snapshot from orchestration envelope fields."""
 
     raw_envelope = envelope or {}
     source = (
@@ -101,7 +101,7 @@ def candidate_scope_from_legacy_envelope(
 
 
 def candidate_scope_items(candidate_scope: Any) -> list[Any]:
-    """Return canonical candidate items from legacy or snapshot scope shapes."""
+    """Return canonical candidate items from envelope or snapshot scope shapes."""
 
     return _raw_candidate_items(candidate_scope)
 

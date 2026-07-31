@@ -87,6 +87,7 @@ def _prompt_hash(prompt: str | None) -> str | None:
 
 
 MAX_HITL_ROUNDS = 15
+MAX_HITL_GROUP_SIZE = 100
 _GENERIC_AGENT_INPUT_PROMPT = GENERIC_AGENT_INPUT_PROMPT
 
 
@@ -198,7 +199,6 @@ class HITLService:
         continuation_message_id: str | None = None,
         display_message_id: str | None = None,
         orchestration_run_id: str | None = None,
-        orchestration_schema_version: int | None = None,
         expires_in_hours: float = 24.0,
         group_id: str | None = None,
         group_total: int | None = None,
@@ -209,6 +209,25 @@ class HITLService:
 
         Returns the created request, or None if max rounds exceeded.
         """
+        if group_id is not None and (
+            group_total is None
+            or group_index is None
+            or group_total < 1
+            or group_total > MAX_HITL_GROUP_SIZE
+            or group_index < 0
+            or group_index >= group_total
+        ):
+            logger.error(
+                "Invalid HITL group bounds",
+                extra={
+                    "group_id": group_id,
+                    "group_total": group_total,
+                    "group_index": group_index,
+                    "max_group_size": MAX_HITL_GROUP_SIZE,
+                },
+            )
+            return None
+
         agent_prompt_hash = _prompt_hash(prompt) if source == "agent" else None
         if source == "agent":
             prompt = public_agent_input_prompt(prompt)
@@ -282,7 +301,6 @@ class HITLService:
             display_message_id=resolved_display_message_id,
             client_request_id=resolved_client_request_id,
             orchestration_run_id=orchestration_run_id,
-            orchestration_schema_version=orchestration_schema_version,
             expires_at=utcnow() + timedelta(hours=expires_in_hours),
             group_id=group_id,
             group_total=group_total,
@@ -1188,7 +1206,6 @@ class HITLService:
             "room_id": request.room_id,
             "user_message_id": request.user_message_id,
             "orchestration_run_id": request.orchestration_run_id,
-            "orchestration_schema_version": request.orchestration_schema_version,
             "source": request.source,
             "response": user_input,
             "user_input": user_input,
@@ -1365,7 +1382,6 @@ class HITLService:
                 continuation_message_id=request.continuation_message_id,
                 display_message_id=request.display_message_id,
                 orchestration_run_id=request.orchestration_run_id,
-                orchestration_schema_version=request.orchestration_schema_version,
             )
             if new_request is None:
                 logger.warning(
@@ -1460,7 +1476,7 @@ class HITLService:
             "task_state": task_state,
             "response_text": task_result_text,
             "resume_execution": False,
-            "legacy_resume_triggered": True,
+            "queue_resume_triggered": True,
         }
 
     # ------------------------------------------------------------------
@@ -1470,41 +1486,11 @@ class HITLService:
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
-        """Resume supervisor loop with user's answer injected into trajectory."""
-        if request.orchestration_run_id:
-            return
-        continuation = await self.persistence.get_pending_continuation_on_message(
-            request.continuation_message_id
-        )
-        if not continuation:
+        """Validate durable supervisor linkage before facade-owned recovery."""
+        del user_input
+        if not request.orchestration_run_id:
             raise ContinuationLostError(
-                f"No continuation found for message {request.continuation_message_id} — "
-                "the supervisor reply could not schedule orchestration recovery"
-            )
-
-        if continuation.get("supervisor"):
-            traj = continuation.get("trajectory", {})
-            traj["hitl_user_reply"] = user_input
-            traj["hitl_original_message_id"] = continuation.get("user_message_id")
-            continuation["trajectory"] = traj
-
-            saved = await self.persistence.save_continuation_on_user_message(
-                request.continuation_message_id, continuation
-            )
-            if not saved:
-                raise RuntimeError(
-                    f"Failed to persist patched continuation for message "
-                    f"{request.continuation_message_id} — user reply would be lost"
-                )
-
-        resumed = await self.continuation.resume_queue_from_continuation(
-            request.continuation_message_id,
-            task_result_text=None,
-        )
-        if not resumed:
-            raise RuntimeError(
-                f"Supervisor resume failed for message {request.continuation_message_id} — "
-                "continuation is preserved for retry"
+                "Supervisor HITL request is missing orchestration_run_id"
             )
 
     # ------------------------------------------------------------------
@@ -1537,7 +1523,17 @@ class HITLService:
         if request.group_id is None:
             return requests
 
-        docs = await self.persistence.get_hitl_group_requests(request.group_id)
+        strict_group_reader = getattr(
+            self.persistence,
+            "get_pending_hitl_group_requests_strict",
+            None,
+        )
+        if callable(strict_group_reader) and inspect.iscoroutinefunction(
+            strict_group_reader
+        ):
+            docs = await strict_group_reader(request.group_id)
+        else:
+            docs = await self.persistence.get_hitl_group_requests(request.group_id)
         seen_request_ids = {request.request_id}
         for doc in docs:
             if doc.get("request_id") in seen_request_ids:
@@ -1581,23 +1577,35 @@ class HITLService:
         )
         cleared_continuation_ids: set[str] = set()
         terminalized_requests: list[HITLRequest] = []
+        terminalization_errors: list[Exception] = []
         for terminal_request in requests_to_terminalize:
-            terminalized = await self.persistence.cas_update_hitl_request(
+            strict_cas = getattr(
+                self.persistence,
+                "cas_update_hitl_request_strict",
+                None,
+            )
+            cas_update = (
+                strict_cas
+                if callable(strict_cas) and inspect.iscoroutinefunction(strict_cas)
+                else self.persistence.cas_update_hitl_request
+            )
+            terminalized = await cas_update(
                 terminal_request.request_id,
                 expected_status=HITLStatus.PENDING.value,
                 status=status.value,
+                cancellation_reconciled=False,
             )
             if not terminalized:
                 continue
 
-            terminalized_requests.append(terminal_request)
-            # Clear the orphaned continuation
+            side_effect_errors: list[Exception] = []
             try:
                 await self._clear_hitl_continuation_once(
                     terminal_request,
                     cleared_continuation_ids,
                 )
-            except Exception:
+            except Exception as exc:
+                side_effect_errors.append(exc)
                 logger.warning(
                     "Failed to clear HITL continuation after terminalizing request",
                     extra={
@@ -1609,14 +1617,14 @@ class HITLService:
                     exc_info=True,
                 )
 
-            # Notify frontend
             try:
                 await self._emit_hitl_event(
                     room_id=terminal_request.room_id,
                     event_type=event_type,
                     request=terminal_request,
                 )
-            except Exception:
+            except Exception as exc:
+                side_effect_errors.append(exc)
                 logger.warning(
                     "Failed to emit HITL terminal event after terminalizing request",
                     extra={
@@ -1629,7 +1637,86 @@ class HITLService:
                     exc_info=True,
                 )
 
+            if side_effect_errors:
+                terminalization_errors.extend(side_effect_errors)
+                continue
+            reconciled = await self.persistence.update_hitl_request(
+                terminal_request.request_id,
+                cancellation_reconciled=True,
+            )
+            if not reconciled:
+                terminalization_errors.append(
+                    RuntimeError("HITL terminal reconciliation failed")
+                )
+                continue
+            terminalized_requests.append(terminal_request)
+
+        if terminalization_errors:
+            raise RuntimeError(
+                "HITL terminal side effects remain pending"
+            ) from terminalization_errors[0]
         return terminalized_requests
+
+    async def _reconcile_terminal_request(
+        self,
+        request: HITLRequest,
+        *,
+        event_type: HITLEventType,
+    ) -> None:
+        await self._clear_hitl_continuation_once(request, set())
+        await self._emit_hitl_event(
+            room_id=request.room_id,
+            event_type=event_type,
+            request=request,
+        )
+        reconciled = await self.persistence.update_hitl_request(
+            request.request_id,
+            cancellation_reconciled=True,
+        )
+        if not reconciled:
+            raise RuntimeError("HITL terminal reconciliation failed")
+
+    async def _reconcile_terminal_group(
+        self,
+        request: HITLRequest,
+        *,
+        event_type: HITLEventType,
+        include_request: bool = True,
+    ) -> None:
+        requests = [request] if include_request else []
+        strict_reader = getattr(
+            self.persistence,
+            "get_unreconciled_terminal_hitl_group_requests_strict",
+            None,
+        )
+        if (
+            request.group_id
+            and callable(strict_reader)
+            and inspect.iscoroutinefunction(strict_reader)
+        ):
+            docs = await strict_reader(request.group_id, request.status.value)
+            requests = [
+                HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
+                for doc in docs
+            ]
+            if include_request and all(
+                item.request_id != request.request_id for item in requests
+            ):
+                requests.insert(0, request)
+
+        errors: list[Exception] = []
+        for terminal_request in requests:
+            try:
+                await self._reconcile_terminal_request(
+                    terminal_request,
+                    event_type=event_type,
+                )
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise RuntimeError("HITL terminal side effects remain pending") from errors[
+                0
+            ]
 
     async def cancel_request(self, request_id: str, room_id: str | None = None) -> None:
         """Cancel a pending HITL request."""
@@ -1639,6 +1726,17 @@ class HITLService:
         request = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
         if room_id is not None and request.room_id != room_id:
             raise HITLRoomMismatchError("Room mismatch")
+        if request.status == HITLStatus.CANCELED:
+            if (
+                request.group_id is not None
+                or doc.get("cancellation_reconciled") is not True
+            ):
+                await self._reconcile_terminal_group(
+                    request,
+                    event_type=HITLEventType.INPUT_CANCELED,
+                    include_request=(doc.get("cancellation_reconciled") is not True),
+                )
+            return
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 
@@ -1666,6 +1764,17 @@ class HITLService:
         request = HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
         if room_id is not None and request.room_id != room_id:
             raise HITLRoomMismatchError("Room mismatch")
+        if request.status == HITLStatus.EXPIRED:
+            if (
+                request.group_id is not None
+                or doc.get("cancellation_reconciled") is not True
+            ):
+                await self._reconcile_terminal_group(
+                    request,
+                    event_type=HITLEventType.INPUT_EXPIRED,
+                    include_request=(doc.get("cancellation_reconciled") is not True),
+                )
+            return
         if request.status != HITLStatus.PENDING:
             return  # Already resolved, no-op
 
@@ -1687,9 +1796,29 @@ class HITLService:
 
     async def cancel_requests_for_message(self, user_message_id: str) -> None:
         """Cancel all pending HITL requests for a given user message."""
-        pending = await self.get_pending_requests_for_message(user_message_id)
-        for req in pending:
-            await self.cancel_request(req.request_id)
+        strict_reader = getattr(
+            self.persistence,
+            "get_pending_hitl_requests_for_message_strict",
+            None,
+        )
+        processed_request_ids: set[str] = set()
+        while True:
+            if callable(strict_reader) and inspect.iscoroutinefunction(strict_reader):
+                docs = await strict_reader(user_message_id)
+                pending = [
+                    HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
+                    for doc in docs
+                ]
+            else:
+                pending = await self.get_pending_requests_for_message(user_message_id)
+            if not pending:
+                return
+            batch_ids = {req.request_id for req in pending}
+            if batch_ids <= processed_request_ids:
+                raise RuntimeError("HITL cancellation scan made no progress")
+            processed_request_ids.update(batch_ids)
+            for req in pending:
+                await self.cancel_request(req.request_id)
 
     PROCESSING_TIMEOUT_SECONDS = 600
     LEASE_HEARTBEAT_SECONDS = 120
@@ -1959,8 +2088,6 @@ class HITLService:
                     group_index=request.group_index,
                     related_message_id=data["related_message_id"],
                     client_request_id=data.get("client_request_id"),
-                    orchestration_run_id=request.orchestration_run_id,
-                    orchestration_schema_version=request.orchestration_schema_version,
                 )
             )
             return
@@ -1981,8 +2108,6 @@ class HITLService:
                 related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),
-                orchestration_run_id=request.orchestration_run_id,
-                orchestration_schema_version=request.orchestration_schema_version,
             )
         )
 

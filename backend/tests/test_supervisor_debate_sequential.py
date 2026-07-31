@@ -17,7 +17,10 @@ from common.utils.time import utcnow
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from models.orchestration import (
+    AgentOutputRecord,
     CompletionEvidence,
+    OrchestrationStatus,
+    ParticipantSnapshot,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
@@ -727,6 +730,80 @@ class TestSequentialDebateDispatch:
         assert [event.was_successful for event in committed_events] == [True, True]
 
     @pytest.mark.asyncio
+    async def test_persisted_partially_finished_debate_reenters_at_next_participant(
+        self, se
+    ):
+        agents = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        state = await se.orchestration_run_store.reconstruct_from_envelope(
+            run_id="umsg-1",
+            room_id="room-1",
+            user_message_id="umsg-1",
+            envelope={"candidate_agent_ids": ["a1", "a2"]},
+            goal="Discuss AI",
+        )
+        state.status = OrchestrationStatus.RUNNING
+        state.steps_used = 1
+        state.participant_snapshot = ParticipantSnapshot(
+            mode="debate",
+            ordered_agent_ids=["a1", "a2"],
+            current_round=0,
+            max_rounds=1,
+            turn_policy="debate_rounds",
+            completed_agent_ids=["a1"],
+        )
+        state.agent_outputs.append(
+            AgentOutputRecord(
+                agent_message_id="agent-msg-a1",
+                agent_id="a1",
+                status="success",
+                text="Alpha already responded",
+            )
+        )
+        await se.orchestration_run_store.create_run(state)
+        dispatch_calls = []
+
+        async def fake_dispatch(targets, **kwargs):
+            dispatch_calls.append([target.agent_id for target in targets])
+            target = targets[0]
+            return [
+                StepResult(
+                    step_number=kwargs.get("step_number", 2),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text="Beta response",
+                    success=True,
+                    status=StepStatus.SUCCESS,
+                    agent_message_id="agent-msg-a2",
+                )
+            ]
+
+        se._dispatch_targets = fake_dispatch
+
+        result = await se.run(
+            room_id="room-1",
+            user_message_id="umsg-1",
+            message_text="Discuss AI",
+            agent_registry=agents,
+            room_config=self._debate_config(),
+        )
+
+        assert result.status == RunStatus.COMPLETED
+        assert dispatch_calls == [["a2"]]
+        assert (
+            se.orchestration_planner.contexts[0].state_context.agent_outputs[0][
+                "agent_id"
+            ]
+            == "a1"
+        )
+        assert result.run_state is not None
+        assert result.run_state.participant_snapshot is not None
+        assert result.run_state.participant_snapshot.ordered_agent_ids == ["a1", "a2"]
+
+    @pytest.mark.asyncio
     async def test_debate_mode_limits_multi_target_planner_to_next_participant(
         self, se
     ):
@@ -1017,67 +1094,6 @@ class TestSequentialDebateDispatch:
         assert result.status == RunStatus.COMPLETED
         assert dispatch_count == 10
 
-    @pytest.mark.asyncio
-    async def test_skips_unhealthy_agent(self, se):
-        """Agent healthy at snapshot but unhealthy on resume should be skipped."""
-        # All agents healthy at snapshot time
-        agents = [
-            _make_agent_profile("a1", "Alpha"),
-            _make_agent_profile("a2", "Beta"),
-            _make_agent_profile("a3", "Gamma"),
-        ]
-        dispatch_ids = []
-
-        async def fake_dispatch(targets, **kwargs):
-            dispatch_ids.append(targets[0].agent_id)
-            return [
-                StepResult(
-                    step_number=kwargs.get("step_number", 1),
-                    agent_id=targets[0].agent_id,
-                    agent_name=targets[0].agent_name,
-                    task=targets[0].task,
-                    response_text="resp",
-                    success=True,
-                    status=StepStatus.SUCCESS,
-                )
-            ]
-
-        se._dispatch_targets = fake_dispatch
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
-
-        # Simulate resume: a1 already dispatched, a2 became unhealthy
-        resumed = SupervisorTrajectory(
-            debate_agent_ids=["a1", "a2", "a3"],
-            entries=[_make_delegate_entry(1, "a1", "Alpha", "first resp")],
-        )
-        # Mark a2 as unhealthy in the registry for this resume
-        agents[1] = _make_agent_profile("a2", "Beta", healthy=False)
-
-        config = RoomConfig(
-            is_debate_mode=True,
-            room_agent_set={"a1": "Alpha", "a2": "Beta", "a3": "Gamma"},
-        )
-
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Go",
-            agent_registry=agents,
-            room_config=config,
-            resumed_trajectory=resumed,
-        )
-
-        assert result.status == RunStatus.COMPLETED
-        # a2 should NOT be dispatched (unhealthy on resume), only a3
-        assert dispatch_ids == ["a3"]
-        assert result.trajectory is None
-        assert result.run_state is not None
-        output_agent_ids = {
-            output.agent_id for output in result.run_state.agent_outputs
-        }
-        assert output_agent_ids == {"a1", "a3"}
-        assert "a2" not in output_agent_ids
-
 
 # =========================================================================
 # Resume tests
@@ -1089,170 +1105,6 @@ class TestDebateResume:
     @pytest.fixture
     def se(self):
         return _make_supervisor_executor()
-
-    @pytest.mark.asyncio
-    async def test_resume_continues_dispatching(self, se):
-        """After resume with 1/3 agents done, should continue with remaining 2."""
-        agents = [
-            _make_agent_profile("a1", "Alpha"),
-            _make_agent_profile("a2", "Beta"),
-            _make_agent_profile("a3", "Gamma"),
-        ]
-
-        # Trajectory already has a1 dispatched
-        resumed = SupervisorTrajectory(
-            debate_agent_ids=["a1", "a2", "a3"],
-            entries=[_make_delegate_entry(1, "a1", "Alpha", "first response")],
-        )
-
-        dispatch_ids = []
-
-        async def fake_dispatch(targets, **kwargs):
-            dispatch_ids.append(targets[0].agent_id)
-            return [
-                StepResult(
-                    step_number=kwargs.get("step_number", 1),
-                    agent_id=targets[0].agent_id,
-                    agent_name=targets[0].agent_name,
-                    task=targets[0].task,
-                    response_text="resp",
-                    success=True,
-                    status=StepStatus.SUCCESS,
-                )
-            ]
-
-        se._dispatch_targets = fake_dispatch
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
-
-        config = RoomConfig(
-            is_debate_mode=True,
-            room_agent_set={
-                "a1": "Alpha",
-                "a2": "Beta",
-                "a3": "Gamma",
-            },
-        )
-
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Debate",
-            agent_registry=agents,
-            room_config=config,
-            resumed_trajectory=resumed,
-        )
-
-        assert result.status == RunStatus.COMPLETED
-        assert dispatch_ids == ["a2", "a3"]
-
-    @pytest.mark.asyncio
-    async def test_resume_completes_when_all_done(self, se):
-        """Resume with all agents already dispatched should immediately DONE."""
-        agents = [
-            _make_agent_profile("a1", "Alpha"),
-            _make_agent_profile("a2", "Beta"),
-        ]
-
-        resumed = SupervisorTrajectory(
-            debate_agent_ids=["a1", "a2"],
-            entries=[
-                _make_delegate_entry(1, "a1", "Alpha"),
-                _make_delegate_entry(2, "a2", "Beta"),
-            ],
-        )
-
-        se._dispatch_targets = AsyncMock()
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
-
-        config = RoomConfig(
-            is_debate_mode=True,
-            room_agent_set={
-                "a1": "Alpha",
-                "a2": "Beta",
-            },
-        )
-
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Debate",
-            agent_registry=agents,
-            room_config=config,
-            resumed_trajectory=resumed,
-        )
-
-        assert result.status == RunStatus.COMPLETED
-        # _dispatch_targets should not be called — all agents already dispatched
-        se._dispatch_targets.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_resume_does_not_premature_done_on_inflight(self, se):
-        """P1 fix: If the last DELEGATE entry has empty results (inflight
-        crash), resume must NOT return DONE — the inflight agent needs
-        re-dispatch."""
-        agents = [
-            _make_agent_profile("a1", "Alpha"),
-            _make_agent_profile("a2", "Beta"),
-        ]
-
-        # a1 succeeded, a2 was inflight (empty results) when crash happened
-        inflight_entry = TrajectoryEntry(
-            step_number=2,
-            action=SupervisorAction(
-                action=ActionType.DELEGATE,
-                reasoning="Debate: Beta",
-                targets=[DelegateTarget(agent_id="a2", agent_name="Beta", task="task")],
-            ),
-            started_at=utcnow(),
-            results=[],
-        )
-        resumed = SupervisorTrajectory(
-            debate_agent_ids=["a1", "a2"],
-            entries=[
-                _make_delegate_entry(1, "a1", "Alpha", "first resp"),
-                inflight_entry,
-            ],
-        )
-
-        dispatch_ids = []
-
-        async def fake_dispatch(targets, **kwargs):
-            dispatch_ids.append(targets[0].agent_id)
-            return [
-                StepResult(
-                    step_number=kwargs.get("step_number", 1),
-                    agent_id=targets[0].agent_id,
-                    agent_name=targets[0].agent_name,
-                    task=targets[0].task,
-                    response_text="resp",
-                    success=True,
-                    status=StepStatus.SUCCESS,
-                )
-            ]
-
-        se._dispatch_targets = fake_dispatch
-        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
-
-        config = RoomConfig(
-            is_debate_mode=True,
-            room_agent_set={
-                "a1": "Alpha",
-                "a2": "Beta",
-            },
-        )
-
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Debate",
-            agent_registry=agents,
-            room_config=config,
-            resumed_trajectory=resumed,
-        )
-
-        assert result.status == RunStatus.COMPLETED
-        # a2 should have been re-dispatched (not skipped with premature DONE)
-        assert "a2" in dispatch_ids
 
     def test_snapshot_survives_resume(self):
         """debate_agent_ids should survive trajectory serialization/deserialization."""
@@ -1286,75 +1138,3 @@ class TestDebateResume:
 class TestResumePreservesDebateParticipants:
     """Verify that debate participants are preserved across pause/resume
     even when room membership changes."""
-
-    def test_resume_preserves_debate_participants(self):
-        """When a debate is paused and the room membership changes,
-        the original debate participants should be restored from
-        the continuation data."""
-        # Original debate had 3 agents
-        trajectory = SupervisorTrajectory(
-            debate_agent_ids=["a1", "a2", "a3"],
-            entries=[
-                _make_delegate_entry(1, "a1", "Alpha", "resp1"),
-            ],
-        )
-
-        # After resume, room only has a1 and a4 (a2, a3 removed, a4 added)
-        current_registry = [
-            _make_agent_profile("a1", "Alpha"),
-            _make_agent_profile("a4", "Delta"),
-        ]
-
-        # Serialized continuation has the original registry
-        continuation = {
-            "agent_registry": [
-                {
-                    "agent_id": "a1",
-                    "agent_name": "Alpha",
-                    "description": "",
-                    "is_healthy": True,
-                },
-                {
-                    "agent_id": "a2",
-                    "agent_name": "Beta",
-                    "description": "",
-                    "is_healthy": True,
-                },
-                {
-                    "agent_id": "a3",
-                    "agent_name": "Gamma",
-                    "description": "",
-                    "is_healthy": True,
-                },
-            ],
-        }
-
-        is_debate_mode = True
-
-        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor
-        if trajectory.debate_agent_ids and is_debate_mode:
-            current_ids = {a.agent_id for a in current_registry}
-            missing_ids = [
-                aid for aid in trajectory.debate_agent_ids if aid not in current_ids
-            ]
-            if missing_ids:
-                serialized_registry = continuation.get("agent_registry", [])
-                serialized_map = {
-                    p["agent_id"]: p
-                    for p in serialized_registry
-                    if isinstance(p, dict) and "agent_id" in p
-                }
-                for mid in missing_ids:
-                    if mid in serialized_map:
-                        try:
-                            current_registry.append(AgentProfile(**serialized_map[mid]))
-                        except (TypeError, KeyError):
-                            pass
-
-        # Verify all original participants are in the registry
-        registry_ids = {a.agent_id for a in current_registry}
-        assert "a1" in registry_ids
-        assert "a2" in registry_ids  # restored from continuation
-        assert "a3" in registry_ids  # restored from continuation
-        assert "a4" in registry_ids  # new agent still present
-        assert len(current_registry) == 4

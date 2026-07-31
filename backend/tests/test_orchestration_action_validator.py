@@ -1101,8 +1101,8 @@ def test_completion_validator_ignores_unknown_disposition_revision_metadata():
     assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
-def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
-    action = RoomSupervisorService._parse_legacy_action_as_planner_action(
+def test_provider_planner_parser_defaults_absent_outcome_policy_fields():
+    action = RoomSupervisorService._parse_provider_action_as_planner_action(
         {
             "action": "delegate",
             "reasoning": "Use the selected specialist.",
@@ -2089,7 +2089,7 @@ async def test_planner_adapter_rejects_completion_with_snapshot_only():
 
 
 @pytest.mark.parametrize(
-    ("legacy_action", "planner_action"),
+    ("provider_action", "planner_action"),
     [
         ("clarify", PlannerActionType.ASK_USER),
         ("done", PlannerActionType.COMPLETE),
@@ -2097,10 +2097,12 @@ async def test_planner_adapter_rejects_completion_with_snapshot_only():
         ("synthesize", PlannerActionType.COMPLETE),
     ],
 )
-def test_v2_adapter_maps_legacy_action_names(legacy_action, planner_action):
-    action = RoomSupervisorService._parse_legacy_action_as_planner_action(
+def test_orchestration_adapter_maps_provider_action_aliases(
+    provider_action, planner_action
+):
+    action = RoomSupervisorService._parse_provider_action_as_planner_action(
         {
-            "action": legacy_action,
+            "action": provider_action,
             "reasoning": "test",
             "targets": [
                 {
@@ -2126,9 +2128,9 @@ def test_v2_adapter_maps_legacy_action_names(legacy_action, planner_action):
     assert action.targets[0].task == "do work"
 
 
-def test_v2_adapter_unknown_action_raises():
+def test_orchestration_adapter_unknown_action_raises():
     with pytest.raises(ValueError, match="unknown planner action"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "mystery",
                 "reasoning": "test",
@@ -2136,18 +2138,18 @@ def test_v2_adapter_unknown_action_raises():
         )
 
 
-def test_v2_adapter_missing_action_raises():
+def test_orchestration_adapter_missing_action_raises():
     with pytest.raises(ValueError, match="action"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "reasoning": "test",
             }
         )
 
 
-def test_v2_adapter_rejects_non_list_targets_when_present():
+def test_orchestration_adapter_rejects_non_list_targets_when_present():
     with pytest.raises(ValueError, match="targets"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -2156,9 +2158,9 @@ def test_v2_adapter_rejects_non_list_targets_when_present():
         )
 
 
-def test_v2_adapter_rejects_non_object_target():
+def test_orchestration_adapter_rejects_non_object_target():
     with pytest.raises(ValueError, match="target"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -2167,9 +2169,9 @@ def test_v2_adapter_rejects_non_object_target():
         )
 
 
-def test_v2_adapter_rejects_delegate_target_missing_agent_id():
+def test_orchestration_adapter_rejects_delegate_target_missing_agent_id():
     with pytest.raises(ValueError, match="agent_id"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -2184,7 +2186,9 @@ def test_v2_adapter_rejects_delegate_target_missing_agent_id():
 
 
 @pytest.mark.parametrize("task_value", [None, "", "  "])
-def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
+def test_orchestration_adapter_rejects_delegate_target_missing_or_empty_task(
+    task_value,
+):
     target = {
         "agent_id": "agent-1",
         "agent_name": "Agent One",
@@ -2193,7 +2197,7 @@ def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
         target["task"] = task_value
 
     with pytest.raises(ValueError, match="task"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",

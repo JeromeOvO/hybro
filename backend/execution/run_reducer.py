@@ -1,4 +1,4 @@
-"""Pure run state transition validation (normative FSM subset for v1 orchestration runs)."""
+"""Pure run state transition validation (normative FSM subset for durable orchestration runs)."""
 
 from __future__ import annotations
 
