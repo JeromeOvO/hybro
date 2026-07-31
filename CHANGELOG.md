@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10](https://github.com/hybroai/hybro/compare/v0.2.9...v0.2.10) (2026-07-31)
+
+
+### Bug Fixes
+
+* acknowledge pending cancellation reconciliation ([8d1dbe6](https://github.com/hybroai/hybro/commit/8d1dbe63e3f1f74a1d8bfcfcc1a1ad280a064434))
+* make orchestration cancellation durable ([cf16761](https://github.com/hybroai/hybro/commit/cf167614aefb39b139e07af87ceded77b202f9f8))
+* recover orchestration before run creation ([26dbb19](https://github.com/hybroai/hybro/commit/26dbb197ed42265a1c6aeab73f50677062f1d730))
+
 ## [0.2.9](https://github.com/hybroai/hybro/compare/v0.2.8...v0.2.9) (2026-07-30)
 
 
