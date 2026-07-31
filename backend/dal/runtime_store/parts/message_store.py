@@ -242,6 +242,38 @@ class MessageRuntimeStorePart:
             logger.error("Failed to refresh processing claim", exc_info=True)
             return False
 
+    async def get_stale_claimed_orchestration_messages(
+        self,
+        orphan_threshold_minutes: int,
+        limit: int = 100,
+    ) -> list[RoomUserMessage]:
+        threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
+        try:
+            docs = await self._room_user_messages.find(
+                {
+                    "extend_info.orchestration": True,
+                    "$or": [
+                        {"processing_claimed_at": {"$lt": threshold}},
+                        {
+                            "processing_claimed_at": {
+                                "$type": "string",
+                                "$lt": _legacy_claim_threshold_text(threshold),
+                            }
+                        },
+                    ],
+                },
+                sort=[("processing_claimed_at", 1), ("message_id", 1)],
+                limit=limit,
+            )
+            messages = [_safe_parse_user_message(doc) for doc in docs]
+            return [message for message in messages if message is not None]
+        except Exception:
+            logger.error(
+                "Failed to get stale claimed orchestration messages",
+                exc_info=True,
+            )
+            return []
+
     async def turn_exists(self, room_id: str, turn_id: str) -> bool:
         try:
             user = await self._room_user_messages.find_one(

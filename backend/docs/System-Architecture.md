@@ -415,7 +415,10 @@ versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
 Durable run-store queries and the stale-task checker can claim and resume stale
-runs after process interruption. A processing-claim heartbeat prevents recovery
+runs after process interruption. The checker also recovers stale claimed
+Supervisor envelopes that were interrupted before durable run creation; the
+canonical entry point then reclaims the message and creates the run normally. A
+processing-claim heartbeat prevents recovery
 from preempting live turns, optimistic write conflicts exit cleanly for the
 winning writer to continue, and deterministic supervisor HITL artifacts can
 finish materializing from an `INGESTING` checkpoint without re-planning.

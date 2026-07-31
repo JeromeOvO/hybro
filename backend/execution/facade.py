@@ -403,7 +403,6 @@ class ExecutionFacade:
         self._orchestration_run_store = orchestration_run_store
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
-        self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
 
     async def _reject_if_hitl_pending(
         self,
@@ -613,9 +612,6 @@ class ExecutionFacade:
                     orchestration_request
                 ),
                 name=f"execution-orchestrate-{ack.message_id}",
-                room_id=request.room_id,
-                message_id=ack.message_id,
-                client_request_id=request.client_request_id,
             )
         await task
 
@@ -637,9 +633,6 @@ class ExecutionFacade:
             return self._spawn_orchestration(
                 self._room_message_center.process_room_user_message(request),
                 name=f"execution-recovery-{reason}-{message_id}",
-                room_id=request.room_id,
-                message_id=message_id,
-                client_request_id=request.client_request_id,
             )
 
     def _spawn_orchestration(
@@ -647,21 +640,12 @@ class ExecutionFacade:
         coro,
         *,
         name: str,
-        room_id: str | None = None,
-        message_id: str | None = None,
-        client_request_id: str | None = None,
     ) -> asyncio.Task[Any]:
         task = self._task_factory(coro, name=name)
         self._inflight.add(task)
-        self._inflight_metadata[task] = {
-            "room_id": room_id,
-            "message_id": message_id,
-            "client_request_id": client_request_id,
-        }
 
         def _on_done(done: asyncio.Task) -> None:
             self._inflight.discard(done)
-            self._inflight_metadata.pop(done, None)
             if done.cancelled():
                 return
             exc = done.exception()

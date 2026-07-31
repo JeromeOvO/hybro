@@ -273,6 +273,36 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
 
 
 @pytest.mark.asyncio
+async def test_graceful_shutdown_while_waiting_for_room_lock_leaves_claim_for_recovery():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="user-msg-1",
+        is_recovery=False,
+    )
+    rmc.message_writer = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(
+        side_effect=asyncio.CancelledError(GRACEFUL_SHUTDOWN_CANCEL_REASON)
+    )
+    rmc._emit_processing_status = AsyncMock()
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await rmc.process_room_user_message(request)
+
+    assert exc_info.value.args == (GRACEFUL_SHUTDOWN_CANCEL_REASON,)
+    rmc.message_writer.claim_user_message_for_processing.assert_awaited_once_with(
+        "user-msg-1"
+    )
+    rmc.message_writer.refresh_processing_claim.assert_not_awaited()
+    rmc._emit_processing_status.assert_not_awaited()
+    rmc._notify_all_non_terminal_tasks_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_room_user_message_cancelled_error_emits_canceled_and_reraises():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     request = SimpleNamespace(

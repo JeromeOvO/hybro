@@ -1131,9 +1131,6 @@ async def test_cancel_inflight_tasks_interrupts_without_public_cancellation():
     task = facade._spawn_orchestration(
         wait_forever(),
         name="execution-test",
-        room_id="room-1",
-        message_id="msg-1",
-        client_request_id="cr-1",
     )
     await asyncio.sleep(0)
 
@@ -1142,7 +1139,6 @@ async def test_cancel_inflight_tasks_interrupts_without_public_cancellation():
     assert marker == ["cleanup"]
     assert cancellation_reasons == [(GRACEFUL_SHUTDOWN_CANCEL_REASON,)]
     assert facade._inflight == set()
-    assert facade._inflight_metadata == {}
     deps["run_lifecycle"].record_processing_status.assert_not_awaited()
 
 
@@ -1175,8 +1171,6 @@ async def test_shutdown_interruption_remains_recoverable_after_restart():
     facade._spawn_orchestration(
         wait_forever(),
         name="execution-test",
-        room_id="room-1",
-        message_id="msg-1",
     )
     await asyncio.sleep(0)
     assert await facade.cancel_inflight_tasks() == 1
@@ -1237,11 +1231,6 @@ async def test_cancel_inflight_tasks_does_not_mark_task_that_completes_during_sh
     task = asyncio.create_task(completes_normally(), name="execution-test")
     await task
     facade._inflight.add(task)
-    facade._inflight_metadata[task] = {
-        "room_id": "room-1",
-        "message_id": "msg-1",
-        "client_request_id": "cr-1",
-    }
 
     assert await facade.cancel_inflight_tasks() == 0
     assert task.done()

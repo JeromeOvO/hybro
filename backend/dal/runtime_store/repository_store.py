@@ -824,6 +824,16 @@ class RuntimeRepositoryStore:
     async def refresh_processing_claim(self, message_id: str) -> bool:
         return await self._message_delegate().refresh_processing_claim(message_id)
 
+    async def get_stale_claimed_orchestration_messages(
+        self,
+        orphan_threshold_minutes: int,
+        limit: int = 100,
+    ) -> list[RuntimeRoomUserMessage]:
+        return await self._message_delegate().get_stale_claimed_orchestration_messages(
+            orphan_threshold_minutes,
+            limit,
+        )
+
     async def turn_exists(self, room_id: str, turn_id: str) -> bool:
         return await self._message_delegate().turn_exists(room_id, turn_id)
 

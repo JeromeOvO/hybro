@@ -638,6 +638,7 @@ class RoomMessageCenter:
         """
         owner = uuid4().hex
         use_distributed = self._room_distributed_lock is not None
+        distributed_acquired = False
 
         loop = asyncio.get_event_loop()
         t0 = loop.time()
@@ -652,6 +653,7 @@ class RoomMessageCenter:
                     room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS
                 )
                 if result is True:
+                    distributed_acquired = True
                     if elapsed > 1.0:
                         logger.info(
                             "Distributed lock acquired for room %s (owner=%s, waited=%.1fs, ttl=%ds)",
@@ -699,9 +701,13 @@ class RoomMessageCenter:
             remaining = max(0.1, timeout - elapsed)
             await asyncio.wait_for(local_lock.acquire(), timeout=remaining)
         except TimeoutError:
-            if use_distributed:
+            if distributed_acquired:
                 await self._release_distributed_lock(room_id, owner)
             return None
+        except asyncio.CancelledError:
+            if distributed_acquired:
+                await asyncio.shield(self._release_distributed_lock(room_id, owner))
+            raise
 
         return owner
 

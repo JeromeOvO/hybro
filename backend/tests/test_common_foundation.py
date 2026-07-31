@@ -873,6 +873,7 @@ def test_protocol_methods_match_design_doc():
             "get_room_agent_messages_by_room_id",
             "get_room_user_message_by_message_id",
             "get_room_user_messages_by_room_id",
+            "get_stale_claimed_orchestration_messages",
             "refresh_processing_claim",
             "reset_last_notified_state",
             "turn_exists",

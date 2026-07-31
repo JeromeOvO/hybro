@@ -343,7 +343,9 @@ class StaleTaskChecker:
         for msg in expired_messages:
             await self._auto_fail_expired_task(msg)
 
-        # 3. Recover orphaned agent messages (never processed)
+        # 3. Recover claimed supervisor envelopes interrupted before durable
+        #    run creation, then recover orphaned pre-created agent messages.
+        await self._recover_claimed_orchestration_envelopes()
         await self._recover_orphaned_messages()
 
         # 4. Clean up stuck room processing status
@@ -864,6 +866,78 @@ class StaleTaskChecker:
                 )
         except Exception as e:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
+
+    async def _recover_claimed_orchestration_envelopes(self) -> None:
+        """Recover supervisor requests interrupted before durable run creation."""
+        if self._execution_recovery_deps is None:
+            logger.warning(
+                "Orchestration envelope recovery skipped: Execution recovery "
+                "dependencies are not bound"
+            )
+            return
+        if self._orchestration_run_recovery_deps is None:
+            logger.warning(
+                "Orchestration envelope recovery skipped: run-store dependencies "
+                "are not bound"
+            )
+            return
+
+        try:
+            messages = await self._store.get_stale_claimed_orchestration_messages(
+                self.orphan_threshold_minutes
+            )
+        except Exception:
+            logger.error(
+                "orchestration_envelope_recovery_scan_failed",
+                exc_info=True,
+            )
+            return
+
+        run_store = self._orchestration_run_recovery_deps.orchestration_run_store
+        for message in messages:
+            message_id = getattr(message, "message_id", None)
+            room_id = getattr(message, "room_id", None)
+            if not isinstance(message_id, str) or not message_id:
+                continue
+            if not isinstance(room_id, str) or not room_id:
+                continue
+            recovery_slot_acquired = False
+            try:
+                if await self._store.is_message_cancelled(message_id):
+                    continue
+                existing = await run_store.get_latest_by_user_message_id(message_id)
+                if existing is not None:
+                    continue
+                if self._recovery_semaphore.locked():
+                    logger.info(
+                        "Recovery slots full, deferring remaining orchestration "
+                        "envelopes"
+                    )
+                    break
+                await self._recovery_semaphore.acquire()
+                recovery_slot_acquired = True
+                task = self._execution_recovery_deps.schedule_recovery(
+                    OrchestrationRequest(
+                        room_id=room_id,
+                        room_user_message_id=message_id,
+                        room_related_message_id="",
+                        is_recovery=True,
+                    ),
+                    reason="orchestration-envelope",
+                )
+                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
+                recovery_slot_acquired = False
+            except Exception as exc:
+                if recovery_slot_acquired:
+                    self._recovery_semaphore.release()
+                logger.error(
+                    "orchestration_envelope_recovery_schedule_failed",
+                    extra={
+                        "room_id": room_id,
+                        "user_message_id": message_id,
+                        **safe_exception_metadata(exc),
+                    },
+                )
 
     async def _recover_orphaned_messages(self) -> None:
         """

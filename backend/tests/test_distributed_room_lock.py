@@ -192,6 +192,26 @@ class TestAcquireRoomLock:
 
         local_lock.release()
 
+    @pytest.mark.asyncio
+    async def test_cancellation_while_waiting_for_local_lock_releases_distributed(
+        self,
+    ):
+        redis = _make_redis()
+        rmc = _make_rmc(redis=redis)
+        local_lock = rmc._get_local_lock("room-1")
+        await local_lock.acquire()
+
+        acquire_task = asyncio.create_task(rmc._acquire_room_lock("room-1", timeout=5))
+        await asyncio.sleep(0)
+        redis._client.set.assert_awaited_once()
+
+        acquire_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await acquire_task
+
+        redis._client.eval.assert_awaited_once()
+        local_lock.release()
+
 
 class TestConcurrentLocalLock:
     @pytest.mark.asyncio
