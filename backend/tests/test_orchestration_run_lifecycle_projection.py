@@ -372,6 +372,44 @@ async def test_project_run_state_causation_replay_does_not_advance_seq(
 
 
 @pytest.mark.asyncio
+async def test_terminal_projection_repairs_missing_event_on_terminal_head():
+    from execution.run_command_handler import RunCommandHandler
+
+    run_repo = InMemoryRunRepository(
+        [
+            {
+                "run_id": "public-run-1",
+                "room_id": "room-1",
+                "trigger_message_id": "trigger-msg-1",
+                "state": RunState.COMPLETED.value,
+                "seq": 4,
+            }
+        ]
+    )
+    event_repo = InMemoryRunEventRepository()
+    handler = RunCommandHandler(
+        run_repository=run_repo,
+        run_event_repository=event_repo,
+    )
+
+    repaired = await handler.project_run_state(
+        room_id="room-1",
+        run_id="public-run-1",
+        trigger_message_id="trigger-msg-1",
+        target_state=RunState.COMPLETED,
+        terminal_reason="done",
+        causation_id="orchestration-terminal-repair:public-run-1:completed",
+    )
+
+    assert repaired is not None
+    assert repaired["type"] == RunEventType.RUN_COMPLETED.value
+    assert repaired["seq"] == 5
+    assert run_repo.docs["public-run-1"]["state"] == RunState.COMPLETED.value
+    assert run_repo.docs["public-run-1"]["seq"] == 5
+    assert len(event_repo.events) == 1
+
+
+@pytest.mark.asyncio
 async def test_project_run_state_terminal_projection_keeps_head_consistent(
     monkeypatch,
 ):

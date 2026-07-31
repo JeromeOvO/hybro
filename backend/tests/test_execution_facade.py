@@ -31,6 +31,7 @@ from models.orchestration import (
     PendingAgentContinuation,
 )
 from models.response import RoomCenterUserMessageResponse
+from models.run import RunState
 
 
 class RecordingTaskFactory:
@@ -67,6 +68,7 @@ def _make_facade(**overrides):
     run_lifecycle = SimpleNamespace(
         heal_diverged_runs=AsyncMock(return_value=2),
         record_processing_status=AsyncMock(return_value=None),
+        project_run_state=AsyncMock(return_value={"event_id": "cancel-event"}),
     )
     run_reader = SimpleNamespace(
         get_run=AsyncMock(return_value=None),
@@ -76,7 +78,10 @@ def _make_facade(**overrides):
         cancel_message_and_broadcast=AsyncMock(),
         clear_cancellation=MagicMock(),
     )
-    cancellation_store = SimpleNamespace(cancel_message=AsyncMock(return_value=True))
+    cancellation_store = SimpleNamespace(
+        cancel_message=AsyncMock(return_value=True),
+        mark_cancellation_reconciled=AsyncMock(return_value=True),
+    )
     hitl_message_cancellation = SimpleNamespace(
         cancel_requests_for_message=AsyncMock(),
     )
@@ -971,6 +976,7 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
 
     async def record(*args, **kwargs):
         order.append("record")
+        return {"event_id": "cancel-event"}
 
     async def cleanup(**kwargs):
         order.append("cleanup")
@@ -980,7 +986,7 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
         "hitl_message_cancellation"
     ].cancel_requests_for_message.side_effect = cancel_hitl
     deps["cancellation_store"].cancel_message.side_effect = persist
-    deps["run_lifecycle"].record_processing_status.side_effect = record
+    deps["run_lifecycle"].project_run_state.side_effect = record
     deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.side_effect = cleanup
 
     assert await facade.cancel(
@@ -989,7 +995,20 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
         requested_by_user_id="user-1",
     )
 
-    assert order == [("persist", "user-1"), "broadcast", "hitl", "record", "cleanup"]
+    assert order == [
+        ("persist", "user-1"),
+        "record",
+        "broadcast",
+        "hitl",
+        "cleanup",
+        "cleanup",
+    ]
+    deps[
+        "room_center"
+    ].update_user_message_orchestration_status.assert_awaited_once_with(
+        "msg-1",
+        "canceled",
+    )
     deps["cancellation_state"].clear_cancellation.assert_not_called()
 
 
@@ -1050,6 +1069,12 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
         if event.type == OrchestrationEventType.RUN_TERMINAL
     ]
     assert len(terminal_events) == 1
+    assert deps["cancellation_store"].cancel_message.await_count == 2
+    assert deps["cancellation_state"].cancel_message_and_broadcast.await_count == 2
+    assert (
+        deps["hitl_message_cancellation"].cancel_requests_for_message.await_count == 2
+    )
+    assert deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -1078,8 +1103,105 @@ async def test_cancel_does_not_rewrite_budget_exhausted_orchestration():
     assert saved is not None
     assert saved.status == OrchestrationStatus.BUDGET_EXHAUSTED
     assert saved.terminal_reason == "step budget exhausted"
-    deps["cancellation_store"].cancel_message.assert_not_awaited()
+    deps[
+        "room_center"
+    ].update_user_message_orchestration_status.assert_awaited_once_with(
+        "msg-1",
+        "budget_exhausted",
+    )
+    deps["cancellation_store"].cancel_message.assert_awaited_once_with(
+        "msg-1",
+        "user-1",
+    )
+    deps["cancellation_store"].mark_cancellation_reconciled.assert_awaited_once_with(
+        "msg-1"
+    )
     deps["cancellation_state"].cancel_message_and_broadcast.assert_not_awaited()
+    deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.assert_not_awaited()
+    deps["run_lifecycle"].project_run_state.assert_awaited_once_with(
+        room_id="room-1",
+        run_id="msg-1",
+        trigger_message_id="msg-1",
+        target_state=RunState.FAILED,
+        terminal_reason=None,
+        causation_id=("orchestration-terminal-repair:msg-1:budget_exhausted"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_rechecks_canonical_state_after_marker_persistence():
+    dispatching = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Get quote",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.DISPATCHING,
+    )
+    completed = dispatching.model_copy(update={"status": OrchestrationStatus.COMPLETED})
+    current = dispatching
+
+    async def get_latest(_message_id):
+        return current
+
+    run_store = SimpleNamespace(
+        get_latest_by_user_message_id=AsyncMock(side_effect=get_latest),
+        save_state=AsyncMock(side_effect=OrchestrationStoreConflict("race")),
+    )
+    facade, deps = _make_facade(orchestration_run_store=run_store)
+
+    async def persist_marker(_message_id, _user_id):
+        nonlocal current
+        current = completed
+        return True
+
+    deps["cancellation_store"].cancel_message.side_effect = persist_marker
+
+    assert await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    deps[
+        "room_center"
+    ].update_user_message_orchestration_status.assert_awaited_once_with(
+        "msg-1",
+        "completed",
+    )
+    deps["cancellation_state"].cancel_message_and_broadcast.assert_not_awaited()
+    deps["hitl_message_cancellation"].cancel_requests_for_message.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancel_conflict_does_not_report_success_for_nonterminal_run():
+    dispatching = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Get quote",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.DISPATCHING,
+    )
+    run_store = SimpleNamespace(
+        get_latest_by_user_message_id=AsyncMock(return_value=dispatching),
+        save_state=AsyncMock(side_effect=OrchestrationStoreConflict("race")),
+    )
+    facade, deps = _make_facade(orchestration_run_store=run_store)
+
+    assert not await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    deps["cancellation_store"].cancel_message.assert_awaited_once()
+    deps["cancellation_state"].cancel_message_and_broadcast.assert_awaited_once_with(
+        "msg-1"
+    )
+    deps["hitl_message_cancellation"].cancel_requests_for_message.assert_not_awaited()
     deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.assert_not_awaited()
 
 

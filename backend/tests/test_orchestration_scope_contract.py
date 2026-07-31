@@ -165,12 +165,18 @@ def _execution_facade_for_scope_test(room_center):
             cancel_request=AsyncMock(return_value=None),
         ),
         run_lifecycle=SimpleNamespace(record_processing_status=AsyncMock()),
-        run_reader=SimpleNamespace(get_runs_for_room=AsyncMock(return_value=[])),
+        run_reader=SimpleNamespace(
+            get_run=AsyncMock(return_value=None),
+            get_runs_for_room=AsyncMock(return_value=[]),
+        ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
             clear_cancellation=MagicMock(),
         ),
-        cancellation_store=SimpleNamespace(cancel_message=AsyncMock(return_value=True)),
+        cancellation_store=SimpleNamespace(
+            cancel_message=AsyncMock(return_value=True),
+            mark_cancellation_reconciled=AsyncMock(return_value=True),
+        ),
         hitl_message_cancellation=SimpleNamespace(
             cancel_requests_for_message=AsyncMock(),
         ),

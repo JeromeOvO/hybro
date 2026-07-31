@@ -48,6 +48,14 @@ def repository_text_index() -> dict[Path, str]:
     return {path: path.read_text(errors="ignore") for path in paths}
 
 
+def test_production_dispatch_cancellation_fence_uses_task_store(
+    repository_text_index: dict[Path, str],
+) -> None:
+    container_text = repository_text_index[BACKEND_ROOT / "container.py"]
+    assert "task_store.is_message_cancelled_strict" in container_text
+    assert "message_store.is_message_cancelled_strict" not in container_text
+
+
 def test_orchestration_has_no_rollout_selectors_or_external_schema_version(
     repository_text_index,
 ):

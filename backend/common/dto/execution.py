@@ -71,6 +71,12 @@ class ExecutionAck(FrozenDTO):
     should_start_orchestration: bool = True
 
 
+class CancellationAck(FrozenDTO):
+    status: str
+    cancellation_applied: bool
+    reconciled: bool
+
+
 class RunInfo(FrozenDTO):
     run_id: str
     room_id: str

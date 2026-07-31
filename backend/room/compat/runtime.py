@@ -64,6 +64,7 @@ from execution.task_tracking import (
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import MemoryContent, RoomMemory
+from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -4472,8 +4473,17 @@ class RoomServices:
         if user_message is None:
             return False
         if not isinstance(user_message.extend_info, dict):
-            user_message.extend_info = {}
+            return False
+        if not (
+            user_message.extend_info.get("orchestration") is True
+            or user_message.extend_info.get("orchestration_run_id")
+        ):
+            return True
         user_message.extend_info["orchestration_status"] = status
+        if status in {
+            terminal_status.value for terminal_status in TERMINAL_ORCHESTRATION_STATUSES
+        }:
+            user_message.processing_claimed_at = None
         return bool(
             await self._store.update_room_user_message_by_message_id(
                 message_id,

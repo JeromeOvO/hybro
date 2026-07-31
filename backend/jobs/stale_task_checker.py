@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -37,9 +37,16 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.dispatch.agent_event import AgentEvent
+from execution.orchestration.cancellation_finalizer import (
+    CancellationFinalizationResult,
+)
 from execution.orchestration.run_store import OrchestrationStoreConflict
 from jobs.constants import STALE_TASK_CHECKER
-from models.orchestration import OrchestrationEventType, OrchestrationRunEvent
+from models.orchestration import (
+    TERMINAL_ORCHESTRATION_STATUSES,
+    OrchestrationEventType,
+    OrchestrationRunEvent,
+)
 from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
 
@@ -87,6 +94,21 @@ class StaleRecoveryDeps:
 @dataclass(frozen=True)
 class StaleOrchestrationRunRecoveryDeps:
     orchestration_run_store: Any
+
+
+class CancellationFinalizeCallable(Protocol):
+    async def __call__(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        settle_no_run: bool = False,
+    ) -> CancellationFinalizationResult: ...
+
+
+@dataclass(frozen=True)
+class StaleCancellationFinalizerDeps:
+    finalize: CancellationFinalizeCallable
 
 
 @dataclass(frozen=True)
@@ -179,12 +201,19 @@ class StaleTaskChecker:
         self._orchestration_run_recovery_deps: (
             StaleOrchestrationRunRecoveryDeps | None
         ) = None
+        self._cancellation_finalizer_deps: StaleCancellationFinalizerDeps | None = None
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
         self._terminal_event_handler: Callable[[AgentEvent], Awaitable[None]] | None = (
             None
         )
+
+    def set_cancellation_finalizer_deps(
+        self,
+        deps: StaleCancellationFinalizerDeps,
+    ) -> None:
+        self._cancellation_finalizer_deps = deps
 
     def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a leader gate instance for distributed leader gating."""
@@ -314,6 +343,9 @@ class StaleTaskChecker:
 
         This is called periodically by the background loop.
         """
+        # Durable user cancellation wins before any polling, expiry, or recovery.
+        await self._terminalize_cancellation_marked_runs()
+
         # Get non-terminal state values for queries
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
 
@@ -343,8 +375,7 @@ class StaleTaskChecker:
         for msg in expired_messages:
             await self._auto_fail_expired_task(msg)
 
-        # 3. Recover claimed supervisor envelopes interrupted before durable
-        #    run creation, then recover orphaned pre-created agent messages.
+        # 3. Recover interrupted orchestration and queue work.
         await self._recover_claimed_orchestration_envelopes()
         await self._recover_orphaned_messages()
 
@@ -385,8 +416,7 @@ class StaleTaskChecker:
         #    This handles mid-loop crashes where the server restarted while
         #    SupervisorExecutor.run() was in-flight.
 
-        # 6b. Recover orchestration durable orchestration runs that no longer keep a full
-        # supervisor trajectory on the user message.
+        # 6b. Recover stale durable orchestration runs.
         await self._recover_stuck_orchestration_runs()
 
         # 7. Recover HITL requests stuck in "processing" (worker crashed
@@ -461,6 +491,13 @@ class StaleTaskChecker:
                     exc_info=True,
                 )
 
+    async def _message_or_parent_cancelled(self, msg: RoomAgentMessage) -> bool:
+        if await self._is_message_cancelled_for_recovery(msg.message_id):
+            return True
+        if msg.related_message_id:
+            return await self._is_message_cancelled_for_recovery(msg.related_message_id)
+        return False
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -511,6 +548,15 @@ class StaleTaskChecker:
             )
             return
 
+        if await self._message_or_parent_cancelled(msg):
+            await self._notify_task_update(
+                message_id=message_id,
+                state=CommonTaskState.CANCELED,
+                room_id=msg.room_id,
+                user_id=msg.user_id or "",
+            )
+            return
+
         agent_task_id = task.id
         created_at = (
             ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
@@ -546,9 +592,9 @@ class StaleTaskChecker:
 
         try:
             # Check if the message was cancelled while the agent was processing
-            is_cancelled = await self._store.is_message_cancelled(message_id)
+            is_cancelled = await self._is_message_cancelled_for_recovery(message_id)
             if not is_cancelled and msg.related_message_id:
-                is_cancelled = await self._store.is_message_cancelled(
+                is_cancelled = await self._is_message_cancelled_for_recovery(
                     msg.related_message_id
                 )
             if is_cancelled:
@@ -606,9 +652,9 @@ class StaleTaskChecker:
                 self._terminal_event_handler is not None
             ):
                 terminal_state = current_task.status.state
-                re_cancelled = await self._store.is_message_cancelled(message_id)
+                re_cancelled = await self._is_message_cancelled_for_recovery(message_id)
                 if not re_cancelled and msg.related_message_id:
-                    re_cancelled = await self._store.is_message_cancelled(
+                    re_cancelled = await self._is_message_cancelled_for_recovery(
                         msg.related_message_id
                     )
                 if re_cancelled or terminal_state == CommonTaskState.CANCELED:
@@ -648,9 +694,9 @@ class StaleTaskChecker:
             new_state = current_task.status.state
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
                 # Re-check cancellation — user may have cancelled between poll and now
-                re_cancelled = await self._store.is_message_cancelled(message_id)
+                re_cancelled = await self._is_message_cancelled_for_recovery(message_id)
                 if not re_cancelled and msg.related_message_id:
-                    re_cancelled = await self._store.is_message_cancelled(
+                    re_cancelled = await self._is_message_cancelled_for_recovery(
                         msg.related_message_id
                     )
                 if re_cancelled:
@@ -699,6 +745,8 @@ class StaleTaskChecker:
         """Auto-fail a task that has been pending too long."""
         message_id = msg.message_id
         if not msg.has_task_tracking:
+            return
+        if await self._message_or_parent_cancelled(msg):
             return
 
         task_state = (
@@ -750,6 +798,8 @@ class StaleTaskChecker:
         reached them, and orphan recovery did not re-trigger them).
         """
         message_id = msg.message_id
+        if await self._message_or_parent_cancelled(msg):
+            return
         created_at = msg.message_created_at
         age_hours = (
             (utcnow() - ensure_utc(created_at)).total_seconds() / 3600
@@ -867,6 +917,74 @@ class StaleTaskChecker:
         except Exception as e:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
 
+    async def _is_message_cancelled_for_recovery(self, message_id: str) -> bool:
+        strict_reader = getattr(
+            self._store,
+            "is_message_cancelled_strict",
+            self._store.is_message_cancelled,
+        )
+        return await strict_reader(message_id)
+
+    def _release_recovery_slot(self, _task: asyncio.Task) -> None:
+        self._recovery_semaphore.release()
+
+    async def _schedule_recovery_with_slot(
+        self,
+        request: OrchestrationRequest,
+        *,
+        reason: str,
+    ) -> bool:
+        """Schedule recovery with exception-safe semaphore ownership."""
+        if self._execution_recovery_deps is None:
+            raise RuntimeError("Execution recovery dependencies are not bound")
+        if self._recovery_semaphore.locked():
+            return False
+
+        await self._recovery_semaphore.acquire()
+        try:
+            task = self._execution_recovery_deps.schedule_recovery(
+                request,
+                reason=reason,
+            )
+        except Exception:
+            self._recovery_semaphore.release()
+            raise
+        task.add_done_callback(self._release_recovery_slot)
+        return True
+
+    async def _repair_orchestration_envelope_from_run(
+        self,
+        message: Any,
+        state: Any,
+    ) -> None:
+        """Repair stale message projection from the canonical durable run."""
+        extend_info = getattr(message, "extend_info", None)
+        if not isinstance(extend_info, dict):
+            return
+        status = getattr(state, "status", None)
+        status_value = getattr(status, "value", status)
+        if not isinstance(status_value, str) or not status_value:
+            return
+
+        terminal = status in TERMINAL_ORCHESTRATION_STATUSES
+        expected_status = extend_info.get("orchestration_status")
+        if not isinstance(expected_status, str) or not expected_status:
+            return
+        if expected_status == status_value and (
+            not terminal or getattr(message, "processing_claimed_at", None) is None
+        ):
+            return
+        updated = await self._store.update_orchestration_projection_if_status(
+            message.message_id,
+            expected_status=expected_status,
+            status=status_value,
+            clear_processing_claim=terminal,
+        )
+        if updated:
+            extend_info["orchestration_status"] = status_value
+            if terminal:
+                message.processing_claimed_at = None
+
     async def _recover_claimed_orchestration_envelopes(self) -> None:
         """Recover supervisor requests interrupted before durable run creation."""
         if self._execution_recovery_deps is None:
@@ -882,62 +1000,83 @@ class StaleTaskChecker:
             )
             return
 
-        try:
-            messages = await self._store.get_stale_claimed_orchestration_messages(
-                self.orphan_threshold_minutes
-            )
-        except Exception:
-            logger.error(
-                "orchestration_envelope_recovery_scan_failed",
-                exc_info=True,
-            )
-            return
-
         run_store = self._orchestration_run_recovery_deps.orchestration_run_store
-        for message in messages:
-            message_id = getattr(message, "message_id", None)
-            room_id = getattr(message, "room_id", None)
-            if not isinstance(message_id, str) or not message_id:
-                continue
-            if not isinstance(room_id, str) or not room_id:
-                continue
-            recovery_slot_acquired = False
+        batch_size = 100
+        after_message_id: str | None = None
+        while True:
             try:
-                if await self._store.is_message_cancelled(message_id):
-                    continue
-                existing = await run_store.get_latest_by_user_message_id(message_id)
-                if existing is not None:
-                    continue
-                if self._recovery_semaphore.locked():
-                    logger.info(
-                        "Recovery slots full, deferring remaining orchestration "
-                        "envelopes"
-                    )
-                    break
-                await self._recovery_semaphore.acquire()
-                recovery_slot_acquired = True
-                task = self._execution_recovery_deps.schedule_recovery(
-                    OrchestrationRequest(
-                        room_id=room_id,
-                        room_user_message_id=message_id,
-                        room_related_message_id="",
-                        is_recovery=True,
-                    ),
-                    reason="orchestration-envelope",
+                messages = await self._store.get_stale_claimed_orchestration_messages(
+                    self.orphan_threshold_minutes,
+                    limit=batch_size,
+                    after_message_id=after_message_id,
                 )
-                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
-                recovery_slot_acquired = False
-            except Exception as exc:
-                if recovery_slot_acquired:
-                    self._recovery_semaphore.release()
+            except Exception:
                 logger.error(
-                    "orchestration_envelope_recovery_schedule_failed",
-                    extra={
-                        "room_id": room_id,
-                        "user_message_id": message_id,
-                        **safe_exception_metadata(exc),
-                    },
+                    "orchestration_envelope_recovery_scan_failed",
+                    exc_info=True,
                 )
+                return
+            if not messages:
+                return
+
+            for message in messages:
+                message_id = getattr(message, "message_id", None)
+                room_id = getattr(message, "room_id", None)
+                if not isinstance(message_id, str) or not message_id:
+                    continue
+                if not isinstance(room_id, str) or not room_id:
+                    continue
+                try:
+                    existing = await run_store.get_latest_by_user_message_id(message_id)
+                    if existing is not None:
+                        await self._repair_orchestration_envelope_from_run(
+                            message,
+                            existing,
+                        )
+                        continue
+                    if await self._is_message_cancelled_for_recovery(message_id):
+                        extend_info = getattr(message, "extend_info", None)
+                        expected_status = (
+                            extend_info.get("orchestration_status")
+                            if isinstance(extend_info, dict)
+                            else None
+                        )
+                        if isinstance(expected_status, str) and expected_status:
+                            await self._store.update_orchestration_projection_if_status(
+                                message_id,
+                                expected_status=expected_status,
+                                status="canceled",
+                                clear_processing_claim=True,
+                            )
+                        continue
+                    scheduled = await self._schedule_recovery_with_slot(
+                        OrchestrationRequest(
+                            room_id=room_id,
+                            room_user_message_id=message_id,
+                            room_related_message_id="",
+                            is_recovery=True,
+                        ),
+                        reason="orchestration-envelope",
+                    )
+                    if not scheduled:
+                        logger.info(
+                            "Recovery slots full, deferring remaining orchestration "
+                            "envelopes"
+                        )
+                        return
+                except Exception as exc:
+                    logger.error(
+                        "orchestration_envelope_recovery_schedule_failed",
+                        extra={
+                            "room_id": room_id,
+                            "user_message_id": message_id,
+                            **safe_exception_metadata(exc),
+                        },
+                    )
+
+            if len(messages) < batch_size:
+                return
+            after_message_id = messages[-1].message_id
 
     async def _recover_orphaned_messages(self) -> None:
         """
@@ -992,6 +1131,8 @@ class StaleTaskChecker:
 
         for user_message_id, room_id in user_messages_to_process.items():
             try:
+                if await self._is_message_cancelled_for_recovery(user_message_id):
+                    continue
                 logger.info(
                     f"Recovering orphaned messages for user message {user_message_id} in room {room_id}"
                 )
@@ -1006,17 +1147,16 @@ class StaleTaskChecker:
                 # Process in background with bounded concurrency (SDR 2.13).
                 # Non-blocking: if all slots are occupied, defer remaining
                 # to the next checker cycle so steps 4-7 aren't starved.
-                if self._recovery_semaphore.locked():
-                    logger.info(
-                        "Recovery slots full, deferring remaining orphan recoveries to next cycle"
-                    )
-                    break
-                await self._recovery_semaphore.acquire()
-                task = self._execution_recovery_deps.schedule_recovery(
+                scheduled = await self._schedule_recovery_with_slot(
                     request,
                     reason="orphan",
                 )
-                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
+                if not scheduled:
+                    logger.info(
+                        "Recovery slots full, deferring remaining orphan recoveries "
+                        "to next cycle"
+                    )
+                    break
 
             except Exception as exc:
                 logger.error(
@@ -1027,6 +1167,67 @@ class StaleTaskChecker:
                         **safe_exception_metadata(exc),
                     },
                 )
+
+    async def _terminalize_cancellation_marked_runs(self) -> None:
+        """Reconcile only pending markers through the shared finalizer."""
+        if self._cancellation_finalizer_deps is None:
+            logger.warning("Cancellation finalizer dependencies are not bound")
+            return
+        batch_size = 100
+        after_message_id: str | None = None
+        settle_cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
+        while True:
+            try:
+                markers = await self._store.list_pending_cancellation_markers(
+                    limit=batch_size,
+                    after_message_id=after_message_id,
+                )
+            except Exception:
+                logger.error(
+                    "orchestration_recovery: failed to scan cancellation markers",
+                    exc_info=True,
+                )
+                raise
+            if not markers:
+                return
+            for marker in markers:
+                message_id = marker.get("message_id")
+                if not isinstance(message_id, str) or not message_id:
+                    continue
+                try:
+                    strict_reader = getattr(
+                        self._store,
+                        "get_room_user_message_by_message_id_strict",
+                        self._store.get_room_user_message_by_message_id,
+                    )
+                    message = await strict_reader(message_id)
+                    room_id = getattr(message, "room_id", None)
+                    if not isinstance(room_id, str) or not room_id:
+                        await self._store.mark_cancellation_reconciled(message_id)
+                        continue
+                    canceled_at = marker.get("cancelled_at")
+                    if isinstance(canceled_at, str):
+                        canceled_at = datetime.fromisoformat(canceled_at)
+                    settle_no_run = (
+                        isinstance(canceled_at, datetime)
+                        and ensure_utc(canceled_at) <= settle_cutoff
+                    )
+                    await self._cancellation_finalizer_deps.finalize(
+                        room_id=room_id,
+                        message_id=message_id,
+                        settle_no_run=settle_no_run,
+                    )
+                except Exception:
+                    logger.warning(
+                        "orchestration_recovery: failed cancellation marker %s",
+                        message_id,
+                        exc_info=True,
+                    )
+            if len(markers) < batch_size:
+                return
+            after_message_id = markers[-1].get("message_id")
+            if not isinstance(after_message_id, str) or not after_message_id:
+                return
 
     async def _recover_stuck_orchestration_runs(self) -> None:
         """Recover stale durable orchestration runs.
@@ -1055,6 +1256,22 @@ class StaleTaskChecker:
         for state in states:
             if ensure_utc(state.updated_at) > cutoff:
                 continue
+            if await self._is_message_cancelled_for_recovery(state.user_message_id):
+                if self._cancellation_finalizer_deps is not None:
+                    try:
+                        await self._cancellation_finalizer_deps.finalize(
+                            room_id=state.room_id,
+                            message_id=state.user_message_id,
+                            settle_no_run=False,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "orchestration_recovery: cancellation finalization failed "
+                            "for %s",
+                            state.run_id,
+                            exc_info=True,
+                        )
+                continue
             if state.status.value == "awaiting_user":
                 logger.info(
                     "orchestration_recovery: skipping run %s — awaiting user input",
@@ -1066,12 +1283,6 @@ class StaleTaskChecker:
                     "Recovery slots full, deferring remaining orchestration recoveries"
                 )
                 break
-            if await self._store.is_message_cancelled(state.user_message_id):
-                logger.info(
-                    "orchestration_recovery: skipping run %s — cancelled by user",
-                    state.run_id,
-                )
-                continue
 
             get_user_message = getattr(
                 self._store,
@@ -1169,16 +1380,15 @@ class StaleTaskChecker:
                     room_related_message_id="",
                     is_recovery=True,
                 )
-                await self._recovery_semaphore.acquire()
-                try:
-                    task = self._execution_recovery_deps.schedule_recovery(
-                        request,
-                        reason="orchestration",
+                scheduled = await self._schedule_recovery_with_slot(
+                    request,
+                    reason="orchestration",
+                )
+                if not scheduled:
+                    logger.info(
+                        "Recovery slots full, deferring orchestration run %s",
+                        saved.run_id,
                     )
-                except Exception:
-                    self._recovery_semaphore.release()
-                    raise
-                task.add_done_callback(lambda _task: self._recovery_semaphore.release())
             except Exception as e:
                 logger.error(
                     "orchestration_recovery: failed to trigger recovery for %s: %s",

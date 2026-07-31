@@ -37,6 +37,10 @@ class RunQueryAdapter:
             return None
         return run_doc_to_run_info(doc) if doc else None
 
+    async def get_run_strict(self, run_id: str) -> RunInfo | None:
+        doc = await self._run_repository.find_one({"run_id": run_id})
+        return run_doc_to_run_info(doc) if doc else None
+
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
         try:
             docs = await self._run_repository.get_active_for_room(room_id)

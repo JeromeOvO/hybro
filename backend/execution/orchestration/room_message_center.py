@@ -1644,6 +1644,11 @@ class RoomMessageCenter:
             if not isinstance(user_message.extend_info, dict):
                 user_message.extend_info = {}
             user_message.extend_info["orchestration_status"] = orchestration_status
+            if (
+                result_run_state is not None
+                and result_run_state.status in TERMINAL_ORCHESTRATION_STATUSES
+            ):
+                user_message.processing_claimed_at = None
             if result_run_state is not None:
                 user_message.extend_info["orchestration_run_id"] = (
                     result_run_state.run_id

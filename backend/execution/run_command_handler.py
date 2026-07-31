@@ -491,7 +491,7 @@ class RunCommandHandler:
         )
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
-        if current_state in TERMINAL_RUN_STATES:
+        if current_state in TERMINAL_RUN_STATES and current_state != terminal_state:
             return None
 
         terminal_event_map = {
@@ -530,7 +530,8 @@ class RunCommandHandler:
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
 
         try:
-            ensure_transition_allowed(current_state, next_state)
+            if not (current_state == next_state and next_state in TERMINAL_RUN_STATES):
+                ensure_transition_allowed(current_state, next_state)
         except RunTransitionError:
             increment_counter(
                 "run_transition_errors_total",

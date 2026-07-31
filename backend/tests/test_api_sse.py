@@ -494,6 +494,59 @@ class TestCancelMessage:
         deps["execution_engine"].cancel.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_canceled_projection_retries_engine_side_effects(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        deps = patch_sse_deps
+        canceled_message = sample_user_message.model_copy(deep=True)
+        canceled_message.extend_info = {"orchestration_status": "canceled"}
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = canceled_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        result = await cancel_message(
+            canceled_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result["outcome"] == "canceled"
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=canceled_message.room_id,
+            message_id=canceled_message.message_id,
+            requested_by_user_id=mock_user.user_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_completion_winner_returns_already_terminal_outcome(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        from common.dto import CancellationAck
+
+        deps = patch_sse_deps
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = sample_user_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+        deps["execution_engine"].cancel.return_value = CancellationAck(
+            status="completed",
+            cancellation_applied=False,
+            reconciled=True,
+        )
+
+        result = await cancel_message(
+            sample_user_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result["status"] == "completed"
+        assert result["outcome"] == "already_terminal"
+
+    @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):
         """Should raise 404 when message doesn't exist."""
         mock_db_service.get_room_user_message_by_message_id.return_value = None

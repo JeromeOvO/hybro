@@ -445,6 +445,7 @@ class TestHITLFlow:
             return_value=mock_req.model_dump(mode="json")
         )
         mock_db.cas_update_hitl_request = AsyncMock(return_value=True)
+        mock_db.update_hitl_request = AsyncMock(return_value=True)
 
         mock_delivery = MagicMock()
         mock_delivery.emit = AsyncMock()
@@ -476,6 +477,7 @@ class TestHITLFlow:
             req_id,
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
+            cancellation_reconciled=False,
         )
 
     @pytest.mark.asyncio

@@ -53,6 +53,18 @@ class MessageRuntimeStorePart:
             logger.error("Failed to get room user message", exc_info=True)
             return None
 
+    async def get_room_user_message_by_message_id_strict(
+        self,
+        message_id: str,
+    ) -> RoomUserMessage | None:
+        doc = await self._message_repository.get_user_message_by_id(message_id)
+        if doc is None:
+            return None
+        message = _safe_parse_user_message(doc)
+        if message is None:
+            raise ValueError(f"invalid user message {message_id}")
+        return message
+
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
@@ -108,6 +120,23 @@ class MessageRuntimeStorePart:
         except Exception:
             logger.error("Failed to get related agent messages", exc_info=True)
             return []
+
+    async def get_room_agent_messages_by_related_message_id_strict(
+        self,
+        related_message_id: str,
+    ) -> list[RoomAgentMessage]:
+        docs = await self._message_repository.get_agent_messages_by_related_message_id(
+            related_message_id
+        )
+        messages: list[RoomAgentMessage] = []
+        for doc in docs:
+            if doc is None:
+                continue
+            message = _safe_parse_agent_message(doc)
+            if message is None:
+                raise ValueError("invalid related agent message")
+            messages.append(message)
+        return messages
 
     async def add_room_agent_message(
         self, room_agent_message: RoomAgentMessage
@@ -246,33 +275,93 @@ class MessageRuntimeStorePart:
         self,
         orphan_threshold_minutes: int,
         limit: int = 100,
+        after_message_id: str | None = None,
     ) -> list[RoomUserMessage]:
         threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
+        legacy_threshold = _legacy_claim_threshold_text(threshold)
         try:
-            docs = await self._room_user_messages.find(
-                {
-                    "extend_info.orchestration": True,
-                    "$or": [
-                        {"processing_claimed_at": {"$lt": threshold}},
-                        {
-                            "processing_claimed_at": {
-                                "$type": "string",
-                                "$lt": _legacy_claim_threshold_text(threshold),
-                            }
-                        },
-                    ],
-                },
-                sort=[("processing_claimed_at", 1), ("message_id", 1)],
-                limit=limit,
-            )
-            messages = [_safe_parse_user_message(doc) for doc in docs]
-            return [message for message in messages if message is not None]
+            query: dict[str, Any] = {
+                "extend_info.orchestration": True,
+                "extend_info.orchestration_status": "created",
+                "$or": [
+                    {
+                        "processing_claimed_at": None,
+                        "$or": [
+                            {"message_created_at": {"$lt": threshold}},
+                            {
+                                "message_created_at": {
+                                    "$type": "string",
+                                    "$lt": legacy_threshold,
+                                }
+                            },
+                        ],
+                    },
+                    {"processing_claimed_at": {"$lt": threshold}},
+                    {
+                        "processing_claimed_at": {
+                            "$type": "string",
+                            "$lt": legacy_threshold,
+                        }
+                    },
+                ],
+            }
+            messages: list[RoomUserMessage] = []
+            cursor = after_message_id
+            while len(messages) < limit:
+                message_id_filter: dict[str, Any] = {"$type": "string"}
+                if cursor is not None:
+                    message_id_filter["$gt"] = cursor
+                query["message_id"] = message_id_filter
+                raw_limit = limit - len(messages)
+                docs = await self._room_user_messages.find(
+                    query,
+                    sort=[("message_id", 1)],
+                    limit=raw_limit,
+                )
+                if not docs:
+                    break
+                for doc in docs:
+                    message = _safe_parse_user_message(doc)
+                    if message is not None:
+                        messages.append(message)
+                cursor = docs[-1]["message_id"]
+                if len(docs) < raw_limit:
+                    break
+            return messages
         except Exception:
             logger.error(
                 "Failed to get stale claimed orchestration messages",
                 exc_info=True,
             )
             return []
+
+    async def update_orchestration_projection_if_status(
+        self,
+        message_id: str,
+        *,
+        expected_status: str,
+        status: str,
+        clear_processing_claim: bool = False,
+    ) -> bool:
+        updates: dict[str, Any] = {
+            "extend_info.orchestration_status": status,
+        }
+        if clear_processing_claim:
+            updates["processing_claimed_at"] = None
+        try:
+            return await self._room_user_messages.update_one(
+                {
+                    "message_id": message_id,
+                    "extend_info.orchestration_status": expected_status,
+                },
+                {"$set": updates},
+            )
+        except Exception:
+            logger.error(
+                "Failed to conditionally update orchestration projection",
+                exc_info=True,
+            )
+            return False
 
     async def turn_exists(self, room_id: str, turn_id: str) -> bool:
         try:

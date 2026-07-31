@@ -7179,6 +7179,24 @@ class SupervisorExecutor:
                 if planned_message_id:
                     message.message_id = planned_message_id
                 inserted = await self.message_writer.add_room_agent_message(message)
+                strict_cancellation_reader = getattr(
+                    self.message_reader,
+                    "is_message_cancelled_strict",
+                    None,
+                )
+                cancellation_persisted = False
+                if callable(strict_cancellation_reader) and inspect.iscoroutinefunction(
+                    strict_cancellation_reader
+                ):
+                    cancellation_persisted = await strict_cancellation_reader(
+                        user_message_id
+                    )
+                if cancellation_persisted is True:
+                    if token is not None:
+                        token.cancel()
+                    raise CancellationError(user_message_id)
+                if token is not None:
+                    token.check()
                 if inserted is False:
                     existing = (
                         await self.message_reader.get_room_agent_message_by_message_id(

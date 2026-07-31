@@ -415,10 +415,12 @@ versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
 Durable run-store queries and the stale-task checker can claim and resume stale
-runs after process interruption. The checker also recovers stale claimed
-Supervisor envelopes that were interrupted before durable run creation; the
-canonical entry point then reclaims the message and creates the run normally. A
-processing-claim heartbeat prevents recovery
+runs after process interruption. The checker also recovers old unclaimed or
+stale claimed Supervisor envelopes that were interrupted before durable run
+creation; terminal envelopes are excluded before the bounded query limit, and
+terminal projection clears the processing claim. The canonical entry point then
+claims or reclaims the message and creates the run normally. A processing-claim
+heartbeat prevents recovery
 from preempting live turns, optimistic write conflicts exit cleanly for the
 winning writer to continue, and deterministic supervisor HITL artifacts can
 finish materializing from an `INGESTING` checkpoint without re-planning.
@@ -1072,14 +1074,17 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` persists cancellation in MongoDB.
-3. Delivery/SSE cancellation state is updated and broadcast.
-4. Pending HITL requests for the message are cancelled.
-5. Any paused orchestration run is terminalized as canceled; pending HITL
-   ids, continuations, and open-question state are cleared.
-6. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
-7. Best-effort remote agent task cleanup is attempted.
-8. Executors observe cancellation tokens at checkpoints and stop gracefully.
+2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
+3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
+   nonterminal durable run while preserving a concurrently completed result.
+4. The finalizer updates the message projection, broadcasts the cancellation
+   token, cancels HITL, emits terminal public lifecycle/SSE, and cleans agent
+   tasks.
+5. The marker is marked reconciled only after every idempotent effect succeeds.
+6. The stale-task checker scans only pending markers and invokes the same typed
+   finalizer after crashes or partial failures. Old no-run markers settle only
+   after the orphan threshold, leaving time to catch a late-created run.
+7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
 typed SSE frames and cancellation state cross worker boundaries.

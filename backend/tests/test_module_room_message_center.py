@@ -18,6 +18,7 @@ import pytest
 from a2a.types import TaskState
 
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
+from common.utils.time import utcnow
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
@@ -212,6 +213,7 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
             "orchestration": True,
             "orchestration_run_id": "run-1",
         },
+        processing_claimed_at=utcnow(),
     )
     run_state = OrchestrationRunState(
         run_id="run-1",
@@ -250,6 +252,7 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
     )
 
     assert user_message.extend_info["terminal_summary"] == summary
+    assert user_message.processing_claimed_at is None
     rmc._turn_event_appender.append.assert_awaited_once_with(
         "room-1",
         "user-msg-1",

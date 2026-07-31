@@ -285,6 +285,16 @@ class RuntimeRepositoryStore:
         )
         return room_user_message_to_runtime(message) if message is not None else None
 
+    async def get_room_user_message_by_message_id_strict(
+        self,
+        message_id: str,
+    ) -> RuntimeRoomUserMessage | None:
+        return (
+            await self._message_delegate().get_room_user_message_by_message_id_strict(
+                message_id
+            )
+        )
+
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
@@ -316,6 +326,14 @@ class RuntimeRepositoryStore:
             await self._message_delegate().get_room_agent_messages_by_related_message_id(
                 related_message_id
             )
+        )
+
+    async def get_room_agent_messages_by_related_message_id_strict(
+        self,
+        related_message_id: str,
+    ) -> list[RuntimeRoomAgentMessage]:
+        return await self._message_delegate().get_room_agent_messages_by_related_message_id_strict(
+            related_message_id
         )
 
     async def add_room_agent_message(
@@ -469,6 +487,22 @@ class RuntimeRepositoryStore:
     async def is_message_cancelled(self, message_id: str) -> bool:
         return await self._task_delegate().is_message_cancelled(message_id)
 
+    async def is_message_cancelled_strict(self, message_id: str) -> bool:
+        return await self._task_delegate().is_message_cancelled_strict(message_id)
+
+    async def list_pending_cancellation_markers(
+        self,
+        limit: int = 100,
+        after_message_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._task_delegate().list_pending_cancellation_markers(
+            limit,
+            after_message_id,
+        )
+
+    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
+        return await self._task_delegate().mark_cancellation_reconciled(message_id)
+
     async def cancel_message(
         self,
         message_id: str,
@@ -577,6 +611,14 @@ class RuntimeRepositoryStore:
             user_message_id
         )
 
+    async def get_pending_hitl_requests_for_message_strict(
+        self,
+        user_message_id: str,
+    ) -> list[dict]:
+        return await self._hitl_delegate().get_pending_hitl_requests_for_message_strict(
+            user_message_id
+        )
+
     async def create_hitl_request(self, request_data: dict) -> bool:
         return await self._hitl_delegate().create_hitl_request(request_data)
 
@@ -594,6 +636,18 @@ class RuntimeRepositoryStore:
     ) -> bool:
         return await self._hitl_delegate().cas_update_hitl_request(
             request_id, expected_status, **updates
+        )
+
+    async def cas_update_hitl_request_strict(
+        self,
+        request_id: str,
+        expected_status: str,
+        **updates,
+    ) -> bool:
+        return await self._hitl_delegate().cas_update_hitl_request_strict(
+            request_id,
+            expected_status,
+            **updates,
         )
 
     async def fenced_update_hitl_request(
@@ -615,6 +669,24 @@ class RuntimeRepositoryStore:
 
     async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
         return await self._hitl_delegate().get_hitl_group_requests(group_id)
+
+    async def get_pending_hitl_group_requests_strict(
+        self,
+        group_id: str,
+    ) -> list[dict]:
+        return await self._hitl_delegate().get_pending_hitl_group_requests_strict(
+            group_id
+        )
+
+    async def get_unreconciled_terminal_hitl_group_requests_strict(
+        self,
+        group_id: str,
+        status: str,
+    ) -> list[dict]:
+        return await self._hitl_delegate().get_unreconciled_terminal_hitl_group_requests_strict(
+            group_id,
+            status,
+        )
 
     async def count_pending_in_hitl_group(self, group_id: str) -> int:
         return await self._hitl_delegate().count_pending_in_hitl_group(group_id)
@@ -828,10 +900,27 @@ class RuntimeRepositoryStore:
         self,
         orphan_threshold_minutes: int,
         limit: int = 100,
+        after_message_id: str | None = None,
     ) -> list[RuntimeRoomUserMessage]:
         return await self._message_delegate().get_stale_claimed_orchestration_messages(
             orphan_threshold_minutes,
             limit,
+            after_message_id,
+        )
+
+    async def update_orchestration_projection_if_status(
+        self,
+        message_id: str,
+        *,
+        expected_status: str,
+        status: str,
+        clear_processing_claim: bool = False,
+    ) -> bool:
+        return await self._message_delegate().update_orchestration_projection_if_status(
+            message_id,
+            expected_status=expected_status,
+            status=status,
+            clear_processing_claim=clear_processing_claim,
         )
 
     async def turn_exists(self, room_id: str, turn_id: str) -> bool:

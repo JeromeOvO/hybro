@@ -42,6 +42,7 @@ from common.dto.delivery import (
 )
 from common.dto.execution import (
     AgentEvent,
+    CancellationAck,
     ExecutionAck,
     ExecutionRequest,
     ExecutionResult,
@@ -142,6 +143,7 @@ __all__ = [
     "AgentStreamEvent",
     "AgentTaskResult",
     "ArtifactUpdateEvent",
+    "CancellationAck",
     "AssembledContext",
     "CancellationEvent",
     "CompactionResult",

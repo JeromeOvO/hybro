@@ -35,12 +35,39 @@ class HITLRuntimeStorePart:
     ) -> list[dict]:
         try:
             return await self._hitl_requests.find(
-                {"user_message_id": user_message_id, "status": "pending"},
+                {
+                    "user_message_id": user_message_id,
+                    "$or": [
+                        {"status": "pending"},
+                        {
+                            "status": "canceled",
+                            "cancellation_reconciled": {"$ne": True},
+                        },
+                    ],
+                },
                 limit=50,
             )
         except Exception:
             logger.error("Failed to get pending HITL requests", exc_info=True)
             return []
+
+    async def get_pending_hitl_requests_for_message_strict(
+        self,
+        user_message_id: str,
+    ) -> list[dict]:
+        return await self._hitl_requests.find(
+            {
+                "user_message_id": user_message_id,
+                "$or": [
+                    {"status": "pending"},
+                    {
+                        "status": "canceled",
+                        "cancellation_reconciled": {"$ne": True},
+                    },
+                ],
+            },
+            limit=50,
+        )
 
     async def create_hitl_request(self, request_data: dict) -> bool:
         try:
@@ -81,6 +108,17 @@ class HITLRuntimeStorePart:
         except Exception:
             logger.error("Failed to CAS update HITL request", exc_info=True)
             return False
+
+    async def cas_update_hitl_request_strict(
+        self,
+        request_id: str,
+        expected_status: str,
+        **updates,
+    ) -> bool:
+        return await self._hitl_requests.update_one(
+            {"request_id": request_id, "status": expected_status},
+            {"$set": dict(updates)},
+        )
 
     async def fenced_update_hitl_request(
         self,
@@ -129,6 +167,31 @@ class HITLRuntimeStorePart:
         except Exception:
             logger.error("Failed to get HITL group requests", exc_info=True)
             return []
+
+    async def get_pending_hitl_group_requests_strict(
+        self,
+        group_id: str,
+    ) -> list[dict]:
+        return await self._hitl_requests.find(
+            {"group_id": group_id, "status": "pending"},
+            sort=[("group_index", 1), ("request_id", 1)],
+            exhaust=True,
+        )
+
+    async def get_unreconciled_terminal_hitl_group_requests_strict(
+        self,
+        group_id: str,
+        status: str,
+    ) -> list[dict]:
+        return await self._hitl_requests.find(
+            {
+                "group_id": group_id,
+                "status": status,
+                "cancellation_reconciled": {"$ne": True},
+            },
+            sort=[("group_index", 1), ("request_id", 1)],
+            exhaust=True,
+        )
 
     async def count_pending_in_hitl_group(self, group_id: str) -> int:
         try:
@@ -628,6 +691,15 @@ class HITLRuntimeStorePart:
             ((("room_id", 1), ("status", 1)), {}),
             ((("expires_at", 1), ("status", 1)), {}),
             ((("user_message_id", 1), ("status", 1)), {}),
+            (
+                (
+                    ("group_id", 1),
+                    ("status", 1),
+                    ("group_index", 1),
+                    ("request_id", 1),
+                ),
+                {},
+            ),
             ((("continuation_message_id", 1),), {}),
         ]
         for keys, kwargs in noncritical_indexes:

@@ -104,6 +104,7 @@ async def test_orphan_recovery_failure_logs_only_safe_exception_metadata(caplog)
     )
     store = SimpleNamespace(
         get_orphaned_agent_messages=AsyncMock(return_value=[orphan]),
+        is_message_cancelled=AsyncMock(return_value=False),
     )
     checker = StaleTaskChecker()
     checker.set_runtime_deps(

@@ -1,6 +1,7 @@
 from typing import Literal, Protocol, runtime_checkable
 
 from common.dto import (
+    CancellationAck,
     ExecutionAck,
     ExecutionRequest,
     HITLRequest,
@@ -25,7 +26,7 @@ class ExecutionEngine(Protocol):
         message_id: str,
         *,
         requested_by_user_id: str,
-    ) -> bool: ...
+    ) -> bool | CancellationAck: ...
     async def get_run(self, run_id: str) -> RunInfo | None: ...
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
     async def cancel_inflight_tasks(self) -> int: ...
