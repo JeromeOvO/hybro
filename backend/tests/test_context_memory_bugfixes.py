@@ -2,7 +2,7 @@
 Unit tests for context & memory bug fixes and new functionality.
 
 Covers:
-- CompactionSweep: attribute names, active-room skip, semaphore
+- CompactionSweep: fail-closed safety gate and worker lifecycle
 - extract_turn_notes_llm: LLM path and heuristic fallback
 - Memory search result hydration: _hydrate_results_from_storage
 - was_successful propagation through add_turn_to_history
@@ -10,8 +10,9 @@ Covers:
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design specification.
 """
 
+import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
 import pytest
@@ -67,6 +68,25 @@ def _make_turn(content="Test", role=TurnRole.USER, **kwargs) -> ConversationTurn
     )
     defaults.update(kwargs)
     return ConversationTurn(**defaults)
+
+
+def _pending_compaction_workers() -> list[asyncio.Task]:
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done() and task.get_name().startswith("compaction-worker-")
+    ]
+
+
+async def _assert_no_pending_compaction_workers() -> None:
+    pending = _pending_compaction_workers()
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    assert not pending, (
+        f"Leaked compaction workers: {[task.get_name() for task in pending]}"
+    )
 
 
 # =============================================================================
@@ -140,6 +160,218 @@ class TestCompactionSweep:
         assert stats["scanned"] == 2
         assert stats["skipped"] == 1
         mock_compaction_svc.compact_if_needed.assert_awaited_once_with("idle_room")
+
+    @pytest.mark.asyncio
+    async def test_sweep_stops_when_active_run_lookup_fails(self):
+        """An unavailable run safety gate must abort the entire sweep."""
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
+
+        sweep = CompactionSweep(interval_minutes=60)
+        list_room_ids = AsyncMock(return_value=["room_1"])
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock()
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=list_room_ids,
+                get_room_ids_with_non_terminal_runs=AsyncMock(
+                    side_effect=RuntimeError("run lookup failed")
+                ),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="run lookup failed"):
+            await sweep.sweep()
+
+        list_room_ids.assert_not_awaited()
+        mock_compaction_svc.compact_if_needed.assert_not_awaited()
+        await _assert_no_pending_compaction_workers()
+
+    @pytest.mark.asyncio
+    async def test_active_run_lookup_failure_releases_leader_lock(self):
+        """The iteration wrapper releases leadership when the safety gate fails."""
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
+        from jobs.constants import COMPACTION_SWEEP
+
+        sweep = CompactionSweep(interval_minutes=60)
+        leader = MagicMock()
+        leader.try_acquire = AsyncMock(return_value=True)
+        leader.release = AsyncMock()
+        sweep.set_leader_election(leader)
+
+        list_room_ids = AsyncMock(return_value=["room_1"])
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock()
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=list_room_ids,
+                get_room_ids_with_non_terminal_runs=AsyncMock(
+                    side_effect=RuntimeError("run lookup failed")
+                ),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="run lookup failed"):
+            await sweep._run_one_iteration()
+
+        leader.release.assert_awaited_once_with(COMPACTION_SWEEP)
+        list_room_ids.assert_not_awaited()
+        mock_compaction_svc.compact_if_needed.assert_not_awaited()
+        await _assert_no_pending_compaction_workers()
+
+    @pytest.mark.asyncio
+    async def test_sweep_does_not_leak_workers_when_room_enumeration_fails(self):
+        """Room enumeration happens before the worker pool is created."""
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
+
+        sweep = CompactionSweep(interval_minutes=60)
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock()
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=AsyncMock(
+                    side_effect=RuntimeError("room enumeration failed")
+                ),
+                get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="room enumeration failed"):
+            await sweep.sweep()
+
+        mock_compaction_svc.compact_if_needed.assert_not_awaited()
+        await _assert_no_pending_compaction_workers()
+
+    @pytest.mark.asyncio
+    async def test_sweep_cancellation_reaps_working_workers(self):
+        """Cancelling the parent sweep cancels and awaits every worker."""
+        from jobs.compaction_sweep import (
+            MAX_CONCURRENT_COMPACTIONS,
+            CompactionSweep,
+            CompactionSweepDeps,
+        )
+
+        sweep = CompactionSweep(interval_minutes=60)
+        all_workers_started = asyncio.Event()
+        release_workers = asyncio.Event()
+        started_count = 0
+
+        async def blocking_compaction(_room_id: str):
+            nonlocal started_count
+            started_count += 1
+            if started_count == MAX_CONCURRENT_COMPACTIONS:
+                all_workers_started.set()
+            await release_workers.wait()
+
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock(
+            side_effect=blocking_compaction
+        )
+        room_ids = [f"room_{index}" for index in range(MAX_CONCURRENT_COMPACTIONS)]
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=AsyncMock(return_value=room_ids),
+                get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        sweep_task = asyncio.create_task(sweep.sweep())
+        worker_tasks: list[asyncio.Task] = []
+        try:
+            await asyncio.wait_for(all_workers_started.wait(), timeout=5)
+            worker_tasks = _pending_compaction_workers()
+            assert len(worker_tasks) == MAX_CONCURRENT_COMPACTIONS
+
+            sweep_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await sweep_task
+
+            assert all(task.cancelled() for task in worker_tasks)
+            await _assert_no_pending_compaction_workers()
+        finally:
+            release_workers.set()
+            if not sweep_task.done():
+                sweep_task.cancel()
+            await asyncio.gather(sweep_task, return_exceptions=True)
+            await _assert_no_pending_compaction_workers()
+
+    @pytest.mark.asyncio
+    async def test_sweep_continues_after_single_room_failure(self):
+        """A room-local compaction error is counted without aborting the sweep."""
+        from jobs.compaction_sweep import CompactionSweep, CompactionSweepDeps
+
+        sweep = CompactionSweep(interval_minutes=60)
+
+        async def compact_room(room_id: str):
+            if room_id == "bad_room":
+                raise RuntimeError("compaction failed")
+            return CompactionResult(
+                room_id=room_id,
+                compacted_count=1,
+                tokens_saved=100,
+            )
+
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock(side_effect=compact_room)
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=AsyncMock(
+                    return_value=["bad_room", "good_room_1", "good_room_2"]
+                ),
+                get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        stats = await sweep.sweep()
+
+        assert stats == {"scanned": 3, "compacted": 2, "skipped": 0, "errors": 1}
+        assert mock_compaction_svc.compact_if_needed.await_count == 3
+        mock_compaction_svc.compact_if_needed.assert_has_awaits(
+            [call("bad_room"), call("good_room_1"), call("good_room_2")],
+            any_order=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sweep_limits_compaction_concurrency(self):
+        """The fixed worker pool never exceeds its configured concurrency."""
+        from jobs.compaction_sweep import (
+            MAX_CONCURRENT_COMPACTIONS,
+            CompactionSweep,
+            CompactionSweepDeps,
+        )
+
+        sweep = CompactionSweep(interval_minutes=60)
+        in_flight = 0
+        max_in_flight = 0
+
+        async def track_concurrency(_room_id: str):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            try:
+                await asyncio.sleep(0)
+            finally:
+                in_flight -= 1
+
+        mock_compaction_svc = AsyncMock()
+        mock_compaction_svc.compact_if_needed = AsyncMock(side_effect=track_concurrency)
+        room_ids = [f"room_{index}" for index in range(MAX_CONCURRENT_COMPACTIONS * 2)]
+        sweep.set_sweep_deps(
+            CompactionSweepDeps(
+                list_room_ids_with_memory=AsyncMock(return_value=room_ids),
+                get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]),
+                context_compaction=mock_compaction_svc,
+            )
+        )
+
+        stats = await sweep.sweep()
+
+        assert stats["scanned"] == len(room_ids)
+        assert max_in_flight == MAX_CONCURRENT_COMPACTIONS
 
 
 # =============================================================================

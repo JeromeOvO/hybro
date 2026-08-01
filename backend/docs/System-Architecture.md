@@ -1195,6 +1195,9 @@ Room memory is updated and used across turns.
 7. Memory search can retrieve relevant historical turns with keyword scoring
    and temporal decay.
 8. The compaction sweep still handles periodic compaction for eligible rooms.
+   Its non-terminal-run lookup is a fail-closed safety gate, and active rooms are
+   skipped before a fixed worker pool starts. The pool is fully reaped on normal
+   completion, failure, or cancellation.
 
 The design keeps current task context, recent conversation context, room summary,
 memory search results, and quoted reply context separate so each can be bounded
