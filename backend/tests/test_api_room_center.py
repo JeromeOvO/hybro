@@ -2248,13 +2248,14 @@ class TestSuggestAgents:
     """Tests for suggest_agents endpoint."""
 
     @pytest.mark.asyncio
-    async def test_returns_suggestions_for_valid_message(self):
+    async def test_returns_suggestions_for_valid_message(self, mock_user):
         """Should return agent suggestions for valid message."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
             return_value={
                 "message_text": "Help me write some code",
                 "top_k": 3,
+                "user_id": "untrusted-body-user",
             }
         )
 
@@ -2280,9 +2281,15 @@ class TestSuggestAgents:
 
         response = await suggest_agents(
             mock_request,
+            user=mock_user,
             selection_service=mock_selection_service,
         )
 
+        mock_selection_service.suggest_agents.assert_awaited_once_with(
+            message_text="Help me write some code",
+            top_k=3,
+            user_id=mock_user.user_id,
+        )
         assert response["success"] is True
         assert response["suggested_agents"] == [
             {
@@ -2300,7 +2307,7 @@ class TestSuggestAgents:
         ]
 
     @pytest.mark.asyncio
-    async def test_returns_error_for_empty_message(self):
+    async def test_returns_error_for_empty_message(self, mock_user):
         """Should return error when message_text is empty."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -2310,13 +2317,19 @@ class TestSuggestAgents:
             }
         )
 
-        response = await suggest_agents(mock_request, selection_service=MagicMock())
+        mock_selection_service = MagicMock()
+        response = await suggest_agents(
+            mock_request,
+            user=mock_user,
+            selection_service=mock_selection_service,
+        )
 
+        mock_selection_service.suggest_agents.assert_not_called()
         assert response["success"] is False
         assert response["status_code"] == 400
 
     @pytest.mark.asyncio
-    async def test_handles_service_error(self):
+    async def test_handles_service_error(self, mock_user):
         """Should handle errors from agent selection service."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -2333,8 +2346,14 @@ class TestSuggestAgents:
 
         response = await suggest_agents(
             mock_request,
+            user=mock_user,
             selection_service=mock_selection_service,
         )
 
+        mock_selection_service.suggest_agents.assert_awaited_once_with(
+            message_text="Test message",
+            top_k=3,
+            user_id=mock_user.user_id,
+        )
         assert response["success"] is False
         assert response["status_code"] == 500

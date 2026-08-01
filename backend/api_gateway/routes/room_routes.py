@@ -671,7 +671,11 @@ async def suggest_agents(
             "status_code": 400,
         }
     try:
-        suggestion_result = await selection_service.suggest_agents(message_text, top_k)
+        suggestion_result = await selection_service.suggest_agents(
+            message_text=message_text,
+            top_k=top_k,
+            user_id=user.user_id,
+        )
         return {
             "success": True,
             **serialize_agent_suggestion_result(suggestion_result),

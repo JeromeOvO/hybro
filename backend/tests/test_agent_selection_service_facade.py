@@ -479,12 +479,21 @@ async def test_suggest_agents_uses_facade(mock_matched_agents):
         mock_matcher_instance.match.return_value = mock_match_result
         MockMatcher.return_value = mock_matcher_instance
 
-        service = AgentSelectionService()
+        mock_reranker = AsyncMock()
+        service = AgentSelectionService(llm_reranker=mock_reranker)
         result = await service.suggest_agents(
             message_text="test message",
             top_k=3,
+            user_id="owner-user",
         )
 
+        mock_matcher_instance.match.assert_awaited_once_with(
+            message_text="test message",
+            user_id="owner-user",
+            is_debate_mode=False,
+            required_input_modes=None,
+        )
+        mock_reranker.rank_agents_for_task.assert_not_awaited()
         assert result.metadata["routing_strategy"] == "parallel"  # 2 agents
         assert result.metadata["reasoning"] == result.analysis
         assert result.metadata["needs_debate"] is False
