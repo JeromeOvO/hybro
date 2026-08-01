@@ -12,7 +12,7 @@ from uuid import uuid4
 from common.dto import FileInfo
 from common.errors import FileStoragePlatformError
 from common.protocols import PreparedFileStream
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileStorageError
 from room_files.leases import RoomWriteLeases
@@ -811,6 +811,7 @@ class RoomFiles:
         return recovered
 
     async def _recover_reference_claims(self, cutoff: datetime) -> int:
+        cutoff = ensure_utc(cutoff)
         cursor = self._metadata.find(
             {
                 "reference_claims": {
@@ -830,7 +831,7 @@ class RoomFiles:
                 if (
                     claim.get("state") != "pending"
                     or claimed_at is None
-                    or claimed_at >= cutoff
+                    or ensure_utc(claimed_at) >= cutoff
                 ):
                     continue
                 message_id = str(claim.get("message_id") or "")

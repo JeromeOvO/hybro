@@ -148,7 +148,10 @@ class AgentSelectionService:
         )
 
     async def suggest_agents(
-        self, message_text: str, top_k: int = 3
+        self,
+        message_text: str,
+        top_k: int = 3,
+        user_id: str | None = None,
     ) -> AgentSuggestionResult:
         """
         Public API method to suggest agents for a message.
@@ -157,13 +160,15 @@ class AgentSelectionService:
         Args:
             message_text: The user's message
             top_k: Maximum number of agents to suggest
+            user_id: Optional sender ID for private agent visibility
 
         Returns:
             AgentSuggestionResult with routing metadata and suggested agents
         """
         result = await self.select_agents_for_message(
-            message_text,
-            top_k,
+            message_text=message_text,
+            top_k=top_k,
+            user_id=user_id,
             use_llm_rerank=False,
         )
 

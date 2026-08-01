@@ -81,7 +81,10 @@ class AgentLivenessChecker(Protocol):
 @runtime_checkable
 class AgentSuggestionService(Protocol):
     async def suggest_agents(
-        self, message_text: str, top_k: int = 3
+        self,
+        message_text: str,
+        top_k: int = 3,
+        user_id: str | None = None,
     ) -> AgentSuggestionResult: ...
 
 
