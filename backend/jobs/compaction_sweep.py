@@ -127,13 +127,22 @@ class CompactionSweep:
         deps = self._require_sweep_deps()
         stats = {"scanned": 0, "compacted": 0, "skipped": 0, "errors": 0}
 
-        # Pre-fetch room_ids with non-terminal runs (runs are source of truth)
-        active_room_ids: set[str] = set()
-        try:
-            ids = await deps.get_room_ids_with_non_terminal_runs()
-            active_room_ids = {rid for rid in ids if rid}
-        except Exception as e:
-            logger.warning("Compaction sweep: could not check active rooms: %s", e)
+        # This lookup is a global safety gate: if it fails, the sweep must stop
+        # rather than treating every room as idle.
+        ids = await deps.get_room_ids_with_non_terminal_runs()
+        active_room_ids = {rid for rid in ids if rid}
+
+        eligible_room_ids: list[str] = []
+        for room_id in await deps.list_room_ids_with_memory():
+            if not room_id:
+                continue
+            stats["scanned"] += 1
+
+            if room_id in active_room_ids:
+                stats["skipped"] += 1
+                continue
+
+            eligible_room_ids.append(room_id)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -164,26 +173,25 @@ class CompactionSweep:
                 finally:
                     queue.task_done()
 
-        workers = [
-            traced_create_task(_worker(), name=f"compaction-worker-{index}")
-            for index in range(MAX_CONCURRENT_COMPACTIONS)
-        ]
+        workers: list[asyncio.Task] = []
+        try:
+            for index in range(MAX_CONCURRENT_COMPACTIONS):
+                workers.append(
+                    traced_create_task(_worker(), name=f"compaction-worker-{index}")
+                )
 
-        for room_id in await deps.list_room_ids_with_memory():
-            if not room_id:
-                continue
-            stats["scanned"] += 1
+            for room_id in eligible_room_ids:
+                await queue.put(room_id)
 
-            if room_id in active_room_ids:
-                stats["skipped"] += 1
-                continue
-
-            await queue.put(room_id)
-
-        # Signal workers to stop
-        for _ in workers:
-            await queue.put(None)
-        await asyncio.gather(*workers)
+            # Signal workers to stop after all eligible rooms are processed.
+            for _ in workers:
+                await queue.put(None)
+            await asyncio.gather(*workers)
+        finally:
+            for worker in workers:
+                if not worker.done():
+                    worker.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
         logger.info(
             "compaction_sweep: done — scanned=%d compacted=%d skipped=%d errors=%d",
