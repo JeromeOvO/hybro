@@ -45,7 +45,10 @@ class RecordingTaskFactory:
 
 
 def _make_facade(**overrides):
-    room_center = SimpleNamespace(send_message_to_room=AsyncMock())
+    room_center = SimpleNamespace(
+        get_idempotent_user_message=AsyncMock(return_value=None),
+        send_message_to_room=AsyncMock(),
+    )
 
     async def persist_message_to_room(*args, **kwargs):
         response = await room_center.send_message_to_room(*args, **kwargs)
@@ -137,6 +140,15 @@ def _assert_processing_status_event(
     assert event.trace_id is None
     assert event.agent_id is None
     assert event.agents is None
+
+
+def _user_message_payload(text: str) -> dict:
+    return {
+        "room_id": "room-1",
+        "message_id": "",
+        "message_type": "user",
+        "message_content": {"message_text": text},
+    }
 
 
 def _room_response_with_preflight(**kwargs) -> RoomCenterUserMessageResponse:
@@ -251,6 +263,191 @@ async def test_execute_rejects_active_run_before_room_persist():
     deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["event_publisher"].emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_replay_lookup_precedes_busy_guards_and_bypasses_them():
+    facade, deps = _make_facade()
+    order: list[str] = []
+
+    async def lookup(**_kwargs):
+        order.append("idempotency")
+        return RoomCenterUserMessageResponse(
+            room_id="room-1",
+            message_id="existing-message",
+            success=True,
+            status_code=200,
+        )
+
+    async def pending(_room_id):
+        order.append("hitl")
+        return [SimpleNamespace()]
+
+    async def active(_room_id):
+        order.append("active")
+        return [
+            RunInfo(
+                run_id="run-1",
+                room_id="room-1",
+                state="processing",
+            )
+        ]
+
+    deps["room_center"].get_idempotent_user_message.side_effect = lookup
+    deps["hitl_manager"].get_pending_requests.side_effect = pending
+    deps["run_reader"].get_runs_for_room.side_effect = active
+
+    ack = await facade.execute(
+        ExecutionRequest(
+            room_id="room-1",
+            sender_id="user-1",
+            client_request_id="request-1",
+            message=_user_message_payload("hello"),
+        )
+    )
+
+    assert order == ["idempotency"]
+    assert ack.success is True
+    assert ack.message_id == "existing-message"
+    assert ack.should_start_orchestration is False
+    deps["hitl_manager"].get_pending_requests.assert_not_awaited()
+    deps["run_reader"].get_runs_for_room.assert_not_awaited()
+    deps["room_center"].persist_message_to_room.assert_not_awaited()
+    deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["event_publisher"].emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy_guard", ["hitl", "active_run"])
+async def test_execute_rechecks_idempotency_when_winner_appears_during_busy_guard(
+    busy_guard: str,
+):
+    facade, deps = _make_facade()
+    winner = RoomCenterUserMessageResponse(
+        room_id="room-1",
+        message_id="winner-message",
+        success=True,
+        status_code=200,
+    )
+    deps["room_center"].get_idempotent_user_message.side_effect = [None, winner]
+    if busy_guard == "hitl":
+        deps["hitl_manager"].get_pending_requests.return_value = [SimpleNamespace()]
+    else:
+        deps["run_reader"].get_runs_for_room.return_value = [
+            RunInfo(
+                run_id="run-1",
+                room_id="room-1",
+                state="processing",
+            )
+        ]
+
+    ack = await facade.execute(
+        ExecutionRequest(
+            room_id="room-1",
+            sender_id="user-1",
+            client_request_id="request-1",
+            message=_user_message_payload("hello"),
+        )
+    )
+
+    assert ack.success is True
+    assert ack.message_id == "winner-message"
+    assert ack.should_start_orchestration is False
+    assert deps["room_center"].get_idempotent_user_message.await_count == 2
+    deps["room_center"].persist_message_to_room.assert_not_awaited()
+    deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
+    deps["event_publisher"].emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_idempotency_conflict_returns_body_level_409_before_busy_guards():
+    facade, deps = _make_facade()
+    deps[
+        "room_center"
+    ].get_idempotent_user_message.return_value = RoomCenterUserMessageResponse(
+        room_id="room-1",
+        success=False,
+        error="The client_request_id was already used for a different request",
+        status_code=409,
+    )
+
+    ack = await facade.execute(
+        ExecutionRequest(
+            room_id="room-1",
+            sender_id="user-1",
+            client_request_id="request-1",
+            message=_user_message_payload("changed"),
+        )
+    )
+
+    assert ack.success is False
+    assert ack.status_code == 409
+    assert ack.should_start_orchestration is False
+    deps["hitl_manager"].get_pending_requests.assert_not_awaited()
+    deps["run_reader"].get_runs_for_room.assert_not_awaited()
+    deps["room_center"].persist_message_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_does_not_fail_open_when_idempotency_lookup_fails():
+    facade, deps = _make_facade()
+    deps["room_center"].get_idempotent_user_message.side_effect = RuntimeError(
+        "mongo unavailable"
+    )
+
+    with pytest.raises(RuntimeError, match="mongo unavailable"):
+        await facade.execute(
+            ExecutionRequest(
+                room_id="room-1",
+                sender_id="user-1",
+                client_request_id="request-1",
+                message=_user_message_payload("hello"),
+            )
+        )
+
+    deps["hitl_manager"].get_pending_requests.assert_not_awaited()
+    deps["run_reader"].get_runs_for_room.assert_not_awaited()
+    deps["room_center"].persist_message_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_concurrent_insert_loser_skips_preflight_and_all_sse():
+    room_center = SimpleNamespace(
+        get_idempotent_user_message=AsyncMock(return_value=None),
+        persist_message_to_room=AsyncMock(
+            return_value=(
+                RoomCenterUserMessageResponse(
+                    room_id="room-1",
+                    message_id="winner-message",
+                    dispatch_root_message_id=None,
+                    success=True,
+                    status_code=200,
+                ),
+                None,
+            )
+        ),
+        run_message_preflight_to_room=AsyncMock(),
+        update_user_message_orchestration_status=AsyncMock(return_value=True),
+    )
+    facade, deps = _make_facade(room_center=room_center)
+
+    ack = await facade.execute(
+        ExecutionRequest(
+            room_id="room-1",
+            sender_id="user-1",
+            client_request_id="request-1",
+            message=_user_message_payload("hello"),
+        )
+    )
+
+    assert ack.success is True
+    assert ack.message_id == "winner-message"
+    assert ack.should_start_orchestration is False
+    room_center.run_message_preflight_to_room.assert_not_awaited()
     deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
@@ -389,6 +586,7 @@ async def test_execute_emits_processing_for_ready_room_preflight():
 async def test_execute_emits_processing_before_room_preflight_continuation():
     preflight_context = object()
     room_center = SimpleNamespace(
+        get_idempotent_user_message=AsyncMock(return_value=None),
         send_message_to_room=AsyncMock(
             side_effect=AssertionError(
                 "legacy single-step room path should not be used"

@@ -13,7 +13,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto import UserMessageInsertResult
 from models.agent import Agent, AgentStatus
+from models.request import RoomCenterUserMessageRequest
 from models.response import (
     RoomCenterUserMessageResponse,
     ScopeResolutionError,
@@ -418,6 +420,44 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_supervisor_empty_explicit_selection_does_not_persist(
+        self,
+        room_center,
+    ):
+        room = _make_room(
+            agent_set={"a1": "Alpha"},
+            extend_info={"use_supervisor": True},
+        )
+        room_center.database_service.get_room_by_room_id.return_value = room
+        request = RoomCenterUserMessageRequest(
+            room_id="room-1",
+            user_id="user-1",
+            message=RoomUserMessage(
+                room_id="room-1",
+                message_id="message-1",
+                user_id="user-1",
+                message_content=MessageContent(message_text="hello"),
+            ),
+            extend_info={
+                "mode": "supervisor",
+                "selected_agent_ids": [],
+                "candidate_scope_mode": "explicit_selection",
+            },
+        )
+        room_center._validate_send_message_request = MagicMock(return_value=None)
+        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._persist_user_message = AsyncMock(return_value=True)
+
+        result = await room_center.send_message_to_room(
+            request,
+            target_group="room_team",
+        )
+
+        assert result.success is False
+        assert result.scope_resolution_error.code == "empty_scope"
+        room_center._persist_user_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_missing_saved_group_does_not_persist(self, room_center):
         room = _make_room()
         room_center.database_service.get_room_by_room_id.return_value = room
@@ -513,7 +553,13 @@ class TestInlineMentionBehavior:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-inline-1",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock(return_value=None)
         handle_mentions = AsyncMock()
@@ -645,7 +691,13 @@ class TestAllAgentsPostPersistMessageId:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-real-123",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock()
 
@@ -709,7 +761,13 @@ class TestClientRequestIdPropagation:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-real-456",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock()
 

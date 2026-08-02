@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
+from room.idempotency import (
+    IdempotencyConflictError,
+    UnexpectedUserMessageDuplicateError,
+)
 from room.repository import MessageMongoRepository, RoomMongoRepository
 
 
@@ -121,6 +127,34 @@ class FakeCollection:
         return count
 
 
+class AtomicUniqueUserMessageCollection(FakeCollection):
+    """Fake Mongo collection that atomically enforces both user-message indexes."""
+
+    def __init__(self, docs: list[dict] | None = None) -> None:
+        super().__init__(docs)
+        self._insert_lock = asyncio.Lock()
+
+    async def insert_one(self, document: dict) -> str:
+        async with self._insert_lock:
+            await asyncio.sleep(0)
+            message_id = document.get("message_id")
+            room_id = document.get("room_id")
+            client_request_id = document.get("client_request_id")
+            if any(doc.get("message_id") == message_id for doc in self.docs):
+                raise DuplicateKeyError("duplicate message_id")
+            if (
+                isinstance(room_id, str)
+                and isinstance(client_request_id, str)
+                and any(
+                    doc.get("room_id") == room_id
+                    and doc.get("client_request_id") == client_request_id
+                    for doc in self.docs
+                )
+            ):
+                raise DuplicateKeyError("duplicate room/client_request_id")
+            return await super().insert_one(document)
+
+
 def _room_repo(docs: list[dict] | None = None):
     rooms = FakeCollection(docs)
     mongo = FakeMongo({"rooms": rooms})
@@ -234,6 +268,280 @@ async def test_message_repository_uses_room_message_collections_and_saves_raw_di
     assert agent_id == "a1"
     assert user_messages.insert_one_calls == [{"message_id": "u1", "room_id": "r1"}]
     assert agent_messages.insert_one_calls == [{"message_id": "a1", "room_id": "r1"}]
+
+
+@pytest.mark.asyncio
+async def test_legacy_user_message_save_normalizes_request_key_without_mutating_input():
+    repo, _, user_messages, _ = _message_repo()
+    message = {
+        "message_id": "message-1",
+        "room_id": "room-1",
+        "client_request_id": "  request-1  ",
+    }
+
+    message_id = await repo.save_user_message(message)
+
+    assert message_id == "message-1"
+    assert message["client_request_id"] == "  request-1  "
+    assert user_messages.insert_one_calls == [
+        {
+            "message_id": "message-1",
+            "room_id": "room-1",
+            "client_request_id": "request-1",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"room_id": "room-1"},
+        {"room_id": "room-1", "message_id": " "},
+        {"room_id": " ", "message_id": "message-1"},
+        {
+            "room_id": "room-1",
+            "message_id": "message-1",
+            "client_request_id": " ",
+        },
+        {
+            "room_id": "room-1",
+            "message_id": "message-1",
+            "client_request_id": 123,
+        },
+        {
+            "room_id": "room-1",
+            "message_id": "message-1",
+            "client_request_id": "x" * 129,
+        },
+    ],
+)
+async def test_legacy_user_message_save_rejects_invalid_identity(message):
+    repo, _, user_messages, _ = _message_repo()
+
+    with pytest.raises(ValueError):
+        await repo.save_user_message(message)
+
+    assert user_messages.insert_one_calls == []
+
+
+def _idempotent_message(
+    *,
+    room_id: str = "r1",
+    client_request_id: str = "request-1",
+    message_id: str = "message-1",
+    fingerprint: str = "fingerprint-1",
+) -> dict:
+    return {
+        "room_id": room_id,
+        "message_id": message_id,
+        "client_request_id": client_request_id,
+        "idempotency_fingerprint": fingerprint,
+        "idempotency_fingerprint_version": 1,
+        "message_type": "user",
+        "message_content": {"message_text": "hello"},
+    }
+
+
+def _idempotent_message_repo(
+    docs: list[dict] | None = None,
+) -> tuple[MessageMongoRepository, AtomicUniqueUserMessageCollection]:
+    user_messages = AtomicUniqueUserMessageCollection(docs)
+    mongo = FakeMongo(
+        {
+            "room_user_messages": user_messages,
+            "room_agent_messages": FakeCollection(),
+        }
+    )
+    return MessageMongoRepository(mongo=mongo), user_messages
+
+
+@pytest.mark.asyncio
+async def test_legacy_save_and_canonical_insert_share_normalized_unique_key():
+    repo, user_messages = _idempotent_message_repo()
+    legacy = _idempotent_message(client_request_id=" request-1 ")
+    legacy.pop("idempotency_fingerprint")
+    legacy.pop("idempotency_fingerprint_version")
+
+    await repo.save_user_message(legacy)
+    replayed = await repo.insert_user_message_idempotently(
+        _idempotent_message(message_id="message-2")
+    )
+
+    assert replayed.created is False
+    assert replayed.message_id == "message-1"
+    assert len(user_messages.docs) == 1
+    assert user_messages.docs[0]["client_request_id"] == "request-1"
+
+
+@pytest.mark.asyncio
+async def test_idempotent_user_message_insert_creates_then_replays_stable_winner():
+    repo, user_messages = _idempotent_message_repo()
+
+    created = await repo.insert_user_message_idempotently(_idempotent_message())
+    replayed = await repo.insert_user_message_idempotently(
+        _idempotent_message(message_id="message-loser")
+    )
+
+    assert created.created is True
+    assert created.message_id == "message-1"
+    assert replayed.created is False
+    assert replayed.message_id == "message-1"
+    assert replayed.document["message_id"] == "message-1"
+    assert len(user_messages.docs) == 1
+    assert user_messages.find_one_calls[-1] == {
+        "room_id": "r1",
+        "client_request_id": "request-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_idempotent_user_message_insert_rejects_payload_conflict():
+    repo, user_messages = _idempotent_message_repo([_idempotent_message()])
+
+    with pytest.raises(IdempotencyConflictError):
+        await repo.insert_user_message_idempotently(
+            _idempotent_message(
+                message_id="message-2",
+                fingerprint="different-fingerprint",
+            )
+        )
+
+    assert len(user_messages.docs) == 1
+
+
+@pytest.mark.asyncio
+async def test_message_id_unique_collision_is_not_misclassified_as_replay():
+    repo, user_messages = _idempotent_message_repo([_idempotent_message()])
+
+    with pytest.raises(
+        UnexpectedUserMessageDuplicateError,
+        match="Unexpected user-message unique-index collision",
+    ):
+        await repo.insert_user_message_idempotently(
+            _idempotent_message(
+                room_id="r2",
+                client_request_id="request-2",
+                message_id="message-1",
+            )
+        )
+
+    assert user_messages.find_one_calls[-1] == {
+        "room_id": "r2",
+        "client_request_id": "request-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_same_client_request_id_is_allowed_in_different_rooms():
+    repo, user_messages = _idempotent_message_repo()
+
+    first = await repo.insert_user_message_idempotently(_idempotent_message())
+    second = await repo.insert_user_message_idempotently(
+        _idempotent_message(room_id="r2", message_id="message-2")
+    )
+
+    assert first.created is True
+    assert second.created is True
+    assert len(user_messages.docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_idempotent_repository_enforces_normalized_request_id_length_boundary():
+    repo, user_messages = _idempotent_message_repo()
+
+    accepted = await repo.insert_user_message_idempotently(
+        _idempotent_message(client_request_id="x" * 128)
+    )
+    normalized = await repo.insert_user_message_idempotently(
+        _idempotent_message(
+            client_request_id=" request-with-padding ",
+            message_id="message-2",
+        )
+    )
+    with pytest.raises(ValueError, match="valid client_request_id"):
+        await repo.insert_user_message_idempotently(
+            _idempotent_message(
+                client_request_id="y" * 129,
+                message_id="message-3",
+            )
+        )
+
+    assert accepted.created is True
+    assert normalized.created is True
+    assert user_messages.docs[1]["client_request_id"] == "request-with-padding"
+    assert len(user_messages.docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_idempotent_user_message_insert_requires_persisted_message_id():
+    repo, user_messages = _idempotent_message_repo()
+    message = _idempotent_message()
+    del message["message_id"]
+
+    with pytest.raises(ValueError, match="non-empty message_id"):
+        await repo.insert_user_message_idempotently(message)
+
+    assert user_messages.docs == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_key_loser_reads_and_returns_winner_message_id():
+    repo, user_messages = _idempotent_message_repo()
+
+    first, second = await asyncio.gather(
+        repo.insert_user_message_idempotently(
+            _idempotent_message(message_id="message-a")
+        ),
+        repo.insert_user_message_idempotently(
+            _idempotent_message(message_id="message-b")
+        ),
+    )
+
+    assert sorted((first.created, second.created)) == [False, True]
+    assert first.message_id == second.message_id
+    assert first.message_id in {"message-a", "message-b"}
+    assert len(user_messages.docs) == 1
+
+
+@pytest.mark.asyncio
+async def test_user_message_update_cannot_rewrite_persistent_identity_fields():
+    repo, _, user_messages, _ = _message_repo(
+        user_docs=[
+            {
+                "room_id": "room-1",
+                "message_id": "message-1",
+                "client_request_id": "request-1",
+                "idempotency_fingerprint": "fingerprint-1",
+                "idempotency_fingerprint_version": 1,
+            }
+        ]
+    )
+
+    updated = await repo.update_user_message(
+        "message-1",
+        {
+            "room_id": "other-room",
+            "message_id": "other-message",
+            "client_request_id": " padded-request ",
+            "idempotency_fingerprint": "other-fingerprint",
+            "idempotency_fingerprint_version": 2,
+            "message_content": {"message_text": "updated"},
+        },
+    )
+
+    assert updated is True
+    assert user_messages.update_one_calls == [
+        (
+            {"message_id": "message-1"},
+            {"$set": {"message_content": {"message_text": "updated"}}},
+            {},
+        )
+    ]
+    assert user_messages.docs[0]["room_id"] == "room-1"
+    assert user_messages.docs[0]["message_id"] == "message-1"
+    assert user_messages.docs[0]["client_request_id"] == "request-1"
+    assert user_messages.docs[0]["idempotency_fingerprint"] == "fingerprint-1"
 
 
 @pytest.mark.asyncio

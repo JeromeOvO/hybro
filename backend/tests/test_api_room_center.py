@@ -1706,6 +1706,191 @@ class TestSendMessage:
         assert execution_request.mentioned_agent_ids is None
 
     @pytest.mark.asyncio
+    async def test_replay_returns_same_message_id_without_second_background_task(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        payload = {
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "message_target_mode": "room_default",
+            "client_request_id": "request-replay-1",
+        }
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value=payload)
+        background_tasks = MagicMock()
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.side_effect = [
+            ExecutionAck(
+                room_id=sample_room.room_id,
+                success=True,
+                message_id="stable-message-id",
+                dispatch_root_message_id="stable-message-id",
+                should_start_orchestration=True,
+            ),
+            ExecutionAck(
+                room_id=sample_room.room_id,
+                success=True,
+                message_id="stable-message-id",
+                dispatch_root_message_id=None,
+                should_start_orchestration=False,
+            ),
+        ]
+
+        first = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+        replay = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert first.message_id == replay.message_id == "stable-message-id"
+        assert replay.success is True
+        background_tasks.add_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_message_trims_client_request_id_before_execution(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "  request-trimmed-1  ",
+            }
+        )
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            success=True,
+            message_id="message-1",
+            should_start_orchestration=False,
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is True
+        execution_request = patch_room_center_deps[
+            "execution_engine"
+        ].execute.await_args.args[0]
+        assert execution_request.client_request_id == "request-trimmed-1"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_request_id", [None, "", "   "])
+    async def test_send_message_rejects_missing_or_blank_client_request_id(
+        self,
+        client_request_id,
+        mock_user,
+        sample_room,
+        sample_user_message,
+        patch_room_center_deps,
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": client_request_id,
+            }
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 400
+        assert response.error == "client_request_id is required"
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_overlong_client_request_id(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "x" * 129,
+            }
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 400
+        assert "maximum length of 128" in (response.error or "")
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_returns_body_level_conflict_without_background_task(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "request-conflict-1",
+            }
+        )
+        background_tasks = MagicMock()
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            room_id=sample_room.room_id,
+            success=False,
+            error="The client_request_id was already used for a different request",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+        response = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 409
+        background_tasks.add_task.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_send_message_rejects_missing_message_target_mode_without_mentions(
         self, mock_user, sample_room, sample_user_message, patch_room_center_deps
     ):

@@ -865,21 +865,33 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      task if orchestration should start.
 
 4. `ExecutionFacade.execute` owns execution preflight:
-   - checks pending HITL requests before persistence,
-   - checks active runs before persistence,
+   - computes the versioned semantic request fingerprint and queries the
+     normalized `(room_id, client_request_id)` key before any pending-HITL or
+     active-run rejection,
+   - returns the existing `message_id` without dispatch metadata for a valid
+     replay, or a body-level `409` for a fingerprint conflict,
+   - for a new key, checks pending HITL requests and active runs before
+     persistence,
    - delegates room persistence to the room route/runtime port,
-   - emits preflight `processing` status immediately after the user message is
-     persisted so the frontend has a cancellable `message_id`,
+   - emits preflight `processing` status only when this request won the insert
+     and received a preflight context, so replays and concurrent losers do not
+     produce another SSE event,
    - asks the room route/runtime port to run message preflight before Execution
      starts orchestration,
-   - emits terminal preflight status when a persisted room response completes
-     before orchestration starts.
+   - emits terminal preflight status when a newly persisted room response
+     completes before orchestration starts.
 
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope,
-   - persists the user message,
+   - materializes a quote and pending attachment claims before attempting the
+     atomic user-message insert,
+   - treats only `created=True` as permission to commit attachment references,
+     publish `message_committed`, create a cancellation token, and continue to
+     preflight,
+   - compensates a concurrent losing insert by releasing only the loser's
+     message-scoped pending claims and deleting only its newly created quote,
    - returns preflight outcome metadata for Execution-owned processing-status
      emission,
    - creates a cancellation token,
@@ -941,6 +953,65 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - emits SSE updates through Delivery,
     - delegates terminal task notifications through
       `execution.dispatch.task_notifications`.
+
+### `sendMessage` persistence idempotency
+
+The persistence key is `(room_id, client_request_id.strip())`. API requests must
+supply a non-empty key of at most 128 characters. The key is room-scoped, so the
+same client request ID can be used independently in different rooms. Every
+repository write path for user messages requires non-empty string `message_id` and
+`room_id`; optional string request IDs are normalized and validated on a copied
+document before insertion, including legacy callers.
+
+New user-message rows store private
+`idempotency_fingerprint` and `idempotency_fingerprint_version` fields. Version 1
+is SHA-256 over canonical JSON (`sort_keys=True`, compact separators, UTF-8),
+including authenticated sender, message/parent semantics, attachment file IDs,
+structured quote inputs, mode, target/group fields, mentions, selections, and
+candidate scope. Unordered Agent ID sets are sorted; empty mention sets normalize
+to absence, while an empty selected-Agent set remains an explicit empty selection.
+Candidate group ID is included only for effective `saved_group` scope.
+Before persistence the room runtime also discards client-supplied run/claim/task
+fields and forces user-message identity. String-valued legacy quote display
+metadata in `extend_info` is allowlisted only when no structured quote is
+present; structured quotes rebuild their persisted display metadata exclusively
+from the structured payload. Generated message/quote IDs, timestamps, resolved
+file metadata and URLs, and the authenticated sender's
+request-time display name are not fingerprinted. Structured quote display/source
+fields remain part of the quote semantics. These private fields are not part of
+room API or SSE models.
+
+`room_user_messages` has two correctness-critical unique indexes:
+
+- `room_user_message_id_unique` on `message_id`;
+- `room_user_client_request_id_unique` on `(room_id, client_request_id)`, with a
+  string-type partial filter for both fields.
+
+Startup runs server-side Mongo aggregation readiness checks before creating these
+indexes. Duplicate message IDs, invalid message IDs/room IDs, duplicate normalized
+request keys, or invalid/non-normalized request IDs stop startup with bounded,
+key-only result samples. The duplicate/group checks can still scan the complete
+collection; the result bound is not a scan bound. Startup never deletes or merges
+historical messages. Index creation failure is fatal.
+
+A replay with the same versioned fingerprint returns success and the original
+`message_id`, but no `dispatch_root_message_id`; therefore it does not publish,
+preflight, emit processing/terminal SSE, or schedule orchestration again. Reusing
+the key with a different new fingerprint returns body-level status `409`.
+Historical rows that have a request key but no fingerprint are treated as legacy
+replays: the original `message_id` is returned, a metadata-only warning is logged,
+and no fingerprint is inferred or backfilled.
+
+This is persistent uniqueness plus retry-side-effect control, not an arbitrary
+crash-point exactly-once protocol. Pending RoomFiles claims retain their existing
+durable reconciliation path, and durable orchestration recovery applies once an
+orchestration run exists. A process failure after quote/claim/message insertion
+but before commit-event publication, preflight, or durable run creation can still
+leave work requiring existing recovery or operator repair; replay intentionally
+does not repeat those effects because doing so could duplicate effects that
+completed before the crash. Failure to release a losing pending RoomFiles claim
+is logged for durable stale-claim recovery and does not replace an already
+established replay or conflict result.
 
 ## Agent Dispatch Workflow
 

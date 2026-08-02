@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
+from common.dto import UserMessageInsertResult
+
 
 @runtime_checkable
 class AgentRepository(Protocol):
@@ -73,6 +75,12 @@ class QuoteRepository(Protocol):
 @runtime_checkable
 class MessageRepository(Protocol):
     async def save_user_message(self, message: dict) -> str: ...
+    async def get_user_message_by_idempotency_key(
+        self, room_id: str, client_request_id: str
+    ) -> dict | None: ...
+    async def insert_user_message_idempotently(
+        self, document: dict
+    ) -> UserMessageInsertResult: ...
     async def save_agent_message(self, message: dict) -> str: ...
     async def get_by_id(self, message_id: str) -> dict | None: ...
     async def get_user_message_by_id(self, message_id: str) -> dict | None: ...

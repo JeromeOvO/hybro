@@ -115,6 +115,7 @@ from common.dto.room import (
     SavedAgentGroupSnapshot,
     SavedUserMessage,
     UserMessageInput,
+    UserMessageInsertResult,
 )
 from common.dto.runtime_store import (
     RuntimeAgentGroup,
@@ -237,5 +238,6 @@ __all__ = [
     "TaskUpdateEvent",
     "UserMemory",
     "UserMessageInput",
+    "UserMessageInsertResult",
     "WorkflowState",
 ]
