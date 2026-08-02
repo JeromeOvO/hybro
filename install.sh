@@ -60,6 +60,14 @@ if [ ! -f default_agents/.env ]; then
     fi
 fi
 
+# /agent/registerAgent is protected. The one-shot registrar authenticates with a
+# shared service token instead of a Clerk session, so both sides need the same
+# secret or every registration fails with 401. Generate it once, after both .env
+# files exist. Idempotent: an already-configured token is left untouched.
+if [ -f backend/.env ] && [ -f default_agents/.env ]; then
+    sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
+fi
+
 # The default-agent services in docker-compose.yml are generated from
 # default_agents/agents.yaml, which is the single source of truth. Regenerate
 # before starting anything so an edited manifest is reflected in this run -
