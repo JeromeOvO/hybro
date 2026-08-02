@@ -197,6 +197,7 @@ def _execution_facade_for_scope_test(room_center):
 @pytest.mark.asyncio
 async def test_execution_facade_passes_scope_fields_to_room_request():
     room_center = SimpleNamespace(
+        get_idempotent_user_message=AsyncMock(return_value=None),
         persist_message_to_room=AsyncMock(
             return_value=(
                 RoomCenterUserMessageResponse(

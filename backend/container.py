@@ -17,6 +17,7 @@ from api_gateway.dependencies import (
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
 from common.health_check import RuntimeHealthCheck
+from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.observability import (
     MetricsCollector,
     get_instance_id,
@@ -1762,6 +1763,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
+    await _ensure_user_message_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
     await _ensure_cancellation_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
@@ -2079,6 +2081,239 @@ async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
         [("room_id", 1)],
         name="room_id_lookup",
     )
+
+
+async def _ensure_user_message_indexes(mongo: MongoDAL) -> None:
+    collection = mongo.collection("room_user_messages")
+    issues = await _user_message_index_readiness_issues(collection)
+    if issues:
+        details = "; ".join(issues)
+        logger.error(
+            "room_user_messages unique-index readiness failed: %s",
+            details,
+        )
+        raise RuntimeError(
+            "room_user_messages cannot enable correctness-critical unique indexes: "
+            f"{details}. Repair the historical rows explicitly; startup did not "
+            "delete or merge any messages."
+        )
+
+    await _create_index(
+        mongo,
+        "room_user_messages",
+        [("message_id", 1)],
+        name="room_user_message_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "room_user_messages",
+        [("room_id", 1), ("client_request_id", 1)],
+        name="room_user_client_request_id_unique",
+        unique=True,
+        critical=True,
+        partialFilterExpression={
+            "room_id": {"$type": "string"},
+            "client_request_id": {"$type": "string"},
+        },
+    )
+
+
+async def _user_message_index_readiness_issues(
+    collection: MongoCollection,
+    *,
+    sample_limit: int = 5,
+) -> list[str]:
+    """Audit historical rows server-side before enabling unique constraints."""
+
+    string_message_id = {"$eq": [{"$type": "$message_id"}, "string"]}
+    trimmed_message_id = {
+        "$trim": {"input": {"$cond": [string_message_id, "$message_id", ""]}}
+    }
+    string_room_id = {"$eq": [{"$type": "$room_id"}, "string"]}
+    trimmed_room_id = {"$trim": {"input": {"$cond": [string_room_id, "$room_id", ""]}}}
+    string_client_request_id = {"$eq": [{"$type": "$client_request_id"}, "string"]}
+    normalized_client_request_input = {
+        "$cond": [
+            string_client_request_id,
+            "$client_request_id",
+            "",
+        ]
+    }
+    trimmed_client_request_id = {"$trim": {"input": normalized_client_request_input}}
+    client_request_id_length = {"$strLenCP": normalized_client_request_input}
+
+    checks: list[tuple[str, list[dict[str, Any]]]] = [
+        (
+            "duplicate non-empty message_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$and": [
+                                string_message_id,
+                                {"$ne": [trimmed_message_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$group": {"_id": "$message_id", "occurrences": {"$sum": 1}}},
+                {"$match": {"occurrences": {"$gt": 1}}},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "message_id": "$_id",
+                        "occurrences": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "missing, null, non-string, or empty message_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {"$ne": [{"$type": "$message_id"}, "string"]},
+                                {"$eq": [trimmed_message_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$project": {"_id": 1, "message_id": 1}},
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "duplicate (room_id, normalized client_request_id)",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$and": [
+                                string_room_id,
+                                string_client_request_id,
+                                {"$ne": [trimmed_room_id, ""]},
+                                {"$ne": [trimmed_client_request_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "room_id": 1,
+                        "client_request_id": trimmed_client_request_id,
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "room_id": "$room_id",
+                            "client_request_id": "$client_request_id",
+                        },
+                        "occurrences": {"$sum": 1},
+                    }
+                },
+                {"$match": {"occurrences": {"$gt": 1}}},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "room_id": "$_id.room_id",
+                        "client_request_id": "$_id.client_request_id",
+                        "occurrences": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "invalid or non-normalized client_request_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {
+                                    "$and": [
+                                        string_client_request_id,
+                                        {
+                                            "$or": [
+                                                {
+                                                    "$eq": [
+                                                        trimmed_client_request_id,
+                                                        "",
+                                                    ]
+                                                },
+                                                {
+                                                    "$ne": [
+                                                        trimmed_client_request_id,
+                                                        "$client_request_id",
+                                                    ]
+                                                },
+                                                {
+                                                    "$gt": [
+                                                        client_request_id_length,
+                                                        MAX_CLIENT_REQUEST_ID_LENGTH,
+                                                    ]
+                                                },
+                                            ]
+                                        },
+                                    ]
+                                },
+                                {
+                                    "$not": [
+                                        {
+                                            "$in": [
+                                                {"$type": "$client_request_id"},
+                                                ["missing", "null", "string"],
+                                            ]
+                                        }
+                                    ]
+                                },
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 1,
+                        "room_id": 1,
+                        "client_request_id": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "missing, null, non-string, or empty room_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {"$ne": [{"$type": "$room_id"}, "string"]},
+                                {"$eq": [trimmed_room_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$project": {"_id": 1, "room_id": 1, "message_id": 1}},
+                {"$limit": sample_limit},
+            ],
+        ),
+    ]
+
+    issues: list[str] = []
+    for label, pipeline in checks:
+        samples = await collection.aggregate(pipeline)
+        if samples:
+            issues.append(
+                f"{label}: found at least {len(samples)}; samples={samples!r}"
+            )
+    return issues
 
 
 async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:

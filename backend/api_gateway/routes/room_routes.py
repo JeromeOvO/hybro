@@ -11,6 +11,10 @@ from api_gateway.dependencies import (
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
+from common.idempotency import (
+    MAX_CLIENT_REQUEST_ID_LENGTH,
+    normalize_client_request_id,
+)
 from common.protocols import ExecutionEngine, RoomRouteReader
 from common.utils.logger import get_logger
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
@@ -395,6 +399,18 @@ async def send_message(
             message=None,
             success=False,
             error="client_request_id is required",
+            status_code=400,
+        )
+    client_request_id = normalize_client_request_id(client_request_id)
+    if len(client_request_id) > MAX_CLIENT_REQUEST_ID_LENGTH:
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error=(
+                "client_request_id exceeds maximum length of "
+                f"{MAX_CLIENT_REQUEST_ID_LENGTH} characters"
+            ),
             status_code=400,
         )
 

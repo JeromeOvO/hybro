@@ -19,6 +19,7 @@ from common.dto import (
     MembershipSeed,
     ParsedUserMessageRequest,
     RoomInfo,
+    UserMessageInsertResult,
 )
 from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
@@ -112,6 +113,12 @@ from room.compat.unbound import (
     UNBOUND_DELIVERY,
     UNBOUND_RUNTIME_STORE,
     UNBOUND_TASK_SERVICE,
+)
+from room.idempotency import (
+    IdempotencyConflictError,
+    UnexpectedUserMessageDuplicateError,
+    UserMessagePersistenceError,
+    stored_fingerprint_matches,
 )
 
 logger = get_logger(__name__)
@@ -2181,17 +2188,79 @@ class RoomServices:
             ParseResult(success=True) if agent_messages else ParseResult(success=False)
         )
 
+    async def get_idempotent_user_message(
+        self,
+        *,
+        room_id: str,
+        client_request_id: str,
+        idempotency_fingerprint: str,
+        idempotency_fingerprint_version: int,
+    ) -> RoomCenterUserMessageResponse | None:
+        """Return a stable replay/conflict response without running side effects."""
+
+        existing = await self._require_facade().get_user_message_by_idempotency_key(
+            room_id,
+            client_request_id,
+        )
+        if existing is None:
+            return None
+        message_id = existing.get("message_id")
+        if not isinstance(message_id, str) or not message_id:
+            raise UserMessagePersistenceError(
+                "Idempotency record is missing a valid message_id"
+            )
+
+        stored_fingerprint = existing.get("idempotency_fingerprint")
+        if stored_fingerprint is None:
+            logger.warning(
+                "Legacy idempotency replay without fingerprint "
+                "room_id=%s client_request_id=%s message_id=%s",
+                room_id,
+                client_request_id,
+                message_id,
+            )
+        elif not stored_fingerprint_matches(
+            existing,
+            fingerprint=idempotency_fingerprint,
+            fingerprint_version=idempotency_fingerprint_version,
+        ):
+            return RoomCenterUserMessageResponse(
+                room_id=room_id,
+                message_id=None,
+                message=None,
+                success=False,
+                error=(
+                    "The client_request_id was already used for a different request"
+                ),
+                status_code=409,
+            )
+
+        return RoomCenterUserMessageResponse(
+            room_id=room_id,
+            message_id=message_id,
+            dispatch_root_message_id=None,
+            message=None,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
     async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> RoomCenterUserMessageResponse:
         """Add and parse user message to room and return execution preflight metadata."""
         persisted_response, preflight_context = await self.persist_message_to_room(
             request,
             target_group,
             mentioned_agent_ids,
+            idempotency_fingerprint=idempotency_fingerprint,
+            idempotency_fingerprint_version=idempotency_fingerprint_version,
         )
         if preflight_context is None:
             return persisted_response
@@ -2202,21 +2271,73 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> tuple[RoomCenterUserMessageResponse, RoomMessagePreflightContext | None]:
         """Validate, scope-check, and persist the user message before heavy preflight."""
+        client_request_id = (
+            request.client_request_id.strip()
+            if isinstance(getattr(request, "client_request_id", None), str)
+            else None
+        )
+        request.client_request_id = client_request_id
+        if (
+            client_request_id
+            and idempotency_fingerprint is not None
+            and idempotency_fingerprint_version is not None
+        ):
+            replay = await self.get_idempotent_user_message(
+                room_id=request.room_id or "",
+                client_request_id=client_request_id,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
+            )
+            if replay is not None:
+                return replay, None
+
         validation_response = self._validate_send_message_request(request)
         if validation_response:
             return validation_response, None
 
         user_message = request.message
-        client_request_id = (
-            request.client_request_id
-            if isinstance(getattr(request, "client_request_id", None), str)
-            else None
-        )
         if user_message is not None:
-            # Breaking cutover invariant: canonical turn key is always present.
+            # The authenticated request boundary, not client-supplied message
+            # metadata, owns room/sender identity and the canonical turn key.
+            user_message.room_id = request.room_id
+            user_message.user_id = request.user_id
             user_message.client_request_id = client_request_id
+            if idempotency_fingerprint is not None:
+                # Canonical sendMessage accepts only user-authored content and
+                # relationship fields. Everything else below is server-owned and
+                # deliberately excluded from the semantic fingerprint.
+                user_message.message_id = ""
+                user_message.message_created_at = utcnow()
+                user_message.message_type = "user"
+                user_message.agent_id = None
+                user_message.run_id = None
+                user_message.step_number = None
+                user_message.total_steps = None
+                user_message.task_updated_at = None
+                user_message.task_content = None
+                user_message.processing_claimed_at = None
+                user_message.quote_id = None
+                user_message.message_content.message_task = None
+                extend_info = (
+                    user_message.extend_info
+                    if isinstance(user_message.extend_info, dict)
+                    else {}
+                )
+                legacy_quote_keys = (
+                    ()
+                    if user_message.quote is not None
+                    else ("quoted_text", "quoted_sender_name")
+                )
+                user_message.extend_info = {
+                    key: value
+                    for key in legacy_quote_keys
+                    if isinstance((value := extend_info.get(key)), str)
+                } or None
 
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
@@ -2414,22 +2535,42 @@ class RoomServices:
         if isinstance(qerr, RoomCenterUserMessageResponse):
             return qerr, None
 
-        if not await self._persist_user_message(
-            user_message,
-            room_agent_set=room.room_agent_set if room else {},
-        ):
-            if getattr(user_message, "quote_id", None):
-                quote_id = user_message.quote_id
-                try:
-                    await self._require_facade().delete_room_quote(quote_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to remove quoted snippet %s for room %s after "
-                        "message persistence failure",
-                        quote_id,
-                        request.room_id,
-                        exc_info=True,
-                    )
+        try:
+            persistence = await self._persist_user_message(
+                user_message,
+                room_agent_set=room.room_agent_set if room else {},
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
+            )
+        except IdempotencyConflictError:
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    room_id=request.room_id,
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=(
+                        "The client_request_id was already used for a different request"
+                    ),
+                    status_code=409,
+                ),
+                None,
+            )
+        except UnexpectedUserMessageDuplicateError:
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="User message uniqueness conflict",
+                    status_code=500,
+                ),
+                None,
+            )
+        except UserMessagePersistenceError:
+            await self._delete_uncommitted_quote(user_message)
             return (
                 RoomCenterUserMessageResponse(
                     message_id=None,
@@ -2437,6 +2578,23 @@ class RoomServices:
                     success=False,
                     error="Failed to add message",
                     status_code=500,
+                ),
+                None,
+            )
+
+        if not persistence.created:
+            # This request lost the unique-index race. Only its own random quote
+            # and pending attachment claims are compensated; winner state remains.
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    room_id=request.room_id,
+                    message_id=persistence.message_id,
+                    dispatch_root_message_id=None,
+                    message=None,
+                    success=True,
+                    error=None,
+                    status_code=200,
                 ),
                 None,
             )
@@ -2803,16 +2961,37 @@ class RoomServices:
             user_message=user_message,
         )
 
+    async def _delete_uncommitted_quote(
+        self,
+        user_message: RoomUserMessage,
+    ) -> None:
+        quote_id = getattr(user_message, "quote_id", None)
+        if not quote_id:
+            return
+        try:
+            await self._require_facade().delete_room_quote(quote_id)
+        except Exception:
+            logger.warning(
+                "Failed to remove uncommitted quoted snippet %s for room %s",
+                quote_id,
+                user_message.room_id,
+                exc_info=True,
+            )
+
     async def _persist_user_message(
         self,
         user_message: RoomUserMessage,
         *,
         room_agent_set: dict[str, str] | None = None,
-    ) -> bool:
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
+    ) -> UserMessageInsertResult:
         async with self._hold_room_write(user_message.room_id, "user-message"):
             return await self._persist_user_message_with_lease(
                 user_message,
                 room_agent_set=room_agent_set,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
             )
 
     @asynccontextmanager
@@ -2829,8 +3008,10 @@ class RoomServices:
         user_message: RoomUserMessage,
         *,
         room_agent_set: dict[str, str] | None = None,
-    ) -> bool:
-        """Persist user message to the database and publish its commit event."""
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
+    ) -> UserMessageInsertResult:
+        """Persist once; only the winning insert commits downstream side effects."""
         attachments = (
             user_message.message_content.attachments
             if user_message.message_content
@@ -2847,49 +3028,93 @@ class RoomServices:
                     message_id=user_message.message_id,
                     file_ids=file_ids,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "Could not claim room file references for message %s",
                     user_message.message_id,
                     exc_info=True,
                 )
-                return False
-
-        persisted = await facade.persist_user_message(user_message)
-        if not persisted and file_ids:
-            await self.room_files.release_references(
-                message_id=user_message.message_id,
-                file_ids=file_ids,
-            )
-        if persisted:
-            if file_ids:
                 try:
-                    await self.room_files.commit_references(
+                    await self.room_files.release_references(
                         message_id=user_message.message_id,
                         file_ids=file_ids,
                     )
                 except Exception:
                     logger.warning(
-                        "Room file references remain pending for recovery: %s",
+                        "Could not release partial room file claims for message %s",
                         user_message.message_id,
                         exc_info=True,
                     )
-            event_publisher = getattr(self, "_message_event_publisher", None)
-            if event_publisher is None:
-                raise RuntimeError(
-                    "RoomServices.bind_message_event_publisher() not called - startup incomplete"
-                )
-            # Wait for local handler completion before preflight can enqueue or
-            # process agent messages. Delivery still dead-letters handler failures.
-            await publish_message_committed(
-                event_publisher,
-                room_id=user_message.room_id,
-                message_id=user_message.message_id,
-                message_type="user",
-                room_agent_set=room_agent_set or {},
-                wait_for_local_handlers=True,
+                raise UserMessagePersistenceError(
+                    "Could not claim room file references"
+                ) from exc
+
+        try:
+            persistence = await facade.persist_user_message(
+                user_message,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
             )
-        return persisted
+        except Exception:
+            if file_ids:
+                try:
+                    await self.room_files.release_references(
+                        message_id=user_message.message_id,
+                        file_ids=file_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not release pending room file references for %s; "
+                        "preserving persistence error and awaiting durable recovery",
+                        user_message.message_id,
+                        exc_info=True,
+                    )
+            raise
+
+        if not persistence.created:
+            if file_ids:
+                try:
+                    await self.room_files.release_references(
+                        message_id=user_message.message_id,
+                        file_ids=file_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not release losing room file references for %s; "
+                        "returning replay and awaiting durable recovery",
+                        user_message.message_id,
+                        exc_info=True,
+                    )
+            return persistence
+
+        if file_ids:
+            try:
+                await self.room_files.commit_references(
+                    message_id=user_message.message_id,
+                    file_ids=file_ids,
+                )
+            except Exception:
+                logger.warning(
+                    "Room file references remain pending for recovery: %s",
+                    user_message.message_id,
+                    exc_info=True,
+                )
+        event_publisher = getattr(self, "_message_event_publisher", None)
+        if event_publisher is None:
+            raise RuntimeError(
+                "RoomServices.bind_message_event_publisher() not called - startup incomplete"
+            )
+        # Wait for local handler completion before preflight can enqueue or
+        # process agent messages. Delivery still dead-letters handler failures.
+        await publish_message_committed(
+            event_publisher,
+            room_id=user_message.room_id,
+            message_id=user_message.message_id,
+            message_type="user",
+            room_agent_set=room_agent_set or {},
+            wait_for_local_handlers=True,
+        )
+        return persistence
 
     async def _handle_mentions_flow(
         self,

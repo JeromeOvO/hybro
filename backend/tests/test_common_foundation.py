@@ -1073,6 +1073,8 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.MessageRepository: {
             "save_user_message",
+            "get_user_message_by_idempotency_key",
+            "insert_user_message_idempotently",
             "save_agent_message",
             "update_user_message",
             "update_agent_message",

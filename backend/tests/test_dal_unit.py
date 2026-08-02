@@ -116,6 +116,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             collection.create_index = AsyncMock(return_value=f"{name}_idx")
             collection.index_information = AsyncMock(return_value={})
             collection.drop_index = AsyncMock()
+            collection.aggregate = AsyncMock(return_value=[])
             collections[name] = collection
         return collections[name]
 
@@ -139,6 +140,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "orchestration_run_events",
         "orchestration_runs",
         "room_agent_messages",
+        "room_user_messages",
         "room_memories",
         "room_quotes",
         "run_events",
@@ -216,6 +218,32 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         unique=True,
         name="room_agent_message_id_unique",
     )
+    assert _has_create_index(
+        collections["room_user_messages"],
+        [("message_id", 1)],
+        unique=True,
+        name="room_user_message_id_unique",
+    )
+    assert _has_create_index(
+        collections["room_user_messages"],
+        [("room_id", 1), ("client_request_id", 1)],
+        unique=True,
+        name="room_user_client_request_id_unique",
+        partialFilterExpression={
+            "room_id": {"$type": "string"},
+            "client_request_id": {"$type": "string"},
+        },
+    )
+    assert collections["room_user_messages"].aggregate.await_count == 5
+    assert all(
+        call.args[0][-1] == {"$limit": 5}
+        for call in collections["room_user_messages"].aggregate.await_args_list
+    )
+    invalid_client_pipeline = (
+        collections["room_user_messages"].aggregate.await_args_list[3].args[0]
+    )
+    assert "$strLenCP" in repr(invalid_client_pipeline)
+    assert "128" in repr(invalid_client_pipeline)
 
 
 @pytest.mark.asyncio
@@ -224,6 +252,8 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
     [
         "orchestration_run_id_unique",
         "orchestration_event_id_unique",
+        "room_user_message_id_unique",
+        "room_user_client_request_id_unique",
         "room_agent_message_id_unique",
     ],
 )
@@ -246,6 +276,7 @@ async def test_ensure_runtime_indexes_raises_for_critical_unique_index_failures(
             collection.create_index = AsyncMock(side_effect=create_index)
             collection.index_information = AsyncMock(return_value={})
             collection.drop_index = AsyncMock()
+            collection.aggregate = AsyncMock(return_value=[])
             collections[name] = collection
         return collections[name]
 
@@ -254,6 +285,76 @@ async def test_ensure_runtime_indexes_raises_for_critical_unique_index_failures(
 
     with pytest.raises(RuntimeError, match="Critical index creation failed"):
         await ensure_runtime_indexes(mongo=mongo)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed_check_index", "expected_error"),
+    [
+        (0, "duplicate non-empty message_id"),
+        (1, "missing, null, non-string, or empty message_id"),
+        (2, "duplicate \\(room_id, normalized client_request_id\\)"),
+        (3, "invalid or non-normalized client_request_id"),
+        (4, "missing, null, non-string, or empty room_id"),
+    ],
+)
+async def test_user_message_index_readiness_blocks_historical_conflicts(
+    failed_check_index: int,
+    expected_error: str,
+):
+    from container import _ensure_user_message_indexes
+
+    collection = MagicMock()
+    responses = [[], [], [], [], []]
+    responses[failed_check_index] = [
+        {
+            "message_id": "message-duplicate",
+            "room_id": "room-1",
+            "client_request_id": "request-1",
+            "occurrences": 2,
+        }
+    ]
+    collection.aggregate = AsyncMock(side_effect=responses)
+    collection.create_index = AsyncMock()
+    mongo = MagicMock()
+    mongo.collection.return_value = collection
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        await _ensure_user_message_indexes(mongo)
+
+    collection.create_index.assert_not_awaited()
+    assert collection.aggregate.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_user_message_index_readiness_passes_then_creates_both_indexes():
+    from container import _ensure_user_message_indexes
+
+    collection = MagicMock()
+    collection.aggregate = AsyncMock(return_value=[])
+    collection.create_index = AsyncMock(return_value="index")
+    mongo = MagicMock()
+    mongo.collection.return_value = collection
+
+    await _ensure_user_message_indexes(mongo)
+
+    assert collection.aggregate.await_count == 5
+    assert _has_create_index(
+        collection,
+        [("message_id", 1)],
+        unique=True,
+        name="room_user_message_id_unique",
+    )
+    assert _has_create_index(
+        collection,
+        [("room_id", 1), ("client_request_id", 1)],
+        unique=True,
+        name="room_user_client_request_id_unique",
+        partialFilterExpression={
+            "room_id": {"$type": "string"},
+            "client_request_id": {"$type": "string"},
+        },
+    )
 
 
 def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
@@ -363,6 +464,7 @@ async def test_search_index_failures_are_reported_independently(
                 return kwargs.get("name")
 
             collection.create_index = AsyncMock(side_effect=create_index)
+            collection.aggregate = AsyncMock(return_value=[])
             collections[name] = collection
         return collections[name]
 

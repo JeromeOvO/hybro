@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
@@ -128,6 +129,15 @@ class SavedUserMessage(FrozenDTO):
     scope_resolution_error: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class UserMessageInsertResult:
+    """Atomic user-message insert outcome returned by persistence adapters."""
+
+    message_id: str
+    created: bool
+    document: dict[str, Any]
+
+
 RoomMessageInfo = MessageRecord
 
 
@@ -162,4 +172,5 @@ __all__ = [
     "SavedAgentGroupSnapshot",
     "SavedUserMessage",
     "UserMessageInput",
+    "UserMessageInsertResult",
 ]

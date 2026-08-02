@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from common.a2a_constants import SSEProcessingStatus
@@ -24,6 +25,11 @@ from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
+)
+from execution.idempotency import (
+    IDEMPOTENCY_FINGERPRINT_VERSION,
+    build_execution_request_fingerprint,
+    normalize_client_request_id,
 )
 from execution.orchestration.cancellation_finalizer import (
     CancellationFinalizationResult,
@@ -105,12 +111,31 @@ VALID_PROCESSING_STATUS_STATES = {
 }
 
 
+@dataclass(frozen=True)
+class _RequestIdempotency:
+    client_request_id: str | None = None
+    fingerprint: str | None = None
+    fingerprint_version: int | None = None
+
+
 class RoomCenterPort(Protocol):
+    async def get_idempotent_user_message(
+        self,
+        *,
+        room_id: str,
+        client_request_id: str,
+        idempotency_fingerprint: str,
+        idempotency_fingerprint_version: int,
+    ) -> Any | None: ...
+
     async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: Any = None,
         mentioned_agent_ids: Any = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> Any: ...
 
     async def persist_message_to_room(
@@ -118,6 +143,9 @@ class RoomCenterPort(Protocol):
         request: RoomCenterUserMessageRequest,
         target_group: Any = None,
         mentioned_agent_ids: Any = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> tuple[Any, Any | None]: ...
 
     async def run_message_preflight_to_room(self, context: Any) -> Any: ...
@@ -421,6 +449,60 @@ class ExecutionFacade:
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
 
+    @staticmethod
+    def _prepare_request_idempotency(
+        request: ExecutionRequest,
+    ) -> tuple[ExecutionRequest, _RequestIdempotency]:
+        if not isinstance(request.client_request_id, str):
+            return request, _RequestIdempotency()
+        client_request_id = normalize_client_request_id(request.client_request_id)
+        if client_request_id != request.client_request_id:
+            request = request.model_copy(
+                update={"client_request_id": client_request_id}
+            )
+        if not client_request_id:
+            return request, _RequestIdempotency()
+        return request, _RequestIdempotency(
+            client_request_id=client_request_id,
+            fingerprint=build_execution_request_fingerprint(request),
+            fingerprint_version=IDEMPOTENCY_FINGERPRINT_VERSION,
+        )
+
+    async def _lookup_idempotent_ack(
+        self,
+        *,
+        request: ExecutionRequest,
+        idempotency: _RequestIdempotency,
+    ) -> ExecutionAck | None:
+        if (
+            idempotency.client_request_id is None
+            or idempotency.fingerprint is None
+            or idempotency.fingerprint_version is None
+        ):
+            return None
+        response = await self._room_center.get_idempotent_user_message(
+            room_id=request.room_id,
+            client_request_id=idempotency.client_request_id,
+            idempotency_fingerprint=idempotency.fingerprint,
+            idempotency_fingerprint_version=idempotency.fingerprint_version,
+        )
+        return (
+            room_response_to_execution_ack(response) if response is not None else None
+        )
+
+    async def _replay_or_rejection(
+        self,
+        *,
+        request: ExecutionRequest,
+        idempotency: _RequestIdempotency,
+        rejection: ExecutionAck,
+    ) -> ExecutionAck:
+        replay_ack = await self._lookup_idempotent_ack(
+            request=request,
+            idempotency=idempotency,
+        )
+        return replay_ack or rejection
+
     async def _reject_if_hitl_pending(
         self,
         request: ExecutionRequest,
@@ -555,14 +637,7 @@ class ExecutionFacade:
         return extend_info or None
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
-        hitl_rejection = await self._reject_if_hitl_pending(request)
-        if hitl_rejection is not None:
-            return hitl_rejection
-
-        active_run_rejection = await self._reject_if_room_has_active_run(request)
-        if active_run_rejection is not None:
-            return active_run_rejection
-
+        request, idempotency = self._prepare_request_idempotency(request)
         room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
@@ -570,9 +645,32 @@ class ExecutionFacade:
             message=request.message,
             attachments=request.attachments,
             inline_file_ids=request.inline_file_ids,
-            client_request_id=request.client_request_id,
+            client_request_id=idempotency.client_request_id,
             extend_info=self._room_request_extend_info(request),
         )
+        replay_ack = await self._lookup_idempotent_ack(
+            request=request,
+            idempotency=idempotency,
+        )
+        if replay_ack is not None:
+            return replay_ack
+
+        hitl_rejection = await self._reject_if_hitl_pending(request)
+        if hitl_rejection is not None:
+            return await self._replay_or_rejection(
+                request=request,
+                idempotency=idempotency,
+                rejection=hitl_rejection,
+            )
+
+        active_run_rejection = await self._reject_if_room_has_active_run(request)
+        if active_run_rejection is not None:
+            return await self._replay_or_rejection(
+                request=request,
+                idempotency=idempotency,
+                rejection=active_run_rejection,
+            )
+
         (
             persisted_response,
             preflight_context,
@@ -580,8 +678,12 @@ class ExecutionFacade:
             room_request,
             request.target_group,
             request.mentioned_agent_ids,
+            idempotency_fingerprint=idempotency.fingerprint,
+            idempotency_fingerprint_version=idempotency.fingerprint_version,
         )
         persisted_ack = room_response_to_execution_ack(persisted_response)
+        if preflight_context is None:
+            return persisted_ack
         try:
             await self._emit_room_preflight_processing_status(request, persisted_ack)
         except Exception:
@@ -589,8 +691,6 @@ class ExecutionFacade:
                 "room preflight processing status emission failed after persistence",
                 exc_info=True,
             )
-        if preflight_context is None:
-            return persisted_ack
         response = await self._room_center.run_message_preflight_to_room(
             preflight_context
         )
