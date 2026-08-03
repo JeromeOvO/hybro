@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11](https://github.com/hybroai/hybro/compare/v0.2.10...v0.2.11) (2026-08-03)
+
+
+### Features
+
+* add persistent send-message idempotency ([4eacf48](https://github.com/hybroai/hybro/commit/4eacf48a76b7001c98abbb7d48a64f4e5187bf9e))
+* add persistent send-message idempotency ([c5bdf94](https://github.com/hybroai/hybro/commit/c5bdf94595441690e58d98ebc141d992641d7b4d))
+
+
+### Bug Fixes
+
+* **backend:** include private agents in suggestions ([38ca288](https://github.com/hybroai/hybro/commit/38ca28828fcd91edc4a845afc943d64dfbea1d1a))
+* **backend:** include runtime subpackages in wheel ([dab8b67](https://github.com/hybroai/hybro/commit/dab8b6773e717e7982ad659f066f0254e868b9a2))
+* **backend:** include runtime subpackages in wheel ([57ff5fb](https://github.com/hybroai/hybro/commit/57ff5fba100c1cec651fbf39bac18668d600f342))
+* **backend:** recover stale file claims and suggest owned private agents ([86de847](https://github.com/hybroai/hybro/commit/86de8473f6aca19ad28c200efc60100528046ef3))
+* harden compaction sweep lifecycle ([6810e8c](https://github.com/hybroai/hybro/commit/6810e8c6d9fcfece55f58b4a1cc4f81224a15d6a))
+* harden compaction sweep lifecycle ([32585f4](https://github.com/hybroai/hybro/commit/32585f44d608c8bdcc3be478c9c42c105673a27c))
+* normalize room file claim timestamps ([aa1ced2](https://github.com/hybroai/hybro/commit/aa1ced25bd8eef1aa5aaf3dbd14dbfe24696dba1))
+* **orchestration:** include blocker_keys in planner questions schema ([cd4edef](https://github.com/hybroai/hybro/commit/cd4edef1cb17493296caea0288a30797ef9baed0))
+* **orchestration:** include blocker_keys in planner questions schema ([cca39c6](https://github.com/hybroai/hybro/commit/cca39c6120fedbfc81ec6d02d730e046124ecd4a))
+* sync release version files and rename backend package ([76eaf98](https://github.com/hybroai/hybro/commit/76eaf9802b6ab3e45ce17a67741fb83b8be14ed0))
+* sync release version files and rename backend package ([bb23b0b](https://github.com/hybroai/hybro/commit/bb23b0b4e5d32427820babe0bda31c1d46be66f9))
+
 ## [0.2.10](https://github.com/hybroai/hybro/compare/v0.2.9...v0.2.10) (2026-07-31)
 
 
