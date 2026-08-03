@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from common.auth import ClerkUser, get_current_user, get_optional_user
+from common.auth import (
+    ClerkUser,
+    get_current_user,
+    get_current_user_or_service,
+    get_optional_user,
+)
 from models.response import (
     AgentCenterResponse,
     RoomCenterRoomMessageResponse,
@@ -38,6 +43,11 @@ def integration_app(integration_user):
 
     app.dependency_overrides[get_current_user] = _mock_auth
     app.dependency_overrides[get_optional_user] = _mock_auth
+    # /agent/registerAgent accepts a Clerk user OR the registrar service token.
+    # Override it too, or tests using this fixture 401 before reaching the
+    # behaviour they assert. test_register_agent_requires_auth clears the
+    # overrides itself, so real auth stays covered.
+    app.dependency_overrides[get_current_user_or_service] = _mock_auth
 
     yield app
 

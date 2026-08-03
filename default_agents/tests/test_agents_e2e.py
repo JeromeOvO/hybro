@@ -3,14 +3,6 @@
 Runs against a live stack started with `docker compose up -d --build`, using the
 published host ports and the public backend at http://localhost:8000.
 
-E2E mode (set E2E=1): the documented prerequisite is a running stack, so an
-unreachable backend, a missing agent card, or a missing registration is a real
-FAILURE — not a skip — otherwise the verifier is false-green. Reserve skips for
-the default (non-E2E) mode where the stack may legitimately be absent.
-
-Regardless of mode, functional checks make real OpenAI calls, so they skip when
-OPENAI_API_KEY is not set.
-
 Tiers (manifest-driven from agents.yaml):
   1. Card availability  - every agent serves its agent card.
   2. Registration       - every agent is registered with the backend.
@@ -37,16 +29,9 @@ MANIFEST_PATH = Path(__file__).resolve().parents[1] / "agents.yaml"
 CARD_PATHS = ("/.well-known/agent-card.json", "/.well-known/agent.json")
 
 
-def _e2e_mode() -> bool:
-    """True when the caller asserts a live stack must be present (E2E=1)."""
-    return os.getenv("E2E", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _fail_or_skip(msg: str) -> None:
-    """Fail in E2E mode (stack is a prerequisite); skip otherwise."""
-    if _e2e_mode():
-        pytest.fail(msg)
-    pytest.skip(msg)
+def _fail_missing_stack(msg: str) -> None:
+    """Fail: these are end-to-end tests and a running stack is a prerequisite."""
+    pytest.fail(f"{msg} (start it with: docker compose up -d --build)")
 
 
 def _load_agents() -> dict[str, dict]:
@@ -67,10 +52,10 @@ def _require_backend() -> None:
     try:
         resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
     except requests.RequestException as exc:
-        _fail_or_skip(f"backend not reachable at {BACKEND_URL}: {exc}")
+        _fail_missing_stack(f"backend not reachable at {BACKEND_URL}: {exc}")
         return
     if resp.status_code != 200:
-        _fail_or_skip(f"backend unhealthy at {BACKEND_URL}: HTTP {resp.status_code}")
+        _fail_missing_stack(f"backend unhealthy at {BACKEND_URL}: HTTP {resp.status_code}")
 
 
 def _require_openai() -> None:
@@ -138,7 +123,7 @@ def test_agent_card_available(agent_id: str) -> None:
     agent_url = _agent_url(spec)
     card = _get_card(agent_url)
     if card is None:
-        _fail_or_skip(f"{agent_id} not reachable at {agent_url}; is the stack running?")
+        _fail_missing_stack(f"{agent_id} not reachable at {agent_url}; is the stack running?")
     assert card.get("name"), f"{agent_id} card missing name: {card}"
     assert card.get("skills"), f"{agent_id} card missing skills: {card}"
 
@@ -152,7 +137,7 @@ def test_agent_registered(agent_id: str) -> None:
     spec = AGENTS[agent_id]
     card = _get_card(_agent_url(spec))
     if card is None:
-        _fail_or_skip(f"{agent_id} not reachable; cannot compare registration")
+        _fail_missing_stack(f"{agent_id} not reachable; cannot compare registration")
     expected_name = card.get("name")
 
     resp = requests.get(f"{BACKEND_URL}{API_PREFIX}/agents", timeout=15)
@@ -179,11 +164,14 @@ def test_weather_agent_functional() -> None:
     _require_openai()
     agent_url = _agent_url(AGENTS["weather_agent"])
     if _get_card(agent_url) is None:
-        _fail_or_skip("weather_agent not reachable; is the stack running?")
+        _fail_missing_stack("weather_agent not reachable; is the stack running?")
 
     result = _send_message(agent_url, "What's the weather in Tokyo?")
     state = (result.get("status") or {}).get("state")
-    assert state in ("completed", "input-required", None) or state, f"unexpected state: {state}"
+
+    assert state in ("completed", "input-required"), (
+        f"weather agent did not complete (state={state!r}): {result}"
+    )
 
     text = " ".join(
         str(p.get("text", "")) for p in _collect_parts(result) if p.get("kind") == "text"
@@ -200,7 +188,7 @@ def test_image_generator_functional() -> None:
     _require_openai()
     agent_url = _agent_url(AGENTS["image_generator_agent"])
     if _get_card(agent_url) is None:
-        _fail_or_skip("image_generator_agent not reachable; is the stack running?")
+        _fail_missing_stack("image_generator_agent not reachable; is the stack running?")
 
     result = _send_message(agent_url, "Generate an image of a red apple", timeout=180)
     file_parts = [p for p in _collect_parts(result) if p.get("kind") == "file"]
@@ -232,7 +220,7 @@ def test_travel_planner_functional() -> None:
     _require_openai()
     agent_url = _agent_url(AGENTS["travel_planner_agent"])
     if _get_card(agent_url) is None:
-        _fail_or_skip("travel_planner_agent not reachable; is the stack running?")
+        _fail_missing_stack("travel_planner_agent not reachable; is the stack running?")
 
     result = _send_message(agent_url, "Plan a short 2-day trip to Kyoto, Japan.")
     _assert_completed_text(result, "travel planner")
@@ -244,7 +232,7 @@ def test_story_functional() -> None:
     _require_openai()
     agent_url = _agent_url(AGENTS["story_agent"])
     if _get_card(agent_url) is None:
-        _fail_or_skip("story_agent not reachable; is the stack running?")
+        _fail_missing_stack("story_agent not reachable; is the stack running?")
 
     result = _send_message(agent_url, "Tell me a very short story about a brave little robot.")
     _assert_completed_text(result, "story")

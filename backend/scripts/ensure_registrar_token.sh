@@ -1,21 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Generate the shared secret the one-shot default-agent registrar uses to call
-# the protected /agent/registerAgent endpoint.
-#
-# The same random value is written to both sides under their respective names:
-#   backend/.env         DEFAULT_AGENT_REGISTRAR_TOKEN
-#   default_agents/.env  AGENT_REGISTRAR_TOKEN
-#
-# The backend compares the two with hmac.compare_digest (common/auth.py), so
-# they must match exactly. An empty value disables service-token auth entirely,
-# which makes every registration attempt fail with 401.
-#
-# Idempotent: if BOTH files already carry a non-empty value, nothing changes.
-# Reused values are never printed.
-#
-# Usage: sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
 
 backend_env=${1:-}
 agents_env=${2:-}

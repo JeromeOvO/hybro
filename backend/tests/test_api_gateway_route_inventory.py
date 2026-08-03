@@ -8,6 +8,7 @@ AUTH_DEPENDENCY_NAMES = {
     "get_api_key",
     "get_api_key_no_track",
     "get_current_user",
+    "get_current_user_or_service",
     "get_current_user_with_query_token",
     "get_optional_user",
 }

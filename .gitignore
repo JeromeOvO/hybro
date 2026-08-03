@@ -32,7 +32,9 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .ruff_cache/
-.venv/
+# No trailing slash: uv can leave .venv as a symlink to its cache, which a
+# directory-only pattern would not ignore.
+.venv
 venv/
 ENV/
 

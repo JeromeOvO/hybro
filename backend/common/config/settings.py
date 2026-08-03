@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
     auth_mode: str = "mock"  # "mock" or "clerk"
 
+    # Default-agent registrar bootstrap (service identity for one-shot registration)
+    default_agent_registrar_token: str = ""
+    # provider_id assigned to agents registered through the service token.
+    default_agent_provider_id: str = "Hybro AI"
+
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check
     cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe

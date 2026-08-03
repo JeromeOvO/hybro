@@ -27,6 +27,8 @@ load_dotenv()
 bind_auth_config(
     clerk_secret_key_value=settings.clerk_secret_key,
     authorized_parties=tuple(settings.frontend_origins),
+    service_registrar_token_value=settings.default_agent_registrar_token,
+    service_provider_id_value=settings.default_agent_provider_id,
 )
 
 
