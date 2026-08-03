@@ -10,7 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode; url?: string }[] = [
+export const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode; url?: string }[] = [
   { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" />, url: "https://openclaw.ai/" },
   { name: "Ollama", description: "Run LLMs locally", color: "text-slate-600 dark:text-slate-300", icon: <OllamaIcon className="h-10 w-10" />, url: "https://ollama.com/" },
   { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" />, url: "https://n8n.io/" },
