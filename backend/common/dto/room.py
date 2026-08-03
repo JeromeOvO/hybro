@@ -138,6 +138,26 @@ class UserMessageInsertResult:
     document: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class TimelinePosition:
+    timeline_sort_us: int
+    source: Literal["user", "agent"]
+    message_id: str
+
+
+@dataclass(frozen=True)
+class RoomTimelineEntry:
+    source: Literal["user", "agent"]
+    message: Any
+
+
+@dataclass(frozen=True)
+class RoomTimelinePage:
+    entries: list[RoomTimelineEntry]
+    has_more: bool
+    next_position: TimelinePosition | None
+
+
 RoomMessageInfo = MessageRecord
 
 
@@ -169,8 +189,11 @@ __all__ = [
     "RoomMembership",
     "RoomMessageInfo",
     "RoomSummary",
+    "RoomTimelineEntry",
+    "RoomTimelinePage",
     "SavedAgentGroupSnapshot",
     "SavedUserMessage",
+    "TimelinePosition",
     "UserMessageInput",
     "UserMessageInsertResult",
 ]

@@ -96,6 +96,11 @@ from models.request import RoomCenterAgentMessageRequest
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
+from room.timeline import (
+    TIMELINE_MIGRATION_MARKER_COLLECTION,
+    TIMELINE_MIGRATION_MARKER_ID,
+    TIMELINE_MIGRATION_VERSION,
+)
 from room_files import LocalFileContentStore, RoomFiles
 
 logger = get_logger(__name__)
@@ -1764,6 +1769,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_user_message_indexes(mongo)
+    await _ensure_room_timeline_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
     await _ensure_cancellation_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
@@ -1819,7 +1825,7 @@ async def _create_index(
         await collection.create_index(keys, unique=unique, name=name, **kwargs)
         return True
     except Exception as exc:
-        if unique and critical:
+        if critical:
             logger.error(
                 "Critical index creation failed for %s.%s",
                 collection_name,
@@ -2081,6 +2087,154 @@ async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
         [("room_id", 1)],
         name="room_id_lookup",
     )
+
+
+async def _ensure_room_timeline_indexes(mongo: MongoDAL) -> None:
+    """Require validated identities and a completed historical timeline audit."""
+
+    specifications = (
+        ("room_user_messages", "room_user_timeline_desc"),
+        ("room_agent_messages", "room_agent_timeline_desc"),
+    )
+    string_room_id = {"$eq": [{"$type": "$room_id"}, "string"]}
+    string_message_id = {"$eq": [{"$type": "$message_id"}, "string"]}
+    invalid_identity = {
+        "$or": [
+            {"$not": [string_room_id]},
+            {
+                "$eq": [
+                    {"$trim": {"input": {"$cond": [string_room_id, "$room_id", ""]}}},
+                    "",
+                ]
+            },
+            {"$not": [string_message_id]},
+            {
+                "$eq": [
+                    {
+                        "$trim": {
+                            "input": {"$cond": [string_message_id, "$message_id", ""]}
+                        }
+                    },
+                    "",
+                ]
+            },
+        ]
+    }
+    invalid_timeline_key = {
+        "$not": [{"$in": [{"$type": "$timeline_sort_us"}, ["int", "long"]]}]
+    }
+    identity_failures: list[str] = []
+    timeline_failures: list[str] = []
+    any_messages = False
+    for collection_name, _index_name in specifications:
+        collection = mongo.collection(collection_name)
+        identity_samples = await collection.aggregate(
+            [
+                {"$match": {"$expr": invalid_identity}},
+                {"$project": {"_id": 0, "message_id": 1}},
+                {"$limit": 5},
+            ]
+        )
+        if identity_samples:
+            sample_ids = [str(sample.get("message_id")) for sample in identity_samples]
+            identity_failures.append(
+                f"{collection_name} invalid message_ids={sample_ids}"
+            )
+        timeline_samples = await collection.aggregate(
+            [
+                {"$match": {"$expr": invalid_timeline_key}},
+                {"$project": {"_id": 0, "message_id": 1}},
+                {"$limit": 5},
+            ]
+        )
+        if timeline_samples:
+            sample_ids = [str(sample.get("message_id")) for sample in timeline_samples]
+            timeline_failures.append(
+                f"{collection_name} invalid message_ids={sample_ids}"
+            )
+        any_messages = (
+            bool(await collection.find_one({}, projection={"_id": 1})) or any_messages
+        )
+
+    if identity_failures:
+        details = "; ".join(identity_failures)
+        logger.error("Room timeline identity readiness failed: %s", details)
+        raise RuntimeError(
+            "Room timeline indexes require non-empty string room_id and message_id. "
+            "The timeline migration cannot repair identity fields; manually repair "
+            f"the key-only samples before restart: {details}"
+        )
+    migration_command = (
+        "cd backend && uv run python -m scripts.migrate_room_timeline_sort_keys --apply"
+    )
+    if timeline_failures:
+        details = "; ".join(timeline_failures)
+        logger.error("Room timeline key readiness failed: %s", details)
+        raise RuntimeError(
+            "Room timeline indexes require integer timeline_sort_us on every "
+            f"message. Run `{migration_command}`. Key-only samples: {details}"
+        )
+
+    bootstrap_empty_marker = not any_messages
+    if any_messages:
+        marker = await mongo.collection(TIMELINE_MIGRATION_MARKER_COLLECTION).find_one(
+            {"_id": TIMELINE_MIGRATION_MARKER_ID}
+        )
+        evidence = marker.get("collections") if isinstance(marker, dict) else None
+        valid_evidence = isinstance(evidence, dict) and all(
+            isinstance(item := evidence.get(collection_name), dict)
+            and isinstance(item.get("scanned"), int)
+            and not isinstance(item.get("scanned"), bool)
+            and isinstance(item.get("correct"), int)
+            and not isinstance(item.get("correct"), bool)
+            and item["scanned"] == item["correct"]
+            for collection_name, _index_name in specifications
+        )
+        if not (
+            isinstance(marker, dict)
+            and marker.get("_id") == TIMELINE_MIGRATION_MARKER_ID
+            and isinstance(marker.get("version"), int)
+            and not isinstance(marker.get("version"), bool)
+            and marker.get("version") == TIMELINE_MIGRATION_VERSION
+            and marker.get("status") == "complete"
+            and valid_evidence
+        ):
+            raise RuntimeError(
+                "Room timeline historical consistency has not passed the final "
+                f"migration audit. Run `{migration_command}` while writes are "
+                "quiesced; startup will not infer consistency from integer type alone."
+            )
+
+    for collection_name, index_name in specifications:
+        await _create_index(
+            mongo,
+            collection_name,
+            [
+                ("room_id", 1),
+                ("timeline_sort_us", -1),
+                ("message_id", -1),
+            ],
+            name=index_name,
+            critical=True,
+        )
+
+    if bootstrap_empty_marker:
+        await mongo.collection(TIMELINE_MIGRATION_MARKER_COLLECTION).update_one(
+            {"_id": TIMELINE_MIGRATION_MARKER_ID},
+            {
+                "$set": {
+                    "marker_id": TIMELINE_MIGRATION_MARKER_ID,
+                    "version": TIMELINE_MIGRATION_VERSION,
+                    "status": "complete",
+                    "completed_at": utcnow(),
+                    "collections": {
+                        collection_name: {"scanned": 0, "correct": 0}
+                        for collection_name, _index_name in specifications
+                    },
+                }
+            },
+            upsert=True,
+        )
 
 
 async def _ensure_user_message_indexes(mongo: MongoDAL) -> None:

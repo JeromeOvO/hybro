@@ -198,13 +198,21 @@ export async function updateRoomExtendInfo(
 }
 
 // Query room messages
+export interface RoomTimelinePagination {
+  limit?: number
+  cursor?: string | null
+}
+
 export async function inquiryRoomMessagesByRoomId(
   room_id: string,
   getToken?: () => Promise<string | null>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  pagination?: RoomTimelinePagination
 ): Promise<RoomCenterRoomMessageResponse> {
   const requestData: RoomCenterRoomMessageRequest = {
-    room_id
+    room_id,
+    ...(pagination?.limit !== undefined ? { limit: pagination.limit } : {}),
+    ...(pagination?.cursor !== undefined ? { cursor: pagination.cursor } : {})
   }
 
   return apiPost<RoomCenterRoomMessageResponse>(

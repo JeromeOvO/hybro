@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto import RoomTimelineEntry, RoomTimelinePage, TimelinePosition
 from common.types import (
     Artifact,
     DataPart,
@@ -30,6 +31,20 @@ def room_runtime():
     svc._store = MagicMock()
     svc.delivery = MagicMock()
     return svc
+
+
+def _timeline_page(*messages):
+    return RoomTimelinePage(
+        entries=[
+            RoomTimelineEntry(
+                source="user" if isinstance(message, RoomUserMessage) else "agent",
+                message=message,
+            )
+            for message in messages
+        ],
+        has_more=False,
+        next_position=None,
+    )
 
 
 def _make_msg_with_attachment(file_id="f1"):
@@ -109,6 +124,65 @@ class TestMessageRetrieval:
 
 
 class TestRoomMessageRetrieval:
+    @pytest.mark.parametrize("limit", [True, "10", 0, -1, 201])
+    async def test_invalid_page_limit_returns_body_level_400(self, room_runtime, limit):
+        facade = MagicMock()
+        facade.get_timeline_page = AsyncMock()
+        room_runtime.bind_facade(facade)
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1", limit=limit)
+        )
+
+        assert result.success is False
+        assert result.status_code == 400
+        facade.get_timeline_page.assert_not_awaited()
+
+    async def test_timeline_repository_failure_never_returns_partial_page(
+        self, room_runtime
+    ):
+        facade = MagicMock()
+        facade.get_timeline_page = AsyncMock(side_effect=RuntimeError("query failed"))
+        room_runtime.bind_facade(facade)
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1")
+        )
+
+        assert result.success is False
+        assert result.status_code == 500
+        assert result.message_list is None
+        assert result.next_cursor is None
+        assert result.error == "Failed to retrieve room timeline"
+        assert "query failed" not in result.error
+
+    async def test_page_metadata_and_attachment_projection(self, room_runtime):
+        user = _make_msg_with_attachment()
+        facade = MagicMock()
+        facade.get_timeline_page = AsyncMock(
+            return_value=RoomTimelinePage(
+                entries=[RoomTimelineEntry(source="user", message=user)],
+                has_more=True,
+                next_position=TimelinePosition(
+                    timeline_sort_us=1, source="user", message_id="msg1"
+                ),
+            )
+        )
+        room_runtime.bind_facade(facade)
+
+        result = await room_runtime.inquiry_room_messages_by_room_id(
+            RoomCenterRoomMessageRequest(room_id="room1", limit=1)
+        )
+
+        assert result.success is True
+        assert result.has_more is True
+        assert result.next_cursor
+        assert (
+            result.message_list[0].message_content.attachments[0].file_url
+            == "/api/v1/files/f1/content"
+        )
+        facade.get_timeline_page.assert_awaited_once_with("room1", limit=1, before=None)
+
     async def test_agent_artifact_only_output_is_returned_as_message_text(
         self,
         room_runtime,
@@ -136,8 +210,7 @@ class TestRoomMessageRetrieval:
             message_content=MessageContent(message_task=task),
         )
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[])
-        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
         room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_room_messages_by_room_id(
@@ -217,8 +290,7 @@ class TestRoomMessageRetrieval:
             extend_info=extend_info,
         )
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[])
-        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
         room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_room_messages_by_room_id(
@@ -266,8 +338,7 @@ class TestRoomMessageRetrieval:
             },
         )
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[])
-        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
         room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_room_messages_by_room_id(
@@ -302,8 +373,7 @@ class TestRoomMessageRetrieval:
             },
         )
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[])
-        facade.get_agent_messages_for_room = AsyncMock(return_value=[agent_msg])
+        facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
         room_runtime.bind_facade(facade)
 
         result = await room_runtime.inquiry_room_messages_by_room_id(

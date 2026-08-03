@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from common.dto import UserMessageInsertResult
+from common.dto import RoomTimelinePage, TimelinePosition, UserMessageInsertResult
 
 
 @runtime_checkable
@@ -97,6 +97,13 @@ class MessageRepository(Protocol):
     async def get_for_room(
         self, room_id: str, limit: int, before: datetime | None = None
     ) -> list[dict]: ...
+    async def get_timeline_page(
+        self,
+        room_id: str,
+        *,
+        limit: int,
+        before: TimelinePosition | None,
+    ) -> RoomTimelinePage: ...
     async def get_thread(self, parent_message_id: str) -> list[dict]: ...
     async def update_status(self, message_id: str, status: str, **fields) -> bool: ...
     async def delete_for_room(self, room_id: str) -> dict[str, int]: ...

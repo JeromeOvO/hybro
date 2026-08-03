@@ -350,10 +350,15 @@ async def inquiry_room_messages(
     request_data = await request.json()
     room_id = request_data.get("room_id")
 
-    # Verify user owns the room
+    # Authorization intentionally precedes pagination validation so an invalid
+    # cursor cannot reveal whether another user's room has timeline data.
     await verify_room_ownership(room_id, user, store)
 
-    room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
+    room_center_request = RoomCenterRoomMessageRequest(
+        room_id=room_id,
+        limit=request_data.get("limit"),
+        cursor=request_data.get("cursor"),
+    )
     room_center_response = await center.inquiry_room_messages_by_room_id(
         room_center_request
     )

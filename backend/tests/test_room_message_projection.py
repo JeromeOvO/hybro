@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
     FileContent,
@@ -18,10 +19,6 @@ from common.types import (
     TextPart,
 )
 from models.request import RoomCenterRoomMessageRequest
-from models.response import (
-    RoomCenterAgentMessageResponse,
-    RoomCenterUserMessageResponse,
-)
 from models.room import MessageContent, RoomAgentMessage
 from room.compat.runtime import RoomServices
 
@@ -66,22 +63,13 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
         ),
     )
     runtime = RoomServices()
-    runtime.inquiry_user_messages_by_room_id = AsyncMock(
-        return_value=RoomCenterUserMessageResponse(
-            room_id="room-1",
-            message_list=[],
-            success=True,
-            error=None,
-        )
+    facade = AsyncMock()
+    facade.get_timeline_page.return_value = RoomTimelinePage(
+        entries=[RoomTimelineEntry(source="agent", message=agent_message)],
+        has_more=False,
+        next_position=None,
     )
-    runtime.inquiry_agent_messages_by_room_id = AsyncMock(
-        return_value=RoomCenterAgentMessageResponse(
-            room_id="room-1",
-            message_list=[agent_message],
-            success=True,
-            error=None,
-        )
-    )
+    runtime.bind_facade(facade)
 
     response = await runtime.inquiry_room_messages_by_room_id(
         RoomCenterRoomMessageRequest(room_id="room-1")
@@ -132,22 +120,13 @@ async def test_room_message_projection_drops_inline_file_without_uri() -> None:
         message_content=MessageContent(message_task=task),
     )
     runtime = RoomServices()
-    runtime.inquiry_user_messages_by_room_id = AsyncMock(
-        return_value=RoomCenterUserMessageResponse(
-            room_id="room-1",
-            message_list=[],
-            success=True,
-            error=None,
-        )
+    facade = AsyncMock()
+    facade.get_timeline_page.return_value = RoomTimelinePage(
+        entries=[RoomTimelineEntry(source="agent", message=agent_message)],
+        has_more=False,
+        next_position=None,
     )
-    runtime.inquiry_agent_messages_by_room_id = AsyncMock(
-        return_value=RoomCenterAgentMessageResponse(
-            room_id="room-1",
-            message_list=[agent_message],
-            success=True,
-            error=None,
-        )
-    )
+    runtime.bind_facade(facade)
 
     response = await runtime.inquiry_room_messages_by_room_id(
         RoomCenterRoomMessageRequest(room_id="room-1")

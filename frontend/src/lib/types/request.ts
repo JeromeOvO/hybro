@@ -334,6 +334,8 @@ export interface ConversationTurn {
 }
 export interface RoomCenterRoomMessageRequest {
   room_id?: string | null;
+  limit?: number | null;
+  cursor?: string | null;
   message_id?: string | null;
   message_type?: string | null;
   message_content?: string | null;

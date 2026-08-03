@@ -120,6 +120,11 @@ from room.idempotency import (
     UserMessagePersistenceError,
     stored_fingerprint_matches,
 )
+from room.timeline import (
+    TimelineCursorError,
+    decode_timeline_cursor,
+    encode_timeline_cursor,
+)
 
 logger = get_logger(__name__)
 
@@ -4514,177 +4519,221 @@ class RoomServices:
         try:
             room_id = request.room_id
 
-            # Get user messages
-            user_message_request = RoomCenterUserMessageRequest(room_id=room_id)
-            user_messages_response = await self.inquiry_user_messages_by_room_id(
-                user_message_request
-            )
+            limit = request.limit if request.limit is not None else 200
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 200
+            ):
+                return RoomCenterRoomMessageResponse(
+                    room_id=room_id,
+                    message_list=None,
+                    success=False,
+                    error="limit must be an integer between 1 and 200",
+                    status_code=400,
+                )
+            try:
+                before = (
+                    decode_timeline_cursor(request.cursor, room_id=room_id)
+                    if request.cursor is not None
+                    else None
+                )
+            except TimelineCursorError:
+                return RoomCenterRoomMessageResponse(
+                    room_id=room_id,
+                    message_list=None,
+                    success=False,
+                    error="Invalid timeline cursor",
+                    status_code=400,
+                )
 
-            # Get agent messages
-            agent_message_request = RoomCenterAgentMessageRequest(room_id=room_id)
-            agent_messages_response = await self.inquiry_agent_messages_by_room_id(
-                agent_message_request
+            page = await self._require_facade().get_timeline_page(
+                room_id,
+                limit=limit,
+                before=before,
             )
-
+            user_messages = [
+                entry.message for entry in page.entries if entry.source == "user"
+            ]
+            agent_messages = [
+                entry.message for entry in page.entries if entry.source == "agent"
+            ]
+            page_order = {
+                (entry.source, entry.message.message_id): index
+                for index, entry in enumerate(page.entries)
+            }
             combined_messages = []
 
             # Process user messages
-            if user_messages_response.success and user_messages_response.message_list:
-                for user_msg in user_messages_response.message_list:
-                    room_message = RoomMessage(
-                        room_id=user_msg.room_id,
-                        message_id=user_msg.message_id,
-                        client_request_id=user_msg.client_request_id,
-                        message_type="user",
-                        message_content=user_msg.message_content,
-                        message_created_at=user_msg.message_created_at,
-                        user_id=user_msg.user_id,
-                        extend_info=_public_user_message_extend_info(
-                            user_msg.extend_info
-                        ),
-                    )
-                    combined_messages.append(room_message)
+            for user_msg in user_messages:
+                if user_msg.message_content and user_msg.message_content.attachments:
+                    for attachment in user_msg.message_content.attachments:
+                        try:
+                            room_files = self.room_files
+                        except RuntimeError:
+                            room_files = None
+                        attachment.file_url = (
+                            await room_files.get_url(attachment.file_id)
+                            if room_files is not None
+                            else attachment.file_url
+                            or f"/api/v1/files/{attachment.file_id}/content"
+                        )
+                room_message = RoomMessage(
+                    room_id=user_msg.room_id,
+                    message_id=user_msg.message_id,
+                    client_request_id=user_msg.client_request_id,
+                    message_type="user",
+                    message_content=user_msg.message_content,
+                    message_created_at=user_msg.message_created_at,
+                    user_id=user_msg.user_id,
+                    extend_info=_public_user_message_extend_info(user_msg.extend_info),
+                )
+                combined_messages.append(room_message)
 
             # Process agent messages
-            if agent_messages_response.success and agent_messages_response.message_list:
-                for agent_msg in agent_messages_response.message_list:
-                    stored_task = (
-                        agent_msg.message_content.message_task
-                        if agent_msg.message_content
-                        else None
+            for agent_msg in agent_messages:
+                stored_task = (
+                    agent_msg.message_content.message_task
+                    if agent_msg.message_content
+                    else None
+                )
+                trusted_hitl_metadata = None
+                trusted_hitl_request_id = None
+                if stored_task is not None:
+                    (
+                        trusted_hitl_metadata,
+                        trusted_hitl_request_id,
+                    ) = await self._trusted_hitl_projection(agent_msg, stored_task)
+                    public_task_data = public_persisted_task_data(stored_task)
+                    if trusted_hitl_metadata is not None:
+                        public_task_data["metadata"] = trusted_hitl_metadata
+                    public_task = Task.model_validate(public_task_data)
+                else:
+                    public_task = None
+                preferred_agent_content = (
+                    extract_public_completed_status_text(stored_task)
+                    if stored_task is not None
+                    else None
+                )
+                fallback_agent_content = (
+                    get_text_from_message(get_message_from_task(public_task))
+                    if public_task is not None
+                    else None
+                )
+                agent_content = resolve_public_agent_response_text(
+                    agent_msg,
+                    preferred_text=preferred_agent_content,
+                    fallback_text=fallback_agent_content,
+                )
+                public_state = (
+                    getattr(
+                        public_task.status.state,
+                        "value",
+                        public_task.status.state,
                     )
-                    trusted_hitl_metadata = None
-                    trusted_hitl_request_id = None
-                    if stored_task is not None:
-                        (
-                            trusted_hitl_metadata,
-                            trusted_hitl_request_id,
-                        ) = await self._trusted_hitl_projection(agent_msg, stored_task)
-                        public_task_data = public_persisted_task_data(stored_task)
-                        if trusted_hitl_metadata is not None:
-                            public_task_data["metadata"] = trusted_hitl_metadata
-                        public_task = Task.model_validate(public_task_data)
-                    else:
-                        public_task = None
-                    preferred_agent_content = (
-                        extract_public_completed_status_text(stored_task)
-                        if stored_task is not None
-                        else None
-                    )
-                    fallback_agent_content = (
-                        get_text_from_message(get_message_from_task(public_task))
-                        if public_task is not None
-                        else None
-                    )
-                    agent_content = resolve_public_agent_response_text(
-                        agent_msg,
-                        preferred_text=preferred_agent_content,
-                        fallback_text=fallback_agent_content,
-                    )
-                    public_state = (
-                        getattr(
-                            public_task.status.state,
-                            "value",
-                            public_task.status.state,
+                    if public_task is not None and public_task.status is not None
+                    else None
+                )
+                if (
+                    agent_content
+                    and public_task is not None
+                    and public_state == TaskState.completed.value
+                    and not public_task.artifacts
+                ):
+                    public_task.artifacts = [
+                        Artifact(
+                            artifact_id=(f"{agent_msg.message_id}-legacy-response"),
+                            name="response",
+                            parts=[Part(root=TextPart(text=agent_content))],
                         )
-                        if public_task is not None and public_task.status is not None
+                    ]
+
+                is_system_hybro = agent_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
+                public_task_label = None
+                public_extend_info: dict[str, object] = {}
+                if not is_system_hybro:
+                    public_task_label = resolve_public_task_label(
+                        agent_msg.extend_info,
+                        agent_msg.agent_id or "agent",
+                    )
+                    public_extend_info["public_task_label"] = public_task_label
+                    public_dispatch_text = (
+                        agent_msg.extend_info.get("public_dispatch_text")
+                        if isinstance(agent_msg.extend_info, dict)
                         else None
                     )
                     if (
-                        agent_content
-                        and public_task is not None
-                        and public_state == TaskState.completed.value
-                        and not public_task.artifacts
+                        isinstance(public_dispatch_text, str)
+                        and public_dispatch_text.strip()
                     ):
-                        public_task.artifacts = [
-                            Artifact(
-                                artifact_id=(f"{agent_msg.message_id}-legacy-response"),
-                                name="response",
-                                parts=[Part(root=TextPart(text=agent_content))],
-                            )
-                        ]
-
-                    is_system_hybro = (
-                        agent_msg.agent_id == CoordinatorAgentId.SYSTEM_HYBRO
-                    )
-                    public_task_label = None
-                    public_extend_info: dict[str, object] = {}
-                    if not is_system_hybro:
-                        public_task_label = resolve_public_task_label(
-                            agent_msg.extend_info,
-                            agent_msg.agent_id or "agent",
+                        public_extend_info["public_dispatch_text"] = (
+                            public_dispatch_text.strip()
                         )
-                        public_extend_info["public_task_label"] = public_task_label
-                        public_dispatch_text = (
-                            agent_msg.extend_info.get("public_dispatch_text")
-                            if isinstance(agent_msg.extend_info, dict)
-                            else None
-                        )
-                        if (
-                            isinstance(public_dispatch_text, str)
-                            and public_dispatch_text.strip()
-                        ):
-                            public_extend_info["public_dispatch_text"] = (
-                                public_dispatch_text.strip()
-                            )
-                    elif isinstance(agent_msg.extend_info, dict):
-                        for key in (
-                            "is_coordinator_summary",
-                            "source_user_message_id",
-                            "summary_origin",
-                            "summary_type",
-                            "turn_completion_kind",
-                        ):
-                            value = agent_msg.extend_info.get(key)
-                            if value is not None:
-                                public_extend_info[key] = value
-                    if trusted_hitl_request_id is not None:
-                        public_extend_info["hitl_request_id"] = trusted_hitl_request_id
+                elif isinstance(agent_msg.extend_info, dict):
+                    for key in (
+                        "is_coordinator_summary",
+                        "source_user_message_id",
+                        "summary_origin",
+                        "summary_type",
+                        "turn_completion_kind",
+                    ):
+                        value = agent_msg.extend_info.get(key)
+                        if value is not None:
+                            public_extend_info[key] = value
+                if trusted_hitl_request_id is not None:
+                    public_extend_info["hitl_request_id"] = trusted_hitl_request_id
 
-                    room_message = RoomMessage(
-                        room_id=agent_msg.room_id,
-                        message_id=agent_msg.message_id,
-                        client_request_id=agent_msg.client_request_id,
-                        message_type="agent",
-                        message_content=MessageContent(
-                            message_text=agent_content or "",
-                            message_task=public_task,
-                        ),
-                        message_created_at=agent_msg.message_created_at,
-                        agent_id=agent_msg.agent_id,
-                        related_message_id=agent_msg.related_message_id,
-                        step_number=agent_msg.step_number,
-                        total_steps=agent_msg.total_steps,
-                        task_updated_at=agent_msg.task_updated_at,
-                        task_content=public_task_label,
-                        extend_info=public_extend_info or None,
-                    )
-                    combined_messages.append(room_message)
-
-            # Sort by creation time, then by step_number for task messages, then by message_id for stability
-            # This ensures consistent ordering when multiple messages have the same timestamp
-            combined_messages.sort(
-                key=lambda x: (
-                    x.message_created_at,
-                    x.step_number if x.step_number is not None else float("inf"),
-                    x.message_id,
+                room_message = RoomMessage(
+                    room_id=agent_msg.room_id,
+                    message_id=agent_msg.message_id,
+                    client_request_id=agent_msg.client_request_id,
+                    message_type="agent",
+                    message_content=MessageContent(
+                        message_text=agent_content or "",
+                        message_task=public_task,
+                    ),
+                    message_created_at=agent_msg.message_created_at,
+                    agent_id=agent_msg.agent_id,
+                    related_message_id=agent_msg.related_message_id,
+                    step_number=agent_msg.step_number,
+                    total_steps=agent_msg.total_steps,
+                    task_updated_at=agent_msg.task_updated_at,
+                    task_content=public_task_label,
+                    extend_info=public_extend_info or None,
                 )
-            )
+                combined_messages.append(room_message)
 
+            combined_messages.sort(
+                key=lambda message: page_order[
+                    (message.message_type, message.message_id)
+                ]
+            )
+            next_cursor = (
+                encode_timeline_cursor(room_id, page.next_position)
+                if page.has_more and page.next_position is not None
+                else None
+            )
             return RoomCenterRoomMessageResponse(
                 room_id=room_id,
                 message_list=combined_messages,
+                has_more=page.has_more,
+                next_cursor=next_cursor,
                 success=True,
                 error=None,
                 status_code=200,
             )
 
-        except Exception as e:
+        except Exception:
+            logger.error(
+                "Failed to retrieve room timeline room_id=%s",
+                request.room_id,
+                exc_info=True,
+            )
             return RoomCenterRoomMessageResponse(
                 room_id=request.room_id,
                 message_list=None,
                 success=False,
-                error=str(e),
+                error="Failed to retrieve room timeline",
                 status_code=500,
             )
 

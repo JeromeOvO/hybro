@@ -32,7 +32,7 @@ from api_gateway.routes.room_routes import (
     update_room_name,
     verify_room_ownership,
 )
-from common.dto import ExecutionAck
+from common.dto import ExecutionAck, RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
     DataPart,
@@ -1274,6 +1274,28 @@ class TestInquiryRoomMessages:
     """Tests for inquiry_room_messages endpoint."""
 
     @pytest.mark.asyncio
+    async def test_ownership_precedes_invalid_cursor_validation(
+        self, mock_user_2, sample_room, mock_db_service
+    ):
+        request = MagicMock()
+        request.json = AsyncMock(
+            return_value={"room_id": sample_room.room_id, "cursor": "not-valid"}
+        )
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+        center = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await inquiry_room_messages(
+                request,
+                mock_user_2,
+                store=mock_db_service,
+                center=center,
+            )
+
+        assert exc_info.value.status_code == 403
+        center.inquiry_room_messages_by_room_id.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_returns_messages_for_owner(
         self, mock_user, sample_room, patch_room_center_deps
     ):
@@ -1282,6 +1304,8 @@ class TestInquiryRoomMessages:
         mock_request.json = AsyncMock(
             return_value={
                 "room_id": sample_room.room_id,
+                "limit": 37,
+                "cursor": "opaque-cursor",
             }
         )
 
@@ -1304,6 +1328,11 @@ class TestInquiryRoomMessages:
         )
 
         assert response.success is True
+        forwarded = patch_room_center_deps[
+            "room_center"
+        ].inquiry_room_messages_by_room_id.await_args.args[0]
+        assert forwarded.limit == 37
+        assert forwarded.cursor == "opaque-cursor"
 
     @pytest.mark.asyncio
     async def test_returns_public_user_history_without_private_orchestration_state(
@@ -1346,8 +1375,13 @@ class TestInquiryRoomMessages:
             "db_service"
         ].get_room_by_room_id.return_value = sample_room
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[user_message])
-        facade.get_agent_messages_for_room = AsyncMock(return_value=[])
+        facade.get_timeline_page = AsyncMock(
+            return_value=RoomTimelinePage(
+                entries=[RoomTimelineEntry(source="user", message=user_message)],
+                has_more=False,
+                next_position=None,
+            )
+        )
         runtime = RoomServices()
         runtime.bind_facade(facade)
         center = RoomCenter(room_services=runtime)
@@ -1492,14 +1526,20 @@ class TestInquiryRoomMessages:
             ),
         )
         facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[])
-        facade.get_agent_messages_for_room = AsyncMock(
-            return_value=[
-                remote_message,
-                local_message,
-                supervisor_message,
-                status_text_message,
-            ]
+        facade.get_timeline_page = AsyncMock(
+            return_value=RoomTimelinePage(
+                entries=[
+                    RoomTimelineEntry(source="agent", message=message)
+                    for message in (
+                        remote_message,
+                        local_message,
+                        supervisor_message,
+                        status_text_message,
+                    )
+                ],
+                has_more=False,
+                next_position=None,
+            )
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)

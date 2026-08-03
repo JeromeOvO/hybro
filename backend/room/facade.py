@@ -15,7 +15,10 @@ from common.dto import (
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
+    RoomTimelineEntry,
+    RoomTimelinePage,
     SavedUserMessage,
+    TimelinePosition,
     UserMessageInput,
     UserMessageInsertResult,
 )
@@ -378,6 +381,48 @@ class RoomFacade:
         except Exception:
             logger.error("Failed to get room agent messages", exc_info=True)
             return []
+
+    async def get_timeline_page(
+        self,
+        room_id: str,
+        *,
+        limit: int,
+        before: TimelinePosition | None,
+    ) -> RoomTimelinePage:
+        page = await self._message_repository.get_timeline_page(
+            room_id,
+            limit=limit,
+            before=before,
+        )
+        entries: list[RoomTimelineEntry] = []
+        selected_agents: list[RoomAgentMessage] = []
+        for entry in page.entries:
+            try:
+                if entry.source == "user":
+                    message = _parse_timeline_user_message(entry.message)
+                else:
+                    message = _parse_timeline_agent_message(entry.message)
+            except Exception:
+                message_id = (
+                    entry.message.get("message_id")
+                    if isinstance(entry.message, dict)
+                    else None
+                )
+                logger.error(
+                    "Invalid selected timeline message room_id=%s message_id=%s",
+                    room_id,
+                    message_id,
+                )
+                raise ValueError("Invalid stored room timeline message") from None
+            if isinstance(message, RoomAgentMessage):
+                selected_agents.append(message)
+            entries.append(RoomTimelineEntry(source=entry.source, message=message))
+        await self._auto_fail_stale_agent_messages(selected_agents)
+        return RoomTimelinePage(
+            entries=entries,
+            has_more=page.has_more,
+            next_position=page.next_position,
+        )
 
     async def get_agent_messages_by_related_message_id(
         self, related_message_id: str
@@ -757,6 +802,23 @@ def _owner_id_from_doc(doc: dict | None) -> str | None:
     if doc is None or not doc.get("room_owner_id"):
         return None
     return str(doc["room_owner_id"])
+
+
+def _parse_timeline_user_message(doc: Any) -> RoomUserMessage:
+    if not isinstance(doc, dict):
+        raise ValueError("invalid user timeline document")
+    return RoomUserMessage.model_validate(doc)
+
+
+def _parse_timeline_agent_message(doc: Any) -> RoomAgentMessage:
+    if not isinstance(doc, dict):
+        raise ValueError("invalid agent timeline document")
+    content = doc.get("message_content")
+    if content and isinstance(content, dict):
+        task = content.get("message_task")
+        if task and isinstance(task, dict):
+            sanitize_task_dict(task)
+    return RoomAgentMessage.model_validate(doc)
 
 
 def _safe_parse_user_message(doc: dict | None) -> RoomUserMessage | None:

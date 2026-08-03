@@ -254,6 +254,8 @@ class RoomCenterMemoryResponse(BaseModel):
 class RoomCenterRoomMessageResponse(BaseModel):
     room_id: str | None = None
     message_list: list[RoomMessage] | None = None
+    has_more: bool | None = None
+    next_cursor: str | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

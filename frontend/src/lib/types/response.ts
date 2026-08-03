@@ -323,6 +323,8 @@ export interface MemoryContent {
 export interface RoomCenterRoomMessageResponse {
   room_id?: string | null;
   message_list?: RoomMessage[] | null;
+  has_more?: boolean | null;
+  next_cursor?: string | null;
   success: boolean;
   error?: string | null;
   status_code?: number;

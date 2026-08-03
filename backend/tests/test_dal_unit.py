@@ -67,6 +67,40 @@ async def test_mongo_collection_adapter_maps_basic_operations():
 
 
 @pytest.mark.asyncio
+async def test_mongo_collection_adapter_replace_reports_matched_identical_document():
+    from dal.mongo.client import MongoCollectionAdapter
+
+    collection = MagicMock()
+    collection.replace_one = AsyncMock(
+        return_value=SimpleNamespace(
+            matched_count=1,
+            modified_count=0,
+            upserted_id=None,
+        )
+    )
+    adapter = MongoCollectionAdapter(collection)
+
+    assert await adapter.replace_one({"_id": "same"}, {"_id": "same"}) is True
+
+
+@pytest.mark.asyncio
+async def test_mongo_collection_adapter_replace_reports_unmatched_document():
+    from dal.mongo.client import MongoCollectionAdapter
+
+    collection = MagicMock()
+    collection.replace_one = AsyncMock(
+        return_value=SimpleNamespace(
+            matched_count=0,
+            modified_count=0,
+            upserted_id=None,
+        )
+    )
+    adapter = MongoCollectionAdapter(collection)
+
+    assert await adapter.replace_one({"_id": "missing"}, {"_id": "missing"}) is False
+
+
+@pytest.mark.asyncio
 async def test_mongo_collection_adapter_materializes_find_and_aggregate():
     from dal.mongo.client import MongoCollectionAdapter
 
@@ -117,6 +151,8 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             collection.index_information = AsyncMock(return_value={})
             collection.drop_index = AsyncMock()
             collection.aggregate = AsyncMock(return_value=[])
+            collection.find_one = AsyncMock(return_value=None)
+            collection.update_one = AsyncMock(return_value=True)
             collections[name] = collection
         return collections[name]
 
@@ -137,6 +173,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agents",
         "conversation_content",
         "cancelled_messages",
+        "migration_markers",
         "orchestration_run_events",
         "orchestration_runs",
         "room_agent_messages",
@@ -234,7 +271,23 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             "client_request_id": {"$type": "string"},
         },
     )
-    assert collections["room_user_messages"].aggregate.await_count == 5
+    assert collections["room_user_messages"].aggregate.await_count == 7
+    assert collections["room_agent_messages"].aggregate.await_count == 2
+    assert _has_create_index(
+        collections["room_user_messages"],
+        [("room_id", 1), ("timeline_sort_us", -1), ("message_id", -1)],
+        unique=False,
+        name="room_user_timeline_desc",
+    )
+    assert _has_create_index(
+        collections["room_agent_messages"],
+        [("room_id", 1), ("timeline_sort_us", -1), ("message_id", -1)],
+        unique=False,
+        name="room_agent_timeline_desc",
+    )
+    marker_update = collections["migration_markers"].update_one.await_args
+    assert marker_update.args[0] == {"_id": "room_timeline_sort_keys_v1"}
+    assert marker_update.kwargs == {"upsert": True}
     assert all(
         call.args[0][-1] == {"$limit": 5}
         for call in collections["room_user_messages"].aggregate.await_args_list
@@ -255,6 +308,8 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "room_user_message_id_unique",
         "room_user_client_request_id_unique",
         "room_agent_message_id_unique",
+        "room_user_timeline_desc",
+        "room_agent_timeline_desc",
     ],
 )
 async def test_ensure_runtime_indexes_raises_for_critical_unique_index_failures(
@@ -277,6 +332,8 @@ async def test_ensure_runtime_indexes_raises_for_critical_unique_index_failures(
             collection.index_information = AsyncMock(return_value={})
             collection.drop_index = AsyncMock()
             collection.aggregate = AsyncMock(return_value=[])
+            collection.find_one = AsyncMock(return_value=None)
+            collection.update_one = AsyncMock(return_value=True)
             collections[name] = collection
         return collections[name]
 
@@ -355,6 +412,177 @@ async def test_user_message_index_readiness_passes_then_creates_both_indexes():
             "client_request_id": {"$type": "string"},
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_room_timeline_readiness_blocks_invalid_rows_before_indexes():
+    from container import _ensure_room_timeline_indexes
+
+    user_collection = MagicMock()
+    user_collection.aggregate = AsyncMock(
+        side_effect=[[], [{"message_id": "missing-timeline"}]]
+    )
+    user_collection.find_one = AsyncMock(return_value={"_id": "user-row"})
+    user_collection.create_index = AsyncMock()
+    agent_collection = MagicMock()
+    agent_collection.aggregate = AsyncMock(return_value=[])
+    agent_collection.find_one = AsyncMock(return_value=None)
+    agent_collection.create_index = AsyncMock()
+    mongo = MagicMock()
+    mongo.collection.side_effect = lambda name: {
+        "room_user_messages": user_collection,
+        "room_agent_messages": agent_collection,
+    }[name]
+
+    with pytest.raises(RuntimeError, match="migrate_room_timeline_sort_keys"):
+        await _ensure_room_timeline_indexes(mongo)
+
+    pipeline = user_collection.aggregate.await_args.args[0]
+    assert pipeline[-2] == {"$project": {"_id": 0, "message_id": 1}}
+    assert pipeline[-1] == {"$limit": 5}
+    user_collection.create_index.assert_not_awaited()
+    agent_collection.create_index.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_timeline_readiness_requires_final_audit_marker_for_existing_rows():
+    from container import _ensure_room_timeline_indexes
+
+    user_collection = MagicMock()
+    user_collection.aggregate = AsyncMock(return_value=[])
+    user_collection.find_one = AsyncMock(return_value={"_id": "user-row"})
+    user_collection.create_index = AsyncMock()
+    agent_collection = MagicMock()
+    agent_collection.aggregate = AsyncMock(return_value=[])
+    agent_collection.find_one = AsyncMock(return_value=None)
+    agent_collection.create_index = AsyncMock()
+    markers = MagicMock()
+    markers.find_one = AsyncMock(return_value=None)
+    mongo = MagicMock()
+    mongo.collection.side_effect = lambda name: {
+        "room_user_messages": user_collection,
+        "room_agent_messages": agent_collection,
+        "migration_markers": markers,
+    }[name]
+
+    with pytest.raises(RuntimeError, match="final migration audit"):
+        await _ensure_room_timeline_indexes(mongo)
+
+    markers.find_one.assert_awaited_once_with({"_id": "room_timeline_sort_keys_v1"})
+    user_collection.create_index.assert_not_awaited()
+    agent_collection.create_index.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_timeline_readiness_rejects_legacy_marker_id_only_row():
+    from container import _ensure_room_timeline_indexes
+
+    user_collection = MagicMock()
+    user_collection.aggregate = AsyncMock(return_value=[])
+    user_collection.find_one = AsyncMock(return_value={"_id": "user-row"})
+    user_collection.create_index = AsyncMock()
+    agent_collection = MagicMock()
+    agent_collection.aggregate = AsyncMock(return_value=[])
+    agent_collection.find_one = AsyncMock(return_value=None)
+    agent_collection.create_index = AsyncMock()
+    markers = MagicMock()
+    markers.find_one = AsyncMock(
+        return_value={
+            "marker_id": "room_timeline_sort_keys_v1",
+            "version": 1,
+            "status": "complete",
+            "collections": {
+                "room_user_messages": {"scanned": 1, "correct": 1},
+                "room_agent_messages": {"scanned": 0, "correct": 0},
+            },
+        }
+    )
+    mongo = MagicMock()
+    mongo.collection.side_effect = lambda name: {
+        "room_user_messages": user_collection,
+        "room_agent_messages": agent_collection,
+        "migration_markers": markers,
+    }[name]
+
+    with pytest.raises(RuntimeError, match="final migration audit"):
+        await _ensure_room_timeline_indexes(mongo)
+
+    markers.find_one.assert_awaited_once_with({"_id": "room_timeline_sort_keys_v1"})
+    user_collection.create_index.assert_not_awaited()
+    agent_collection.create_index.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_timeline_readiness_accepts_valid_final_audit_marker():
+    from container import _ensure_room_timeline_indexes
+
+    user_collection = MagicMock()
+    user_collection.aggregate = AsyncMock(return_value=[])
+    user_collection.find_one = AsyncMock(return_value={"_id": "user-row"})
+    user_collection.create_index = AsyncMock(return_value="user-index")
+    agent_collection = MagicMock()
+    agent_collection.aggregate = AsyncMock(return_value=[])
+    agent_collection.find_one = AsyncMock(return_value={"_id": "agent-row"})
+    agent_collection.create_index = AsyncMock(return_value="agent-index")
+    markers = MagicMock()
+    markers.find_one = AsyncMock(
+        return_value={
+            "_id": "room_timeline_sort_keys_v1",
+            "marker_id": "room_timeline_sort_keys_v1",
+            "version": 1,
+            "status": "complete",
+            "collections": {
+                "room_user_messages": {"scanned": 2, "correct": 2},
+                "room_agent_messages": {"scanned": 1, "correct": 1},
+            },
+        }
+    )
+    mongo = MagicMock()
+    mongo.collection.side_effect = lambda name: {
+        "room_user_messages": user_collection,
+        "room_agent_messages": agent_collection,
+        "migration_markers": markers,
+    }[name]
+
+    await _ensure_room_timeline_indexes(mongo)
+
+    assert _has_create_index(
+        user_collection,
+        [("room_id", 1), ("timeline_sort_us", -1), ("message_id", -1)],
+        unique=False,
+        name="room_user_timeline_desc",
+    )
+    assert _has_create_index(
+        agent_collection,
+        [("room_id", 1), ("timeline_sort_us", -1), ("message_id", -1)],
+        unique=False,
+        name="room_agent_timeline_desc",
+    )
+
+
+@pytest.mark.asyncio
+async def test_room_timeline_readiness_requires_manual_identity_repair():
+    from container import _ensure_room_timeline_indexes
+
+    user_collection = MagicMock()
+    user_collection.aggregate = AsyncMock(side_effect=[[{"message_id": None}], []])
+    user_collection.find_one = AsyncMock(return_value={"_id": "user-row"})
+    user_collection.create_index = AsyncMock()
+    agent_collection = MagicMock()
+    agent_collection.aggregate = AsyncMock(return_value=[])
+    agent_collection.find_one = AsyncMock(return_value=None)
+    agent_collection.create_index = AsyncMock()
+    mongo = MagicMock()
+    mongo.collection.side_effect = lambda name: {
+        "room_user_messages": user_collection,
+        "room_agent_messages": agent_collection,
+    }[name]
+
+    with pytest.raises(RuntimeError, match="manually repair"):
+        await _ensure_room_timeline_indexes(mongo)
+
+    user_collection.create_index.assert_not_awaited()
+    agent_collection.create_index.assert_not_awaited()
 
 
 def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
@@ -465,6 +693,8 @@ async def test_search_index_failures_are_reported_independently(
 
             collection.create_index = AsyncMock(side_effect=create_index)
             collection.aggregate = AsyncMock(return_value=[])
+            collection.find_one = AsyncMock(return_value=None)
+            collection.update_one = AsyncMock(return_value=True)
             collections[name] = collection
         return collections[name]
 
