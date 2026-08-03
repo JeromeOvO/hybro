@@ -16,7 +16,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from api.sse import (
+from api_gateway.routes.sse_routes import (
     cancel_message,
     get_room_sse_status,
     stream_room_messages,
@@ -33,7 +33,7 @@ from common.types import (
 from delivery.task_notifier import TaskUpdateNotifier
 from execution.dispatch.task_notifications import _notify_task_update_impl
 from models.room import MessageContent, RoomAgentMessage
-from tests.delivery_adapter_fakes import make_delivery_facade
+from tests.fakes.delivery import make_delivery_facade
 
 # =============================================================================
 # SSE Stream Tests
@@ -492,6 +492,91 @@ class TestCancelMessage:
             "outcome": "already_terminal",
         }
         deps["execution_engine"].cancel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_canceled_projection_retries_engine_side_effects(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        deps = patch_sse_deps
+        canceled_message = sample_user_message.model_copy(deep=True)
+        canceled_message.extend_info = {"orchestration_status": "canceled"}
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = canceled_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+
+        result = await cancel_message(
+            canceled_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result["outcome"] == "canceled"
+        deps["execution_engine"].cancel.assert_awaited_once_with(
+            room_id=canceled_message.room_id,
+            message_id=canceled_message.message_id,
+            requested_by_user_id=mock_user.user_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_completion_winner_returns_already_terminal_outcome(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        from common.dto import CancellationAck
+
+        deps = patch_sse_deps
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = sample_user_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+        deps["execution_engine"].cancel.return_value = CancellationAck(
+            status="completed",
+            cancellation_applied=False,
+            reconciled=True,
+        )
+
+        result = await cancel_message(
+            sample_user_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result["status"] == "completed"
+        assert result["outcome"] == "already_terminal"
+
+    @pytest.mark.asyncio
+    async def test_persisted_marker_with_pending_finalization_is_accepted(
+        self, mock_user, sample_room, sample_user_message, patch_sse_deps
+    ):
+        from common.dto import CancellationAck
+
+        deps = patch_sse_deps
+        deps[
+            "db_service"
+        ].get_room_user_message_by_message_id.return_value = sample_user_message
+        deps["db_service"].get_room_by_room_id.return_value = sample_room
+        deps["execution_engine"].cancel.return_value = CancellationAck(
+            status="cancellation_pending",
+            cancellation_applied=False,
+            reconciled=False,
+        )
+
+        result = await cancel_message(
+            sample_user_message.message_id,
+            mock_user,
+            db=deps["db_service"],
+            engine=deps["execution_engine"],
+        )
+
+        assert result == {
+            "success": True,
+            "message_id": sample_user_message.message_id,
+            "message": "Message cancellation accepted and pending reconciliation",
+            "status": "cancellation_pending",
+            "outcome": "pending_reconciliation",
+        }
 
     @pytest.mark.asyncio
     async def test_raises_404_when_message_not_found(self, mock_user, mock_db_service):

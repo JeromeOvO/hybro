@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
+    CancellationAck,
     ExecutionAck,
     ExecutionRequest,
     HITLRequest,
@@ -14,16 +16,24 @@ from common.dto import (
     HubAgentResponseInternal,
     RunInfo,
 )
-from common.observability import traced_create_task
+from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
 from execution.dispatch.agent_event import AgentEvent
 from execution.events import emit_processing_status, emit_room_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
+)
+from execution.idempotency import (
+    IDEMPOTENCY_FINGERPRINT_VERSION,
+    build_execution_request_fingerprint,
+    normalize_client_request_id,
+)
+from execution.orchestration.cancellation_finalizer import (
+    CancellationFinalizationResult,
+    OrchestrationCancellationFinalizer,
 )
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import (
@@ -42,15 +52,16 @@ from execution.ports import (
     RunReadPort,
     TaskFactory,
 )
+from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from execution.translators import room_response_to_execution_ack
 from models.orchestration import (
-    TERMINAL_ORCHESTRATION_STATUSES,
     OrchestrationEventType,
     OrchestrationRunEvent,
     OrchestrationRunState,
     OrchestrationStatus,
 )
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+from models.run import RunState
 
 if TYPE_CHECKING:
     from models.response import OrchestrationResponse
@@ -100,12 +111,31 @@ VALID_PROCESSING_STATUS_STATES = {
 }
 
 
+@dataclass(frozen=True)
+class _RequestIdempotency:
+    client_request_id: str | None = None
+    fingerprint: str | None = None
+    fingerprint_version: int | None = None
+
+
 class RoomCenterPort(Protocol):
+    async def get_idempotent_user_message(
+        self,
+        *,
+        room_id: str,
+        client_request_id: str,
+        idempotency_fingerprint: str,
+        idempotency_fingerprint_version: int,
+    ) -> Any | None: ...
+
     async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: Any = None,
         mentioned_agent_ids: Any = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> Any: ...
 
     async def persist_message_to_room(
@@ -113,6 +143,9 @@ class RoomCenterPort(Protocol):
         request: RoomCenterUserMessageRequest,
         target_group: Any = None,
         mentioned_agent_ids: Any = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> tuple[Any, Any | None]: ...
 
     async def run_message_preflight_to_room(self, context: Any) -> Any: ...
@@ -399,9 +432,76 @@ class ExecutionFacade:
         self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
         self._orchestration_run_store = orchestration_run_store
+        self._cancellation_finalizer = OrchestrationCancellationFinalizer(
+            run_store=orchestration_run_store,
+            project_status=self._project_orchestration_status,
+            broadcast_cancellation=cancellation_state.cancel_message_and_broadcast,
+            cancel_hitl=hitl_message_cancellation.cancel_requests_for_message,
+            project_public_terminal=self._project_public_terminal_status,
+            cleanup_agent_tasks=agent_task_cleanup.cleanup_cancelled_message_tasks,
+            mark_reconciled=cancellation_store.mark_cancellation_reconciled,
+            get_public_run=getattr(
+                run_reader,
+                "get_run_strict",
+                run_reader.get_run,
+            ),
+        )
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
-        self._inflight_metadata: dict[asyncio.Task, dict[str, str | None]] = {}
+
+    @staticmethod
+    def _prepare_request_idempotency(
+        request: ExecutionRequest,
+    ) -> tuple[ExecutionRequest, _RequestIdempotency]:
+        if not isinstance(request.client_request_id, str):
+            return request, _RequestIdempotency()
+        client_request_id = normalize_client_request_id(request.client_request_id)
+        if client_request_id != request.client_request_id:
+            request = request.model_copy(
+                update={"client_request_id": client_request_id}
+            )
+        if not client_request_id:
+            return request, _RequestIdempotency()
+        return request, _RequestIdempotency(
+            client_request_id=client_request_id,
+            fingerprint=build_execution_request_fingerprint(request),
+            fingerprint_version=IDEMPOTENCY_FINGERPRINT_VERSION,
+        )
+
+    async def _lookup_idempotent_ack(
+        self,
+        *,
+        request: ExecutionRequest,
+        idempotency: _RequestIdempotency,
+    ) -> ExecutionAck | None:
+        if (
+            idempotency.client_request_id is None
+            or idempotency.fingerprint is None
+            or idempotency.fingerprint_version is None
+        ):
+            return None
+        response = await self._room_center.get_idempotent_user_message(
+            room_id=request.room_id,
+            client_request_id=idempotency.client_request_id,
+            idempotency_fingerprint=idempotency.fingerprint,
+            idempotency_fingerprint_version=idempotency.fingerprint_version,
+        )
+        return (
+            room_response_to_execution_ack(response) if response is not None else None
+        )
+
+    async def _replay_or_rejection(
+        self,
+        *,
+        request: ExecutionRequest,
+        idempotency: _RequestIdempotency,
+        rejection: ExecutionAck,
+    ) -> ExecutionAck:
+        replay_ack = await self._lookup_idempotent_ack(
+            request=request,
+            idempotency=idempotency,
+        )
+        return replay_ack or rejection
 
     async def _reject_if_hitl_pending(
         self,
@@ -526,7 +626,6 @@ class ExecutionFacade:
             or request.selected_agent_ids is not None
             or request.candidate_scope_mode is not None
             or request.candidate_scope_group_id is not None
-            or request.orchestration_schema_version is not None
         ):
             extend_info["mode"] = request.mode
         if request.selected_agent_ids is not None:
@@ -535,21 +634,10 @@ class ExecutionFacade:
             extend_info["candidate_scope_mode"] = request.candidate_scope_mode
         if request.candidate_scope_group_id is not None:
             extend_info["candidate_scope_group_id"] = request.candidate_scope_group_id
-        if request.orchestration_schema_version is not None:
-            extend_info["orchestration_schema_version"] = (
-                request.orchestration_schema_version
-            )
         return extend_info or None
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
-        hitl_rejection = await self._reject_if_hitl_pending(request)
-        if hitl_rejection is not None:
-            return hitl_rejection
-
-        active_run_rejection = await self._reject_if_room_has_active_run(request)
-        if active_run_rejection is not None:
-            return active_run_rejection
-
+        request, idempotency = self._prepare_request_idempotency(request)
         room_request = RoomCenterUserMessageRequest(
             room_id=request.room_id,
             user_id=request.sender_id,
@@ -557,9 +645,32 @@ class ExecutionFacade:
             message=request.message,
             attachments=request.attachments,
             inline_file_ids=request.inline_file_ids,
-            client_request_id=request.client_request_id,
+            client_request_id=idempotency.client_request_id,
             extend_info=self._room_request_extend_info(request),
         )
+        replay_ack = await self._lookup_idempotent_ack(
+            request=request,
+            idempotency=idempotency,
+        )
+        if replay_ack is not None:
+            return replay_ack
+
+        hitl_rejection = await self._reject_if_hitl_pending(request)
+        if hitl_rejection is not None:
+            return await self._replay_or_rejection(
+                request=request,
+                idempotency=idempotency,
+                rejection=hitl_rejection,
+            )
+
+        active_run_rejection = await self._reject_if_room_has_active_run(request)
+        if active_run_rejection is not None:
+            return await self._replay_or_rejection(
+                request=request,
+                idempotency=idempotency,
+                rejection=active_run_rejection,
+            )
+
         (
             persisted_response,
             preflight_context,
@@ -567,8 +678,12 @@ class ExecutionFacade:
             room_request,
             request.target_group,
             request.mentioned_agent_ids,
+            idempotency_fingerprint=idempotency.fingerprint,
+            idempotency_fingerprint_version=idempotency.fingerprint_version,
         )
         persisted_ack = room_response_to_execution_ack(persisted_response)
+        if preflight_context is None:
+            return persisted_ack
         try:
             await self._emit_room_preflight_processing_status(request, persisted_ack)
         except Exception:
@@ -576,8 +691,6 @@ class ExecutionFacade:
                 "room preflight processing status emission failed after persistence",
                 exc_info=True,
             )
-        if preflight_context is None:
-            return persisted_ack
         response = await self._room_center.run_message_preflight_to_room(
             preflight_context
         )
@@ -605,13 +718,18 @@ class ExecutionFacade:
             user_id=request.sender_id,
             client_request_id=request.client_request_id,
         )
-        task = self._spawn_orchestration(
-            self._room_message_center.process_room_user_message(orchestration_request),
-            name=f"execution-orchestrate-{ack.message_id}",
-            room_id=request.room_id,
-            message_id=ack.message_id,
+        with bind_log_context(
             client_request_id=request.client_request_id,
-        )
+            room_id=request.room_id,
+            user_message_id=ack.message_id,
+            message_id=ack.message_id,
+        ):
+            task = self._spawn_orchestration(
+                self._room_message_center.process_room_user_message(
+                    orchestration_request
+                ),
+                name=f"execution-orchestrate-{ack.message_id}",
+            )
         await task
 
     def schedule_recovery_orchestration(
@@ -623,34 +741,28 @@ class ExecutionFacade:
         message_id = (
             request.room_user_message_id or request.room_agent_message_id or "unknown"
         )
-        return self._spawn_orchestration(
-            self._room_message_center.process_room_user_message(request),
-            name=f"execution-recovery-{reason}-{message_id}",
-            room_id=request.room_id,
-            message_id=message_id,
+        with bind_log_context(
             client_request_id=request.client_request_id,
-        )
+            room_id=request.room_id,
+            user_message_id=message_id,
+            message_id=message_id,
+        ):
+            return self._spawn_orchestration(
+                self._room_message_center.process_room_user_message(request),
+                name=f"execution-recovery-{reason}-{message_id}",
+            )
 
     def _spawn_orchestration(
         self,
         coro,
         *,
         name: str,
-        room_id: str | None = None,
-        message_id: str | None = None,
-        client_request_id: str | None = None,
     ) -> asyncio.Task[Any]:
         task = self._task_factory(coro, name=name)
         self._inflight.add(task)
-        self._inflight_metadata[task] = {
-            "room_id": room_id,
-            "message_id": message_id,
-            "client_request_id": client_request_id,
-        }
 
         def _on_done(done: asyncio.Task) -> None:
             self._inflight.discard(done)
-            self._inflight_metadata.pop(done, None)
             if done.cancelled():
                 return
             exc = done.exception()
@@ -663,113 +775,130 @@ class ExecutionFacade:
         task.add_done_callback(_on_done)
         return task
 
+    async def _project_orchestration_status(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        status: OrchestrationStatus,
+    ) -> bool:
+        try:
+            return bool(
+                await self._room_center.update_user_message_orchestration_status(
+                    message_id,
+                    status.value,
+                )
+            )
+        except Exception:
+            logger.warning(
+                "failed to project orchestration status",
+                extra={
+                    "message_id": message_id,
+                    "room_id": room_id,
+                    "status": status.value,
+                },
+                exc_info=True,
+            )
+            return False
+
+    async def _project_public_terminal_status(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        status: OrchestrationStatus,
+    ) -> None:
+        target_state = {
+            OrchestrationStatus.COMPLETED: RunState.COMPLETED,
+            OrchestrationStatus.CANCELED: RunState.CANCELED,
+            OrchestrationStatus.FAILED: RunState.FAILED,
+            OrchestrationStatus.BUDGET_EXHAUSTED: RunState.FAILED,
+        }[status]
+        projected = await self._run_lifecycle.project_run_state(
+            room_id=room_id,
+            run_id=message_id,
+            trigger_message_id=message_id,
+            target_state=target_state,
+            terminal_reason=(
+                "request canceled" if target_state == RunState.CANCELED else None
+            ),
+            causation_id=f"orchestration-terminal-repair:{message_id}:{status.value}",
+        )
+        if projected is None:
+            strict_get_run = getattr(
+                self._run_reader,
+                "get_run_strict",
+                self._run_reader.get_run,
+            )
+            public_run = await strict_get_run(message_id)
+            public_state = getattr(
+                getattr(public_run, "state", None),
+                "value",
+                getattr(public_run, "state", None),
+            )
+            if public_state != target_state.value:
+                raise RuntimeError("public terminal lifecycle projection failed")
+        await emit_processing_status(
+            room_id=room_id,
+            status=target_state.value,
+            message_id=message_id,
+            lifecycle_message_id=message_id,
+            record_lifecycle=False,
+            run_lifecycle=self._run_lifecycle,
+            event_publisher=self._event_publisher,
+            run_event_enabled=self._run_event_enabled,
+            client_request_id_resolver=self._client_request_id_resolver,
+        )
+
+    async def finalize_pending_cancellation(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        settle_no_run: bool = False,
+    ) -> CancellationFinalizationResult:
+        return await self._cancellation_finalizer.finalize(
+            room_id=room_id,
+            message_id=message_id,
+            settle_no_run=settle_no_run,
+        )
+
     async def cancel(
         self,
         room_id: str,
         message_id: str,
         *,
         requested_by_user_id: str,
-    ) -> bool:
-        if self._orchestration_run_store is not None:
-            current = await self._orchestration_run_store.get_latest_by_user_message_id(
-                message_id
-            )
-            if (
-                current is not None
-                and current.status in TERMINAL_ORCHESTRATION_STATUSES
-            ):
-                logger.info(
-                    "cancellation ignored for terminal orchestration",
-                    extra={
-                        "message_id": message_id,
-                        "run_id": current.run_id,
-                        "status": current.status.value,
-                    },
-                )
-                return True
+    ) -> bool | CancellationAck:
         persisted = await self._cancellation_store.cancel_message(
             message_id,
             requested_by_user_id,
         )
         if not persisted:
             return False
-        await self._cancellation_state.cancel_message_and_broadcast(message_id)
-        await self._hitl_message_cancellation.cancel_requests_for_message(message_id)
-        sidecar_canceled = await self._cancel_orchestration_sidecar(message_id)
-        if sidecar_canceled:
-            try:
-                projected = (
-                    await self._room_center.update_user_message_orchestration_status(
-                        message_id,
-                        OrchestrationStatus.CANCELED.value,
-                    )
-                )
-            except Exception:
-                projected = False
-                logger.warning(
-                    "failed to project canceled orchestration status",
-                    extra={"message_id": message_id, "room_id": room_id},
-                    exc_info=True,
-                )
-            if not projected:
-                logger.warning(
-                    "canceled orchestration status was not persisted",
-                    extra={"message_id": message_id, "room_id": room_id},
-                )
-        await emit_processing_status(
-            room_id=room_id,
-            status="canceled",
-            message_id=message_id,
-            lifecycle_message_id=message_id,
-            run_lifecycle=self._run_lifecycle,
-            event_publisher=self._event_publisher,
-            run_event_enabled=self._run_event_enabled,
-            client_request_id_resolver=self._client_request_id_resolver,
-        )
         try:
-            await self._agent_task_cleanup.cleanup_cancelled_message_tasks(
+            result = await self.finalize_pending_cancellation(
                 room_id=room_id,
                 message_id=message_id,
             )
-        except Exception:
-            logger.warning("agent task cleanup failed for cancellation", exc_info=True)
-        return True
-
-    async def _cancel_orchestration_sidecar(self, user_message_id: str) -> bool:
-        """Terminalize the paused orchestration state when a run is canceled."""
-        if self._orchestration_run_store is None:
-            return False
-        for _ in range(3):
-            current = await self._orchestration_run_store.get_latest_by_user_message_id(
-                user_message_id
-            )
-            if current is None:
-                return False
-            if current.status in TERMINAL_ORCHESTRATION_STATUSES:
-                return current.status == OrchestrationStatus.CANCELED
-            updated = deepcopy(current)
-            updated.status = OrchestrationStatus.CANCELED
-            updated.terminal_reason = "request canceled"
-            updated.pending_hitl_request_ids.clear()
-            updated.pending_agent_continuations.clear()
-            for question in updated.open_questions:
-                if question.get("status") == "open":
-                    question["status"] = "canceled"
-            updated.state_version = current.state_version + 1
-            updated.updated_at = utcnow()
-            try:
-                await self._orchestration_run_store.save_state(
-                    updated,
-                    expected_version=current.state_version,
-                )
+            if result.cancellation_applied:
                 return True
-            except OrchestrationStoreConflict:
-                continue
-        logger.warning(
-            "failed to terminalize orchestration sidecar after cancellation",
-            extra={"user_message_id": user_message_id},
-        )
-        return False
+            return CancellationAck(
+                status=result.status.value,
+                cancellation_applied=False,
+                reconciled=result.reconciled,
+            )
+        except Exception:
+            logger.warning(
+                "cancellation marker persisted but finalization remains pending",
+                extra={"room_id": room_id, "message_id": message_id},
+                exc_info=True,
+            )
+            return CancellationAck(
+                status="cancellation_pending",
+                cancellation_applied=False,
+                reconciled=False,
+            )
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         return await self._run_reader.get_run(run_id)
@@ -778,43 +907,19 @@ class ExecutionFacade:
         return await self._run_reader.get_runs_for_room(room_id)
 
     async def cancel_inflight_tasks(self) -> int:
-        task_metadata = {
-            task: (self._inflight_metadata.get(task) or {})
-            for task in set(self._inflight)
-            if not task.done()
-        }
-        for task in task_metadata:
-            task.cancel()
-        if task_metadata:
-            await asyncio.gather(*task_metadata, return_exceptions=True)
+        """Interrupt local execution without terminalizing durable runs.
 
-        canceled_count = 0
-        for task, metadata in task_metadata.items():
-            if not task.cancelled():
-                continue
-            room_id = metadata.get("room_id")
-            message_id = metadata.get("message_id")
-            if not room_id or not message_id:
-                continue
-            try:
-                await emit_processing_status(
-                    room_id=room_id,
-                    status="canceled",
-                    message_id=message_id,
-                    lifecycle_message_id=message_id,
-                    run_lifecycle=self._run_lifecycle,
-                    event_publisher=self._event_publisher,
-                    run_event_enabled=self._run_event_enabled,
-                    client_request_id_resolver=self._client_request_id_resolver,
-                    client_request_id=metadata.get("client_request_id"),
-                )
-            except Exception:
-                logger.warning(
-                    "execution shutdown failed to mark orchestration canceled",
-                    exc_info=True,
-                )
-            canceled_count += 1
-        return canceled_count
+        Graceful process shutdown is an infrastructure interruption, not a user
+        cancellation. Non-terminal orchestration remains recoverable after the
+        next process starts, so this method must not emit a public terminal state.
+        """
+        tasks = {task for task in set(self._inflight) if not task.done()}
+        for task in tasks:
+            task.cancel(GRACEFUL_SHUTDOWN_CANCEL_REASON)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        return sum(task.cancelled() for task in tasks)
 
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)
@@ -955,6 +1060,7 @@ class ExecutionFacade:
             room_user_message_id=state.user_message_id,
             user_id=hitl_result.get("responder_id"),
             is_recovery=True,
+            reuse_processing_claim=True,
             client_request_id=state.client_request_id,
         )
         self.schedule_recovery_orchestration(

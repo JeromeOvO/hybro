@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "multi-agents-backend"
-version = "0.2.6"
-description = "Multi-Agents Backend"
+name = "hybro-backend"
+version = "0.2.10"
+description = "Hybro backend"
 requires-python = ">=3.12"
 dependencies = [
     # Web framework
@@ -40,14 +40,13 @@ dependencies = [
     "platformdirs>=4.3.8",
     # Utilities
     "cachetools>=5.5.2",
-    "loguru>=0.7.3",
     "python-dateutil>=2.9.0.post0",
     "pypdf>=5.0.0,<7",
     "gunicorn>=25.3.0",
 ]
 
 [project.scripts]
-multi-agents-backend = "main:main"
+hybro-backend = "main:main"
 discover = "scripts.discovery_cli:main"
 
 [project.optional-dependencies]
@@ -67,16 +66,14 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
-    "-v",
     "--tb=short",
     "--strict-markers",
     "--asyncio-mode=auto",
 ]
 markers = [
     "asyncio: mark test as async",
-    "unit: mark test as a unit test",
-    "integration: mark test as an integration test",
-    "slow: mark test as slow running",
+    "core: critical local product-flow regression baseline",
+    "integration: requires an explicitly configured external service",
 ]
 asyncio_mode = "auto"
 
@@ -178,7 +175,6 @@ docstring-code-format = true
 [tool.setuptools]
 py-modules = ["main", "container"]
 packages = [
-    "api",
     "agent",
     "agent.repository",
     "room",
@@ -199,6 +195,7 @@ packages = [
     "delivery.event_bus",
     "execution",
     "execution.orchestration",
+    "execution.repository",
     "execution.dispatch",
     "execution.dispatch.middleware",
     "execution.dispatch.transports",
@@ -221,6 +218,7 @@ packages = [
     "common.errors",
     "common.middleware",
     "common.observability",
+    "common.prompts",
     "common.protocols",
     "common.server",
     "common.utils",

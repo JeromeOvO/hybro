@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
+from common.a2a_task_projection import public_artifact_data, public_part_data
 from common.config.settings import settings
+from common.observability import traced_create_task
 from common.utils.a2a_helpers import (
     extract_text_from_artifact_dicts,
     filter_non_text_parts,
@@ -23,11 +25,7 @@ from common.utils.a2a_helpers import (
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.result_ingestor import AgentResultRead
-from execution.task_tracking import (
-    public_artifact_data,
-    public_part_data,
-    resolve_public_task_label,
-)
+from execution.task_tracking import resolve_public_task_label
 
 if TYPE_CHECKING:
     from execution.ports import ExecutionDeliveryPort, TaskNotificationStorePort
@@ -607,7 +605,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"artifact-lease-{e.message_id}",
+        )
         try:
             await operation()
             if stopped.is_set():
@@ -890,7 +891,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, display_text or ""),
+            lambda: self._resume_orchestration_event(e, display_text or ""),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -974,7 +975,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+            lambda: self._resume_orchestration_event(e, "", failed=True),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -1048,7 +1049,7 @@ class AgentResponseHandler:
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration(e.message_id, "", failed=True),
+            lambda: self._resume_orchestration_event(e, "", failed=True),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
@@ -1203,7 +1204,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"terminal-lease-{message_id}",
+        )
         try:
             await operation()
             if stopped.is_set():
@@ -1252,7 +1256,10 @@ class AgentResponseHandler:
                             owner_task.cancel()
                         return
 
-        maintainer = asyncio.create_task(maintain())
+        maintainer = traced_create_task(
+            maintain(),
+            name=f"terminal-lease-{message_id}",
+        )
         try:
             result = await operation()
             if stopped.is_set():
@@ -1318,6 +1325,10 @@ class AgentResponseHandler:
             )
         )
         if not continuation:
+            # Durable supervisor runs do not serialize message continuations.
+            # Re-enter from the committed agent message so the canonical run
+            # can ingest the interactive state and create its HITL request.
+            await self._resume_orchestration_event(e, "")
             return
 
         if self.hitl_coordinator is None:
@@ -1765,6 +1776,24 @@ class AgentResponseHandler:
                 e.message_id,
                 exc_info=True,
             )
+
+    async def _resume_orchestration_event(
+        self,
+        event: AgentEvent,
+        response_text: str,
+        *,
+        failed: bool = False,
+    ) -> None:
+        # Direct transport finalizes synchronously inside the active supervisor
+        # dispatch. The outer executor ingests its ProcessingResult and continues;
+        # recursive recovery here would wait on the room lock it already holds.
+        if event.skip_persist:
+            return
+        await self._resume_orchestration(
+            event.message_id,
+            response_text,
+            failed=failed,
+        )
 
     async def _resume_orchestration(
         self,

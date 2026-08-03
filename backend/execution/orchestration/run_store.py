@@ -4,13 +4,14 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from execution.orchestration.candidate_scope import (
-    candidate_scope_from_legacy_envelope,
+    candidate_scope_from_envelope,
 )
 from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
     CandidateScopeSnapshot,
     OrchestrationRunEvent,
     OrchestrationRunState,
+    OrchestrationStatus,
 )
 
 
@@ -69,7 +70,7 @@ class OrchestrationRunStore(Protocol):
 
 
 class InMemoryOrchestrationRunStore:
-    """In-memory orchestration sidecar store for tests and single-process rollout."""
+    """In-memory orchestration run store for tests and single-process use."""
 
     def __init__(self) -> None:
         self._states_by_run_id: dict[str, OrchestrationRunState] = {}
@@ -166,6 +167,7 @@ class InMemoryOrchestrationRunStore:
             state
             for state in self._states_by_run_id.values()
             if state.status not in TERMINAL_ORCHESTRATION_STATUSES
+            and state.status != OrchestrationStatus.AWAITING_USER
         ]
         recoverable.sort(
             key=lambda state: (
@@ -187,7 +189,7 @@ class InMemoryOrchestrationRunStore:
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
         candidate_agent_ids = _candidate_agent_ids_from_envelope(normalized_envelope)
-        candidate_scope = _candidate_scope_from_legacy_envelope(
+        candidate_scope = _candidate_scope_from_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
             candidate_agent_ids=candidate_agent_ids,
@@ -220,7 +222,7 @@ class InMemoryOrchestrationRunStore:
 
 
 class MongoOrchestrationRunStore:
-    """Durable orchestration sidecar store backed by MongoDB collections."""
+    """Durable orchestration run store backed by MongoDB collections."""
 
     def __init__(
         self,
@@ -375,7 +377,13 @@ class MongoOrchestrationRunStore:
         docs = await self._runs.find(
             {
                 "status": {
-                    "$nin": [status.value for status in TERMINAL_ORCHESTRATION_STATUSES]
+                    "$nin": [
+                        status.value
+                        for status in (
+                            *TERMINAL_ORCHESTRATION_STATUSES,
+                            OrchestrationStatus.AWAITING_USER,
+                        )
+                    ]
                 }
             },
             sort=[("updated_at", 1), ("created_at", 1), ("run_id", 1)],
@@ -394,7 +402,7 @@ class MongoOrchestrationRunStore:
     ) -> OrchestrationRunState:
         normalized_envelope = envelope if isinstance(envelope, Mapping) else {}
         candidate_agent_ids = _candidate_agent_ids_from_envelope(normalized_envelope)
-        candidate_scope = _candidate_scope_from_legacy_envelope(
+        candidate_scope = _candidate_scope_from_envelope(
             room_id=room_id,
             envelope=normalized_envelope,
             candidate_agent_ids=candidate_agent_ids,
@@ -440,7 +448,7 @@ def _state_from_doc(doc: Mapping[str, Any]) -> OrchestrationRunState:
     return OrchestrationRunState.model_validate(payload)
 
 
-def _candidate_scope_from_legacy_envelope(
+def _candidate_scope_from_envelope(
     *,
     room_id: str,
     envelope: Mapping[str, Any],
@@ -454,7 +462,7 @@ def _candidate_scope_from_legacy_envelope(
     if not candidate_agent_ids and selected_agent_set is None:
         return None
 
-    return candidate_scope_from_legacy_envelope(
+    return candidate_scope_from_envelope(
         room_id=room_id,
         envelope=scope_envelope,
         selected_agent_set=selected_agent_set,

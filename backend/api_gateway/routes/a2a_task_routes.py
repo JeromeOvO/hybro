@@ -15,10 +15,10 @@ from common.a2a_constants import (
     NON_TERMINAL_STATES,
     get_retry_after_seconds,
 )
+from common.a2a_task_projection import public_persisted_task_data
 from common.auth import ClerkUser, get_current_user
 from common.protocols import A2ATaskStatusReader
 from common.utils.logger import get_logger
-from execution.task_tracking import public_persisted_task_data
 
 logger = get_logger(__name__)
 

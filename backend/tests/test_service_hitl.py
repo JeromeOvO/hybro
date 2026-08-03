@@ -193,6 +193,26 @@ class TestRequestInput:
         mock_hitl_db_service.create_hitl_request.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_rejects_hitl_group_larger_than_supported_bound(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="msg-456",
+            source="supervisor",
+            prompt="Question 1",
+            group_id="group-1",
+            group_total=101,
+            group_index=0,
+        )
+
+        assert result is None
+        mock_hitl_db_service.create_hitl_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_supervisor_projection_persists_request_id_on_display_message(
         self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
     ):
@@ -253,7 +273,7 @@ class TestRequestInput:
         mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_legacy_request_omits_absent_v2_run_links_when_persisted(
+    async def test_legacy_request_omits_absent_orchestration_run_links_when_persisted(
         self, hitl_service, mock_hitl_db_service, mock_hitl_delivery
     ):
         hitl_service._persistence = mock_hitl_db_service
@@ -269,7 +289,6 @@ class TestRequestInput:
 
         persisted_doc = mock_hitl_db_service.create_hitl_request.await_args.args[0]
         assert "orchestration_run_id" not in persisted_doc
-        assert "orchestration_schema_version" not in persisted_doc
 
     @pytest.mark.asyncio
     async def test_emits_sse_event_on_creation(
@@ -1627,7 +1646,7 @@ class TestRequestInput:
         continuation.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_blocking_followup_hitl_preserves_v2_run_links(
+    async def test_blocking_followup_hitl_preserves_orchestration_run_links(
         self,
         hitl_service,
         mock_hitl_db_service,
@@ -1648,7 +1667,6 @@ class TestRequestInput:
             "continuation_message_id": "agent-paused-msg",
             "display_message_id": "agent-paused-msg",
             "orchestration_run_id": "run-msg-1",
-            "orchestration_schema_version": 2,
             "status": HITLStatus.PENDING.value,
             "expires_at": "2026-07-03T00:00:00Z",
             "created_at": "2026-07-02T00:00:00Z",
@@ -1691,7 +1709,6 @@ class TestRequestInput:
             mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args.args[0]
         )
         assert followup_doc["orchestration_run_id"] == "run-msg-1"
-        assert followup_doc["orchestration_schema_version"] == 2
         mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
         continuation.resume_queue_from_continuation.assert_not_awaited()
 
@@ -1759,7 +1776,6 @@ class TestRequestInput:
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
         )
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._agent_reply = SimpleNamespace(
@@ -1810,7 +1826,6 @@ class TestRequestInput:
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
         )
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._agent_reply = SimpleNamespace(
@@ -2043,6 +2058,30 @@ class TestCancelRequest:
             sample_hitl_request.request_id,
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
+            cancellation_reconciled=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_retries_unreconciled_canceled_request(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+        mock_hitl_delivery,
+        sample_hitl_request,
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        hitl_service._delivery = mock_hitl_delivery
+        request_doc = sample_hitl_request.model_dump(mode="json")
+        request_doc["status"] = HITLStatus.CANCELED.value
+        request_doc["cancellation_reconciled"] = False
+        mock_hitl_db_service.get_hitl_request.return_value = request_doc
+
+        await hitl_service.cancel_request(sample_hitl_request.request_id)
+
+        mock_hitl_delivery.emit.assert_awaited_once()
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            cancellation_reconciled=True,
         )
 
     @pytest.mark.asyncio
@@ -2116,8 +2155,12 @@ class TestCancelRequest:
             sample_hitl_request.request_id,
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
+            cancellation_reconciled=False,
         )
-        mock_hitl_db_service.update_hitl_request.assert_not_called()
+        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
+            sample_hitl_request.request_id,
+            cancellation_reconciled=True,
+        )
         mock_hitl_delivery.emit.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -2198,9 +2241,12 @@ class TestCancelRequestsForMessage:
             status=HITLStatus.PENDING,
         )
 
-        mock_hitl_db_service.get_pending_hitl_requests_for_message.return_value = [
-            request1.model_dump(mode="json"),
-            request2.model_dump(mode="json"),
+        mock_hitl_db_service.get_pending_hitl_requests_for_message.side_effect = [
+            [
+                request1.model_dump(mode="json"),
+                request2.model_dump(mode="json"),
+            ],
+            [],
         ]
 
         # Mock get_hitl_request to return each request when queried
@@ -2217,6 +2263,46 @@ class TestCancelRequestsForMessage:
 
         # Should have CAS-canceled both requests
         assert mock_hitl_db_service.cas_update_hitl_request.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cancellation_reads_pages_until_no_hitl_requests_remain(
+        self, hitl_service, mock_hitl_db_service
+    ):
+        hitl_service._persistence = mock_hitl_db_service
+        first_page = [
+            HITLRequest(
+                request_id=f"req-{index}",
+                room_id="room-123",
+                user_message_id="msg-456",
+                source="supervisor",
+                prompt=f"Prompt {index}",
+                status=HITLStatus.PENDING,
+            ).model_dump(mode="json")
+            for index in range(50)
+        ]
+        second_page = [
+            HITLRequest(
+                request_id="req-50",
+                room_id="room-123",
+                user_message_id="msg-456",
+                source="supervisor",
+                prompt="Prompt 50",
+                status=HITLStatus.PENDING,
+            ).model_dump(mode="json")
+        ]
+        mock_hitl_db_service.get_pending_hitl_requests_for_message.side_effect = [
+            first_page,
+            second_page,
+            [],
+        ]
+        hitl_service.cancel_request = AsyncMock()
+
+        await hitl_service.cancel_requests_for_message("msg-456")
+
+        assert hitl_service.cancel_request.await_count == 51
+        assert (
+            mock_hitl_db_service.get_pending_hitl_requests_for_message.await_count == 3
+        )
 
 
 class TestHandleResponseErrors:
@@ -2344,7 +2430,6 @@ class TestHandleResponseErrors:
             continuation_message_id="user-msg-456",
             display_message_id="clarifier-msg-1",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
             status=HITLStatus.PENDING,
         )
 
@@ -2398,7 +2483,6 @@ class TestHandleResponseErrors:
             prompt="Which account?",
             continuation_message_id="user-msg-456",
             orchestration_run_id="run-msg-1",
-            orchestration_schema_version=2,
             status=HITLStatus.PENDING,
         )
         request_doc = request.model_dump(mode="json")

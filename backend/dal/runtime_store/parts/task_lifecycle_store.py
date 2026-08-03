@@ -18,7 +18,6 @@ from dal.runtime_store.parts.webhook_tokens import (
 )
 from models.room import RoomAgentMessage
 from models.run import NON_TERMINAL_RUN_STATE_VALUES
-from models.supervisor import TrajectoryStatus
 
 logger = get_logger(__name__)
 
@@ -315,6 +314,48 @@ class TaskLifecycleRuntimeStorePart:
             logger.error("Failed to check message cancellation", exc_info=True)
             return False
 
+    async def is_message_cancelled_strict(self, message_id: str) -> bool:
+        reader = getattr(self._message_repository, "is_message_cancelled", None)
+        if callable(reader):
+            return await reader(message_id)
+        return (
+            await self._cancelled_messages.find_one({"message_id": message_id})
+        ) is not None
+
+    async def list_pending_cancellation_markers(
+        self,
+        limit: int = 100,
+        after_message_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {
+            "message_id": {"$type": "string"},
+            "reconciliation_status": "pending",
+        }
+        if after_message_id is not None:
+            query["message_id"]["$gt"] = after_message_id
+        return await self._cancelled_messages.find(
+            query,
+            projection={"_id": 0},
+            sort=[("message_id", 1)],
+            limit=limit,
+        )
+
+    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
+        try:
+            await self._cancelled_messages.update_one(
+                {"message_id": message_id},
+                {
+                    "$set": {
+                        "reconciliation_status": "reconciled",
+                        "reconciled_at": utcnow(),
+                    }
+                },
+            )
+            return True
+        except Exception:
+            logger.error("Failed to reconcile cancellation marker", exc_info=True)
+            return False
+
     async def cancel_message(
         self,
         message_id: str,
@@ -324,11 +365,12 @@ class TaskLifecycleRuntimeStorePart:
             await self._cancelled_messages.update_one(
                 {"message_id": message_id},
                 {
+                    "$set": {"reconciliation_status": "pending"},
                     "$setOnInsert": {
                         "message_id": message_id,
                         "user_id": requested_by_user_id,
                         "cancelled_at": utcnow(),
-                    }
+                    },
                 },
                 upsert=True,
             )
@@ -523,49 +565,6 @@ class TaskLifecycleRuntimeStorePart:
             ) is not None
         except Exception:
             logger.error("Failed to save user-message continuation", exc_info=True)
-            return False
-
-    async def get_stuck_supervisor_trajectory_messages(
-        self,
-        older_than_minutes: int,
-        limit: int = 100,
-    ) -> list[dict]:
-        try:
-            threshold = utcnow() - timedelta(minutes=older_than_minutes)
-            return await self._room_user_messages.find(
-                {
-                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                    "extend_info.supervisor": True,
-                    "message_created_at": {"$lt": threshold},
-                },
-                projection={"message_id": 1, "room_id": 1, "_id": 0},
-                limit=limit,
-            )
-        except Exception:
-            logger.error(
-                "Failed to get stuck supervisor trajectory messages",
-                exc_info=True,
-            )
-            return []
-
-    async def claim_stuck_supervisor_trajectory(self, message_id: str) -> bool:
-        try:
-            doc = await self._room_user_messages.find_one_and_update(
-                {
-                    "message_id": message_id,
-                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
-                },
-                {
-                    "$set": {
-                        "extend_info.supervisor_trajectory.status": (
-                            TrajectoryStatus.RECOVERING
-                        ),
-                    }
-                },
-            )
-            return doc is not None
-        except Exception:
-            logger.error("Failed to claim stuck supervisor trajectory", exc_info=True)
             return False
 
     async def _find_agent_messages(

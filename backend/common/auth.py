@@ -9,7 +9,10 @@ from functools import lru_cache
 from clerk_backend_api import Clerk, authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import HTTPException, Request, status
-from loguru import logger
+
+from common.observability import get_logger
+
+logger = get_logger(__name__)
 
 clerk_secret_key: str | None = None
 clerk_authorized_parties: tuple[str, ...] = (
@@ -68,8 +71,11 @@ def _cached_clerk_user_name(user_id: str) -> str | None:
         parts = [user.first_name, user.last_name]
         full = " ".join(p for p in parts if p)
         return full or user.username or None
-    except Exception as e:
-        logger.warning(f"Failed to resolve Clerk user name for {user_id}: {e}")
+    except Exception as exc:
+        logger.warning(
+            "clerk_user_name_resolution_failed",
+            extra={"user_id": user_id, "error_type": type(exc).__name__},
+        )
         return None
 
 
@@ -144,13 +150,16 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Token verification failed: {type(e).__name__}: {e}")
+    except Exception as exc:
+        logger.error(
+            "clerk_token_verification_failed",
+            extra={"error_type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication verification failed",
             headers={"WWW-Authenticate": "Bearer"},
-        ) from e
+        ) from exc
 
 
 async def get_current_user(

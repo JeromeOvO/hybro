@@ -3,8 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from api.hub import hub_status_for_user
-from api.relay import RegisterHubRequest, relay_register, relay_status
+from api_gateway.routes.hub_routes import hub_status_for_user
+from api_gateway.routes.relay_routes import (
+    RegisterHubRequest,
+    relay_register,
+    relay_status,
+)
 from common.auth import ClerkUser
 from hub_runtime_bridge.adapters.relay_hub_store import RelayHubStore
 from models.api_key import APIKey

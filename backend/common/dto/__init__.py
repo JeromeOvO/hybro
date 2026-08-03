@@ -42,6 +42,7 @@ from common.dto.delivery import (
 )
 from common.dto.execution import (
     AgentEvent,
+    CancellationAck,
     ExecutionAck,
     ExecutionRequest,
     ExecutionResult,
@@ -114,6 +115,7 @@ from common.dto.room import (
     SavedAgentGroupSnapshot,
     SavedUserMessage,
     UserMessageInput,
+    UserMessageInsertResult,
 )
 from common.dto.runtime_store import (
     RuntimeAgentGroup,
@@ -142,6 +144,7 @@ __all__ = [
     "AgentStreamEvent",
     "AgentTaskResult",
     "ArtifactUpdateEvent",
+    "CancellationAck",
     "AssembledContext",
     "CancellationEvent",
     "CompactionResult",
@@ -235,5 +238,6 @@ __all__ = [
     "TaskUpdateEvent",
     "UserMemory",
     "UserMessageInput",
+    "UserMessageInsertResult",
     "WorkflowState",
 ]

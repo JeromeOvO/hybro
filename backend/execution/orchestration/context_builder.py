@@ -1,4 +1,4 @@
-"""Structured planner context for v2 orchestration run state."""
+"""Structured planner context for orchestration run state."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class MissingRequiredQuoteError(ValueError):
 
 
 class CandidateAgentContext(BaseModel):
-    """Planner-facing view of one sidecar-selected candidate agent."""
+    """Planner-facing view of one run-selected candidate agent."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -38,7 +38,7 @@ class CandidateAgentContext(BaseModel):
 
 
 class CandidateScopeContext(BaseModel):
-    """Candidate scope supplied by the orchestration sidecar."""
+    """Candidate scope supplied by the orchestration run."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -178,6 +178,28 @@ def _planner_public_state_payload(
     return payload
 
 
+def _planner_feedback_payload(
+    state_context: OrchestrationStateContext,
+) -> list[dict[str, Any]]:
+    feedback: list[dict[str, Any]] = []
+    for failure in state_context.open_failures:
+        if (
+            failure.get("source") != "planner_validator"
+            or failure.get("status") != "open"
+        ):
+            continue
+        feedback.append(
+            {
+                "error_code": failure.get("error_code"),
+                "error_message": failure.get("error_message"),
+                "retry_count": failure.get("retry_count", 0),
+                "max_retries": failure.get("max_retries", 0),
+                "recovery_hints": list(failure.get("recovery_hints") or []),
+            }
+        )
+    return feedback[-1:]
+
+
 class OrchestrationPlannerContext(BaseModel):
     """Structured input boundary for planner adapters."""
 
@@ -207,6 +229,7 @@ class OrchestrationPlannerContext(BaseModel):
             "room_background": self.room_background,
             "candidate_scope": self.candidate_scope.model_dump(mode="json"),
             "state_context": _planner_public_state_payload(self.state_context),
+            "planner_feedback": _planner_feedback_payload(self.state_context),
             "available_resources": [
                 resource.model_dump(mode="json")
                 for resource in self.available_resources
@@ -224,7 +247,7 @@ def build_orchestration_planner_context(
     room_background: str | None = None,
     available_resources: Sequence[Any] | None = None,
 ) -> OrchestrationPlannerContext:
-    """Build a deterministic planner context from sidecar state and turn data."""
+    """Build a deterministic planner context from durable run state and turn data."""
 
     quote_context = _build_quote_context(quote)
     if quote_required and quote_context is None:

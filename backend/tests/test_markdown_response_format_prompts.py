@@ -31,6 +31,14 @@ def test_hybro_markdown_response_format_requires_section_headers() -> None:
 
 def test_supervisor_synthesis_prompt_includes_shared_markdown_format() -> None:
     assert "{user_goal}" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    assert "You are HYBRO, producing your final response" in (
+        SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    )
+    assert "Refer to yourself only as HYBRO" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    assert (
+        "never call yourself the Supervisor, HYBRO Platform, or HYBRO AI"
+        in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
+    )
     assert (
         "Answer the original user goal directly" in SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT
     )

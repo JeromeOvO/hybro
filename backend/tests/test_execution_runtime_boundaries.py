@@ -148,6 +148,27 @@ def test_execution_runtime_ports_use_named_method_contracts() -> None:
     )
 
 
+def test_container_binds_room_user_history_for_orchestration_resources() -> None:
+    tree = ast.parse((ROOT / "container.py").read_text())
+    execution_message_reader = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "execution_message_reader"
+            for target in node.targets
+        )
+    )
+    bindings = {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in execution_message_reader.keywords
+    }
+
+    assert bindings["get_room_user_messages_by_room_id"] == (
+        "message_store.get_room_user_messages_by_room_id"
+    )
+
+
 def test_execution_focused_port_signatures_match_plan() -> None:
     expected_signatures = {
         (ports.A2ATransportPort, "has_streaming_capability"): (

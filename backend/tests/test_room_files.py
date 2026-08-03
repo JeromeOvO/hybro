@@ -20,18 +20,34 @@ class InMemoryCollection:
         self.docs.append(deepcopy(doc))
         return SimpleNamespace(inserted_id=doc["file_id"])
 
-    async def find_one(self, query):
+    async def find_one(self, query, **kwargs):
         for doc in self.docs:
             if _matches(doc, query):
                 return deepcopy(doc)
         return None
 
-    async def update_one(self, query, update):
+    async def update_one(self, query, update, *, array_filters=None):
         for doc in self.docs:
             if not _matches(doc, query):
                 continue
             for key, value in update.get("$set", {}).items():
-                doc[key] = value
+                if key == "reference_claims.$[claim].state":
+                    claim_filter = (array_filters or [{}])[0]
+                    for claim in doc.get("reference_claims", []):
+                        if _matches(
+                            claim,
+                            {
+                                filter_key.removeprefix("claim."): filter_value
+                                for filter_key, filter_value in claim_filter.items()
+                            },
+                        ):
+                            claim["state"] = value
+                else:
+                    doc[key] = value
+            for key, value in update.get("$pull", {}).items():
+                doc[key] = [
+                    item for item in doc.get(key, []) if not _matches(item, value)
+                ]
             for key, value in update.get("$inc", {}).items():
                 doc[key] = doc.get(key, 0) + value
             return SimpleNamespace(modified_count=1)
@@ -81,11 +97,23 @@ def _matches(doc, query):
     for key, value in query.items():
         actual = doc.get(key)
         if isinstance(value, dict) and "$lt" in value:
-            if actual is None or actual >= value["$lt"]:
+            if actual is None or _as_utc(actual) >= _as_utc(value["$lt"]):
+                return False
+        elif isinstance(value, dict) and "$elemMatch" in value:
+            if not any(_matches(item, value["$elemMatch"]) for item in actual or []):
+                return False
+        elif isinstance(value, dict) and "$size" in value:
+            if actual is None or len(actual) != value["$size"]:
                 return False
         elif actual != value:
             return False
     return True
+
+
+def _as_utc(value):
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 async def test_room_files_upload_persists_ready_metadata_and_content():
@@ -131,6 +159,37 @@ async def test_room_files_upload_persists_ready_metadata_and_content():
             "updated_at": now,
         }
     ]
+
+
+async def test_reconcile_content_uses_collection_projection_keyword():
+    collection = InMemoryCollection()
+    collection.docs.append({"file_id": "known-file"})
+    content_store = SimpleNamespace(
+        list_file_ids=AsyncMock(return_value=["known-file", "orphan-file"]),
+        delete=AsyncMock(return_value=True),
+    )
+    files = RoomFiles(metadata=collection, content=content_store)
+
+    assert await files._reconcile_content() == 1
+    content_store.delete.assert_awaited_once_with("orphan-file")
+
+
+async def test_reference_recovery_uses_message_projection_keyword():
+    messages = SimpleNamespace(find_one=AsyncMock(return_value={"_id": "message"}))
+    files = RoomFiles(
+        metadata=InMemoryCollection(),
+        content=MemoryFileContentStore(),
+        messages=messages,
+    )
+
+    assert await files._message_exists("message-1") is True
+    assert await files._has_message_reference("file-1") is True
+    assert messages.find_one.await_args_list[0].args == ({"message_id": "message-1"},)
+    assert messages.find_one.await_args_list[0].kwargs == {"projection": {"_id": 1}}
+    assert messages.find_one.await_args_list[1].args == (
+        {"message_content.attachments.file_id": "file-1"},
+    )
+    assert messages.find_one.await_args_list[1].kwargs == {"projection": {"_id": 1}}
 
 
 async def test_user_upload_survives_lost_finalize_acknowledgement():
@@ -353,6 +412,120 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
     assert deleted == 1
     assert await files.get_bytes(old["file_id"], max_bytes=3) is None
     assert await files.get_bytes(new["file_id"], max_bytes=3) == b"new"
+
+
+async def test_reference_recovery_commits_stale_naive_claim_when_message_exists():
+    now = datetime(2026, 8, 1, tzinfo=UTC)
+    collection = InMemoryCollection()
+    collection.docs.append(
+        {
+            "file_id": "stale-claim",
+            "source": "user_upload",
+            "status": "ready",
+            "version": 1,
+            "reference_claims": [
+                {
+                    "message_id": "message-1",
+                    "state": "pending",
+                    "claimed_at": datetime(2026, 7, 28),
+                }
+            ],
+            "created_at": now - timedelta(days=4),
+            "updated_at": now - timedelta(days=4),
+        }
+    )
+    messages = SimpleNamespace(find_one=AsyncMock(return_value={"_id": "message-1"}))
+    files = RoomFiles(
+        metadata=collection,
+        content=MemoryFileContentStore(),
+        messages=messages,
+        now=lambda: now,
+    )
+
+    recovered = await files._recover_reference_claims(now - timedelta(hours=24))
+
+    assert recovered == 1
+    assert collection.docs[0]["reference_claims"][0]["state"] == "committed"
+
+
+async def test_recovery_removes_stale_naive_claim_and_deletes_orphan():
+    now = datetime(2026, 8, 1, tzinfo=UTC)
+    file_id = "e" * 32
+    collection = InMemoryCollection()
+    collection.docs.append(
+        {
+            "file_id": file_id,
+            "source": "user_upload",
+            "status": "ready",
+            "version": 1,
+            "reference_claims": [
+                {
+                    "message_id": "missing-message",
+                    "state": "pending",
+                    "claimed_at": datetime(2026, 7, 28),
+                }
+            ],
+            "created_at": now - timedelta(days=4),
+            "updated_at": now - timedelta(days=4),
+        }
+    )
+    content_store = MemoryFileContentStore()
+    await content_store.write(file_id, b"orphan", "text/plain")
+    messages = SimpleNamespace(find_one=AsyncMock(return_value=None))
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        messages=messages,
+        now=lambda: now,
+    )
+
+    recovered = await files.recover()
+
+    assert recovered == 2
+    assert collection.docs == []
+    assert await content_store.read(file_id, max_bytes=6) is None
+
+
+async def test_reference_recovery_only_updates_stale_claims():
+    now = datetime(2026, 8, 1, tzinfo=UTC)
+    collection = InMemoryCollection()
+    collection.docs.append(
+        {
+            "file_id": "mixed-claims",
+            "source": "user_upload",
+            "status": "ready",
+            "version": 1,
+            "reference_claims": [
+                {
+                    "message_id": "old-message",
+                    "state": "pending",
+                    "claimed_at": datetime(2026, 7, 28),
+                },
+                {
+                    "message_id": "new-message",
+                    "state": "pending",
+                    "claimed_at": datetime(2026, 7, 31, 12),
+                },
+            ],
+            "created_at": now - timedelta(days=4),
+            "updated_at": now - timedelta(days=4),
+        }
+    )
+    messages = SimpleNamespace(find_one=AsyncMock(return_value={"_id": "message"}))
+    files = RoomFiles(
+        metadata=collection,
+        content=MemoryFileContentStore(),
+        messages=messages,
+        now=lambda: now,
+    )
+
+    recovered = await files._recover_reference_claims(now - timedelta(hours=24))
+
+    assert recovered == 1
+    assert [claim["state"] for claim in collection.docs[0]["reference_claims"]] == [
+        "committed",
+        "pending",
+    ]
 
 
 async def test_recovery_removes_crash_orphaned_agent_artifact():

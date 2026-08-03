@@ -23,6 +23,12 @@ from common.a2a_constants import (
     is_interactive_state,
     is_terminal_state,
 )
+from common.a2a_task_projection import (
+    public_artifact_data,
+    public_message_data,
+    public_part_data,
+    public_persisted_task_data,
+)
 from common.types import (
     Artifact,
     Message,
@@ -52,10 +58,6 @@ from execution.state.task_state_manager import (
 )
 from execution.task_tracking import (
     extract_public_completed_status_text,
-    public_artifact_data,
-    public_message_data,
-    public_part_data,
-    public_persisted_task_data,
     resolve_public_task_label,
 )
 from models.error import A2AServiceError
@@ -2087,7 +2089,10 @@ class DirectTransport(AgentTransport):
                 )
                 return False, _PUBLIC_AGENT_FAILURE_MESSAGE, None, None
 
-        logger.error("Unexpected response type from task tracking: %s", response)
+        logger.error(
+            "unexpected_task_tracking_response",
+            extra={"response_type": type(response).__name__},
+        )
         return False, "", None, None
 
     async def _finalize_polled_task(

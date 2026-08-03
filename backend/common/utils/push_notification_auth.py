@@ -49,11 +49,18 @@ class PushNotificationSenderAuth(PushNotificationAuth):
                 response.raise_for_status()
                 is_verified = response.text == validation_token
 
-                logger.info(f"Verified push-notification URL: {url} => {is_verified}")
+                logger.info(
+                    "push_notification_url_verified",
+                    extra={
+                        "url": url,
+                        "outcome": "success" if is_verified else "error",
+                    },
+                )
                 return is_verified
-            except Exception as e:
+            except Exception as exc:
                 logger.warning(
-                    f"Error during sending push-notification for URL {url}: {e}"
+                    "push_notification_url_verification_failed",
+                    extra={"url": url, "error_type": type(exc).__name__},
                 )
 
         return False
@@ -93,10 +100,14 @@ class PushNotificationSenderAuth(PushNotificationAuth):
             try:
                 response = await client.post(url, json=data, headers=headers)
                 response.raise_for_status()
-                logger.info(f"Push-notification sent for URL: {url}")
-            except Exception as e:
+                logger.info(
+                    "push_notification_completed",
+                    extra={"url": url, "outcome": "success"},
+                )
+            except Exception as exc:
                 logger.warning(
-                    f"Error during sending push-notification for URL {url}: {e}"
+                    "push_notification_failed",
+                    extra={"url": url, "error_type": type(exc).__name__},
                 )
 
 

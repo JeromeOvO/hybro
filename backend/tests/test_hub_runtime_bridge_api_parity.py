@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_relay_and_hub_route_inventory_matches_phase8_fixture() -> None:
-    from api.hub import router as hub_router
-    from api.relay import router as relay_router
+    from api_gateway.routes.hub_routes import router as hub_router
+    from api_gateway.routes.relay_routes import router as relay_router
 
     expected = json.loads((ROOT / "tests/fixtures/phase8_hub_routes.json").read_text())
     actual = [

@@ -12,7 +12,7 @@ from uuid import uuid4
 from common.dto import FileInfo
 from common.errors import FileStoragePlatformError
 from common.protocols import PreparedFileStream
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileStorageError
 from room_files.leases import RoomWriteLeases
@@ -811,6 +811,7 @@ class RoomFiles:
         return recovered
 
     async def _recover_reference_claims(self, cutoff: datetime) -> int:
+        cutoff = ensure_utc(cutoff)
         cursor = self._metadata.find(
             {
                 "reference_claims": {
@@ -830,7 +831,7 @@ class RoomFiles:
                 if (
                     claim.get("state") != "pending"
                     or claimed_at is None
-                    or claimed_at >= cutoff
+                    or ensure_utc(claimed_at) >= cutoff
                 ):
                     continue
                 message_id = str(claim.get("message_id") or "")
@@ -887,7 +888,10 @@ class RoomFiles:
         if self._messages is None or not message_id:
             return False
         return (
-            await self._messages.find_one({"message_id": message_id}, {"_id": 1})
+            await self._messages.find_one(
+                {"message_id": message_id},
+                projection={"_id": 1},
+            )
             is not None
         )
 
@@ -896,7 +900,8 @@ class RoomFiles:
             return False
         return (
             await self._messages.find_one(
-                {"message_content.attachments.file_id": file_id}, {"_id": 1}
+                {"message_content.attachments.file_id": file_id},
+                projection={"_id": 1},
             )
             is not None
         )
@@ -950,7 +955,10 @@ class RoomFiles:
         list_file_ids = getattr(self._content, "list_file_ids", None)
         if list_file_ids is not None:
             for file_id in await list_file_ids():
-                if await self._metadata.find_one({"file_id": file_id}, {"_id": 1}):
+                if await self._metadata.find_one(
+                    {"file_id": file_id},
+                    projection={"_id": 1},
+                ):
                     continue
                 if await self._content.delete(file_id):
                     recovered += 1

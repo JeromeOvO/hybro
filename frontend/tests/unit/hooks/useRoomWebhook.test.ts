@@ -1369,6 +1369,74 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(banner.error).toHaveBeenCalledWith('Processing failed: Backend failed cleanly')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-structured-details',
+          client_request_id: clientRequestId,
+          details: { message: 'Planning next action...' },
+        },
+      }))
+    })
+
+    expect(flags().processing).toBe(false)
+    expect(useMessageStore.getState().entities[userEntity!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
+      'Thinking...',
+      'Planning next action...',
+    ])
+  })
+
+  it('does not revive processing when a late active status arrives after a terminal event that preceded DB hydration', async () => {
+    const { result } = await mountHook()
+    await waitFor(() => expect(result.current.room).toBeTruthy())
+
+    await act(async () => {
+      await result.current.sendUserMessage({
+        userInput: 'Terminal event wins before hydration',
+        dispatch: { message_target_mode: 'room_default' },
+      })
+    })
+
+    const userEntity = useMessageStore
+      .getState()
+      .orderedIds
+      .map((id) => useMessageStore.getState().entities[id])
+      .find((entity) => entity?.messageType === 'user')
+    expect(userEntity?.clientRequestId).toBeTruthy()
+
+    // Model the production race: terminal processing_status resolves the
+    // lifecycle before the persisted user entity is available to stamp.
+    useMessageStore.getState().removeMessage('msg-1')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'failed',
+          message_id: 'msg-1',
+          client_request_id: userEntity!.clientRequestId,
+          details: { message: 'Planner failed' },
+        },
+      }))
+    })
+    expect(flags().processing).toBe(false)
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-1',
+          client_request_id: userEntity!.clientRequestId,
+          details: { message: 'Planning next action...' },
+        },
+      }))
+    })
+
+    expect(flags().processing).toBe(false)
   })
 
   it('preserves logs for a room-level terminal status when the user entity still has its optimistic id', async () => {

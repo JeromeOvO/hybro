@@ -1,4 +1,3 @@
-import inspect
 from datetime import UTC, datetime
 
 import pytest
@@ -6,51 +5,65 @@ from pydantic import ValidationError as PydanticValidationError
 
 from common.dto import (
     AgentCardSnapshot,
+    AgentEvent,
     AgentInfo,
+    AgentMessageFinal,
+    AgentMessagePartial,
     AgentRegistered,
+    ArtifactUpdateEvent,
+    CancellationEvent,
     CompactionResult,
     ContextBlock,
     CreateRoomRequest,
+    DebateRoundEvent,
     DeliveryEnvelope,
-    DeliveryEvent,
     EmbeddingResult,
+    ErrorEvent,
+    ExecutionAck,
     ExecutionRequest,
     ExecutionResult,
     FileMetadata,
     GatewayRoute,
+    HITLRequest,
+    HITLRequestEvent,
+    HITLResolvedEvent,
+    HITLResponse,
+    HubAgentEvent,
+    HubAgentResponseInternal,
     HubAgentStatus,
     HubConnectionInfo,
     InternalDomainEvent,
     LLMRequest,
     LLMResponse,
     MembershipSeed,
+    MembershipUpdateRequest,
     MemorySearchResult,
     MessageRecord,
     ModelInfo,
     NotificationPayload,
     PaginationParams,
+    ProcessingStatusEvent,
     QueryFilter,
     RateLimitInfo,
     RelayPayload,
     RoomCreated,
     RoomCreationParams,
+    RoomInfo,
     RoomMembership,
     RoomSummary,
+    RunEventNotification,
+    RunInfo,
+    RunState,
+    SavedUserMessage,
     SortOrder,
     SSEEvent,
+    TaskSubmittedEvent,
+    TaskUpdateEvent,
     WorkflowState,
 )
-from common.errors import AppError, NotFoundError, ValidationError
 
 
-def test_frozen_dto_is_immutable():
-    agent = AgentInfo(agent_id="a1", name="Agent", status="active")
-
-    with pytest.raises(PydanticValidationError):
-        agent.name = "Changed"
-
-
-def test_phase0_dtos_can_be_instantiated():
+def test_common_dtos_can_be_instantiated():
     now = datetime.now(UTC)
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
@@ -70,12 +83,57 @@ def test_phase0_dtos_can_be_instantiated():
         content={},
         created_at=now,
     )
-    RoomCreationParams(owner_id="u1", owner_name="User", room_name="Room")
+    seed = MembershipSeed(mode="manual", agent_ids=["a1"])
+    MembershipUpdateRequest(add_agent_ids=["a2"], remove_agent_ids=["a1"])
+    RoomInfo(
+        room_id="r1",
+        room_name="Room",
+        owner_id="u1",
+        owner_name="User",
+        agent_ids=["a1"],
+        created_at=now,
+    )
+    CreateRoomRequest(
+        owner_id="u1",
+        owner_name="User",
+        room_name="Room",
+        membership_seed=seed,
+    )
+    RoomCreationParams(
+        owner_id="u1",
+        owner_name="User",
+        room_name="Room",
+        membership_seed=seed,
+    )
+    SavedUserMessage(
+        room_id="r1",
+        message_id="m1",
+        user_id="u1",
+        user_name="User",
+        message={},
+    )
     ExecutionRequest(
         room_id="r1", message_text="hello", sender_id="u1", sender_name="User"
     )
+    ExecutionAck(
+        room_id="r1",
+        message_id="m1",
+        user_id="u1",
+        user_name="User",
+        message={},
+    )
     ExecutionResult(success=True)
     WorkflowState(run_id="run1", room_id="r1", state="queued", updated_at=now)
+    RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
+    HITLRequest(
+        request_id="hitl1",
+        room_id="r1",
+        user_message_id="m1",
+        prompt="Continue?",
+        source="agent",
+    )
+    HITLResponse(request_id="hitl1", response_text="yes", responder_id="u1")
+    AgentEvent(room_id="r1", agent_id="a1", message_id="m1", event_type="partial")
     ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
     CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
     MemorySearchResult(
@@ -87,6 +145,54 @@ def test_phase0_dtos_can_be_instantiated():
     )
     DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
     SSEEvent(event="message", data={})
+    ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
+    RunEventNotification(
+        room_id="r1",
+        event_id="e1",
+        run_id="run1",
+        seq=1,
+        run_event_type="agent_started",
+    )
+    AgentMessagePartial(
+        room_id="r1",
+        message_id="m1",
+        agent_id="a1",
+        content_delta="hello",
+    )
+    AgentMessageFinal(
+        room_id="r1",
+        message_id="m1",
+        agent_id="a1",
+        content={"text": "done"},
+    )
+    CancellationEvent(room_id="r1", message_id="m1")
+    HITLRequestEvent(
+        room_id="r1",
+        request_id="h1",
+        prompt="Continue?",
+        prompt_type="text",
+        source="agent",
+        message_id="m1",
+    )
+    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1", source="agent")
+    TaskSubmittedEvent(
+        room_id="r1",
+        message_id="m1",
+        task_id="t1",
+        agent_name="Agent",
+    )
+    TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
+    ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
+    ErrorEvent(room_id="r1", error="failed")
+    HubAgentEvent(
+        room_id="r1",
+        hub_id="h1",
+        agent_id="a1",
+        message_id="m1",
+        status="working",
+        timestamp=now,
+    )
+    DebateRoundEvent(room_id="r1", round_number=1, agent_id="a1", message_id="m1")
     NotificationPayload(room_id="r1", message="notice")
     HubConnectionInfo(hub_id="h1", owner_id="u1", is_online=True)
     HubAgentStatus(hub_id="h1", agent_id="a1", status="active")
@@ -120,6 +226,15 @@ def test_phase0_dtos_can_be_instantiated():
     InternalDomainEvent(timestamp=now)
     AgentRegistered(agent_id="a1", timestamp=now)
     RoomCreated(room_id="r1", owner_id="u1", timestamp=now)
+    HubAgentResponseInternal(
+        hub_id="h1",
+        agent_id="a1",
+        task_id="t1",
+        room_id="r1",
+        is_terminal=True,
+        payload={},
+        timestamp=now,
+    )
 
 
 def test_room_creation_params_default_seed_does_not_weaken_create_request():
@@ -191,46 +306,3 @@ def test_create_room_request_payloads_are_frozen():
     assert type(request.extend_info).__name__ == "FrozenDict"
     with pytest.raises(TypeError):
         request.extend_info["a"] = 2
-
-
-def test_protocols_are_runtime_checkable():
-    import common.protocols as protocols
-
-    non_protocol_exports = {"ViewSetFilterParams", "ViewSetPaginationParams"}
-    for name in protocols.__all__:
-        obj = getattr(protocols, name)
-        if inspect.isclass(obj) and name not in non_protocol_exports:
-            assert getattr(obj, "_is_runtime_protocol", False), name
-
-
-def test_event_exports_are_distinct():
-    assert DeliveryEvent is not InternalDomainEvent
-    assert InternalDomainEvent.__name__ == "InternalDomainEvent"
-
-
-def test_settings_class_loads_from_env(monkeypatch):
-    monkeypatch.setenv("MONGODB_DB_NAME", "phase0_test_db")
-    from common.config.settings import Settings
-
-    settings = Settings()
-
-    assert settings.mongodb_db_name == "phase0_test_db"
-
-
-def test_common_settings_package_exports_settings_singleton():
-    from common.config import settings as common_settings
-    from common.config.settings import settings as exported_settings
-
-    assert exported_settings is common_settings
-
-
-def test_error_hierarchy():
-    err = NotFoundError("Agent", "a1")
-
-    assert isinstance(err, AppError)
-    assert err.code == "NOT_FOUND"
-    assert err.details["entity_type"] == "Agent"
-
-    validation = ValidationError("Invalid input", details={"field": "name"})
-    assert str(validation) == "Invalid input"
-    assert validation.details == {"field": "name"}

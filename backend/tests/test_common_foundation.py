@@ -3,7 +3,6 @@ import inspect
 import json
 import tomllib
 import warnings
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -12,64 +11,27 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from common.dto import (
-    AgentCardSnapshot,
-    AgentEvent,
     AgentInfo,
     AgentMessageFinal,
     AgentMessagePartial,
-    AgentRegistered,
     ArtifactUpdateEvent,
     CancellationEvent,
-    CompactionResult,
-    ContextBlock,
-    CreateRoomRequest,
     DebateRoundEvent,
     DeliveryEnvelope,
     DeliveryEvent,
     DeliveryEventBase,
-    EmbeddingResult,
     ErrorEvent,
-    ExecutionAck,
-    ExecutionRequest,
-    ExecutionResult,
-    FileMetadata,
-    GatewayRoute,
-    HITLRequest,
     HITLRequestEvent,
     HITLResolvedEvent,
-    HITLResponse,
     HubAgentEvent,
-    HubAgentResponseInternal,
-    HubAgentStatus,
-    HubConnectionInfo,
     InternalDomainEvent,
-    LLMRequest,
-    LLMResponse,
-    MembershipSeed,
-    MembershipUpdateRequest,
-    MemorySearchResult,
-    MessageRecord,
-    ModelInfo,
-    NotificationPayload,
-    PaginationParams,
     ProcessingStatusEvent,
-    QueryFilter,
-    RateLimitInfo,
-    RelayPayload,
-    RoomCreated,
-    RoomCreationParams,
     RoomInfo,
-    RoomMembership,
-    RoomSummary,
     RunEventNotification,
     RunInfo,
     RunState,
-    SavedUserMessage,
-    SortOrder,
-    SSEEvent,
     TaskSubmittedEvent,
     TaskUpdateEvent,
-    WorkflowState,
 )
 from common.errors import AppError, NotFoundError, ValidationError
 
@@ -321,180 +283,6 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
     assert "AUTHORIZED_PARTIES" not in Path("common/auth.py").read_text()
 
 
-def test_common_foundation_dtos_can_be_instantiated():
-    now = datetime.now(UTC)
-
-    AgentInfo(agent_id="a1", name="Agent", status="active")
-    AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})
-    RoomSummary(
-        room_id="r1",
-        room_name="Room",
-        owner_id="u1",
-        owner_name="User",
-        created_at=now,
-    )
-    RoomMembership(room_id="r1", agent_ids=["a1"])
-    MessageRecord(
-        room_id="r1",
-        message_id="m1",
-        message_type="user",
-        content={},
-        created_at=now,
-    )
-    seed = MembershipSeed(mode="manual", agent_ids=["a1"])
-    MembershipUpdateRequest(add_agent_ids=["a2"], remove_agent_ids=["a1"])
-    RoomInfo(
-        room_id="r1",
-        room_name="Room",
-        owner_id="u1",
-        owner_name="User",
-        agent_ids=["a1"],
-        created_at=now,
-    )
-    CreateRoomRequest(
-        owner_id="u1",
-        owner_name="User",
-        room_name="Room",
-        membership_seed=seed,
-    )
-    RoomCreationParams(
-        owner_id="u1",
-        owner_name="User",
-        room_name="Room",
-        membership_seed=seed,
-    )
-    SavedUserMessage(
-        room_id="r1",
-        message_id="m1",
-        user_id="u1",
-        user_name="User",
-        message={},
-    )
-    ExecutionRequest(
-        room_id="r1", message_text="hello", sender_id="u1", sender_name="User"
-    )
-    ExecutionAck(
-        room_id="r1",
-        message_id="m1",
-        user_id="u1",
-        user_name="User",
-        message={},
-    )
-    ExecutionResult(success=True)
-    WorkflowState(run_id="run1", room_id="r1", state="queued", updated_at=now)
-    RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
-    HITLRequest(
-        request_id="hitl1",
-        room_id="r1",
-        user_message_id="m1",
-        prompt="Continue?",
-        source="agent",
-    )
-    HITLResponse(request_id="hitl1", response_text="yes", responder_id="u1")
-    AgentEvent(room_id="r1", agent_id="a1", message_id="m1", event_type="partial")
-    ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
-    CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
-    MemorySearchResult(
-        room_id="r1",
-        content="memory",
-        keyword_score=0.5,
-        relevance_score=0.5,
-        temporal_decay_factor=1.0,
-    )
-    DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
-    SSEEvent(event="message", data={})
-    ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
-    RunEventNotification(
-        room_id="r1",
-        event_id="e1",
-        run_id="run1",
-        seq=1,
-        run_event_type="agent_started",
-    )
-    AgentMessagePartial(
-        room_id="r1",
-        message_id="m1",
-        agent_id="a1",
-        content_delta="hello",
-    )
-    AgentMessageFinal(
-        room_id="r1",
-        message_id="m1",
-        agent_id="a1",
-        content={"text": "done"},
-    )
-    CancellationEvent(room_id="r1", message_id="m1")
-    HITLRequestEvent(
-        room_id="r1",
-        request_id="h1",
-        prompt="Continue?",
-        prompt_type="text",
-        source="agent",
-        message_id="m1",
-    )
-    HITLResolvedEvent(room_id="r1", request_id="h1", message_id="m1", source="agent")
-    TaskSubmittedEvent(
-        room_id="r1",
-        message_id="m1",
-        task_id="t1",
-        agent_name="Agent",
-    )
-    TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
-    ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
-    ErrorEvent(room_id="r1", error="failed")
-    HubAgentEvent(
-        room_id="r1",
-        hub_id="h1",
-        agent_id="a1",
-        message_id="m1",
-        status="working",
-        timestamp=now,
-    )
-    DebateRoundEvent(room_id="r1", round_number=1, agent_id="a1", message_id="m1")
-    NotificationPayload(room_id="r1", message="notice")
-    HubConnectionInfo(hub_id="h1", owner_id="u1", is_online=True)
-    HubAgentStatus(hub_id="h1", agent_id="a1", status="active")
-    RelayPayload(hub_id="h1", payload={})
-    LLMRequest(messages=[{"role": "user", "content": "hi"}])
-    LLMResponse(content="ok", model="test")
-    EmbeddingResult(text="hi", embedding=[0.1])
-    ModelInfo(
-        model_id="m1",
-        logical_name="test",
-        provider="openai",
-        capabilities=[],
-        max_context_tokens=1,
-    )
-    RateLimitInfo(limit=10, remaining=9, reset_at=now)
-    FileMetadata(
-        file_id="f1",
-        room_id="r1",
-        owner_id="u1",
-        source="user_upload",
-        mime_type="text/plain",
-        file_name="x.txt",
-        size_bytes=1,
-        sha256="0" * 64,
-        status="ready",
-    )
-    GatewayRoute(agent_id="a1", gateway_url="/gateway/a1")
-    QueryFilter(criteria={"room_id": "r1"})
-    PaginationParams(page=1, limit=10)
-    SortOrder(field="created_at", direction="desc")
-    InternalDomainEvent(timestamp=now)
-    AgentRegistered(agent_id="a1", timestamp=now)
-    RoomCreated(room_id="r1", owner_id="u1", timestamp=now)
-    HubAgentResponseInternal(
-        hub_id="h1",
-        agent_id="a1",
-        task_id="t1",
-        room_id="r1",
-        is_terminal=True,
-        payload={},
-        timestamp=now,
-    )
-
-
 def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
     envelope = DeliveryEnvelope(
         room_id="room-1",
@@ -699,8 +487,6 @@ def test_delivery_event_schemas_match_design_doc():
             "group_index",
             "related_message_id",
             "client_request_id",
-            "orchestration_run_id",
-            "orchestration_schema_version",
         },
         HITLResolvedEvent: {
             "room_id",
@@ -714,8 +500,6 @@ def test_delivery_event_schemas_match_design_doc():
             "error_message",
             "related_message_id",
             "client_request_id",
-            "orchestration_run_id",
-            "orchestration_schema_version",
         },
         TaskSubmittedEvent: {
             "room_id",
@@ -1043,6 +827,7 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RuntimeHITLStore: {
             "cas_update_hitl_request",
+            "cas_update_hitl_request_strict",
             "claim_hitl_group_routing",
             "claim_hitl_request",
             "count_hitl_requests_for_message",
@@ -1053,9 +838,12 @@ def test_protocol_methods_match_design_doc():
             "fenced_update_hitl_request",
             "find_pending_hitl_request_for_agent_message",
             "get_hitl_group_requests",
+            "get_pending_hitl_group_requests_strict",
+            "get_unreconciled_terminal_hitl_group_requests_strict",
             "get_hitl_request",
             "get_pending_hitl_requests",
             "get_pending_hitl_requests_for_message",
+            "get_pending_hitl_requests_for_message_strict",
             "iter_stale_processing_hitl_requests",
             "persist_hitl_request_id_on_message",
             "persist_pending_hitl_on_agent_message",
@@ -1086,14 +874,18 @@ def test_protocol_methods_match_design_doc():
             "delete_room_agent_message_by_message_id",
             "get_room_agent_message_by_message_id",
             "get_room_agent_messages_by_related_message_id",
+            "get_room_agent_messages_by_related_message_id_strict",
             "get_room_agent_messages_by_room_id",
             "get_room_user_message_by_message_id",
+            "get_room_user_message_by_message_id_strict",
             "get_room_user_messages_by_room_id",
+            "get_stale_claimed_orchestration_messages",
             "refresh_processing_claim",
             "reset_last_notified_state",
             "turn_exists",
             "unclaim_user_message",
             "update_last_notified_state",
+            "update_orchestration_projection_if_status",
             "update_room_agent_message_by_message_id",
             "update_room_agent_message_with_new_message_content_by_message_id",
             "update_room_user_message_by_message_id",
@@ -1104,13 +896,14 @@ def test_protocol_methods_match_design_doc():
         protocols.RuntimeTaskLifecycleStore: {
             "cancel_message",
             "check_task_limits",
-            "claim_stuck_supervisor_trajectory",
             "enable_task_tracking_on_message",
             "find_stale_non_terminal_runs",
             "generate_webhook_token",
             "get_active_runs_by_room_id",
             "get_and_clear_continuation_on_message",
             "get_and_clear_continuation_on_user_message",
+            "list_pending_cancellation_markers",
+            "mark_cancellation_reconciled",
             "get_expired_task_messages",
             "get_non_tracked_stale_task_messages",
             "get_orphaned_agent_messages",
@@ -1118,10 +911,10 @@ def test_protocol_methods_match_design_doc():
             "get_pending_task_messages_for_user",
             "get_room_ids_with_non_terminal_runs",
             "get_stale_task_messages",
-            "get_stuck_supervisor_trajectory_messages",
             "get_task_messages_for_room",
             "hash_webhook_token",
             "is_message_cancelled",
+            "is_message_cancelled_strict",
             "resolve_client_request_id_for_agent_message",
             "resolve_client_request_id_for_message_id",
             "save_continuation_on_message",
@@ -1280,6 +1073,8 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.MessageRepository: {
             "save_user_message",
+            "get_user_message_by_idempotency_key",
+            "insert_user_message_idempotently",
             "save_agent_message",
             "update_user_message",
             "update_agent_message",

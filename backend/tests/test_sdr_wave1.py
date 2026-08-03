@@ -78,6 +78,12 @@ class TestClaimOrReclaimUserMessage:
         assert "$or" in query
         assert {"processing_claimed_at": None} in query["$or"]
         assert {"processing_claimed_at": {"$lt": threshold}} in query["$or"]
+        assert {
+            "processing_claimed_at": {
+                "$type": "string",
+                "$lt": "2026-01-01T00:00:00.000000",
+            }
+        } in query["$or"]
 
     @pytest.mark.asyncio
     async def test_reclaim_fails_for_recently_claimed(self):
@@ -96,6 +102,28 @@ class TestClaimOrReclaimUserMessage:
 
 class TestIdempotencyGuardInRoomMessageCenter:
     """Tests for the idempotency guard in process_room_user_message."""
+
+    @pytest.mark.asyncio
+    async def test_hitl_resume_reuses_existing_processing_claim(self):
+        """An immediate HITL resume must not wait for its own claim to become stale."""
+        from execution.orchestration.room_message_center import RoomMessageCenter
+
+        rmc = object.__new__(RoomMessageCenter)
+        rmc.message_writer = MagicMock()
+        rmc.message_writer.refresh_processing_claim = AsyncMock(return_value=True)
+        rmc.message_writer.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+
+        request = MagicMock(
+            room_user_message_id="msg-1",
+            is_recovery=True,
+            reuse_processing_claim=True,
+        )
+
+        claimed = await rmc._claim_user_message(request)
+
+        assert claimed is True
+        rmc.message_writer.refresh_processing_claim.assert_awaited_once_with("msg-1")
+        rmc.message_writer.claim_or_reclaim_user_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_normal_claim_rejected_returns_409(self):
@@ -224,6 +252,16 @@ class TestStaleTaskCheckerSemaphore:
             "get_agent_by_agent_id",
             AsyncMock(return_value=None),
         )
+        monkeypatch.setattr(
+            mod.store,
+            "is_message_cancelled",
+            AsyncMock(return_value=False),
+        )
+        monkeypatch.setattr(
+            mod.store,
+            "is_message_cancelled_strict",
+            AsyncMock(return_value=False),
+        )
 
         await checker._recover_orphaned_messages()
 
@@ -254,45 +292,535 @@ class TestStaleTaskCheckerSemaphore:
         get_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_supervisor_recovery_uses_execution_scheduler(self, monkeypatch):
-        from jobs import stale_task_checker as mod
-        from jobs.stale_task_checker import StaleRecoveryDeps, StaleTaskChecker
+    async def test_orchestration_envelope_query_filters_before_bounded_scan(self):
+        from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
 
-        checker = StaleTaskChecker()
+        user_messages = SimpleNamespace(find=AsyncMock(return_value=[]))
+        part = MessageRuntimeStorePart(
+            room_agent_messages=SimpleNamespace(),
+            room_user_messages=user_messages,
+            message_repository=SimpleNamespace(),
+        )
+
+        assert await part.get_stale_claimed_orchestration_messages(2, limit=25) == []
+
+        query = user_messages.find.await_args.args[0]
+        assert query["extend_info.orchestration"] is True
+        assert query["extend_info.orchestration_status"] == "created"
+        unclaimed_created = query["$or"][0]
+        assert unclaimed_created["processing_claimed_at"] is None
+        created_at_predicates = unclaimed_created["$or"]
+        assert created_at_predicates[0]["message_created_at"].get("$lt") is not None
+        assert created_at_predicates[1]["message_created_at"]["$type"] == "string"
+        assert created_at_predicates[1]["message_created_at"].get("$lt")
+        assert query["$or"][1]["processing_claimed_at"].get("$lt") is not None
+        assert query["message_id"] == {"$type": "string"}
+        assert user_messages.find.await_args.kwargs["limit"] == 25
+
+    @pytest.mark.asyncio
+    async def test_projection_repair_is_compare_and_set(self):
+        from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+
+        user_messages = SimpleNamespace(update_one=AsyncMock(return_value=True))
+        part = MessageRuntimeStorePart(
+            room_agent_messages=SimpleNamespace(),
+            room_user_messages=user_messages,
+            message_repository=SimpleNamespace(),
+        )
+
+        assert await part.update_orchestration_projection_if_status(
+            "message-1",
+            expected_status="created",
+            status="completed",
+            clear_processing_claim=True,
+        )
+
+        user_messages.update_one.assert_awaited_once_with(
+            {
+                "message_id": "message-1",
+                "extend_info.orchestration_status": "created",
+            },
+            {
+                "$set": {
+                    "extend_info.orchestration_status": "completed",
+                    "processing_claimed_at": None,
+                }
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_terminal_envelopes_do_not_starve_bounded_recovery_query(self):
+        from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+        from models.room import MessageContent, RoomUserMessage
+
+        terminal_docs = [
+            RoomUserMessage(
+                room_id="room-1",
+                message_id=f"terminal-{index:03d}",
+                user_id="user-1",
+                message_content=MessageContent(message_text="done"),
+                extend_info={
+                    "orchestration": True,
+                    "orchestration_status": "completed",
+                },
+                processing_claimed_at=utcnow() - timedelta(minutes=10),
+            ).model_dump(mode="json")
+            for index in range(100)
+        ]
+        stranded_doc = RoomUserMessage(
+            room_id="room-1",
+            message_id="stranded-101",
+            user_id="user-1",
+            message_content=MessageContent(message_text="recover me"),
+            extend_info={
+                "orchestration": True,
+                "orchestration_status": "created",
+            },
+            processing_claimed_at=None,
+            message_created_at=utcnow() - timedelta(minutes=10),
+        ).model_dump(mode="json")
+
+        class FilteringCollection:
+            async def find(self, query, *, sort, limit):
+                recoverable_status = query["extend_info.orchestration_status"]
+                recoverable = [
+                    doc
+                    for doc in [*terminal_docs, stranded_doc]
+                    if doc["extend_info"]["orchestration_status"] == recoverable_status
+                ]
+                return recoverable[:limit]
+
+        assert isinstance(stranded_doc["message_created_at"], str)
+        part = MessageRuntimeStorePart(
+            room_agent_messages=SimpleNamespace(),
+            room_user_messages=FilteringCollection(),
+            message_repository=SimpleNamespace(),
+        )
+
+        messages = await part.get_stale_claimed_orchestration_messages(2, limit=100)
+
+        assert [message.message_id for message in messages] == ["stranded-101"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_envelope_cannot_truncate_keyset_page(self):
+        from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+        from models.room import MessageContent, RoomUserMessage
+
+        valid_docs = [
+            RoomUserMessage(
+                room_id="room-1",
+                message_id=f"created-{index:03d}",
+                user_id="user-1",
+                message_content=MessageContent(message_text="existing"),
+                extend_info={
+                    "orchestration": True,
+                    "orchestration_status": "created",
+                },
+                processing_claimed_at=utcnow() - timedelta(minutes=10),
+            ).model_dump(mode="json")
+            for index in range(99)
+        ]
+        malformed_doc = {
+            "message_id": "created-099",
+            "room_id": "room-1",
+            "extend_info": {
+                "orchestration": True,
+                "orchestration_status": "created",
+            },
+            "processing_claimed_at": (utcnow() - timedelta(minutes=10)).isoformat(),
+        }
+        stranded_doc = RoomUserMessage(
+            room_id="room-1",
+            message_id="stranded-100",
+            user_id="user-1",
+            message_content=MessageContent(message_text="recover me"),
+            extend_info={
+                "orchestration": True,
+                "orchestration_status": "created",
+            },
+            processing_claimed_at=utcnow() - timedelta(minutes=10),
+        ).model_dump(mode="json")
+
+        class KeysetCollection:
+            def __init__(self):
+                self.calls = 0
+
+            async def find(self, query, *, sort, limit):
+                self.calls += 1
+                after = query["message_id"].get("$gt")
+                docs = [*valid_docs, malformed_doc, stranded_doc]
+                if after is not None:
+                    docs = [doc for doc in docs if doc["message_id"] > after]
+                return docs[:limit]
+
+        collection = KeysetCollection()
+        part = MessageRuntimeStorePart(
+            room_agent_messages=SimpleNamespace(),
+            room_user_messages=collection,
+            message_repository=SimpleNamespace(),
+        )
+
+        messages = await part.get_stale_claimed_orchestration_messages(2, limit=100)
+
+        assert len(messages) == 100
+        assert messages[-1].message_id == "stranded-100"
+        assert collection.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_claimed_supervisor_envelope_without_run_is_recovered(self):
+        from jobs.stale_task_checker import (
+            StaleOrchestrationRunRecoveryDeps,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
         scheduled = []
 
         def schedule_recovery(request, *, reason):
             scheduled.append((request, reason))
             return MagicMock(add_done_callback=MagicMock())
 
+        stale_message = SimpleNamespace(
+            message_id="msg-before-run",
+            room_id="room-1",
+            extend_info={"orchestration": {"goal": "Coordinate this"}},
+        )
+        store = SimpleNamespace(
+            get_stale_claimed_orchestration_messages=AsyncMock(
+                return_value=[stale_message]
+            ),
+            is_message_cancelled=AsyncMock(return_value=False),
+        )
+        run_store = SimpleNamespace(
+            get_latest_by_user_message_id=AsyncMock(return_value=None)
+        )
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
         checker.set_execution_recovery_deps(
             StaleRecoveryDeps(schedule_recovery=schedule_recovery)
         )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stuck_supervisor_trajectory_messages",
-            AsyncMock(return_value=[{"message_id": "msg-1", "room_id": "room-1"}]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "is_message_cancelled",
-            AsyncMock(return_value=False),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "claim_stuck_supervisor_trajectory",
-            AsyncMock(return_value=True),
+        checker.set_orchestration_run_recovery_deps(
+            StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
         )
 
-        await checker._recover_stuck_supervisor_trajectories()
+        await checker._recover_claimed_orchestration_envelopes()
 
+        store.get_stale_claimed_orchestration_messages.assert_awaited_once_with(
+            2,
+            limit=100,
+            after_message_id=None,
+        )
+        run_store.get_latest_by_user_message_id.assert_awaited_once_with(
+            "msg-before-run"
+        )
         assert len(scheduled) == 1
         request, reason = scheduled[0]
-        assert reason == "supervisor"
-        assert request.room_user_message_id == "msg-1"
+        assert reason == "orchestration-envelope"
+        assert request.room_id == "room-1"
+        assert request.room_user_message_id == "msg-before-run"
+        assert request.is_recovery is True
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_uses_sidecar_run_store(self):
+    async def test_existing_terminal_run_repairs_stale_created_envelope(self):
+        from jobs.stale_task_checker import (
+            StaleOrchestrationRunRecoveryDeps,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+        from models.orchestration import OrchestrationStatus
+
+        message = SimpleNamespace(
+            message_id="message-1",
+            room_id="room-1",
+            extend_info={"orchestration_status": "created"},
+            processing_claimed_at=utcnow() - timedelta(minutes=10),
+        )
+        store = SimpleNamespace(
+            get_stale_claimed_orchestration_messages=AsyncMock(
+                side_effect=[[message], []]
+            ),
+            is_message_cancelled=AsyncMock(return_value=False),
+            update_orchestration_projection_if_status=AsyncMock(return_value=True),
+        )
+        run_store = SimpleNamespace(
+            get_latest_by_user_message_id=AsyncMock(
+                return_value=SimpleNamespace(status=OrchestrationStatus.COMPLETED)
+            )
+        )
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=MagicMock())
+        )
+        checker.set_orchestration_run_recovery_deps(
+            StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
+        )
+
+        await checker._recover_claimed_orchestration_envelopes()
+
+        assert message.extend_info["orchestration_status"] == "completed"
+        assert message.processing_claimed_at is None
+        store.update_orchestration_projection_if_status.assert_awaited_once_with(
+            "message-1",
+            expected_status="created",
+            status="completed",
+            clear_processing_claim=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancellation_marker_repairs_pre_run_envelope(self):
+        from jobs.stale_task_checker import (
+            StaleOrchestrationRunRecoveryDeps,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+
+        message = SimpleNamespace(
+            message_id="message-1",
+            room_id="room-1",
+            extend_info={"orchestration_status": "created"},
+            processing_claimed_at=utcnow() - timedelta(minutes=10),
+        )
+        store = SimpleNamespace(
+            get_stale_claimed_orchestration_messages=AsyncMock(return_value=[message]),
+            is_message_cancelled=AsyncMock(return_value=True),
+            update_orchestration_projection_if_status=AsyncMock(return_value=True),
+        )
+        run_store = SimpleNamespace(
+            get_latest_by_user_message_id=AsyncMock(return_value=None)
+        )
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=MagicMock())
+        )
+        checker.set_orchestration_run_recovery_deps(
+            StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
+        )
+
+        await checker._recover_claimed_orchestration_envelopes()
+
+        store.update_orchestration_projection_if_status.assert_awaited_once_with(
+            "message-1",
+            expected_status="created",
+            status="canceled",
+            clear_processing_claim=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_existing_runs_cannot_starve_later_bootstrap_envelope(self):
+        from jobs.stale_task_checker import (
+            StaleOrchestrationRunRecoveryDeps,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+        from models.orchestration import OrchestrationStatus
+
+        messages = [
+            SimpleNamespace(
+                message_id=f"existing-{index:03d}",
+                room_id="room-1",
+                extend_info={"orchestration_status": "created"},
+                processing_claimed_at=utcnow() - timedelta(minutes=10),
+            )
+            for index in range(100)
+        ]
+        messages.append(
+            SimpleNamespace(
+                message_id="stranded-101",
+                room_id="room-1",
+                extend_info={"orchestration_status": "created"},
+                processing_claimed_at=None,
+            )
+        )
+
+        async def scan(_minutes, *, limit, after_message_id):
+            page = [
+                message
+                for message in messages
+                if after_message_id is None or message.message_id > after_message_id
+            ]
+            return page[:limit]
+
+        store = SimpleNamespace(
+            get_stale_claimed_orchestration_messages=AsyncMock(side_effect=scan),
+            is_message_cancelled=AsyncMock(return_value=False),
+            update_room_user_message_by_message_id=AsyncMock(return_value=True),
+        )
+
+        async def get_run(message_id):
+            if message_id.startswith("existing-"):
+                return SimpleNamespace(status=OrchestrationStatus.CREATED)
+            return None
+
+        run_store = SimpleNamespace(
+            get_latest_by_user_message_id=AsyncMock(side_effect=get_run)
+        )
+        scheduled = []
+
+        def schedule_recovery(request, *, reason):
+            scheduled.append((request, reason))
+            return MagicMock(add_done_callback=MagicMock())
+
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=schedule_recovery)
+        )
+        checker.set_orchestration_run_recovery_deps(
+            StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
+        )
+
+        await checker._recover_claimed_orchestration_envelopes()
+
+        assert store.get_stale_claimed_orchestration_messages.await_count == 2
+        assert len(scheduled) == 1
+        request, reason = scheduled[0]
+        assert request.room_user_message_id == "stranded-101"
+        assert reason == "orchestration-envelope"
+
+    @pytest.mark.asyncio
+    async def test_recovery_scheduler_releases_slot_on_synchronous_failure(self):
+        from jobs.stale_task_checker import (
+            MAX_CONCURRENT_RECOVERIES,
+            StaleRecoveryDeps,
+            StaleTaskChecker,
+        )
+        from models.request import OrchestrationRequest
+
+        def fail_scheduling(_request, *, reason):
+            raise RuntimeError(f"cannot schedule {reason}")
+
+        checker = StaleTaskChecker()
+        checker.set_execution_recovery_deps(
+            StaleRecoveryDeps(schedule_recovery=fail_scheduling)
+        )
+
+        for _ in range(MAX_CONCURRENT_RECOVERIES + 1):
+            with pytest.raises(RuntimeError, match="cannot schedule orphan"):
+                await checker._schedule_recovery_with_slot(
+                    OrchestrationRequest(
+                        room_id="room-1",
+                        room_user_message_id="message-1",
+                    ),
+                    reason="orphan",
+                )
+
+        assert checker._recovery_semaphore.locked() is False
+
+    @pytest.mark.asyncio
+    async def test_pending_cancellation_marker_uses_shared_finalizer(self):
+        from jobs.stale_task_checker import (
+            StaleCancellationFinalizerDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+
+        marker = {
+            "message_id": "message-1",
+            "cancelled_at": utcnow() - timedelta(minutes=10),
+        }
+        store = SimpleNamespace(
+            list_pending_cancellation_markers=AsyncMock(return_value=[marker]),
+            get_room_user_message_by_message_id=AsyncMock(
+                return_value=SimpleNamespace(room_id="room-1")
+            ),
+        )
+        finalize = AsyncMock()
+        checker = StaleTaskChecker(orphan_threshold_minutes=2)
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_cancellation_finalizer_deps(
+            StaleCancellationFinalizerDeps(finalize=finalize)
+        )
+
+        await checker._terminalize_cancellation_marked_runs()
+
+        finalize.assert_awaited_once_with(
+            room_id="room-1",
+            message_id="message-1",
+            settle_no_run=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_deleted_message_cancellation_marker_is_reconciled(self):
+        from jobs.stale_task_checker import (
+            StaleCancellationFinalizerDeps,
+            StaleTaskChecker,
+            StaleTaskCheckerDeps,
+        )
+
+        marker = {"message_id": "deleted-1", "cancelled_at": utcnow()}
+        store = SimpleNamespace(
+            list_pending_cancellation_markers=AsyncMock(return_value=[marker]),
+            get_room_user_message_by_message_id=AsyncMock(return_value=None),
+            mark_cancellation_reconciled=AsyncMock(return_value=True),
+        )
+        finalize = AsyncMock()
+        checker = StaleTaskChecker()
+        checker.set_runtime_deps(
+            StaleTaskCheckerDeps(
+                store=store,
+                rooms_collection=None,
+                notify_task_update=AsyncMock(),
+                increment_counter=MagicMock(),
+                a2a_service=SimpleNamespace(),
+            )
+        )
+        checker.set_cancellation_finalizer_deps(
+            StaleCancellationFinalizerDeps(finalize=finalize)
+        )
+
+        await checker._terminalize_cancellation_marked_runs()
+
+        store.mark_cancellation_reconciled.assert_awaited_once_with("deleted-1")
+        finalize.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_orchestration_recovery_uses_sidecar_run_store(self):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -354,12 +882,14 @@ class TestStaleTaskCheckerSemaphore:
         assert event.type == OrchestrationEventType.RUN_RECOVERED
         assert len(scheduled) == 1
         request, reason = scheduled[0]
-        assert reason == "orchestration_v2"
+        assert reason == "orchestration"
         assert request.room_id == "room-1"
         assert request.room_user_message_id == "msg-1"
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_skips_fresh_processing_claim(self):
+    async def test_orchestration_recovery_skips_fresh_processing_claim(
+        self,
+    ):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -417,7 +947,7 @@ class TestStaleTaskCheckerSemaphore:
         run_store.append_event.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_fails_closed_without_claim_reader(
+    async def test_orchestration_recovery_fails_closed_without_claim_reader(
         self, caplog
     ):
         from jobs.stale_task_checker import (
@@ -474,7 +1004,7 @@ class TestStaleTaskCheckerSemaphore:
         assert "processing-claim reader is not bound" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_skips_awaiting_user_runs(self):
+    async def test_orchestration_recovery_skips_awaiting_user_runs(self):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -531,7 +1061,9 @@ class TestStaleTaskCheckerSemaphore:
         run_store.append_event.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_v2_orchestration_recovery_recovers_hitl_artifact_creating_runs(self):
+    async def test_orchestration_recovery_recovers_hitl_artifact_creating_runs(
+        self,
+    ):
         from jobs.stale_task_checker import (
             StaleOrchestrationRunRecoveryDeps,
             StaleRecoveryDeps,
@@ -586,7 +1118,7 @@ class TestStaleTaskCheckerSemaphore:
         run_store.save_state.assert_awaited_once()
         assert len(scheduled) == 1
         request, reason = scheduled[0]
-        assert reason == "orchestration_v2"
+        assert reason == "orchestration"
         assert request.room_user_message_id == "msg-1"
 
     def test_container_binds_processing_claim_reader_to_stale_task_store(self):
@@ -608,59 +1140,6 @@ class TestStaleTaskCheckerSemaphore:
         assert bindings["get_room_user_message_by_message_id"] == (
             "message_store.get_room_user_message_by_message_id"
         )
-
-    @pytest.mark.asyncio
-    async def test_stale_checker_uses_bound_hitl_recovery_deps(self, monkeypatch):
-        from jobs import stale_task_checker as mod
-        from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
-
-        checker = StaleTaskChecker()
-        recover = AsyncMock()
-        checker.set_hitl_deps(
-            StaleHITLDeps(
-                recover_stale_processing=recover,
-                cancel_requests_for_message=AsyncMock(),
-            )
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stale_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_expired_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_orphaned_agent_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_room_ids_with_non_terminal_runs",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_non_tracked_stale_task_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "get_stuck_supervisor_trajectory_messages",
-            AsyncMock(return_value=[]),
-        )
-        monkeypatch.setattr(
-            mod.store,
-            "find_stale_non_terminal_runs",
-            AsyncMock(return_value=[]),
-        )
-
-        await checker.check_stale_tasks()
-
-        recover.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_mark_task_failed_cancels_hitl_through_bound_deps(self, monkeypatch):

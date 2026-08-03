@@ -21,12 +21,25 @@ class FakeRedisKV:
         self.setnx_result = setnx_result
         self.error = error
         self.calls: list[tuple[str, str, int]] = []
+        self.values: dict[str, str] = {}
+        self.deleted: list[str] = []
 
     async def setnx(self, key: str, value: str, ttl: int) -> bool:
         self.calls.append((key, value, ttl))
         if self.error is not None:
             raise self.error
+        if self.setnx_result:
+            self.values[key] = value
         return self.setnx_result
+
+    async def get(self, key: str) -> str | None:
+        if self.error is not None:
+            raise self.error
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> bool:
+        self.deleted.append(key)
+        return self.values.pop(key, None) is not None
 
 
 @pytest.mark.asyncio
@@ -47,6 +60,7 @@ async def test_non_terminal_statuses_are_never_deduped():
     assert redis.calls == []
 
 
+@pytest.mark.core
 @pytest.mark.asyncio
 async def test_first_terminal_status_passes_and_second_l1_hit_suppresses():
     redis = FakeRedisKV(setnx_result=True)
@@ -95,6 +109,31 @@ async def test_custom_terminal_prefix_and_ttl_are_used_for_l2():
     )
 
     assert redis.calls == [("termx:room-1:msg-1", "completed", 7)]
+
+
+@pytest.mark.asyncio
+async def test_failed_delivery_release_clears_owned_l1_and_l2_reservations():
+    redis = FakeRedisKV(setnx_result=True)
+    dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+
+    assert await dedup.should_deliver(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+    )
+    await dedup.release(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+    )
+
+    assert "room-1:msg-1" not in dedup.cache
+    assert redis.deleted == ["terminal:room-1:msg-1"]
+    assert await dedup.should_deliver(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+    )
 
 
 @pytest.mark.asyncio

@@ -149,7 +149,7 @@ PRODUCTION_REVERSE_IMPORT_ROOTS = [
     Path("platform_module"),
     Path("room"),
     Path("services"),
-    Path("api"),
+    Path("api_gateway"),
 ]
 
 

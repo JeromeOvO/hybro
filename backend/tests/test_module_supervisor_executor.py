@@ -3,7 +3,7 @@ Unit tests for SupervisorExecutor module.
 
 Tests cover:
 - _log_and_return: passes through result, includes trajectory metadata
-- _save_interrupted_state: saves trajectory on unexpected failure
+- _checkpoint_interrupt: saves trajectory on unexpected failure
 - CLARIFY cleanup compensation: orphan requests are canceled on failure
 """
 
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.utils.time import utcnow
+from common.observability import get_log_context
 from execution.orchestration.dispatch_payload import ResolvedDispatchPayload
 from execution.orchestration.planner import RoomSupervisorPlannerAdapter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
@@ -44,7 +44,6 @@ from models.supervisor import (
     SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
-    TrajectoryEntry,
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -399,7 +398,7 @@ async def test_supervisor_dispatch_missing_required_context_ref_fails_before_pro
     se.room_runtime.create_agent_message.assert_not_called()
     se.agent_message_processor.process_single_message.assert_not_awaited()
 
-    updated = await se._ingest_v2_results(
+    updated = await se._ingest_orchestration_results(
         state,
         result,
         status=OrchestrationStatus.RUNNING,
@@ -579,7 +578,7 @@ async def test_supervisor_dispatch_missing_required_attachment_ref_fails_before_
     se.room_runtime.create_agent_message.assert_not_called()
     se.agent_message_processor.process_single_message.assert_not_awaited()
 
-    updated = await se._ingest_v2_results(
+    updated = await se._ingest_orchestration_results(
         state,
         result,
         status=OrchestrationStatus.RUNNING,
@@ -623,10 +622,10 @@ async def test_supervisor_logs_planner_decision_with_refs(caplog):
     )
 
     with caplog.at_level("INFO"):
-        await se._record_v2_planner_action(state, action)
+        await se._record_orchestration_planner_action(state, action)
 
     assert any(
-        record.message == "supervisor_planner_decision"
+        record.message == "supervisor_planner_completed"
         and record.__dict__.get("run_id") == "run-1"
         and record.__dict__.get("room_id") == "room-1"
         and record.__dict__.get("user_message_id") == "msg-1"
@@ -637,49 +636,66 @@ async def test_supervisor_logs_planner_decision_with_refs(caplog):
 
 
 @pytest.mark.asyncio
-async def test_run_creates_orchestration_state_without_legacy_or_trajectory_checkpoint(
-    monkeypatch,
-):
-    store = InMemoryOrchestrationRunStore()
+async def test_terminal_run_replay_logs_completion_once(caplog):
     executor = _make_supervisor_executor()
-    executor.run_store = store
-    user_message = _state_unification_user_message(
-        extend_info={
-            "orchestration": True,
-            "orchestration_run_id": "msg-1",
-            "candidate_scope_mode": "explicit_selection",
-            "candidate_agent_ids": ["agent-1"],
-        }
-    )
-
-    monkeypatch.setattr(
-        executor,
-        "_execute_orchestration_loop",
-        AsyncMock(
-            return_value=SupervisorRunResult(
-                status=RunStatus.COMPLETED,
-                run_id="msg-1",
-                trajectory=None,
-            )
-        ),
-    )
-
-    result = await executor.run(
+    state = OrchestrationRunState(
+        run_id="run-terminal",
         room_id="room-1",
         user_message_id="msg-1",
-        message_text="Need quote",
-        agent_registry=[_make_agent_profile()],
-        room_config=SimpleNamespace(room_agent_set={"agent-1": "Agent One"}),
-        user_message=user_message,
+        goal="Coordinate the selected agents",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.COMPLETED,
     )
+    result = SupervisorRunResult(
+        status=RunStatus.COMPLETED,
+        run_id=state.run_id,
+        trajectory=None,
+    )
+    caplog.set_level("INFO", logger="execution.orchestration.supervisor_executor")
 
-    state = await store.get_run("msg-1")
-    assert result.run_id == "msg-1"
-    assert result.trajectory is None
-    assert state is not None
-    assert state.candidate_scope is not None
-    assert state.candidate_scope.agent_ids == ["agent-1"]
-    assert "supervisor_trajectory" not in (user_message.extend_info or {})
+    assert await executor._log_state_and_return("room-1", state, result) is result
+    assert await executor._log_state_and_return("room-1", state, result) is result
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "supervisor_run_completed"
+    ]
+    assert len(records) == 1
+    assert records[0].run_id == "run-terminal"
+    assert records[0].outcome == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_nonterminal_run_logs_paused_instead_of_completed(caplog):
+    executor = _make_supervisor_executor()
+    state = OrchestrationRunState(
+        run_id="run-awaiting-user",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="Wait for clarification",
+        candidate_agent_ids=["agent-1"],
+        status=OrchestrationStatus.AWAITING_USER,
+    )
+    result = SupervisorRunResult(
+        status=RunStatus.PAUSED,
+        run_id=state.run_id,
+        trajectory=None,
+    )
+    caplog.set_level("INFO", logger="execution.orchestration.supervisor_executor")
+
+    assert await executor._log_state_and_return("room-1", state, result) is result
+
+    assert not any(
+        record.getMessage() == "supervisor_run_completed" for record in caplog.records
+    )
+    paused = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "supervisor_run_paused"
+    )
+    assert paused.run_id == "run-awaiting-user"
+    assert paused.outcome == RunStatus.PAUSED.value
 
 
 @pytest.mark.asyncio
@@ -754,6 +770,48 @@ async def test_run_state_loader_creates_state_with_orchestration_run_id():
     assert state.candidate_scope is not None
     assert state.candidate_scope.snapshot_id == "scope-snapshot-1"
     assert state.candidate_scope.agent_ids == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_binds_loaded_orchestration_run_id_to_downstream_context(
+    monkeypatch,
+):
+    store = InMemoryOrchestrationRunStore()
+    executor = _make_supervisor_executor()
+    executor.run_store = store
+    observed_context = {}
+    user_message = _state_unification_user_message(
+        message_id="msg-1",
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "run-1",
+            "candidate_scope_mode": "explicit_selection",
+            "candidate_agent_ids": ["agent-1"],
+        },
+    )
+
+    async def execute_loop(**kwargs):
+        observed_context.update(get_log_context())
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            run_id=kwargs["state"].run_id,
+            trajectory=None,
+        )
+
+    monkeypatch.setattr(executor, "_execute_orchestration_loop", execute_loop)
+
+    await executor.run(
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Need quote",
+        agent_registry=[_make_agent_profile()],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    assert observed_context["run_id"] == "run-1"
+    assert observed_context["user_message_id"] == "msg-1"
+    assert get_log_context() == {}
 
 
 @pytest.mark.asyncio
@@ -975,7 +1033,7 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
     assert result.run_state.status == OrchestrationStatus.COMPLETED
 
 
-def test_compat_trajectory_projects_completed_agent_output_as_success():
+def test_transient_trajectory_projects_completed_agent_output_as_success():
     state = OrchestrationRunState(
         run_id="msg-1",
         room_id="room-1",
@@ -1004,7 +1062,7 @@ def test_compat_trajectory_projects_completed_agent_output_as_success():
         ],
     )
 
-    trajectory = SupervisorExecutor._compat_trajectory_from_state(state)
+    trajectory = SupervisorExecutor._trajectory_from_state(state)
 
     assert len(trajectory.entries) == 1
     projected = trajectory.entries[0].results[0]
@@ -1013,7 +1071,7 @@ def test_compat_trajectory_projects_completed_agent_output_as_success():
     assert projected.response_text == "Completed agent output is visible."
 
 
-def test_compat_trajectory_preserves_a2a_metadata_from_agent_output():
+def test_transient_trajectory_preserves_a2a_metadata_from_agent_output():
     state = OrchestrationRunState(
         run_id="msg-1",
         room_id="room-1",
@@ -1045,7 +1103,7 @@ def test_compat_trajectory_preserves_a2a_metadata_from_agent_output():
         ],
     )
 
-    trajectory = SupervisorExecutor._compat_trajectory_from_state(state)
+    trajectory = SupervisorExecutor._trajectory_from_state(state)
 
     projected = trajectory.entries[0].results[0]
     assert projected.a2a_task_id == "task-1"
@@ -1053,7 +1111,7 @@ def test_compat_trajectory_preserves_a2a_metadata_from_agent_output():
     assert projected.status_message == "The agent needs additional information."
 
 
-def test_v2_result_from_output_record_projects_completed_status_as_success():
+def test_orchestration_result_from_output_record_projects_completed_status_as_success():
     intent = DispatchIntent(
         step_id="msg-1:step-1",
         step_target_id="msg-1:step-1:target-1",
@@ -1070,7 +1128,7 @@ def test_v2_result_from_output_record_projects_completed_status_as_success():
         text="Recovered completed output.",
     )
 
-    result = SupervisorExecutor._v2_result_from_output_record(
+    result = SupervisorExecutor._orchestration_result_from_output_record(
         intent,
         output,
         {"agent-1": "Agent One"},
@@ -1081,59 +1139,6 @@ def test_v2_result_from_output_record_projects_completed_status_as_success():
     assert result.status == StepStatus.SUCCESS
     assert result.success is True
     assert result.response_text == "Recovered completed output."
-
-
-def test_resolve_pending_results_from_outputs_projects_completed_status_as_success():
-    state = OrchestrationRunState(
-        run_id="msg-1",
-        room_id="room-1",
-        user_message_id="msg-1",
-        goal="Need quote",
-        candidate_agent_ids=["agent-1"],
-        agent_outputs=[
-            AgentOutputRecord(
-                agent_message_id="agent-msg-1",
-                agent_id="agent-1",
-                status="completed",
-                text="Pending output finished.",
-            )
-        ],
-    )
-    entry = TrajectoryEntry(
-        step_number=1,
-        action=SupervisorAction(
-            action=ActionType.DELEGATE,
-            reasoning="Wait for agent",
-            targets=[
-                DelegateTarget(
-                    agent_id="agent-1",
-                    agent_name="Agent One",
-                    task="Find pricing",
-                )
-            ],
-        ),
-        results=[
-            StepResult(
-                step_number=1,
-                agent_id="agent-1",
-                agent_name="Agent One",
-                task="Find pricing",
-                response_text="",
-                success=False,
-                status=StepStatus.PAUSED,
-                agent_message_id="agent-msg-1",
-            )
-        ],
-        started_at=utcnow(),
-    )
-
-    SupervisorExecutor._resolve_v2_pending_results_from_outputs(state, entry)
-
-    resolved = entry.results[0]
-    assert resolved.status == StepStatus.SUCCESS
-    assert resolved.success is True
-    assert resolved.response_text == "Pending output finished."
-    assert entry.completed_at is not None
 
 
 @pytest.mark.asyncio
@@ -1174,7 +1179,7 @@ async def test_supervisor_generic_failed_result_does_not_create_preflight_task()
 
 
 @pytest.mark.asyncio
-async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_result(
+async def test_dispatch_unexpected_exception_logs_only_safe_metadata(
     caplog,
 ):
     se = _make_supervisor_executor()
@@ -1206,7 +1211,19 @@ async def test_dispatch_unexpected_exception_logs_raw_but_returns_safe_step_resu
             None,
         )
 
-    assert private_exception in caplog.text
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "agent_call_completed"
+    )
+    assert record.error_type == "RuntimeError"
+    assert len(record.error_fingerprint) == 16
+    assert "supervisor_executor.py:" in record.error_stack
+    assert ":dispatch_one" in record.error_stack
+    assert private_exception not in caplog.text
+    assert private_task not in caplog.text
+    assert private_exception not in record.error_stack
+    assert private_task not in record.error_stack
     assert len(results) == 1
     assert results[0].status == StepStatus.FAILED
     assert results[0].error_message == "Agent processing failed"
@@ -1288,7 +1305,7 @@ class TestLogAndReturn:
 
 class TestClarifyCleanupCompensation:
     """Tests that the CLARIFY handler cleans up HITL requests and messages
-    when _save_interrupted_state fails or request_input returns None mid-group."""
+    when _checkpoint_interrupt fails or request_input returns None mid-group."""
 
     @pytest.fixture
     def se(self):
@@ -1300,7 +1317,7 @@ class TestClarifyCleanupCompensation:
         return cfg
 
     @pytest.mark.asyncio
-    async def test_cancels_requests_when_save_interrupted_state_fails(self, se):
+    async def test_cancels_requests_when_checkpoint_interrupt_fails(self, se):
         """If all questions are created but continuation save fails,
         all HITL requests and messages must be cleaned up."""
         from models.supervisor import (
@@ -1330,7 +1347,7 @@ class TestClarifyCleanupCompensation:
         )
 
         se.supervisor_service.decide_next = AsyncMock(return_value=action)
-        se._save_interrupted_state = AsyncMock(return_value=False)
+        se._checkpoint_interrupt = AsyncMock(return_value=False)
 
         se.hitl_coordinator = hitl_mock
         result = await se.run(
@@ -1500,7 +1517,7 @@ class TestProcessingStatusLifecycleOrder:
                 )
             ]
         )
-        se._save_interrupted_state = AsyncMock(return_value=True)
+        se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
@@ -1552,7 +1569,7 @@ class TestProcessingStatusLifecycleOrder:
                 )
             ]
         )
-        se._save_interrupted_state = AsyncMock(return_value=True)
+        se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
@@ -1562,7 +1579,6 @@ class TestProcessingStatusLifecycleOrder:
             client_request_id="cr-1",
             extend_info={
                 "orchestration_run_id": "run-msg-1",
-                "orchestration_schema_version": 2,
             },
         )
 
@@ -1577,7 +1593,6 @@ class TestProcessingStatusLifecycleOrder:
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
         assert call_kwargs["orchestration_run_id"] == "run-msg-1"
-        assert call_kwargs["orchestration_schema_version"] == 2
 
     @pytest.mark.asyncio
     async def test_supervisor_hitl_records_before_awaiting_input_send(self):
@@ -1603,7 +1618,7 @@ class TestProcessingStatusLifecycleOrder:
             return_value="cr-1"
         )
         se.message_writer.add_room_agent_message = AsyncMock()
-        se._save_interrupted_state = AsyncMock(return_value=True)
+        se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
@@ -1640,7 +1655,7 @@ class TestProcessingStatusLifecycleOrder:
             return_value="cr-1"
         )
         se.message_writer.add_room_agent_message = AsyncMock()
-        se._save_interrupted_state = AsyncMock(return_value=True)
+        se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
         hitl_mock.request_input = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
@@ -1650,7 +1665,6 @@ class TestProcessingStatusLifecycleOrder:
             client_request_id="cr-1",
             extend_info={
                 "orchestration_run_id": "run-msg-1",
-                "orchestration_schema_version": 2,
             },
         )
 
@@ -1665,4 +1679,3 @@ class TestProcessingStatusLifecycleOrder:
 
         call_kwargs = hitl_mock.request_input.await_args.kwargs
         assert call_kwargs["orchestration_run_id"] == "run-msg-1"
-        assert call_kwargs["orchestration_schema_version"] == 2

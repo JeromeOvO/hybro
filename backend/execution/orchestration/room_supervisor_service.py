@@ -48,7 +48,7 @@ class SupervisorPlanningError(Exception):
 # Prompts (adaptive loop)
 # =============================================================================
 
-SUPERVISOR_SYSTEM_PROMPT = """You are a Supervisor coordinating specialist agents in a chat room.
+SUPERVISOR_SYSTEM_PROMPT = """You are HYBRO's internal planner, coordinating specialist agents in a chat room.
 
 ## Available Agents
 {agent_registry}
@@ -94,7 +94,7 @@ Output ONLY valid JSON matching the schema below.
      The user will see them as paginated cards and answer one at a time.
 4. PLATFORM_ANSWER: No available agent is suitable, or suitable agent execution
    failed with no useful retry or alternate remaining.
-   - Answer through HYBRO Platform's own LLM.
+   - Answer through HYBRO's own LLM.
    - Explicitly disclose that the currently connected agents have limited
      capabilities that do not cover the request, or that agent execution failed.
 5. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
@@ -115,7 +115,7 @@ Output ONLY valid JSON matching the schema below.
 - Never ask an agent to impersonate, role-play as, or generate responses on behalf
   of other agents. Each agent can only speak for itself.
 - You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE.
-  PLATFORM_ANSWER is the only action that allows HYBRO Platform to answer without
+  PLATFORM_ANSWER is the only action that allows HYBRO to answer without
   an agent result, and only under the limited conditions above.
 - After each agent result, evaluate quality per the QUALITY EVALUATION section
   below. If the agent returned a substantive response that fully addresses the
@@ -191,7 +191,7 @@ Actions remaining: {steps_remaining}.
 ## What should happen next?"""
 
 SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = (
-    """You are producing HYBRO Platform's final response to the user. Depending on
+    """You are HYBRO, producing your final response to the user. Depending on
 the execution trajectory, you may synthesize specialist-agent evidence or answer
 directly when no suitable connected agent was available.
 
@@ -205,9 +205,11 @@ directly when no suitable connected agent was available.
 {synthesis_instruction}
 
 ## Rules
-- Answer the original user goal directly, as HYBRO AI after completing the work.
+- Answer the original user goal directly, as HYBRO after completing the work.
   The response is the final answer, not an execution report or a summary of the
   fact that agents were called.
+- Speak naturally in the first person. Refer to yourself only as HYBRO if a name
+  is needed; never call yourself the Supervisor, HYBRO Platform, or HYBRO AI.
 - Lead with the outcome the user asked for. Select only the facts, decisions,
   caveats, and next actions needed to make that outcome useful.
 - Treat agent responses and artifacts as evidence. Do not copy full artifacts,
@@ -218,7 +220,7 @@ directly when no suitable connected agent was available.
   dispatch status, planner reasoning, task labels, or synthesis instructions.
 - Do not invent, estimate, or fill gaps in agent results. Clearly distinguish
   confirmed results from conditions, assumptions, and unresolved items.
-- You are HYBRO AI. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
+- You are HYBRO. Never adopt the identity, name, or persona of any agent. Never say "I'm [Agent Name]" or repeat an agent's self-introduction.
 - Attribute insights to their source agent when helpful: "According to [Agent Name]..."
 - Resolve contradictions by noting both perspectives.
 - If one agent failed, note what was successfully completed and what was not.
@@ -588,15 +590,6 @@ class RoomSupervisorService:
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
 
-        if trajectory.hitl_user_reply:
-            lines.append(
-                f"\n### User's Clarification Reply\n{trajectory.hitl_user_reply}"
-            )
-        elif trajectory.clarify_user_reply:
-            lines.append(
-                f"\n### User's Clarification Reply\n{trajectory.clarify_user_reply}"
-            )
-
         # Warn about consecutive same-agent re-delegations
         all_entries = trajectory.entries
         if len(all_entries) >= 2:
@@ -869,19 +862,19 @@ class RoomSupervisorService:
 
     @staticmethod
     def parse_planner_action(response_json: dict) -> PlannerAction:
-        """Parse an existing supervisor JSON decision into a v2 planner action."""
+        """Parse an existing supervisor JSON decision into an orchestration planner action."""
 
-        return RoomSupervisorService._parse_legacy_action_as_planner_action(
+        return RoomSupervisorService._parse_provider_action_as_planner_action(
             response_json
         )
 
     @staticmethod
-    def _parse_legacy_action_as_planner_action(
+    def _parse_provider_action_as_planner_action(
         response_json: dict,
     ) -> PlannerAction:
-        """Adapt legacy supervisor JSON action names to a strict v2 action.
+        """Adapt provider action aliases to a strict orchestration action.
 
-        Unlike ``_parse_supervisor_action``, this v2 path raises for unknown or
+        Unlike ``_parse_supervisor_action``, this orchestration path raises for unknown or
         malformed action values instead of coercing them to DONE.
         """
 
@@ -899,8 +892,8 @@ class RoomSupervisorService:
             "clarify": PlannerActionType.ASK_USER,
             "done": PlannerActionType.COMPLETE,
             "delegate": PlannerActionType.DELEGATE,
-            # Legacy providers used "synthesize" to mean that agent work was
-            # complete. V2 normalizes it to COMPLETE; Execution owns the final
+            # Some providers use "synthesize" to mean that agent work was
+            # complete. Orchestration normalizes it to COMPLETE; Execution owns the final
             # synthesis step and only then marks the run terminal.
             "synthesize": PlannerActionType.COMPLETE,
         }

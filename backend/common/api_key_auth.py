@@ -9,9 +9,11 @@ import hashlib
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
-from loguru import logger
 
+from common.observability import get_logger
 from common.protocols import APIKeyAuthenticator, APIKeyPrincipal
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -102,7 +104,7 @@ async def get_api_key(request: Request) -> APIKeyPrincipal:
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:
-        logger.warning("API key validation failed: X-API-Key header missing")
+        logger.warning("api_key_validation_failed", extra={"error_code": "missing_key"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -138,7 +140,7 @@ async def get_api_key_no_track(request: Request) -> APIKeyPrincipal:
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:
-        logger.warning("API key validation failed: X-API-Key header missing")
+        logger.warning("api_key_validation_failed", extra={"error_code": "missing_key"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
+from common.observability import traced_create_task
 from common.utils.logger import get_logger
 from jobs.constants import ORPHANED_UPLOAD_CLEANER
 
@@ -51,7 +52,10 @@ class OrphanedUploadCleaner:
             logger.warning("Orphaned upload cleaner already running")
             return
         self._running = True
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = traced_create_task(
+            self._run_loop(),
+            name="orphaned-upload-cleanup",
+        )
         logger.info(
             "Orphaned upload cleaner started (interval: %d hours)",
             self.interval_hours,

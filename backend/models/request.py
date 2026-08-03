@@ -9,6 +9,7 @@ from pydantic import (
     field_validator,
 )
 
+from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
 from models.memory import ChatContext, RoomMemory
@@ -143,6 +144,7 @@ class OrchestrationRequest(BaseModel):
     room_related_message_id: str | None = None
     user_id: str | None = None
     is_recovery: bool = False
+    reuse_processing_claim: bool = False
     client_request_id: str | None = None
 
 
@@ -292,7 +294,11 @@ class RoomCenterUserMessageRequest(BaseModel):
     message: RoomUserMessage | None = None
     attachments: list[UserAttachmentRequest] | None = None
     inline_file_ids: list[str] | None = None
-    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    client_request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_CLIENT_REQUEST_ID_LENGTH,
+    )
 
 
 class RoomCenterAgentMessageRequest(BaseModel):

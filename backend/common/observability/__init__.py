@@ -1,4 +1,11 @@
-from common.observability.logging import configure_logging, get_logger
+from common.observability.logging import (
+    bind_log_context,
+    configure_logging,
+    get_instance_id,
+    get_log_context,
+    get_logger,
+    safe_exception_metadata,
+)
 from common.observability.metrics import MetricsCollector, NoopMetricsCollector
 from common.observability.run_metrics import increment_counter, snapshot_counters
 from common.observability.tracing import (
@@ -14,10 +21,14 @@ __all__ = [
     "NoopMetricsCollector",
     "NoopTracingProvider",
     "TracingProvider",
+    "bind_log_context",
     "configure_logging",
     "get_current_trace_id",
+    "get_instance_id",
+    "get_log_context",
     "get_logger",
     "increment_counter",
+    "safe_exception_metadata",
     "snapshot_counters",
     "trace_id_context",
     "traced_create_task",

@@ -19,7 +19,12 @@ from common.types import (
 )
 from common.utils.cancellation import CancellationToken
 from models.request import RoomCenterAgentMessageRequest
-from models.room import MessageContent, RoomAgentMessage, UserAttachment
+from models.room import (
+    MessageContent,
+    RoomAgentMessage,
+    RoomUserMessage,
+    UserAttachment,
+)
 from room.compat.runtime import RoomServices
 
 
@@ -391,8 +396,13 @@ class TestProcessAgentMessageAttachmentPreflight:
             for part in result.a2a_message.parts
             if hasattr(part.root, "text")
         ]
-        assert any("dispatch task text sentinel" in text for text in texts)
-        assert any("request resource text" in text for text in texts)
+        assert len(texts) == 1
+        assert "dispatch task text sentinel" in texts[0]
+        assert "Selected source material follows." in texts[0]
+        assert "request resource text" in texts[0]
+        assert texts[0].index("dispatch task text sentinel") < texts[0].index(
+            "request resource text"
+        )
         assert all("legacy resource text" not in text for text in texts)
         assert any(
             getattr(part.root, "file", None) is not None
@@ -632,6 +642,59 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert result.a2a_message is not None
         assert len(result.a2a_message.parts) == 1
         reader.get_bytes.assert_not_called()
+
+    async def test_explicit_refs_only_can_forward_selected_prior_turn_attachment(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="f2",
+            s3_key="uploads/r/f2/report.pdf",
+            mime_type="application/pdf",
+            file_name="report.pdf",
+            size_bytes=4,
+        )
+        reader = self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
+            content=b"%PDF",
+        )
+        svc._facade.get_message = AsyncMock(
+            return_value=RoomMessageInfo(
+                room_id="room-1",
+                message_id="user-msg-1",
+                message_type="user",
+                content={"message_text": "yes", "attachments": []},
+            )
+        )
+        prior_message = RoomUserMessage(
+            room_id="room-1",
+            message_id="prior-user-msg",
+            message_content=MessageContent(
+                message_text="read this",
+                attachments=[attachment],
+            ),
+        )
+        svc._store.get_room_user_messages_by_room_id = AsyncMock(
+            return_value=[prior_message]
+        )
+        message = self._message()
+
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                message=message,
+                dispatch_task="Create a structured submission from the selected PDF.",
+                explicit_attachment_refs=["f2"],
+                attachment_forwarding_policy="explicit_refs_only",
+            )
+        )
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        assert any(
+            getattr(part.root, "file", None) is not None
+            for part in result.a2a_message.parts
+        )
+        reader.get_bytes.assert_awaited_once_with("f2", max_bytes=1024)
 
     async def test_oversized_declared_attachment_returns_file_too_large(self):
         svc = RoomServices()

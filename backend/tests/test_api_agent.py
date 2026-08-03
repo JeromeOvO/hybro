@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from api.agent import (
+from api_gateway.routes.agent_routes import (
     delete_agent,
     get_agent,
     get_agent_by_provider,

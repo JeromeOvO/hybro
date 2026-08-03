@@ -65,7 +65,7 @@ REMOVED_LEGACY_OPERATIONAL_SCRIPTS = {
     "database/migration/null_legacy_room_processing_message_id.py",
     "database/migration/purge_empty_artifact_parts.py",
     "database/migration/recreate_task_tracking_indexes.py",
-    "database/migration/rename_supervisor_v2_fields.py",
+    "database/migration/rename_supervisor_orchestration_fields.py",
     "scripts/backfill_agent_status.py",
     "scripts/backfill_room_agent_message_parts.py",
     "scripts/backfill_timestamps_to_utc.py",

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from api.hitl import (
+from api_gateway.routes.hitl_routes import (
     cancel_hitl_request,
     get_pending_hitl_requests,
     respond_to_hitl_request,
@@ -185,7 +185,7 @@ class TestGetPendingHitlRequests:
         assert result["requests"][0]["client_request_id"] == "cr-pending-hitl"
 
     @pytest.mark.asyncio
-    async def test_pending_requests_omit_absent_v2_run_links(
+    async def test_pending_requests_omit_absent_orchestration_run_links(
         self,
         mock_user,
         mock_db_service,
@@ -214,7 +214,6 @@ class TestGetPendingHitlRequests:
 
         pending = result["requests"][0]
         assert "orchestration_run_id" not in pending
-        assert "orchestration_schema_version" not in pending
 
     @pytest.mark.asyncio
     async def test_pending_requests_use_public_sse_projection(
@@ -242,7 +241,6 @@ class TestGetPendingHitlRequests:
                 display_message_id="display-msg-1",
                 client_request_id="client-public-1",
                 orchestration_run_id="run-private",
-                orchestration_schema_version=2,
                 prompt_type="choice",
                 choices=["Approve", "Reject"],
                 group_id="group-public-1",
@@ -292,7 +290,6 @@ class TestGetPendingHitlRequests:
                 "continuation_message_id",
                 "display_message_id",
                 "orchestration_run_id",
-                "orchestration_schema_version",
                 "status",
                 "user_input",
                 "responded_at",

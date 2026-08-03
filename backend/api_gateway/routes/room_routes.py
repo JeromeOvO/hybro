@@ -11,6 +11,10 @@ from api_gateway.dependencies import (
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
+from common.idempotency import (
+    MAX_CLIENT_REQUEST_ID_LENGTH,
+    normalize_client_request_id,
+)
 from common.protocols import ExecutionEngine, RoomRouteReader
 from common.utils.logger import get_logger
 from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
@@ -389,24 +393,24 @@ async def send_message(
             status_code=400,
         )
 
-    orchestration_schema_version = request_data.get("orchestration_schema_version")
-    if orchestration_schema_version is not None and (
-        isinstance(orchestration_schema_version, bool)
-        or not isinstance(orchestration_schema_version, int)
-    ):
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error="orchestration_schema_version must be an integer",
-            status_code=400,
-        )
     if not isinstance(client_request_id, str) or not client_request_id.strip():
         return RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
             success=False,
             error="client_request_id is required",
+            status_code=400,
+        )
+    client_request_id = normalize_client_request_id(client_request_id)
+    if len(client_request_id) > MAX_CLIENT_REQUEST_ID_LENGTH:
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error=(
+                "client_request_id exceeds maximum length of "
+                f"{MAX_CLIENT_REQUEST_ID_LENGTH} characters"
+            ),
             status_code=400,
         )
 
@@ -424,11 +428,7 @@ async def send_message(
         isinstance(room.extend_info, dict)
         and room.extend_info.get("use_supervisor", False) is True
     )
-    is_v2_supervisor_orchestration = (
-        mode == "supervisor"
-        and orchestration_schema_version == 2
-        and room_uses_supervisor
-    )
+    is_supervisor_orchestration = mode == "supervisor" and room_uses_supervisor
 
     message_target_mode = request_data.get("message_target_mode")
     target_group_id = request_data.get("target_group_id")
@@ -498,7 +498,7 @@ async def send_message(
     if (
         mentioned_agent_ids
         and message_target_mode is not None
-        and not is_v2_supervisor_orchestration
+        and not is_supervisor_orchestration
     ):
         return RoomCenterUserMessageResponse(
             message_id=None,
@@ -559,7 +559,7 @@ async def send_message(
                 ),
                 status_code=400,
             )
-    elif is_v2_supervisor_orchestration and selected_agent_ids:
+    elif is_supervisor_orchestration and selected_agent_ids:
         if has_target_group_id:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -593,23 +593,20 @@ async def send_message(
         return err
 
     logger.info(
-        "gateway_send_message_received room_id=%s user_id=%s "
-        "client_request_id=%s mode=%s schema=%s room_supervisor=%s "
-        "target_mode=%s target_group_id=%s mentioned_count=%d "
-        "selected_count=%d attachment_count=%d inline_file_count=%d message_len=%d",
-        room_id,
-        user.user_id,
-        client_request_id,
-        mode,
-        orchestration_schema_version,
-        room_uses_supervisor,
-        message_target_mode,
-        target_group_id,
-        len(mentioned_agent_ids or []),
-        len(selected_agent_ids or []),
-        len(attachments or []),
-        len(inline_file_ids or []),
-        _message_text_len(message),
+        "gateway_send_message_received",
+        extra={
+            "room_id": room_id,
+            "client_request_id": client_request_id,
+            "mode": mode,
+            "room_supervisor": room_uses_supervisor,
+            "target_mode": message_target_mode,
+            "target_group_id": target_group_id,
+            "mentioned_count": len(mentioned_agent_ids or []),
+            "selected_count": len(selected_agent_ids or []),
+            "attachment_count": len(attachments or []),
+            "inline_file_count": len(inline_file_ids or []),
+            "message_length": _message_text_len(message),
+        },
     )
 
     related_message_id = ""
@@ -631,32 +628,34 @@ async def send_message(
         selected_agent_ids=selected_agent_ids,
         candidate_scope_mode=candidate_scope_mode,
         candidate_scope_group_id=candidate_scope_group_id,
-        orchestration_schema_version=orchestration_schema_version,
         parent_message_id=related_message_id or None,
         mode=mode,
     )
     ack = await engine.execute(execution_request)
     logger.info(
-        "gateway_send_message_ack room_id=%s message_id=%s "
-        "client_request_id=%s success=%s status_code=%s "
-        "should_start_orchestration=%s preflight_outcome=%s",
-        room_id,
-        ack.message_id,
-        client_request_id,
-        ack.success,
-        ack.status_code,
-        ack.should_start_orchestration,
-        ack.preflight_outcome,
+        "gateway_send_message_completed",
+        extra={
+            "room_id": room_id,
+            "message_id": ack.message_id,
+            "user_message_id": ack.message_id,
+            "client_request_id": client_request_id,
+            "outcome": "success" if ack.success else "error",
+            "status": ack.status_code,
+            "should_start_orchestration": ack.should_start_orchestration,
+            "preflight_outcome": ack.preflight_outcome,
+        },
     )
 
     # Auto-trigger processing as background task if message was created successfully
     if ack.success and ack.message_id and ack.should_start_orchestration:
         logger.info(
-            "gateway_send_message_background_scheduled room_id=%s "
-            "message_id=%s client_request_id=%s",
-            room_id,
-            ack.message_id,
-            client_request_id,
+            "gateway_send_message_background_scheduled",
+            extra={
+                "room_id": room_id,
+                "message_id": ack.message_id,
+                "user_message_id": ack.message_id,
+                "client_request_id": client_request_id,
+            },
         )
         background_tasks.add_task(
             engine.start_orchestration,
@@ -688,7 +687,11 @@ async def suggest_agents(
             "status_code": 400,
         }
     try:
-        suggestion_result = await selection_service.suggest_agents(message_text, top_k)
+        suggestion_result = await selection_service.suggest_agents(
+            message_text=message_text,
+            top_k=top_k,
+            user_id=user.user_id,
+        )
         return {
             "success": True,
             **serialize_agent_suggestion_result(suggestion_result),

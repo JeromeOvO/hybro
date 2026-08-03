@@ -1,16 +1,15 @@
 # System Architecture
 
 This document describes the current architecture and core workflows of the
-`multi-agents-backend` codebase. It is based on the repository state as of
-2026-06-26 and focuses on the code that is currently present, not on older
-design documents that may have existed previously.
+canonical backend under the Hybro monorepo's `backend/` directory. The retired
+standalone `multi-agents-backend` repository is not the runtime source described
+here. This document focuses on code currently present in the monorepo.
 
 ## High-Level Shape
 
 The backend is a FastAPI monolith that coordinates:
 
 - A web app API for rooms, agents, messages, HITL, files, and SSE.
-- A public/API-key gateway for agent discovery and direct agent calls.
 - A Hub relay path for locally connected hub agents.
 - A2A agent communication, including synchronous, streaming, and webhook-based
   long-running task updates.
@@ -29,7 +28,6 @@ flowchart TD
     APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
     APIGateway --> OwnerPorts[owner protocols / facades]
     APIGateway --> Execution[execution facade]
-    APIGateway --> Platform[platform facade]
 
     Container[container.py composition root] --> ExecutionPorts[Execution ports]
     Execution --> ExecutionPorts
@@ -51,15 +49,15 @@ flowchart TD
     ResponseHandler --> Mongo[(MongoDB)]
     ResponseHandler --> Delivery[delivery facade / SSE]
     RoomServices --> ContextMemory[context_memory facade]
-    Platform --> Mongo
-    Platform --> RoomFiles[room_files / local filesystem]
+    RoomServices --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
 
 ## Runtime Entry Point
 
-`main.py` creates the FastAPI app, configures process logging, installs
+`main.py` creates the FastAPI app, configures the stdout-only structured
+logging pipeline, installs request correlation/logging middleware, installs
 middleware, mounts `api_gateway.router`, and delegates runtime assembly to
 container-owned entrypoints:
 
@@ -158,14 +156,12 @@ Important route groups:
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
 - `files_routes.py`: file upload for room message attachments.
-- `discovery_routes.py`: API-key agent discovery.
-- `platform_gateway_routes.py`: API-key gateway send/stream/card endpoints.
 - `relay_routes.py`: hub daemon registration, event stream, publish, sync, status.
 - `webhook_routes.py`: A2A task webhook callbacks.
 - `a2a_task_routes.py`: long-running A2A task inspection.
 
-Most frontend-facing routes use Clerk auth. Discovery, gateway, and relay routes
-use API-key auth from `common.api_key_auth`.
+Most frontend-facing routes use Clerk auth. Relay routes use API-key auth from
+`common.api_key_auth`.
 
 ### `common`
 
@@ -176,9 +172,13 @@ use API-key auth from `common.api_key_auth`.
   execution, hub, platform, LLM, and DAL dependencies.
 - `common.config.settings`: environment-backed settings.
 - `common.errors`: typed domain/platform errors.
-- `common.utils`: logging, time, A2A helpers, context utilities, and streaming
-  helpers.
-- `common.observability`: tracing and metrics helpers.
+- `common.utils`: time, A2A helpers, context utilities, streaming helpers, and a
+  side-effect-free compatibility import for the logging API.
+- `common.observability`: process logging, correlation context, tracing, and
+  metrics helpers. See [Observability.md](Observability.md).
+- `common.a2a_task_projection`: common-owned, persistence-safe public projection
+  of A2A tasks, messages, parts, and artifacts. API routes and runtime modules
+  share this privacy boundary without importing one another's implementations.
 
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
@@ -332,16 +332,21 @@ Execution also defines a durable orchestration run-state foundation. The
 versioned `OrchestrationRunState` model, pure reducer transitions, and
 `OrchestrationRunStore` contract support optimistic state writes, append-only
 events, recovery queries, and envelope reconstruction. Public run lifecycle
-projection accepts an explicit public `RunState`, is idempotent by causation id,
-and remains behind the existing run dual-write feature gate. A projection with
-a new causation id records that binding even when the public head is already at
-the requested active state; repeated processing projections use `RUN_RESUMED`
-rather than emitting another start event. Mapping orchestration-specific
-statuses into public run states is performed by the state-driven supervisor loop
-while legacy supervisor execution remains available for requests that do not
-activate the versioned runtime.
+projection accepts an explicit public `RunState` and is idempotent by causation
+id. Public projection is unconditional: `OrchestrationRunState` is the execution
+source of truth, while `runs` and `run_events` are public lifecycle projections.
+A projection with a new causation id records that binding even when the public
+head is already at the requested active state; repeated processing projections
+use `RUN_RESUMED` rather than emitting another start event. Mapping
+orchestration-specific statuses into public run states is performed by the
+single state-driven supervisor loop. Graceful process shutdown is treated as an
+infrastructure interruption rather than a user cancellation: local execution
+tasks stop without emitting terminal public state or terminalizing the durable
+run, and stale recovery resumes them after restart. Explicit user cancellation
+remains the only path that permanently marks both durable and public run state
+as canceled.
 
-Versioned supervisor requests can also carry an explicit candidate scope from
+Supervisor requests carry an explicit candidate scope from
 the API boundary into a lightweight orchestration envelope. Scope normalization
 rejects unknown, inaccessible, or inconsistent agent selections before planner
 execution. The frontend selector defines this scope: `all_agents` snapshots every
@@ -351,67 +356,114 @@ run Mongo lexical matching before the Supervisor; it supplies every Agent Card
 profile in the selected scope so the Supervisor makes the suitability decision.
 Lexical matching remains available to discovery and suggestion surfaces.
 
-The Supervisor applies an agent-first policy. It delegates to one suitable Agent,
-delegates independent work to multiple Agents in parallel, or delegates dependent
-work sequentially. When no scoped Agent is suitable, or suitable Agent execution
-has failed with no useful retry or alternate, the dedicated `platform_answer`
-action streams a direct HYBRO Platform LLM response. A no-suitable-Agent response
-must disclose that the currently connected Agents have limited capability for the
-request; an execution-failure fallback must distinguish that operational failure.
-An empty candidate scope is therefore a valid Supervisor input, not a pending
-synthetic A2A task.
+HYBRO is the primary user-facing assistant; Supervisor is only the internal
+planner role. User-facing synthesis speaks as HYBRO and does not expose planner,
+routing, orchestration, or action terminology. Specialist Agents are optional
+external tools. The planner delegates when a suitable Agent materially advances
+the goal through a domain workflow, reusable structured artifact, external
+action, or specialist work meaningfully different from a prose response.
+HYBRO's ability to draft plausible prose is not by itself a reason to avoid
+delegation. Explicit Agent requests and approval of a previously offered Agent
+action also prefer delegation. The planner can delegate to one suitable Agent,
+delegate independent work in parallel, or delegate dependent work sequentially.
+A request to read, explain, or summarize a readable attachment is answered
+through `platform_answer` first. That response offers exactly one concrete Agent
+action when one suitable next step materially advances the likely goal, and
+delegation starts only after the user confirms or requests the offered result.
 
-The versioned planner action schema and pure action validator enforce
-candidate membership, step-budget, required-target, and prior-output rules while
-the existing supervisor loop remains the default runtime path. Lightweight v2
-envelope activation and state-driven execution are disabled by default behind
-`EXECUTION_ORCHESTRATION_V2`; candidate-scope validation still applies before
-the feature gate so disabled requests safely retain the legacy runtime path.
-`FEATURE_ORCHESTRATION_V2` remains accepted as a deployment migration alias,
-with the new environment variable taking precedence. Pending legacy
-clarifications resume before a new v2 envelope can be created.
+When no scoped Agent is suitable, or suitable Agent execution has failed with no
+useful retry or alternate, `platform_answer` streams a direct HYBRO response. A
+no-suitable-Agent response answers naturally without exposing routing
+decisions, connected-Agent names, capability limitations, or unsolicited
+domain-specific next steps. An execution-failure fallback must still distinguish
+and disclose that operational failure. An empty candidate scope is therefore a
+valid Supervisor input, not a pending synthetic A2A task.
+
+The planner action schema and pure action validator enforce candidate
+membership, step-budget, required-target, and prior-output rules. Every
+Supervisor room request creates a lightweight durable orchestration envelope;
+there is no rollout selector or alternate supervisor execution path. The client
+selects scope and mode but does not select an orchestration schema version.
 
 The orchestration boundary also defines deterministic planner context and agent
 result ingestion. `build_orchestration_planner_context` projects quoted content,
 candidate metadata, step budget, and durable run state into an immutable
 planner-facing payload; `RoomSupervisorPlannerAdapter` parses and validates the
 next action through the supervisor service's public planner boundary and the
-existing action contract. Agent terminal responses can
+existing action contract. Backend control state remains private, but the latest
+open planner-validator failure is projected separately as bounded,
+planner-facing retry feedback containing only its error, retry count, and
+recovery hints. The next planning attempt must correct that error instead of
+repeating an identical invalid action. Delegation defaults to one Agent per
+planner step; multiple targets are reserved for independent work with one shared
+parallel group, while dependent Agent work advances sequentially across steps.
+Agent terminal responses can
 be normalized into `AgentResultRead` records and projected by the pure,
 replay-safe `AgentResultIngestor` when an orchestration ingestion service is
 bound. Sparse or identical terminal replays preserve richer output and do not
 advance the run-state version. The state-driven supervisor loop consumes these
 boundaries to plan, reduce, persist, and resume each versioned step.
 
-HITL records, execution DTOs, delivery events, live SSE frames, and catch-up
-responses preserve optional `orchestration_run_id` and
-`orchestration_schema_version` links without changing legacy payloads. Supervisor
-HITL requests propagate these links from the orchestration state, and grouped
-cancellation or expiry terminalizes each pending sibling while retaining its
-own linkage metadata. This contract remains compatible with legacy HITL records
-that do not contain orchestration fields.
+HITL records preserve the optional `orchestration_run_id` needed to resume the
+durable run. Delivery events and public SSE frames do not expose private
+orchestration linkage. Grouped cancellation or expiry terminalizes each pending
+sibling while retaining its own run linkage metadata.
 
-For activated v2 envelopes, `RoomMessageCenter` routes execution through
-`SupervisorExecutor.run_v2`. Each planner action is reduced into optimistic,
+`RoomMessageCenter` routes every durable orchestration envelope through
+`SupervisorExecutor.run`. Each planner action is reduced into optimistic,
 versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
 Durable run-store queries and the stale-task checker can claim and resume stale
-sidecar runs after process interruption. A processing-claim heartbeat prevents
-recovery from preempting live turns, optimistic write conflicts exit cleanly for
-the winning writer to continue, and deterministic supervisor HITL artifacts can
-finish materializing from an `INGESTING` checkpoint without re-planning. Legacy
-supervisor requests continue to use the existing loop.
+runs after process interruption. The checker also recovers old unclaimed or
+stale claimed Supervisor envelopes that were interrupted before durable run
+creation; terminal envelopes are excluded before the bounded query limit, and
+terminal projection clears the processing claim. The canonical entry point then
+claims or reclaims the message and creates the run normally. A processing-claim
+heartbeat prevents recovery
+from preempting live turns, optimistic write conflicts exit cleanly for the
+winning writer to continue, and deterministic supervisor HITL artifacts can
+finish materializing from an `INGESTING` checkpoint without re-planning.
 
-The v2 planner receives a bounded resource catalog for user attachments and
+The orchestration planner receives a bounded resource catalog for user attachments and
 generated projections. Resource references are explicit: planner targets select
 context, artifact, or attachment refs, dispatch validates those refs against the
 run state and Agent Card input modes, and only selected payloads are materialized
-for the target Agent. PDF text projection is size-bounded and injected as
-selected context, while raw attachments remain behind an explicit-ref-only
-forwarding policy. The resource provider and projection service are assembled in
-`container.py`; failure recovery and retry policy remain separate orchestration
-concerns.
+for the target Agent. When the current turn has no attachment, the catalog also
+includes a bounded set of the room's most recent user attachments with their
+original source-message lineage, allowing follow-up phrases such as “this
+information” to select the earlier projection by reference. A current-turn
+attachment takes precedence and suppresses prior-turn carryover. The planner
+keeps each private Agent task concise: only the objective, material constraints,
+and expected result belong in the task, while source material travels through
+the smallest sufficient reference set. It prefers structured artifacts over
+copied prose. Text projections are preferred when plain extracted text is
+sufficient; a raw attachment is preferred when the target Agent advertises a
+native intake or document-processing workflow for its MIME type. PDF text
+projection is size-bounded and injected as selected context, while raw
+attachments remain behind an explicit-ref-only forwarding policy. An explicitly
+selected prior-turn attachment is resolved from room history under the same
+room boundary before preflight, so follow-up dispatches can forward the original
+file rather than failing against the attachment-less approval message. For
+orchestrated dispatch, the target Agent's current request is the private,
+capability-scoped dispatch task—not the user's short approval message—and
+selected text resources are compiled into that same request body so single-text
+and multi-part A2A consumers receive equivalent input. The action validator also
+rejects a delegate task that mentions an available resource ID without selecting
+that exact ID through dispatch refs, allowing the next planner attempt to repair
+the omission before any external Agent is called. The resource provider and
+projection service are assembled in `container.py`; failure recovery and retry
+policy remain separate orchestration concerns.
+
+For a direct `platform_answer`, Execution resolves readable PDF projections into
+a separate bounded, untrusted attachment-content section of the synthesis
+instruction. The synthesis model treats that section as source data rather than
+instructions. Follow-up direct answers reuse the same bounded recent-room
+attachment lookup as planning, so Planner and synthesis see consistent source
+material. This lets HYBRO answer attachment questions without delegating the file
+merely to obtain its text. When the user explicitly requests a suitable external
+outcome, that request is already authorization and takes precedence over the
+attachment direct-answer path; dependent Agent work proceeds one target at a time.
 
 ### Execution Control Plane
 
@@ -426,8 +478,8 @@ each iteration the planner compares that goal with the bounded state-context
 projection of facts, artifacts, agent outputs, and open questions. It either
 chooses the next business action or declares the goal complete. Completion is
 LLM-judged; Execution only enforces mechanical blockers such as pending HITL,
-active dispatches, unresolved questions, and open runtime failures. Legacy
-`synthesize` decisions are normalized to `complete`.
+active dispatches, unresolved questions, and open runtime failures. The
+provider action alias `synthesize` is normalized to `complete`.
 
 `complete` is not itself a terminal side effect. Execution first runs final
 synthesis, streams the user-facing response, and only then persists the run as
@@ -459,9 +511,14 @@ orchestration steps. A2A adapters and `DirectTransport` perform protocol
 conversion, send/stream/cancel, and normalized result production only.
 `HITLService` owns HITL request/response lifecycle CAS and persistence;
 `ExecutionFacade` records HITL answers onto orchestration runs and resumes
-Execution.
+Execution. Because an intentional HITL pause retains the original user
+message's processing claim, the immediate HITL resume refreshes and reuses that
+claim. Crash and orphan recovery remain separate: they may reclaim a message
+only after its processing claim crosses the configured stale threshold. The
+reclaim query accepts both BSON datetimes and legacy ISO-string claim timestamps
+so persisted turns retain the same timeout semantics across storage versions.
 
-An external A2A `input-required` state is not automatically user-facing HITL.
+An external A2A `input-required` state is not always immediately user-facing HITL.
 Execution first performs a bounded, silent recovery using information that was
 not already delivered to that A2A task. Original dispatch refs and previously
 attempted content fingerprints cannot be replayed as new evidence. An explicit
@@ -469,7 +526,10 @@ continuation result with material output resumes the loop; a push continuation
 pauses for its callback. If no new information exists, the blocking reply still
 requires input, or a blocking reply has neither state nor output, Execution
 preserves `awaiting_input` and upgrades it through `HITLService`. This recovery
-does not return to the planner or consume the remaining orchestration budget.
+does not return to the planner or consume the remaining orchestration budget. In
+particular, when the Agent already received selected context, artifact, or
+attachment refs and no new payload resolves the request, Execution promotes the
+existing A2A continuation to HITL instead of dispatching the same task again.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer; safe concrete
@@ -575,24 +635,12 @@ lives in `delivery`. Delivery never calls back into Execution or removed-package
 business services; lifecycle recording happens before typed delivery events are
 emitted.
 
-### `platform_module`
+### `room_files`
 
-`platform_module.PlatformFacade` groups public platform-facing capabilities:
-
-- `PlatformGateway`: API-key agent discovery, card masking, synchronous calls,
-  and streaming calls.
-- `PlatformDiscovery`: discovery service abstraction.
-- `PlatformFileStorage`: compatibility facade over room-owned file uploads and
-  stable authenticated content URLs.
-- `PlatformContentStorage`: binary/full-content storage used by context memory.
-- Gateway/discovery/agent rate limiters backed by Mongo collections.
-
-This module is used by:
-
-- `/gateway/*` routes for external agent messaging.
-- `/discovery/*` routes for external agent search.
-- `/files/upload` for authenticated room file uploads.
-- Context memory compaction content storage.
+`room_files` owns authenticated room uploads, file metadata, local content,
+artifact materialization, cleanup, and room-deletion coordination. Route and
+runtime consumers use its storage protocols; filesystem paths do not cross the
+module boundary.
 
 ### `hub_runtime_bridge` and Relay
 
@@ -817,21 +865,33 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      task if orchestration should start.
 
 4. `ExecutionFacade.execute` owns execution preflight:
-   - checks pending HITL requests before persistence,
-   - checks active runs before persistence,
+   - computes the versioned semantic request fingerprint and queries the
+     normalized `(room_id, client_request_id)` key before any pending-HITL or
+     active-run rejection,
+   - returns the existing `message_id` without dispatch metadata for a valid
+     replay, or a body-level `409` for a fingerprint conflict,
+   - for a new key, checks pending HITL requests and active runs before
+     persistence,
    - delegates room persistence to the room route/runtime port,
-   - emits preflight `processing` status immediately after the user message is
-     persisted so the frontend has a cancellable `message_id`,
+   - emits preflight `processing` status only when this request won the insert
+     and received a preflight context, so replays and concurrent losers do not
+     produce another SSE event,
    - asks the room route/runtime port to run message preflight before Execution
      starts orchestration,
-   - emits terminal preflight status when a persisted room response completes
-     before orchestration starts.
+   - emits terminal preflight status when a newly persisted room response
+     completes before orchestration starts.
 
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope,
-   - persists the user message,
+   - materializes a quote and pending attachment claims before attempting the
+     atomic user-message insert,
+   - treats only `created=True` as permission to commit attachment references,
+     publish `message_committed`, create a cancellation token, and continue to
+     preflight,
+   - compensates a concurrent losing insert by releasing only the loser's
+     message-scoped pending claims and deleting only its newly created quote,
    - returns preflight outcome metadata for Execution-owned processing-status
      emission,
    - creates a cancellation token,
@@ -854,7 +914,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - loads quoted context when present,
    - creates or reuses a cancellation token,
    - chooses one of two execution paths:
-     - Supervisor path for `extend_info.supervisor`.
+     - Supervisor path for the durable orchestration envelope identified by
+       `extend_info.orchestration`, `orchestration_run_id`, and its candidate scope.
      - Queue path for pre-created agent messages.
 
 8. Queue path:
@@ -871,7 +932,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - The supervisor compares the persisted goal with accumulated context and
      prefers suitable Agents from the complete selector-defined scope.
    - If no scoped Agent is suitable, use `platform_answer` to stream a direct
-     Platform response with the required connected-Agent capability disclosure.
+     natural HYBRO response without exposing Agent routing or capabilities.
    - The Supervisor can delegate to one Agent or coordinate multiple Agents in
      parallel or sequence.
    - Execution performs final synthesis after `complete` and marks the run
@@ -892,6 +953,65 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
     - emits SSE updates through Delivery,
     - delegates terminal task notifications through
       `execution.dispatch.task_notifications`.
+
+### `sendMessage` persistence idempotency
+
+The persistence key is `(room_id, client_request_id.strip())`. API requests must
+supply a non-empty key of at most 128 characters. The key is room-scoped, so the
+same client request ID can be used independently in different rooms. Every
+repository write path for user messages requires non-empty string `message_id` and
+`room_id`; optional string request IDs are normalized and validated on a copied
+document before insertion, including legacy callers.
+
+New user-message rows store private
+`idempotency_fingerprint` and `idempotency_fingerprint_version` fields. Version 1
+is SHA-256 over canonical JSON (`sort_keys=True`, compact separators, UTF-8),
+including authenticated sender, message/parent semantics, attachment file IDs,
+structured quote inputs, mode, target/group fields, mentions, selections, and
+candidate scope. Unordered Agent ID sets are sorted; empty mention sets normalize
+to absence, while an empty selected-Agent set remains an explicit empty selection.
+Candidate group ID is included only for effective `saved_group` scope.
+Before persistence the room runtime also discards client-supplied run/claim/task
+fields and forces user-message identity. String-valued legacy quote display
+metadata in `extend_info` is allowlisted only when no structured quote is
+present; structured quotes rebuild their persisted display metadata exclusively
+from the structured payload. Generated message/quote IDs, timestamps, resolved
+file metadata and URLs, and the authenticated sender's
+request-time display name are not fingerprinted. Structured quote display/source
+fields remain part of the quote semantics. These private fields are not part of
+room API or SSE models.
+
+`room_user_messages` has two correctness-critical unique indexes:
+
+- `room_user_message_id_unique` on `message_id`;
+- `room_user_client_request_id_unique` on `(room_id, client_request_id)`, with a
+  string-type partial filter for both fields.
+
+Startup runs server-side Mongo aggregation readiness checks before creating these
+indexes. Duplicate message IDs, invalid message IDs/room IDs, duplicate normalized
+request keys, or invalid/non-normalized request IDs stop startup with bounded,
+key-only result samples. The duplicate/group checks can still scan the complete
+collection; the result bound is not a scan bound. Startup never deletes or merges
+historical messages. Index creation failure is fatal.
+
+A replay with the same versioned fingerprint returns success and the original
+`message_id`, but no `dispatch_root_message_id`; therefore it does not publish,
+preflight, emit processing/terminal SSE, or schedule orchestration again. Reusing
+the key with a different new fingerprint returns body-level status `409`.
+Historical rows that have a request key but no fingerprint are treated as legacy
+replays: the original `message_id` is returned, a metadata-only warning is logged,
+and no fingerprint is inferred or backfilled.
+
+This is persistent uniqueness plus retry-side-effect control, not an arbitrary
+crash-point exactly-once protocol. Pending RoomFiles claims retain their existing
+durable reconciliation path, and durable orchestration recovery applies once an
+orchestration run exists. A process failure after quote/claim/message insertion
+but before commit-event publication, preflight, or durable run creation can still
+leave work requiring existing recovery or operator repair; replay intentionally
+does not repeat those effects because doing so could duplicate effects that
+completed before the crash. Failure to release a losing pending RoomFiles claim
+is logged for durable stale-claim recovery and does not replace an already
+established replay or conflict result.
 
 ## Agent Dispatch Workflow
 
@@ -1008,35 +1128,6 @@ Hub-connected local agents use API-key authenticated relay endpoints.
 This design lets hub agents participate in the normal room execution pipeline
 while keeping hub transport details isolated from queue/supervisor orchestration.
 
-## Gateway and Discovery Workflow
-
-The public API-key surface is separate from the frontend room workflow.
-
-Discovery:
-
-```text
-POST /api/v1/discovery/agents
-POST /api/v1/gateway/agents/discover
-```
-
-Messaging:
-
-```text
-POST /api/v1/gateway/agents/{agent_id}/message/send
-POST /api/v1/gateway/agents/{agent_id}/message/stream
-GET  /api/v1/gateway/agents/{agent_id}/card
-```
-
-The platform gateway:
-
-1. Authenticates API keys.
-2. Applies per-key and global rate limits.
-3. Resolves visible/public agents.
-4. Masks AgentCard URLs so clients call the gateway, not private backend URLs.
-5. Checks per-agent rate limits.
-6. Uses `AgentTransport` from `a2a_adapter` to call agents.
-7. Returns A2A-shaped responses or SSE stream frames.
-
 ## SSE and Cancellation Workflow
 
 Frontend SSE is room-scoped:
@@ -1054,14 +1145,17 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` persists cancellation in MongoDB.
-3. Delivery/SSE cancellation state is updated and broadcast.
-4. Pending HITL requests for the message are cancelled.
-5. Any paused orchestration sidecar is terminalized as canceled; pending HITL
-   ids, continuations, and open-question state are cleared.
-6. A terminal typed `ProcessingStatusEvent(status="canceled")` is emitted.
-7. Best-effort remote agent task cleanup is attempted.
-8. Executors observe cancellation tokens at checkpoints and stop gracefully.
+2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
+3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
+   nonterminal durable run while preserving a concurrently completed result.
+4. The finalizer updates the message projection, broadcasts the cancellation
+   token, cancels HITL, emits terminal public lifecycle/SSE, and cleans agent
+   tasks.
+5. The marker is marked reconciled only after every idempotent effect succeeds.
+6. The stale-task checker scans only pending markers and invokes the same typed
+   finalizer after crashes or partial failures. Old no-run markers settle only
+   after the orphan threshold, leaving time to catch a late-created run.
+7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
 typed SSE frames and cancellation state cross worker boundaries.
@@ -1172,6 +1266,9 @@ Room memory is updated and used across turns.
 7. Memory search can retrieve relevant historical turns with keyword scoring
    and temporal decay.
 8. The compaction sweep still handles periodic compaction for eligible rooms.
+   Its non-terminal-run lookup is a fail-closed safety gate, and active rooms are
+   skipped before a fixed worker pool starts. The pool is fully reaped on normal
+   completion, failure, or cancellation.
 
 The design keeps current task context, recent conversation context, room summary,
 memory search results, and quoted reply context separate so each can be bounded
@@ -1306,7 +1403,7 @@ Focused tests are organized by module and workflow:
 - `tests/test_delivery_*`: SSE, event bus, cancellation, delivery protocols.
 - `tests/test_execution_*` and related orchestration tests: execution flows.
 - `tests/test_hub_runtime_bridge_*`: hub relay behavior.
-- `tests/test_platform_*`: gateway, files, rate limits, platform protocols.
+- `tests/test_api_gateway_*` and `tests/test_files_routes.py`: gateway boundaries and file routes.
 - `tests/test_service_*`: service-level runtime compatibility and behavior.
 
 For architecture-sensitive changes, run the closest focused tests first, then

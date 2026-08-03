@@ -12,6 +12,7 @@ from common.dto import (
 from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_publisher import EventPublisherImpl
+from delivery.sse.deduplication import TerminalStatusDeduplicator
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
@@ -46,6 +47,7 @@ class FakeBus:
         self.sse: list[tuple[str, dict]] = []
         self.internal = []
         self.dead_letters: list[dict] = []
+        self.sse_trace_ids: list[str | None] = []
         self.sse_error: Exception | None = None
         self.internal_error: Exception | None = None
         self.dead_letter_error: Exception | None = None
@@ -53,6 +55,7 @@ class FakeBus:
     async def publish_sse(self, room_id: str, frame: dict) -> None:
         if self.sse_error is not None:
             raise self.sse_error
+        self.sse_trace_ids.append(get_current_trace_id())
         self.sse.append((room_id, frame))
 
     async def publish_internal(self, event) -> None:
@@ -118,7 +121,7 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
     metrics = FakeMetrics()
     publisher = make_publisher(transport=transport, bus=bus, metrics=metrics)
 
-    await publisher.emit(
+    delivered = await publisher.emit(
         ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
     )
 
@@ -134,6 +137,7 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
     }
     assert transport.frames == [("room-1", frame)]
     assert bus.sse == [("room-1", frame)]
+    assert delivered is True
     assert metrics.increments == [
         (
             "hybro_delivery_events_emitted_total",
@@ -156,12 +160,13 @@ async def test_emit_suppresses_terminal_duplicate_and_counts_dedup():
         metrics=metrics,
     )
 
-    await publisher.emit(
+    delivered = await publisher.emit(
         ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="completed")
     )
 
     assert transport.frames == []
     assert bus.sse == []
+    assert delivered is False
     assert dedup.calls == [("room-1", "msg-1", "completed")]
     assert metrics.increments == [
         (
@@ -194,12 +199,74 @@ async def test_fanout_failure_is_dead_lettered_without_raising():
     bus.sse_error = RuntimeError("redis down")
     publisher = make_publisher(bus=bus)
 
-    await publisher.emit(
+    delivered = await publisher.emit(
         ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
     )
 
+    assert delivered is True
     assert len(bus.dead_letters) == 1
     assert publisher.dead_letters[0]["failure_stage"] == "sse_fanout"
+
+
+@pytest.mark.asyncio
+async def test_emit_returns_false_when_translation_fails(monkeypatch):
+    bus = FakeBus()
+    publisher = make_publisher(bus=bus)
+
+    def fail_translation(*_args, **_kwargs):
+        raise ValueError("PRIVATE_TRANSLATION_SENTINEL")
+
+    monkeypatch.setattr(
+        "delivery.event_publisher.to_sse_frame",
+        fail_translation,
+    )
+
+    delivered = await publisher.emit(
+        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+    )
+
+    assert delivered is False
+    assert bus.dead_letters[0]["failure_stage"] == "translate"
+
+
+@pytest.mark.asyncio
+async def test_emit_returns_false_when_all_frontend_paths_fail():
+    transport = FakeTransport()
+    transport.error = RuntimeError("local down")
+    bus = FakeBus()
+    bus.sse_error = RuntimeError("redis down")
+    publisher = make_publisher(transport=transport, bus=bus)
+
+    delivered = await publisher.emit(
+        ProcessingStatusEvent(room_id="room-1", message_id="msg-1", status="processing")
+    )
+
+    assert delivered is False
+    assert bus.dead_letters[0]["failure_stage"] == "sse_fanout"
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_delivery_releases_dedup_reservation_for_retry():
+    transport = FakeTransport()
+    bus = FakeBus()
+    dedup = TerminalStatusDeduplicator(config=DeliveryConfig())
+    publisher = make_publisher(transport=transport, bus=bus, dedup=dedup)
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-terminal",
+        status="completed",
+    )
+    transport.error = RuntimeError("local down")
+    bus.sse_error = RuntimeError("redis down")
+
+    assert await publisher.emit(event) is False
+
+    transport.error = None
+    bus.sse_error = None
+    assert await publisher.emit(event) is True
+    assert await publisher.emit(event) is False
+    assert len(transport.frames) == 1
+    assert len(bus.sse) == 1
 
 
 @pytest.mark.asyncio
@@ -398,6 +465,26 @@ async def test_trace_context_is_added_to_typed_frames():
         )
 
     assert transport.frames[0][1]["data"]["trace_id"] == "trace-123"
+    assert bus.sse_trace_ids == ["trace-123"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_event_trace_is_used_for_cross_instance_publish():
+    transport = FakeTransport()
+    bus = FakeBus()
+    publisher = make_publisher(transport=transport, bus=bus)
+
+    await publisher.emit(
+        ProcessingStatusEvent(
+            room_id="room-1",
+            message_id="msg-1",
+            status="processing",
+            trace_id="trace-from-event",
+        )
+    )
+
+    assert bus.sse_trace_ids == ["trace-from-event"]
+    assert bus.sse[0][1]["data"]["trace_id"] == "trace-from-event"
 
 
 @pytest.mark.asyncio

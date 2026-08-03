@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from common.a2a_constants import is_terminal_state
+from common.a2a_task_projection import public_persisted_task_data
 from common.dto import (
     AgentInfo,
     AgentMessageInput,
@@ -16,6 +17,7 @@ from common.dto import (
     RoomMessageInfo,
     SavedUserMessage,
     UserMessageInput,
+    UserMessageInsertResult,
 )
 from common.observability import NoopTracingProvider
 from common.protocols import (
@@ -30,10 +32,13 @@ from common.types import MessageRole as Role
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
-from execution.task_tracking import public_persisted_task_data
 from models.quote import QuotedSnippet, QuoteSourceKind
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room, RoomAgentMessage, RoomUserMessage
+from room.idempotency import (
+    IdempotencyConflictError,
+    UserMessagePersistenceError,
+)
 from room.membership import resolve_membership_seed
 from room.translators import (
     agent_message_doc_from_input,
@@ -248,16 +253,46 @@ class RoomFacade:
         await self._message_repository.save_user_message(doc)
         return saved_user_message_from_doc(doc)
 
-    async def persist_user_message(self, user_message: RoomUserMessage) -> bool:
+    def ensure_user_message_id(self, user_message: RoomUserMessage) -> str:
+        if user_message.message_id == "":
+            user_message.message_id = self._id_factory()
+        return user_message.message_id
+
+    async def persist_user_message(
+        self,
+        user_message: RoomUserMessage,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
+    ) -> UserMessageInsertResult:
         try:
-            if user_message.message_id == "":
-                user_message.message_id = self._id_factory()
+            self.ensure_user_message_id(user_message)
             doc = user_message.model_dump(mode="json", exclude={"quote"})
             _strip_file_urls(doc)
-            return bool(await self._message_repository.save_user_message(doc))
-        except Exception:
+            if idempotency_fingerprint is not None:
+                if idempotency_fingerprint_version is None:
+                    raise ValueError("Idempotency fingerprint version is required")
+                doc["idempotency_fingerprint"] = idempotency_fingerprint
+                doc["idempotency_fingerprint_version"] = idempotency_fingerprint_version
+                return await self._message_repository.insert_user_message_idempotently(
+                    doc
+                )
+
+            message_id = await self._message_repository.save_user_message(doc)
+            return UserMessageInsertResult(
+                message_id=message_id,
+                created=True,
+                document=doc,
+            )
+        except IdempotencyConflictError:
+            raise
+        except UserMessagePersistenceError:
+            raise
+        except Exception as exc:
             logger.error("Failed to persist room user message", exc_info=True)
-            return False
+            raise UserMessagePersistenceError(
+                "Failed to persist room user message"
+            ) from exc
 
     async def save_agent_message(self, room_id: str, message: AgentMessageInput) -> str:
         await self._require_room(room_id)
@@ -302,6 +337,16 @@ class RoomFacade:
         getter = getattr(self._message_repository, "get_user_message_by_id", None)
         doc = await getter(message_id) if getter is not None else None
         return _safe_parse_user_message(doc)
+
+    async def get_user_message_by_idempotency_key(
+        self,
+        room_id: str,
+        client_request_id: str,
+    ) -> dict | None:
+        return await self._message_repository.get_user_message_by_idempotency_key(
+            room_id,
+            client_request_id,
+        )
 
     async def get_agent_message_model(self, message_id: str) -> RoomAgentMessage | None:
         getter = getattr(self._message_repository, "get_agent_message_by_id", None)

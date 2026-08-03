@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useProcessingRestore } from '@/hooks/room/useProcessingRestore'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
+import { inquiryActiveRuns } from '@/lib/api/room'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+
+vi.mock('@/lib/api/room', () => ({
+  inquiryActiveRuns: vi.fn(),
+}))
 
 function createLifecycle({
   placeholderDismissed,
@@ -46,6 +51,7 @@ function createLifecycle({
 
 describe('useProcessingRestore', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
@@ -118,5 +124,137 @@ describe('useProcessingRestore', () => {
     await waitFor(() => {
       expect(lifecycle.stopProcessing).not.toHaveBeenCalled()
     })
+  })
+
+  it('reconciles and stops a failed live lifecycle when backend has no active run', async () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-live-failed',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'What content in this pdf?',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+      processingStatusLogs: [{
+        id: 'processing-log-live',
+        message: 'Planning...',
+        timestamp: new Date().toISOString(),
+      }],
+    }, 'sse')
+
+    const lifecycle = createLifecycle({
+      placeholderDismissed: false,
+      processingResolved: false,
+      messageId: 'msg-live-failed',
+    })
+    const getToken = vi.fn().mockResolvedValue('token')
+    const reconcileWithDb = vi.fn(async () => {
+      const entity = useMessageStore.getState().entities['msg-live-failed']
+      useMessageStore.getState().upsertMessage({
+        id: entity.id,
+        roomId: entity.roomId,
+        messageType: 'user',
+        content: entity.content,
+        senderName: entity.senderName,
+        timestamp: entity.timestamp,
+        turnTerminalStatus: 'failed',
+      }, 'db')
+    })
+    vi.mocked(inquiryActiveRuns).mockResolvedValue({
+      room_id: 'room-1',
+      active_runs: [],
+      success: true,
+      status_code: 200,
+    })
+
+    renderHook(() => useProcessingRestore(
+      'room-1',
+      { active_runs: [] },
+      false,
+      lifecycle,
+      getToken,
+      reconcileWithDb,
+    ))
+
+    await waitFor(() => {
+      expect(reconcileWithDb).toHaveBeenCalledWith('room-1')
+      expect(lifecycle.stopProcessing).toHaveBeenCalled()
+    })
+    expect(inquiryActiveRuns).toHaveBeenCalledWith(
+      'room-1',
+      getToken,
+      undefined,
+      'msg-live-failed',
+    )
+    expect(lifecycle.markProcessingResolved).toHaveBeenCalled()
+  })
+
+  it('does not let a stale reconciliation stop a newer lifecycle', async () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'msg-live-failed',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'What content is in this PDF?',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+      processingStatusLogs: [{
+        id: 'processing-log-live',
+        message: 'Planning...',
+        timestamp: new Date().toISOString(),
+      }],
+    }, 'sse')
+
+    const lifecycle = createLifecycle({
+      placeholderDismissed: false,
+      processingResolved: false,
+      messageId: 'msg-live-failed',
+    })
+    const getToken = vi.fn().mockResolvedValue('token')
+    let finishReconciliation: (() => void) | undefined
+    let reconciliationCompleted = false
+    const reconciliationGate = new Promise<void>((resolve) => {
+      finishReconciliation = resolve
+    })
+    const reconcileWithDb = vi.fn(async () => {
+      const entity = useMessageStore.getState().entities['msg-live-failed']
+      useMessageStore.getState().upsertMessage({
+        id: entity.id,
+        roomId: entity.roomId,
+        messageType: 'user',
+        content: entity.content,
+        senderName: entity.senderName,
+        timestamp: entity.timestamp,
+        turnTerminalStatus: 'failed',
+      }, 'db')
+      await reconciliationGate
+      reconciliationCompleted = true
+    })
+    vi.mocked(inquiryActiveRuns).mockResolvedValue({
+      room_id: 'room-1',
+      active_runs: [],
+      success: true,
+      status_code: 200,
+    })
+
+    renderHook(() => useProcessingRestore(
+      'room-1',
+      { active_runs: [] },
+      false,
+      lifecycle,
+      getToken,
+      reconcileWithDb,
+    ))
+
+    await waitFor(() => {
+      expect(reconcileWithDb).toHaveBeenCalledWith('room-1')
+    })
+
+    vi.mocked(lifecycle.getMessageId).mockReturnValue('msg-new-turn')
+    finishReconciliation?.()
+
+    await waitFor(() => {
+      expect(reconciliationCompleted).toBe(true)
+    })
+    expect(lifecycle.markProcessingResolved).not.toHaveBeenCalled()
+    expect(lifecycle.stopProcessing).not.toHaveBeenCalled()
   })
 })

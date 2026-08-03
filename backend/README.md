@@ -1,90 +1,80 @@
-# multi-agents-backend
+# Hybro Backend
 
-This project is the backend for HybroAI's multi-agents system.
+This directory is the canonical backend for the Hybro monorepo. The retired
+standalone `multi-agents-backend` repository is not the source used by the
+current application, Docker Compose configuration, or CI.
 
-## Getting Started
+## Run from the monorepo
 
-### 1. Clone the Repository
+### Docker Compose
 
-```sh
-git clone git@github.com:hybroai/multi-agents-backend.git
-cd ./multi-agents-backend
-```
-
-### 2. Install Dependencies
-
-Use [uv](https://github.com/astral-sh/uv) for fast dependency management:
+From the repository root:
 
 ```sh
-uv sync
+docker compose up -d --build
 ```
 
-### 3. Start the Project
+The API is available at <http://localhost:8000> and its health endpoint is
+<http://localhost:8000/health>.
 
-Run the following command to start the backend server:
+### Run the backend directly
+
+Python 3.12+ and a reachable MongoDB instance are required.
 
 ```sh
-uvicorn main:app
+cd backend
+cp .env.example .env
+uv sync --extra dev
+uv run uvicorn main:app --reload
 ```
 
-The project will be accessible at [http://localhost:8000](http://localhost:8000).
+Use `AUTH_MODE=mock` for local development without Clerk credentials. Redis is
+optional for a single-process local server; cross-process delivery and locking
+require it.
 
----
+## Project layout
 
-## Environment Configuration
+- `main.py`: FastAPI application and lifespan entry point.
+- `container.py`: runtime composition root.
+- `api_gateway/`: the only HTTP route package.
+- `agent/`, `room/`, `execution/`, `context_memory/`, `delivery/`: domain modules.
+- `a2a_adapter/`: A2A SDK boundary.
+- `llm_gateway/`: LLM provider boundary.
+- `hub_runtime_bridge/`: local Hub relay runtime.
+- `dal/`: MongoDB and Redis adapters.
+- `room_files/`: room-owned file metadata and local content storage.
+- `tests/`: unit, boundary, and workflow tests.
 
-### A2A Inline File Dispatch Limits
+The former `api/` compatibility package has been removed. New routes belong in
+`api_gateway/routes/` and must use injected owner protocols rather than concrete
+repositories.
 
-`A2A_INLINE_FILE_MAX_RAW_BYTES` limits the raw bytes for one user-uploaded file
-before it is base64 encoded into an outbound A2A message. The default is
-`5242880` bytes, or 5 MiB. Room attachment uploads are capped at the same
-limit so accepted uploads do not later fail inline agent dispatch for size
-alone.
+See [`docs/System-Architecture.md`](docs/System-Architecture.md) for the current
+runtime architecture. `docs/MODULAR_DECOUPLING_DESIGN.md` is an archived design
+record and must not be treated as a description of the live system.
 
-`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits the aggregate base64-encoded file
-bytes across all file parts in one outbound A2A message. The default is
-`6990508` bytes. When this setting is `0` or blank, the backend derives it from
-`A2A_INLINE_FILE_MAX_RAW_BYTES` as `4 * ceil(raw_limit / 3)`.
+## Validation
 
-Treat these values as memory and backpressure controls for inline bytes
-dispatch. They are not URI-dispatch feature flags: user-uploaded files that are
-sent to agents use inline A2A file bytes, while platform storage URIs stay
-internal to Hybro.
+Run from `backend/`:
 
----
+```sh
+uv run ruff format --check .
+uv run ruff check .
+uv run pytest -m core
+uv run pytest
+```
 
-## Dependency Management with uv
+Real Redis integration tests are explicit:
 
-- **Add a new dependency:**
+```sh
+HYBRO_TEST_REDIS_URL=redis://localhost:6379/0 uv run pytest -m integration
+```
 
-  ```sh
-  uv add <package>
-  ```
+See [`tests/README.md`](tests/README.md) for test lanes and cleanup conventions.
 
-- **Remove a dependency:**
+## A2A inline file limits
 
-  ```sh
-  uv remove <package>
-  ```
-
-- **Upgrade all dependencies and update the lockfile:**
-
-  ```sh
-  uv lock --upgrade
-  ```
-
-- **Sync your environment to the lockfile:**
-  ```sh
-  uv sync
-  ```
-
----
-
-## Notes
-
-- Always use `uv` commands to manage dependencies to ensure consistency.
-- After adding or removing dependencies, remember to run `uv sync` to update your environment.
-
----
-
-Happy hacking!
+`A2A_INLINE_FILE_MAX_RAW_BYTES` limits one uploaded file before base64 encoding.
+`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in an
+outbound A2A message. Uploaded files sent to agents use inline A2A bytes; local
+filesystem paths and authenticated room-file URLs remain internal to Hybro.

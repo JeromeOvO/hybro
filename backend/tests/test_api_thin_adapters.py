@@ -126,10 +126,19 @@ def _load_allowlist() -> set[tuple[str, str]]:
     return allowed
 
 
+def _gateway_python_files() -> list[Path]:
+    return sorted(
+        [
+            *Path("api_gateway/routes").glob("*.py"),
+            *Path("api_gateway/viewsets").glob("*.py"),
+        ]
+    )
+
+
 def _api_import_violations() -> list[str]:
     allowed = _load_allowlist()
     violations: list[str] = []
-    for path in sorted(Path("api").glob("*.py")):
+    for path in _gateway_python_files():
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Import | ast.ImportFrom):
@@ -140,33 +149,32 @@ def _api_import_violations() -> list[str]:
     return violations
 
 
-def test_api_modules_are_thin_route_adapters():
+def test_legacy_api_package_is_not_reintroduced():
+    assert not Path("api").exists()
+
+
+def test_api_gateway_modules_are_thin_route_adapters():
     violations = _api_import_violations()
 
     assert not violations, "Forbidden API imports:\n" + "\n".join(violations)
 
 
-def test_api_modules_do_not_import_other_route_modules_for_helpers():
-    allowed_modules = {"api.agent_viewset", "api_gateway.viewsets.agent"}
+def test_api_gateway_routes_do_not_import_other_routes_for_helpers():
     violations: list[str] = []
-    for path in sorted(Path("api").glob("*.py")):
+    for path in sorted(Path("api_gateway/routes").glob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.module is None:
                 continue
-            if (
-                node.module.startswith("api.")
-                and node.module not in {"api.viewset", "api_gateway.viewsets.base"}
-                and node.module not in allowed_modules
-            ):
+            if node.module.startswith("api_gateway.routes."):
                 violations.append(f"{path}:{node.lineno}: {node.module}")
 
     assert not violations, (
-        "API route modules import other route modules:\n" + "\n".join(violations)
+        "API Gateway routes import other route modules:\n" + "\n".join(violations)
     )
 
 
-def test_api_bindings_do_not_expose_concrete_store_or_service_names():
+def test_api_gateway_bindings_do_not_expose_concrete_store_or_service_names():
     forbidden_names = {
         "mongodb",
         "mongo",
@@ -176,7 +184,7 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
     }
     violations: list[str] = []
 
-    for path in sorted(Path("api").glob("*.py")):
+    for path in _gateway_python_files():
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -196,11 +204,7 @@ def test_api_bindings_do_not_expose_concrete_store_or_service_names():
 
 def test_api_bindings_do_not_use_any_typed_dependency_seams():
     violations: list[str] = []
-    paths = [
-        *Path("api").glob("*.py"),
-        *Path("api_gateway/routes").glob("*.py"),
-        *Path("api_gateway/viewsets").glob("*.py"),
-    ]
+    paths = _gateway_python_files()
 
     for path in sorted(paths):
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -719,7 +723,7 @@ def test_room_center_route_inventory_records_live_protocol_owners():
 
 
 def test_room_center_protocol_inventory_matches_handler_calls():
-    from api import room_center
+    from api_gateway.routes import room_routes as room_center
 
     expectations = {
         "inquiry_active_runs": (
@@ -760,7 +764,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
 
 def test_room_active_runs_inventory_records_execution_support():
-    from api import room_center
+    from api_gateway.routes import room_routes as room_center
 
     routes = json.loads(Path("tests/fixtures/phase9_api_routes.json").read_text())
     room_setting_route = next(
@@ -820,9 +824,9 @@ def test_agent_viewset_routes_inject_repository_protocol_not_raw_database():
 
 def test_viewset_route_adapter_does_not_manage_repository_construction_or_sessions():
     source = (
-        Path("api/viewset.py").read_text()
+        Path("api_gateway/viewsets/base.py").read_text()
         + "\n"
-        + Path("api/agent_viewset.py").read_text()
+        + Path("api_gateway/viewsets/agent.py").read_text()
     )
     forbidden = (
         "Depends(get_viewset_db)",
@@ -1000,8 +1004,8 @@ def test_hub_route_dependencies_are_typed_with_route_facing_protocol():
     import inspect
     from typing import get_type_hints
 
-    from api import hub
     from api_gateway import dependencies as gateway_deps
+    from api_gateway.routes import hub_routes as hub
     from common.protocols import HubStatusReader
 
     provider_hints = get_type_hints(gateway_deps.get_hub_relay_service)
@@ -1021,7 +1025,7 @@ def test_agent_routes_expose_typed_dependency_providers():
         AgentCenterCompatibility,
         AgentLivenessChecker,
     )
-    from api import agent
+    from api_gateway.routes import agent_routes as agent
     from common.protocols import AgentRegistry
 
     provider_expectations = {
@@ -1196,8 +1200,8 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
     import inspect
     from typing import get_type_hints
 
-    from api import files
     from api_gateway import dependencies as gateway_deps
+    from api_gateway.routes import files_routes as files
     from common.protocols import FileStorage, RoomOwnershipReader
 
     storage_provider_hints = get_type_hints(gateway_deps.get_file_storage)
@@ -1328,8 +1332,8 @@ def test_relay_route_dependencies_are_typed_with_route_facing_protocol():
     import inspect
     from typing import get_type_hints
 
-    from api import relay
     from api_gateway import dependencies as gateway_deps
+    from api_gateway.routes import relay_routes as relay
     from common.protocols import APIKeyPrincipal, HubRelayManagement
 
     provider_hints = get_type_hints(gateway_deps.get_relay_service)

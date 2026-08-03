@@ -5,7 +5,7 @@ Covers:
 - _validate_canonical_mentions rejects invalid/unauthorized agents
 - _resolve_explicit_target_scope rejects empty room_team, missing/empty saved groups
 - Pre-persist scope validation: rejected messages never reach the database
-- Legacy inline mentions persist-first behavior (pinned)
+- Inline mentions persist-first behavior (pinned)
 - _resolve_room_agent_refs marks private agents as inaccessible for non-owners
 """
 
@@ -13,21 +13,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.utils.time import utcnow
+from common.dto import UserMessageInsertResult
 from models.agent import Agent, AgentStatus
+from models.request import RoomCenterUserMessageRequest
 from models.response import (
     RoomCenterUserMessageResponse,
     ScopeResolutionError,
 )
 from models.room import MessageContent, Room, RoomUserMessage
 from models.room_services_models import ParseResult
-from models.supervisor import (
-    ActionType,
-    SupervisorAction,
-    SupervisorTrajectory,
-    TrajectoryEntry,
-    TrajectoryStatus,
-)
 from room.compat.runtime import RoomServices
 
 
@@ -426,6 +420,44 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_supervisor_empty_explicit_selection_does_not_persist(
+        self,
+        room_center,
+    ):
+        room = _make_room(
+            agent_set={"a1": "Alpha"},
+            extend_info={"use_supervisor": True},
+        )
+        room_center.database_service.get_room_by_room_id.return_value = room
+        request = RoomCenterUserMessageRequest(
+            room_id="room-1",
+            user_id="user-1",
+            message=RoomUserMessage(
+                room_id="room-1",
+                message_id="message-1",
+                user_id="user-1",
+                message_content=MessageContent(message_text="hello"),
+            ),
+            extend_info={
+                "mode": "supervisor",
+                "selected_agent_ids": [],
+                "candidate_scope_mode": "explicit_selection",
+            },
+        )
+        room_center._validate_send_message_request = MagicMock(return_value=None)
+        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._persist_user_message = AsyncMock(return_value=True)
+
+        result = await room_center.send_message_to_room(
+            request,
+            target_group="room_team",
+        )
+
+        assert result.success is False
+        assert result.scope_resolution_error.code == "empty_scope"
+        room_center._persist_user_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_missing_saved_group_does_not_persist(self, room_center):
         room = _make_room()
         room_center.database_service.get_room_by_room_id.return_value = room
@@ -455,18 +487,16 @@ class TestPrePersistScopeValidation:
 
 
 # =============================================================================
-# Legacy inline mentions (pinned: persist-before-validate behavior)
+# Inline mentions (pinned: persist-before-validate behavior)
 # =============================================================================
 
 
-class TestLegacyInlineMentionBehavior:
-    """Legacy inline mentions (no mentioned_agent_ids) are NOT covered by
+class TestInlineMentionBehavior:
+    """Inline mentions (no mentioned_agent_ids) are NOT covered by
     reject-before-persist. This test class pins the explicit design decision."""
 
     @pytest.mark.asyncio
-    async def test_legacy_inline_mention_drops_unknown_agent_silently(
-        self, room_center
-    ):
+    async def test_inline_mention_drops_unknown_agent_silently(self, room_center):
         """parse_agent_mentions silently drops agents not in room — no error."""
         text = "<@unknown-agent|Ghost> do something"
         agent_set = {"a1": "Alpha"}
@@ -477,7 +507,7 @@ class TestLegacyInlineMentionBehavior:
     async def test_pre_persist_skipped_when_no_canonical_mentions(self, room_center):
         """When mentioned_agent_ids is empty/None, _validate_canonical_mentions
         is NOT called. The code path for room_team goes through _resolve_explicit_target_scope
-        instead, which runs pre-persist. Legacy inline mentions only run post-persist."""
+        instead, which runs pre-persist. Inline mentions only run post-persist."""
         room = _make_room(agent_set={"a1": "Alpha"})
         agent = _make_agent("a1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
@@ -523,13 +553,19 @@ class TestLegacyInlineMentionBehavior:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-inline-1",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock(return_value=None)
         handle_mentions = AsyncMock()
-        prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
+        prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
         room_center._handle_mentions_flow = handle_mentions
-        room_center._prepare_for_supervisor = prepare_supervisor
+        room_center._prepare_orchestration_envelope = prepare_orchestration
 
         result = await room_center.send_message_to_room(
             request,
@@ -539,137 +575,7 @@ class TestLegacyInlineMentionBehavior:
 
         assert result.success is True
         handle_mentions.assert_not_awaited()
-        assert prepare_supervisor.await_args.kwargs["explicit_mentions"] == [
-            {
-                "agent_id": "a1",
-                "agent_name": "Alpha",
-                "mention_text": "<@a1|Alpha>",
-                "position": 0,
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_clarify_resume_preserves_explicit_mentions(self, room_center):
-        room = _make_room(
-            agent_set={"a1": "Alpha"},
-            extend_info={
-                "debateMode": False,
-                "use_supervisor": True,
-                "pending_clarification_message_id": "orig-msg",
-            },
-        )
-        trajectory = SupervisorTrajectory(
-            status=TrajectoryStatus.CLARIFYING,
-            entries=[
-                TrajectoryEntry(
-                    step_number=1,
-                    action=SupervisorAction(
-                        action=ActionType.CLARIFY,
-                        reasoning="need detail",
-                        clarification_question="What should Alpha do?",
-                    ),
-                    started_at=utcnow(),
-                )
-            ],
-        )
-        original = MagicMock()
-        original.extend_info = {
-            "supervisor_trajectory": trajectory.model_dump(mode="json")
-        }
-        room_center.database_service.get_room_user_message_by_message_id.return_value = original
-        room_center.database_service.update_room_user_message_by_message_id = (
-            AsyncMock()
-        )
-        room_center.database_service.update_room_by_room_id = AsyncMock()
-        user_message = RoomUserMessage(
-            room_id="room-1",
-            message_id="reply-msg",
-            user_id="user-1",
-            message_content=MessageContent(message_text="ask Alpha"),
-            extend_info={},
-        )
-        mentions = [
-            {
-                "agent_id": "a1",
-                "agent_name": "Alpha",
-                "mention_text": "<@a1|Alpha>",
-                "position": 0,
-            }
-        ]
-
-        result = await room_center._prepare_clarify_resume(
-            room=room,
-            user_message=user_message,
-            message_text="ask Alpha",
-            pending_clarify_msg_id="orig-msg",
-            agents=None,
-            selected_agent_set={"a1": "Alpha"},
-            is_debate_mode=False,
-            room_memory=None,
-            explicit_mentions=mentions,
-        )
-
-        assert result is True
-        assert user_message.extend_info["explicit_mentions"] == mentions
-        assert user_message.extend_info["room_config"]["explicit_mentions"] == mentions
-
-    @pytest.mark.asyncio
-    async def test_supervisor_inline_mention_preserves_clarify_resume(
-        self, room_center
-    ):
-        room = _make_room(
-            agent_set={"a1": "Alpha"},
-            extend_info={
-                "debateMode": False,
-                "use_supervisor": True,
-                "pending_clarification_message_id": "orig-msg",
-            },
-        )
-        agent = _make_agent("a1", "Alpha")
-        room_center.database_service.get_room_by_room_id.return_value = room
-        room_center.database_service.get_agent_by_agent_id.return_value = agent
-        room_center.database_service.get_room_memory_by_room_id = AsyncMock(
-            return_value=None
-        )
-
-        request = MagicMock()
-        request.room_id = "room-1"
-        request.user_id = "user-1"
-        request.client_request_id = None
-        request.message = RoomUserMessage(
-            room_id="room-1",
-            message_id="msg-inline-clarify",
-            user_id="user-1",
-            message_content=MessageContent(
-                message_text="<@a1|Alpha> use the latest draft",
-            ),
-            extend_info={},
-        )
-
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
-        room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.delivery.create_token = MagicMock(return_value=None)
-        handle_mentions = AsyncMock()
-        prepare_clarify = AsyncMock(return_value=True)
-        prepare_supervisor = AsyncMock(return_value=ParseResult(success=True))
-        room_center._handle_mentions_flow = handle_mentions
-        room_center._prepare_clarify_resume = prepare_clarify
-        room_center._prepare_for_supervisor = prepare_supervisor
-
-        result = await room_center.send_message_to_room(
-            request,
-            target_group="room_team",
-            mentioned_agent_ids=None,
-        )
-
-        assert result.success is True
-        handle_mentions.assert_not_awaited()
-        prepare_supervisor.assert_not_awaited()
-        assert prepare_clarify.await_args.kwargs["pending_clarify_msg_id"] == "orig-msg"
-        assert prepare_clarify.await_args.kwargs["explicit_mentions"] == [
+        assert prepare_orchestration.await_args.kwargs["explicit_mentions"] == [
             {
                 "agent_id": "a1",
                 "agent_name": "Alpha",
@@ -785,7 +691,13 @@ class TestAllAgentsPostPersistMessageId:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-real-123",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock()
 
@@ -849,7 +761,13 @@ class TestClientRequestIdPropagation:
         room_center._validate_send_message_request = MagicMock(return_value=None)
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._materialize_room_quote = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="msg-real-456",
+                created=True,
+                document={},
+            )
+        )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.delivery.create_token = MagicMock()
 

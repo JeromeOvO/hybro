@@ -102,14 +102,36 @@ class RoomRouteAdapter:
             request
         )
 
+    async def get_idempotent_user_message(
+        self,
+        *,
+        room_id: str,
+        client_request_id: str,
+        idempotency_fingerprint: str,
+        idempotency_fingerprint_version: int,
+    ) -> RoomCenterUserMessageResponse | None:
+        return await self._require_room_services().get_idempotent_user_message(
+            room_id=room_id,
+            client_request_id=client_request_id,
+            idempotency_fingerprint=idempotency_fingerprint,
+            idempotency_fingerprint_version=idempotency_fingerprint_version,
+        )
+
     async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> RoomCenterUserMessageResponse:
         return await self._require_room_services().send_message_to_room(
-            request, target_group, mentioned_agent_ids
+            request,
+            target_group,
+            mentioned_agent_ids,
+            idempotency_fingerprint=idempotency_fingerprint,
+            idempotency_fingerprint_version=idempotency_fingerprint_version,
         )
 
     async def persist_message_to_room(
@@ -117,14 +139,33 @@ class RoomRouteAdapter:
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ):
         return await self._require_room_services().persist_message_to_room(
-            request, target_group, mentioned_agent_ids
+            request,
+            target_group,
+            mentioned_agent_ids,
+            idempotency_fingerprint=idempotency_fingerprint,
+            idempotency_fingerprint_version=idempotency_fingerprint_version,
         )
 
     async def run_message_preflight_to_room(self, context):
         return await self._require_room_services().run_message_preflight_to_room(
             context
+        )
+
+    async def update_user_message_orchestration_status(
+        self,
+        message_id: str,
+        status: str,
+    ) -> bool:
+        return bool(
+            await self._require_room_services().update_user_message_orchestration_status(
+                message_id,
+                status,
+            )
         )
 
 

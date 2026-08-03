@@ -507,6 +507,10 @@ class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
         self, message_id: str
     ) -> RoomUserMessage | None: ...
 
+    async def get_room_user_messages_by_room_id(
+        self, room_id: str
+    ) -> list[RoomUserMessage]: ...
+
     async def get_room_agent_message_by_message_id(
         self, message_id: str
     ) -> RoomAgentMessage | None: ...
@@ -514,6 +518,8 @@ class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
     ) -> list[RoomAgentMessage]: ...
+
+    async def is_message_cancelled_strict(self, message_id: str) -> bool: ...
 
 
 class RoomMessageWriter(Protocol):
@@ -796,6 +802,7 @@ SSEDeliveryPort = ExecutionDeliveryPort
 
 class RunReadPort(Protocol):
     async def get_run(self, run_id: str) -> RunInfo | None: ...
+    async def get_run_strict(self, run_id: str) -> RunInfo | None: ...
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
 
 
@@ -810,6 +817,8 @@ class CancellationStorePort(Protocol):
         message_id: str,
         requested_by_user_id: str,
     ) -> bool: ...
+
+    async def mark_cancellation_reconciled(self, message_id: str) -> bool: ...
 
 
 class HITLMessageCancellationPort(Protocol):

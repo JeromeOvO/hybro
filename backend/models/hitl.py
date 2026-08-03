@@ -97,9 +97,8 @@ class HITLRequest(BaseModel):
     display_message_id: str | None = None
     client_request_id: str | None = None
 
-    # Dynamic orchestration v2 linkage.  Optional for legacy HITL records.
+    # Durable orchestration linkage.
     orchestration_run_id: str | None = None
-    orchestration_schema_version: int | None = None
 
     # The question
     prompt: str

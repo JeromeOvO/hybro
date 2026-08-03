@@ -299,6 +299,7 @@ async def test_resource_catalog_generates_and_resolves_projection_without_presee
         user_message_id="msg-1",
         attachments=[_pdf_attachment()],
         candidate_agents=[SimpleNamespace(agent_id="agent-1", input_modes=["text"])],
+        attachment_source_message_ids={"file-1": "previous-message"},
     )
     payload = await provider.resolve_ref(
         "ctx:file-file-1:text",
@@ -307,6 +308,7 @@ async def test_resource_catalog_generates_and_resolves_projection_without_presee
     )
 
     assert resources[0].projections[0].status == "ready"
+    assert resources[0].source_message_id == "previous-message"
     assert payload is not None
     assert payload.text == "projected text"
     projection_service.ensure_projection.assert_awaited_once()

@@ -1,11 +1,51 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
+from pymongo.errors import DuplicateKeyError
+
+from common.dto import UserMessageInsertResult
+from common.idempotency import (
+    MAX_CLIENT_REQUEST_ID_LENGTH,
+    normalize_client_request_id,
+)
 from common.protocols import MongoDAL
+from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from room.idempotency import (
+    IdempotencyConflictError,
+    UnexpectedUserMessageDuplicateError,
+    stored_fingerprint_matches,
+)
 from room.message_graph import normalize_history_rows, status_update_payload
+
+logger = get_logger(__name__)
+
+
+def _canonical_user_message_document(message: dict) -> dict:
+    """Validate user-message identity and normalize its optional request key."""
+
+    candidate = dict(message)
+    for field in ("message_id", "room_id"):
+        value = candidate.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"User-message insert requires non-empty {field}")
+
+    client_request_id = candidate.get("client_request_id")
+    if client_request_id is None:
+        return candidate
+    if not isinstance(client_request_id, str):
+        raise ValueError("User-message client_request_id must be a string or null")
+    normalized_client_request_id = normalize_client_request_id(client_request_id)
+    if (
+        not normalized_client_request_id
+        or len(normalized_client_request_id) > MAX_CLIENT_REQUEST_ID_LENGTH
+    ):
+        raise ValueError("User-message insert requires valid client_request_id")
+    candidate["client_request_id"] = normalized_client_request_id
+    return candidate
 
 
 class RoomMongoRepository:
@@ -93,8 +133,104 @@ class MessageMongoRepository:
         self._cancelled_messages = None
 
     async def save_user_message(self, message: dict) -> str:
-        inserted_id = await self._user_messages.insert_one(dict(message))
-        return str(message.get("message_id") or inserted_id)
+        candidate = _canonical_user_message_document(message)
+        await self._user_messages.insert_one(candidate)
+        return candidate["message_id"]
+
+    async def get_user_message_by_idempotency_key(
+        self,
+        room_id: str,
+        client_request_id: str,
+    ) -> dict | None:
+        normalized_client_request_id = client_request_id.strip()
+        if (
+            not normalized_client_request_id
+            or len(normalized_client_request_id) > MAX_CLIENT_REQUEST_ID_LENGTH
+        ):
+            raise ValueError("Invalid client_request_id for idempotency lookup")
+        return await self._user_messages.find_one(
+            {
+                "room_id": room_id,
+                "client_request_id": normalized_client_request_id,
+            }
+        )
+
+    async def insert_user_message_idempotently(
+        self,
+        document: dict,
+    ) -> UserMessageInsertResult:
+        candidate = _canonical_user_message_document(document)
+        room_id = candidate.get("room_id")
+        client_request_id = candidate.get("client_request_id")
+        fingerprint = candidate.get("idempotency_fingerprint")
+        fingerprint_version = candidate.get("idempotency_fingerprint_version")
+        if not isinstance(room_id, str) or not room_id:
+            raise ValueError("Idempotent user-message insert requires room_id")
+        if (
+            not isinstance(client_request_id, str)
+            or not client_request_id
+            or len(client_request_id) > MAX_CLIENT_REQUEST_ID_LENGTH
+        ):
+            raise ValueError(
+                "Idempotent user-message insert requires normalized client_request_id"
+            )
+        if not isinstance(fingerprint, str) or not fingerprint:
+            raise ValueError(
+                "Idempotent user-message insert requires idempotency_fingerprint"
+            )
+        if not isinstance(fingerprint_version, int):
+            raise ValueError(
+                "Idempotent user-message insert requires fingerprint version"
+            )
+
+        try:
+            await self._user_messages.insert_one(candidate)
+        except DuplicateKeyError as exc:
+            existing = await self.get_user_message_by_idempotency_key(
+                room_id,
+                client_request_id,
+            )
+            if existing is None:
+                # The collision came from message_id (or another unique index),
+                # not from this request key. It is not a valid replay.
+                raise UnexpectedUserMessageDuplicateError(
+                    "Unexpected user-message unique-index collision"
+                ) from exc
+            existing_message_id = existing.get("message_id")
+            if not isinstance(existing_message_id, str) or not existing_message_id:
+                raise UnexpectedUserMessageDuplicateError(
+                    "Conflicting idempotency record has no valid message_id"
+                ) from exc
+            if existing.get("idempotency_fingerprint") is None:
+                logger.warning(
+                    "Legacy idempotency replay without fingerprint "
+                    "room_id=%s client_request_id=%s message_id=%s",
+                    room_id,
+                    client_request_id,
+                    existing_message_id,
+                )
+                return UserMessageInsertResult(
+                    message_id=existing_message_id,
+                    created=False,
+                    document=deepcopy(existing),
+                )
+            if stored_fingerprint_matches(
+                existing,
+                fingerprint=fingerprint,
+                fingerprint_version=fingerprint_version,
+            ):
+                return UserMessageInsertResult(
+                    message_id=existing_message_id,
+                    created=False,
+                    document=deepcopy(existing),
+                )
+            raise IdempotencyConflictError(room_id, client_request_id) from None
+
+        return UserMessageInsertResult(
+            message_id=candidate["message_id"],
+            created=True,
+            document=deepcopy(candidate),
+        )
 
     async def save_agent_message(self, message: dict) -> str:
         inserted_id = await self._agent_messages.insert_one(dict(message))
@@ -236,9 +372,18 @@ class MessageMongoRepository:
         )
 
     async def update_user_message(self, message_id: str, updates: dict) -> bool:
+        candidate = dict(updates)
+        for immutable_field in (
+            "message_id",
+            "room_id",
+            "client_request_id",
+            "idempotency_fingerprint",
+            "idempotency_fingerprint_version",
+        ):
+            candidate.pop(immutable_field, None)
         return await self._user_messages.update_one(
             {"message_id": message_id},
-            {"$set": dict(updates)},
+            {"$set": candidate},
         )
 
     async def update_agent_message(self, message_id: str, updates: dict) -> bool:

@@ -25,6 +25,11 @@ def recovery_hints_for_planner_error(error_code: str) -> list[str]:
             "choose_alternate_agent",
             "fail_with_actionable_summary",
         ]
+    if error_code == "delegate_resource_ref_omitted":
+        return [
+            "select_mentioned_resource_via_refs",
+            "remove_resource_ids_and_facts_from_task",
+        ]
     if error_code.startswith("ask_user_blocker"):
         return ["reference_validated_blocker_keys"]
     return ["replan_with_valid_schema", "choose_valid_refs"]

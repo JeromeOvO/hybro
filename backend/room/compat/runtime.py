@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from agent.routing_safety import sanitize_routing_agent_ids
-from common.config.settings import settings
+from common.a2a_task_projection import (
+    public_artifact_data,
+    public_message_data,
+    public_persisted_task_data,
+)
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -15,6 +19,7 @@ from common.dto import (
     MembershipSeed,
     ParsedUserMessageRequest,
     RoomInfo,
+    UserMessageInsertResult,
 )
 from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import ContextMemoryRuntime
@@ -45,7 +50,7 @@ from common.utils.context_utils import (
     migrate_legacy_memory,
 )
 from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
+from common.utils.time import utcnow
 from context_memory.projection import _human_size, build_turn_content
 from execution.orchestration.candidate_scope import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
@@ -54,15 +59,13 @@ from execution.orchestration.candidate_scope import (
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from execution.task_tracking import (
     extract_public_completed_status_text,
-    public_artifact_data,
-    public_message_data,
-    public_persisted_task_data,
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import MemoryContent, RoomMemory
+from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -110,6 +113,12 @@ from room.compat.unbound import (
     UNBOUND_DELIVERY,
     UNBOUND_RUNTIME_STORE,
     UNBOUND_TASK_SERVICE,
+)
+from room.idempotency import (
+    IdempotencyConflictError,
+    UnexpectedUserMessageDuplicateError,
+    UserMessagePersistenceError,
+    stored_fingerprint_matches,
 )
 
 logger = get_logger(__name__)
@@ -1809,17 +1818,6 @@ class RoomServices:
         return dict(info)
 
     @classmethod
-    def _is_orchestration_request(
-        cls,
-        request: RoomCenterUserMessageRequest,
-    ) -> bool:
-        info = cls._orchestration_request_info(request)
-        return (
-            info.get("mode") == "supervisor"
-            and info.get("orchestration_schema_version") == 2
-        )
-
-    @classmethod
     def _selected_agent_ids_from_request(
         cls,
         request: RoomCenterUserMessageRequest,
@@ -2018,21 +2016,32 @@ class RoomServices:
             selected_by_user_id=request.user_id,
         )
 
+        existing_extend_info = (
+            user_message.extend_info
+            if isinstance(user_message.extend_info, dict)
+            else {}
+        )
         envelope = {
-            "orchestration": True,
-            "orchestration_schema_version": 2,
-            "orchestration_run_id": user_message.message_id,
-            "orchestration_status": "created",
-            "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
-            "candidate_scope_source": candidate_scope.source,
-            "candidate_scope_mode": candidate_scope.source,
-            "candidate_agent_ids": list(candidate_scope.agent_ids),
-            "candidate_scope_snapshot_version": candidate_scope.revision,
-            "mentioned_agent_ids": [
-                mention["agent_id"] for mention in (explicit_mentions or [])
-            ],
-            "client_request_id": client_request_id,
+            key: value
+            for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
+            if isinstance((value := existing_extend_info.get(key)), str)
         }
+        envelope.update(
+            {
+                "orchestration": True,
+                "orchestration_run_id": user_message.message_id,
+                "orchestration_status": "created",
+                "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
+                "candidate_scope_source": candidate_scope.source,
+                "candidate_scope_mode": candidate_scope.source,
+                "candidate_agent_ids": list(candidate_scope.agent_ids),
+                "candidate_scope_snapshot_version": candidate_scope.revision,
+                "mentioned_agent_ids": [
+                    mention["agent_id"] for mention in (explicit_mentions or [])
+                ],
+                "client_request_id": client_request_id,
+            }
+        )
         if candidate_scope.group_id:
             envelope["candidate_scope_group_id"] = candidate_scope.group_id
 
@@ -2053,229 +2062,6 @@ class RoomServices:
             len(selected_agent_set),
         )
         return ParseResult(success=True)
-
-    async def _prepare_for_supervisor(
-        self,
-        room: Room,
-        user_message: RoomUserMessage,
-        message_text: str,
-        agents: list | None,
-        selected_agent_set: dict,
-        is_debate_mode: bool,
-        room_memory: "RoomMemory | None",
-        token: CancellationToken | None = None,
-        explicit_mentions: list[dict] | None = None,
-    ) -> ParseResult:
-        """Prepare extend_info for supervisor execution.
-
-        This method:
-        - Does NOT call the supervisor LLM
-        - Does NOT create any ``RoomAgentMessage`` records
-        - ONLY stores the data needed for ``SupervisorExecutor.run()``
-        - Builds budget-aware supervisor context via ContextAssemblyService (§11.1)
-
-        Agent messages are created one at a time inside
-        ``SupervisorExecutor._dispatch_targets``.
-        """
-        from models.supervisor import RoomConfig
-
-        if token and token.is_cancelled:
-            logger.info(
-                "RoomServices: Message parsing cancelled (supervisor) for %s",
-                user_message.message_id,
-            )
-            self.delivery.clear_cancellation(user_message.message_id)
-            return ParseResult(success=False, canceled=True)
-
-        agent_registry = self._build_agent_registry(agents, selected_agent_set)
-
-        room_config = RoomConfig(
-            is_debate_mode=is_debate_mode,
-            room_agent_set=selected_agent_set,
-            explicit_mentions=explicit_mentions or [],
-        )
-
-        # Build budget-aware context via ContextAssemblyService (§11.1)
-        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-        conversation_context = await self._build_supervisor_conversation_context(
-            room=room,
-            room_memory=room_memory,
-            message_text=message_text,
-            agent_registry=agent_dicts,
-            log_context="",
-        )
-
-        user_message.extend_info = {
-            **(user_message.extend_info or {}),
-            "supervisor": True,
-            "agent_registry": agent_dicts,
-            "room_config": room_config.model_dump(mode="json"),
-            "conversation_context": conversation_context,
-            "explicit_mentions": explicit_mentions or [],
-        }
-        await self._store.update_room_user_message_by_message_id(
-            user_message.message_id, user_message
-        )
-
-        logger.info(
-            "RoomServices: supervisor data prepared for message %s (%d agents)",
-            user_message.message_id,
-            len(agent_registry),
-        )
-
-        return ParseResult(success=True)
-
-    # ------------------------------------------------------------------
-    # Supervisor clarify-resume preparation (Phase 4, §7.4)
-    # ------------------------------------------------------------------
-
-    CLARIFY_TTL_SECONDS: int = 3600  # 1 hour
-
-    async def _prepare_clarify_resume(
-        self,
-        room: Room,
-        user_message: RoomUserMessage,
-        message_text: str,
-        pending_clarify_msg_id: str,
-        agents: list | None,
-        selected_agent_set: dict,
-        is_debate_mode: bool,
-        room_memory: "RoomMemory | None",
-        explicit_mentions: list[dict] | None = None,
-    ) -> bool:
-        """Check whether a pending CLARIFY can be resumed and prepare extend_info.
-
-        Returns ``True`` if the user message was prepared for clarify-resume
-        (``extend_info`` updated with ``supervisor_clarify_resume``).
-        Returns ``False`` if the pending clarification is stale, missing, or
-        otherwise invalid — the caller should fall through to a fresh supervisor run.
-        """
-        from models.supervisor import (
-            RoomConfig,
-            SupervisorTrajectory,
-            TrajectoryStatus,
-        )
-
-        original_msg = await self._store.get_room_user_message_by_message_id(
-            pending_clarify_msg_id
-        )
-        if not original_msg or not isinstance(original_msg.extend_info, dict):
-            logger.warning(
-                "RoomServices: clarify resume — original message %s not found "
-                "or missing extend_info, clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        traj_data = original_msg.extend_info.get("supervisor_trajectory")
-        if not traj_data:
-            logger.warning(
-                "RoomServices: clarify resume — no trajectory on message %s, "
-                "clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        try:
-            trajectory = SupervisorTrajectory(**traj_data)
-        except Exception as e:
-            logger.warning(
-                "RoomServices: clarify resume — failed to deserialize trajectory: %s",
-                e,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        if trajectory.status != "clarifying":
-            logger.info(
-                "RoomServices: clarify resume — trajectory status is %s (not 'clarifying'), "
-                "treating as fresh request",
-                trajectory.status,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        # TTL check: if the last entry's started_at is older than CLARIFY_TTL_SECONDS,
-        # the clarification has gone stale.
-        if not trajectory.entries:
-            logger.warning(
-                "RoomServices: clarify resume — trajectory has no entries for "
-                "message %s, clearing stale flag",
-                pending_clarify_msg_id,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        last_entry = trajectory.entries[-1]
-        age = (utcnow() - ensure_utc(last_entry.started_at)).total_seconds()
-        if age > self.CLARIFY_TTL_SECONDS:
-            logger.info(
-                "RoomServices: clarify resume — stale (%.0fs > %ds), "
-                "treating as fresh request",
-                age,
-                self.CLARIFY_TTL_SECONDS,
-            )
-            await self._clear_pending_clarification(room)
-            return False
-
-        # All checks passed — prepare the user message for clarify-resume.
-        # Set the user's reply on the trajectory so the supervisor sees it.
-        trajectory.clarify_user_reply = message_text
-        trajectory.status = TrajectoryStatus.RUNNING
-
-        agent_registry = self._build_agent_registry(agents, selected_agent_set)
-
-        room_config = RoomConfig(
-            is_debate_mode=is_debate_mode,
-            room_agent_set=selected_agent_set,
-            explicit_mentions=explicit_mentions or [],
-        )
-
-        # Build budget-aware context via ContextMemoryRuntime (§11.1)
-        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
-        conversation_context = await self._build_supervisor_conversation_context(
-            room=room,
-            room_memory=room_memory,
-            message_text=message_text,
-            agent_registry=agent_dicts,
-            log_context=" in clarify-resume",
-        )
-
-        user_message.extend_info = {
-            **(user_message.extend_info or {}),
-            "supervisor": True,
-            "supervisor_clarify_resume": True,
-            "clarify_original_message_id": pending_clarify_msg_id,
-            "resumed_trajectory": trajectory.model_dump(mode="json"),
-            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
-            "room_config": room_config.model_dump(mode="json"),
-            "conversation_context": conversation_context,
-            "explicit_mentions": explicit_mentions or [],
-        }
-        await self._store.update_room_user_message_by_message_id(
-            user_message.message_id, user_message
-        )
-
-        # Clear the pending flag on the room
-        await self._clear_pending_clarification(room)
-
-        logger.info(
-            "RoomServices: Supervisor clarify resume prepared for message %s "
-            "(original: %s, %d agents)",
-            user_message.message_id,
-            pending_clarify_msg_id,
-            len(agent_registry),
-        )
-
-        return True
-
-    async def _clear_pending_clarification(self, room: Room) -> None:
-        """Remove the ``pending_clarification_message_id`` flag from the room."""
-        if isinstance(room.extend_info, dict):
-            room.extend_info.pop("pending_clarification_message_id", None)
-            await self._store.update_room_by_room_id(room.room_id, room)
 
     async def parse_user_message(
         self,
@@ -2364,7 +2150,18 @@ class RoomServices:
                 )
             )
 
-        logger.info(f"LLM Parsed result: {parsed_result}")
+        logger.info(
+            "message_parse_completed",
+            extra={
+                "outcome": "success" if parsed_result else "empty",
+                "message_type": (
+                    parsed_result.get("message_type") if parsed_result else None
+                ),
+                "step_count": (
+                    len(parsed_result.get("task_steps", [])) if parsed_result else 0
+                ),
+            },
+        )
 
         if not parsed_result:
             logger.warning("No parsed result from LLM")
@@ -2391,17 +2188,79 @@ class RoomServices:
             ParseResult(success=True) if agent_messages else ParseResult(success=False)
         )
 
+    async def get_idempotent_user_message(
+        self,
+        *,
+        room_id: str,
+        client_request_id: str,
+        idempotency_fingerprint: str,
+        idempotency_fingerprint_version: int,
+    ) -> RoomCenterUserMessageResponse | None:
+        """Return a stable replay/conflict response without running side effects."""
+
+        existing = await self._require_facade().get_user_message_by_idempotency_key(
+            room_id,
+            client_request_id,
+        )
+        if existing is None:
+            return None
+        message_id = existing.get("message_id")
+        if not isinstance(message_id, str) or not message_id:
+            raise UserMessagePersistenceError(
+                "Idempotency record is missing a valid message_id"
+            )
+
+        stored_fingerprint = existing.get("idempotency_fingerprint")
+        if stored_fingerprint is None:
+            logger.warning(
+                "Legacy idempotency replay without fingerprint "
+                "room_id=%s client_request_id=%s message_id=%s",
+                room_id,
+                client_request_id,
+                message_id,
+            )
+        elif not stored_fingerprint_matches(
+            existing,
+            fingerprint=idempotency_fingerprint,
+            fingerprint_version=idempotency_fingerprint_version,
+        ):
+            return RoomCenterUserMessageResponse(
+                room_id=room_id,
+                message_id=None,
+                message=None,
+                success=False,
+                error=(
+                    "The client_request_id was already used for a different request"
+                ),
+                status_code=409,
+            )
+
+        return RoomCenterUserMessageResponse(
+            room_id=room_id,
+            message_id=message_id,
+            dispatch_root_message_id=None,
+            message=None,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
     async def send_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> RoomCenterUserMessageResponse:
         """Add and parse user message to room and return execution preflight metadata."""
         persisted_response, preflight_context = await self.persist_message_to_room(
             request,
             target_group,
             mentioned_agent_ids,
+            idempotency_fingerprint=idempotency_fingerprint,
+            idempotency_fingerprint_version=idempotency_fingerprint_version,
         )
         if preflight_context is None:
             return persisted_response
@@ -2412,21 +2271,73 @@ class RoomServices:
         request: RoomCenterUserMessageRequest,
         target_group: str = "room_team",
         mentioned_agent_ids: list[str] | None = None,
+        *,
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
     ) -> tuple[RoomCenterUserMessageResponse, RoomMessagePreflightContext | None]:
         """Validate, scope-check, and persist the user message before heavy preflight."""
+        client_request_id = (
+            request.client_request_id.strip()
+            if isinstance(getattr(request, "client_request_id", None), str)
+            else None
+        )
+        request.client_request_id = client_request_id
+        if (
+            client_request_id
+            and idempotency_fingerprint is not None
+            and idempotency_fingerprint_version is not None
+        ):
+            replay = await self.get_idempotent_user_message(
+                room_id=request.room_id or "",
+                client_request_id=client_request_id,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
+            )
+            if replay is not None:
+                return replay, None
+
         validation_response = self._validate_send_message_request(request)
         if validation_response:
             return validation_response, None
 
         user_message = request.message
-        client_request_id = (
-            request.client_request_id
-            if isinstance(getattr(request, "client_request_id", None), str)
-            else None
-        )
         if user_message is not None:
-            # Breaking cutover invariant: canonical turn key is always present.
+            # The authenticated request boundary, not client-supplied message
+            # metadata, owns room/sender identity and the canonical turn key.
+            user_message.room_id = request.room_id
+            user_message.user_id = request.user_id
             user_message.client_request_id = client_request_id
+            if idempotency_fingerprint is not None:
+                # Canonical sendMessage accepts only user-authored content and
+                # relationship fields. Everything else below is server-owned and
+                # deliberately excluded from the semantic fingerprint.
+                user_message.message_id = ""
+                user_message.message_created_at = utcnow()
+                user_message.message_type = "user"
+                user_message.agent_id = None
+                user_message.run_id = None
+                user_message.step_number = None
+                user_message.total_steps = None
+                user_message.task_updated_at = None
+                user_message.task_content = None
+                user_message.processing_claimed_at = None
+                user_message.quote_id = None
+                user_message.message_content.message_task = None
+                extend_info = (
+                    user_message.extend_info
+                    if isinstance(user_message.extend_info, dict)
+                    else {}
+                )
+                legacy_quote_keys = (
+                    ()
+                    if user_message.quote is not None
+                    else ("quoted_text", "quoted_sender_name")
+                )
+                user_message.extend_info = {
+                    key: value
+                    for key in legacy_quote_keys
+                    if isinstance((value := extend_info.get(key)), str)
+                } or None
 
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
@@ -2467,7 +2378,7 @@ class RoomServices:
         pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
         required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
-        orchestration_requested = self._is_orchestration_request(request)
+        orchestration_requested = use_supervisor
         orchestration_info = self._orchestration_request_info(request)
         candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
         if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
@@ -2624,22 +2535,42 @@ class RoomServices:
         if isinstance(qerr, RoomCenterUserMessageResponse):
             return qerr, None
 
-        if not await self._persist_user_message(
-            user_message,
-            room_agent_set=room.room_agent_set if room else {},
-        ):
-            if getattr(user_message, "quote_id", None):
-                quote_id = user_message.quote_id
-                try:
-                    await self._require_facade().delete_room_quote(quote_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to remove quoted snippet %s for room %s after "
-                        "message persistence failure",
-                        quote_id,
-                        request.room_id,
-                        exc_info=True,
-                    )
+        try:
+            persistence = await self._persist_user_message(
+                user_message,
+                room_agent_set=room.room_agent_set if room else {},
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
+            )
+        except IdempotencyConflictError:
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    room_id=request.room_id,
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=(
+                        "The client_request_id was already used for a different request"
+                    ),
+                    status_code=409,
+                ),
+                None,
+            )
+        except UnexpectedUserMessageDuplicateError:
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="User message uniqueness conflict",
+                    status_code=500,
+                ),
+                None,
+            )
+        except UserMessagePersistenceError:
+            await self._delete_uncommitted_quote(user_message)
             return (
                 RoomCenterUserMessageResponse(
                     message_id=None,
@@ -2647,6 +2578,23 @@ class RoomServices:
                     success=False,
                     error="Failed to add message",
                     status_code=500,
+                ),
+                None,
+            )
+
+        if not persistence.created:
+            # This request lost the unique-index race. Only its own random quote
+            # and pending attachment claims are compensated; winner state remains.
+            await self._delete_uncommitted_quote(user_message)
+            return (
+                RoomCenterUserMessageResponse(
+                    room_id=request.room_id,
+                    message_id=persistence.message_id,
+                    dispatch_root_message_id=None,
+                    message=None,
+                    success=True,
+                    error=None,
+                    status_code=200,
                 ),
                 None,
             )
@@ -2709,21 +2657,9 @@ class RoomServices:
         pre_resolved_scope = context.pre_resolved_scope
         pre_resolved_selected_scope = context.pre_resolved_selected_scope
         token = context.token
-        v2_orchestration_requested = use_supervisor and self._is_orchestration_request(
-            request
-        )
-        v2_orchestration_active = (
-            v2_orchestration_requested and settings.execution_orchestration_v2
-        )
-        pending_clarify_msg_id = (
-            room.extend_info.get("pending_clarification_message_id")
-            if isinstance(room.extend_info, dict)
-            else None
-        )
-        # Validated candidate scope is safe for the legacy supervisor; the
-        # feature flag gates only lightweight envelope/runtime activation.
+        orchestration_active = use_supervisor
         selected_scope_locked = (
-            v2_orchestration_requested and pre_resolved_selected_scope is not None
+            orchestration_active and pre_resolved_selected_scope is not None
         )
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
@@ -2859,26 +2795,24 @@ class RoomServices:
             user_message.message_id,
             client_request_id,
             use_supervisor,
-            v2_orchestration_active,
+            orchestration_active,
             target_group,
             len(selected_agent_set),
             auto_assign,
             dispatch_strategy.value,
         )
 
-        # Fetch room memory for legacy context assembly. Orchestration requests
-        # persist only the lightweight orchestration envelope here.
+        # Queue/debate preparation may need a small routing context. Supervisor
+        # orchestration assembles its own context from the durable run state.
         room_memory = None
-        if (
-            use_supervisor and (not v2_orchestration_active or pending_clarify_msg_id)
-        ) or (not use_supervisor and len(selected_agent_set) > 1):
+        if not use_supervisor and len(selected_agent_set) > 1:
             room_memory = await self._store.get_room_memory_by_room_id(request.room_id)
             if room_memory and room_memory.memory_content:
                 room_memory.memory_content = migrate_legacy_memory(
                     room_memory.memory_content
                 )
 
-        # Build conversation_context for non-supervisor paths (V1 decomposer, mentions, etc.)
+        # Build conversation context only for queue/debate message preparation.
         conversation_context = None
         if room_memory and room_memory.memory_content:
             conversation_context = build_minimal_context(
@@ -2895,44 +2829,16 @@ class RoomServices:
             qblock = f"\n\n[User quoted excerpt for routing]\n{ext_q.strip()[:2000]}"
             conversation_context = (conversation_context or "") + qblock
 
-        # Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
+        # Supervisor: lightweight durable preparation without an LLM call or
+        # pre-generated agent messages.
         if use_supervisor:
-            clarify_resume_prepared = False
-            if pending_clarify_msg_id:
-                clarify_resume_prepared = await self._prepare_clarify_resume(
-                    room=room,
-                    user_message=user_message,
-                    message_text=message_text,
-                    pending_clarify_msg_id=pending_clarify_msg_id,
-                    agents=agents,
-                    selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
-                    explicit_mentions=pre_resolved_mentions,
-                )
-
-            if clarify_resume_prepared:
-                parse_result = ParseResult(success=True)
-            elif v2_orchestration_active:
-                parse_result = await self._prepare_orchestration_envelope(
-                    request=request,
-                    user_message=user_message,
-                    selected_agent_set=selected_agent_set,
-                    explicit_mentions=pre_resolved_mentions,
-                    client_request_id=client_request_id,
-                )
-            else:
-                parse_result = await self._prepare_for_supervisor(
-                    room=room,
-                    user_message=user_message,
-                    message_text=message_text,
-                    agents=agents,
-                    selected_agent_set=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
-                    room_memory=room_memory,
-                    token=token,
-                    explicit_mentions=pre_resolved_mentions,
-                )
+            parse_result = await self._prepare_orchestration_envelope(
+                request=request,
+                user_message=user_message,
+                selected_agent_set=selected_agent_set,
+                explicit_mentions=pre_resolved_mentions,
+                client_request_id=client_request_id,
+            )
         else:
             parse_result = await self.parse_user_message(
                 request.room_id,
@@ -2983,7 +2889,7 @@ class RoomServices:
             user_message.message_id,
             client_request_id,
             use_supervisor,
-            v2_orchestration_active,
+            orchestration_active,
         )
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -3055,16 +2961,37 @@ class RoomServices:
             user_message=user_message,
         )
 
+    async def _delete_uncommitted_quote(
+        self,
+        user_message: RoomUserMessage,
+    ) -> None:
+        quote_id = getattr(user_message, "quote_id", None)
+        if not quote_id:
+            return
+        try:
+            await self._require_facade().delete_room_quote(quote_id)
+        except Exception:
+            logger.warning(
+                "Failed to remove uncommitted quoted snippet %s for room %s",
+                quote_id,
+                user_message.room_id,
+                exc_info=True,
+            )
+
     async def _persist_user_message(
         self,
         user_message: RoomUserMessage,
         *,
         room_agent_set: dict[str, str] | None = None,
-    ) -> bool:
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
+    ) -> UserMessageInsertResult:
         async with self._hold_room_write(user_message.room_id, "user-message"):
             return await self._persist_user_message_with_lease(
                 user_message,
                 room_agent_set=room_agent_set,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
             )
 
     @asynccontextmanager
@@ -3081,15 +3008,19 @@ class RoomServices:
         user_message: RoomUserMessage,
         *,
         room_agent_set: dict[str, str] | None = None,
-    ) -> bool:
-        """Persist user message to the database and publish its commit event."""
+        idempotency_fingerprint: str | None = None,
+        idempotency_fingerprint_version: int | None = None,
+    ) -> UserMessageInsertResult:
+        """Persist once; only the winning insert commits downstream side effects."""
         attachments = (
             user_message.message_content.attachments
             if user_message.message_content
             else None
         )
         file_ids = [attachment.file_id for attachment in attachments or []]
+        facade = self._require_facade()
         if file_ids:
+            facade.ensure_user_message_id(user_message)
             try:
                 await self.room_files.claim_references(
                     room_id=user_message.room_id,
@@ -3097,49 +3028,93 @@ class RoomServices:
                     message_id=user_message.message_id,
                     file_ids=file_ids,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "Could not claim room file references for message %s",
                     user_message.message_id,
                     exc_info=True,
                 )
-                return False
-
-        persisted = await self._require_facade().persist_user_message(user_message)
-        if not persisted and file_ids:
-            await self.room_files.release_references(
-                message_id=user_message.message_id,
-                file_ids=file_ids,
-            )
-        if persisted:
-            if file_ids:
                 try:
-                    await self.room_files.commit_references(
+                    await self.room_files.release_references(
                         message_id=user_message.message_id,
                         file_ids=file_ids,
                     )
                 except Exception:
                     logger.warning(
-                        "Room file references remain pending for recovery: %s",
+                        "Could not release partial room file claims for message %s",
                         user_message.message_id,
                         exc_info=True,
                     )
-            event_publisher = getattr(self, "_message_event_publisher", None)
-            if event_publisher is None:
-                raise RuntimeError(
-                    "RoomServices.bind_message_event_publisher() not called - startup incomplete"
-                )
-            # Wait for local handler completion before preflight can enqueue or
-            # process agent messages. Delivery still dead-letters handler failures.
-            await publish_message_committed(
-                event_publisher,
-                room_id=user_message.room_id,
-                message_id=user_message.message_id,
-                message_type="user",
-                room_agent_set=room_agent_set or {},
-                wait_for_local_handlers=True,
+                raise UserMessagePersistenceError(
+                    "Could not claim room file references"
+                ) from exc
+
+        try:
+            persistence = await facade.persist_user_message(
+                user_message,
+                idempotency_fingerprint=idempotency_fingerprint,
+                idempotency_fingerprint_version=idempotency_fingerprint_version,
             )
-        return persisted
+        except Exception:
+            if file_ids:
+                try:
+                    await self.room_files.release_references(
+                        message_id=user_message.message_id,
+                        file_ids=file_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not release pending room file references for %s; "
+                        "preserving persistence error and awaiting durable recovery",
+                        user_message.message_id,
+                        exc_info=True,
+                    )
+            raise
+
+        if not persistence.created:
+            if file_ids:
+                try:
+                    await self.room_files.release_references(
+                        message_id=user_message.message_id,
+                        file_ids=file_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not release losing room file references for %s; "
+                        "returning replay and awaiting durable recovery",
+                        user_message.message_id,
+                        exc_info=True,
+                    )
+            return persistence
+
+        if file_ids:
+            try:
+                await self.room_files.commit_references(
+                    message_id=user_message.message_id,
+                    file_ids=file_ids,
+                )
+            except Exception:
+                logger.warning(
+                    "Room file references remain pending for recovery: %s",
+                    user_message.message_id,
+                    exc_info=True,
+                )
+        event_publisher = getattr(self, "_message_event_publisher", None)
+        if event_publisher is None:
+            raise RuntimeError(
+                "RoomServices.bind_message_event_publisher() not called - startup incomplete"
+            )
+        # Wait for local handler completion before preflight can enqueue or
+        # process agent messages. Delivery still dead-letters handler failures.
+        await publish_message_committed(
+            event_publisher,
+            room_id=user_message.room_id,
+            message_id=user_message.message_id,
+            message_type="user",
+            room_agent_set=room_agent_set or {},
+            wait_for_local_handlers=True,
+        )
+        return persistence
 
     async def _handle_mentions_flow(
         self,
@@ -3623,7 +3598,7 @@ class RoomServices:
         """
         # Skip for direct chat — only 1 agent is working, awareness is misleading.
         # task_description=None is set precisely for direct-chat scenarios in both
-        # legacy and Supervisor paths.
+        # queue and Supervisor paths.
         if task_description is None:
             return None
 
@@ -3699,8 +3674,11 @@ class RoomServices:
 
             return "\n".join(parts)
 
-        except Exception as e:
-            logger.warning(f"Failed to build room awareness: {e}")
+        except Exception as exc:
+            logger.warning(
+                "room_awareness_build_failed",
+                extra={"error_type": type(exc).__name__},
+            )
             return None
 
     async def process_agent_message(
@@ -3786,6 +3764,27 @@ class RoomServices:
         agent = await self._store.get_agent_by_agent_id(agent_id)
         agent_name = agent.agent_card.name if agent else None
 
+        resolved_resource_payloads = request.resolved_resource_payloads
+        if resolved_resource_payloads is None:
+            resolved_resource_payloads = request.dispatch_resource_payloads
+        if resolved_resource_payloads is None:
+            resolved_payload_refs = (
+                message.extend_info.get("resolved_dispatch_payload_refs")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+            resolved_resource_payloads = (
+                resolved_payload_refs.get("resource_payloads")
+                if isinstance(resolved_payload_refs, dict)
+                else None
+            )
+        if resolved_resource_payloads is None:
+            resolved_resource_payloads = (
+                message.extend_info.get("resolved_dispatch_resource_payloads")
+                if isinstance(message.extend_info, dict)
+                else None
+            )
+
         # Turn context (QUOTE_REPLY): user prompt + quote snapshot + separate agent task
         turn_ctx = None
         if orchestration_user_message_id:
@@ -3811,8 +3810,37 @@ class RoomServices:
                     )
 
         original_text = agent_message.parts[0].root.text or ""
-        current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
-        agent_task_for_cas = original_text if turn_ctx else None
+        if dispatch_task_text:
+            current_task_for_cas = dispatch_task_text
+            agent_task_for_cas = None
+        else:
+            current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
+            agent_task_for_cas = original_text if turn_ctx else None
+
+        embedded_text_resource_indexes: set[int] = set()
+        selected_text_sections: list[str] = []
+        if dispatch_task_text and isinstance(resolved_resource_payloads, list):
+            for index, payload in enumerate(resolved_resource_payloads):
+                if not isinstance(payload, dict):
+                    continue
+                text = payload.get("text")
+                mime_type = str(payload.get("mime_type") or "").split(";", 1)[0]
+                if (
+                    not isinstance(text, str)
+                    or not text.strip()
+                    or mime_type == "application/json"
+                ):
+                    continue
+                ref_id = payload.get("ref_id")
+                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
+                selected_text_sections.append(f"Resource {label}:\n{text.strip()}")
+                embedded_text_resource_indexes.add(index)
+        if selected_text_sections:
+            current_task_for_cas = (
+                f"{current_task_for_cas}\n\n"
+                "Selected source material follows.\n"
+                + "\n\n".join(selected_text_sections)
+            )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
         )
@@ -3931,34 +3959,17 @@ class RoomServices:
                         )
 
                 agent_message.parts[0].root.text = context
-        except Exception as e:
+        except Exception as exc:
             # Log but continue with original message if context building fails
-            logger.warning(f"Failed to build context for agent message: {e}")
+            logger.warning(
+                "agent_message_context_build_failed",
+                extra={"error_type": type(exc).__name__},
+            )
 
-        resolved_resource_payloads = request.resolved_resource_payloads
-        if resolved_resource_payloads is None:
-            resolved_resource_payloads = request.dispatch_resource_payloads
-        if resolved_resource_payloads is None:
-            resolved_payload_refs = (
-                message.extend_info.get("resolved_dispatch_payload_refs")
-                if isinstance(message.extend_info, dict)
-                else None
-            )
-            resolved_resource_payloads = (
-                resolved_payload_refs.get("resource_payloads")
-                if isinstance(resolved_payload_refs, dict)
-                else None
-            )
-        if resolved_resource_payloads is None:
-            resolved_resource_payloads = (
-                message.extend_info.get("resolved_dispatch_resource_payloads")
-                if isinstance(message.extend_info, dict)
-                else None
-            )
         if isinstance(resolved_resource_payloads, list):
             target_agent_card = getattr(agent, "agent_card", None)
             accepted_modes = agent_input_modes(target_agent_card)
-            for payload in resolved_resource_payloads:
+            for index, payload in enumerate(resolved_resource_payloads):
                 if not isinstance(payload, dict):
                     continue
                 text = payload.get("text")
@@ -4023,6 +4034,8 @@ class RoomServices:
                     continue
 
                 if not isinstance(text, str) or not text.strip():
+                    continue
+                if index in embedded_text_resource_indexes:
                     continue
                 if mime_type == "application/json" and mime_type_is_accepted(
                     mime_type, accepted_modes
@@ -4092,7 +4105,7 @@ class RoomServices:
             if isinstance(message.extend_info, dict)
             else None
         )
-        if user_attachments and forwarding_policy == "explicit_refs_only":
+        if forwarding_policy == "explicit_refs_only":
             raw_attachment_refs = request.explicit_attachment_refs
             if (
                 raw_attachment_refs is None
@@ -4117,11 +4130,71 @@ class RoomServices:
                     continue
                 if isinstance(raw_ref, dict) and raw_ref.get("ref_id"):
                     selected_ref_set.add(str(raw_ref["ref_id"]))
+
+            def is_selected_attachment(attachment: UserAttachment) -> bool:
+                return (
+                    attachment.file_id in selected_ref_set
+                    or f"file:{attachment.file_id}" in selected_ref_set
+                )
+
+            selected_file_ids = {
+                attachment.file_id
+                for attachment in user_attachments
+                if is_selected_attachment(attachment)
+            }
+            unresolved_ref_ids = {
+                ref.removeprefix("file:")
+                for ref in selected_ref_set
+                if ref.removeprefix("file:") not in selected_file_ids
+            }
+            get_room_user_messages = getattr(
+                self._store,
+                "get_room_user_messages_by_room_id",
+                None,
+            )
+            if unresolved_ref_ids and get_room_user_messages is not None:
+                try:
+                    room_user_messages = await get_room_user_messages(message.room_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to load prior room attachments for explicit dispatch",
+                        extra={
+                            "room_id": message.room_id,
+                            "agent_message_id": message.message_id,
+                        },
+                        exc_info=True,
+                    )
+                    room_user_messages = []
+                for room_user_message in reversed(room_user_messages):
+                    message_content = getattr(
+                        room_user_message,
+                        "message_content",
+                        None,
+                    )
+                    prior_attachments = getattr(
+                        message_content,
+                        "attachments",
+                        None,
+                    )
+                    for prior_attachment in prior_attachments or []:
+                        try:
+                            attachment = (
+                                prior_attachment
+                                if isinstance(prior_attachment, UserAttachment)
+                                else UserAttachment.model_validate(prior_attachment)
+                            )
+                        except Exception:
+                            continue
+                        if attachment.file_id not in unresolved_ref_ids:
+                            continue
+                        user_attachments.append(attachment)
+                        unresolved_ref_ids.remove(attachment.file_id)
+                    if not unresolved_ref_ids:
+                        break
             user_attachments = [
                 attachment
                 for attachment in user_attachments
-                if attachment.file_id in selected_ref_set
-                or f"file:{attachment.file_id}" in selected_ref_set
+                if is_selected_attachment(attachment)
             ]
         if user_attachments:
             agent_card_obj = getattr(agent, "agent_card", None)
@@ -4625,13 +4698,40 @@ class RoomServices:
         if user_message is None:
             return False
         if not isinstance(user_message.extend_info, dict):
-            user_message.extend_info = {}
+            return False
+        if not (
+            user_message.extend_info.get("orchestration") is True
+            or user_message.extend_info.get("orchestration_run_id")
+        ):
+            return True
+        terminal = status in {
+            terminal_status.value for terminal_status in TERMINAL_ORCHESTRATION_STATUSES
+        }
+        already_projected = user_message.extend_info.get(
+            "orchestration_status"
+        ) == status and (not terminal or user_message.processing_claimed_at is None)
+        if already_projected:
+            return True
+
         user_message.extend_info["orchestration_status"] = status
+        if terminal:
+            user_message.processing_claimed_at = None
+        updated = await self._store.update_room_user_message_by_message_id(
+            message_id,
+            user_message,
+        )
+        if updated:
+            return True
+
+        # Mongo reports a no-op write as unmodified. A concurrent or replayed
+        # projection is successful when the persisted envelope is already at
+        # the requested state.
+        persisted = await self._store.get_room_user_message_by_message_id(message_id)
         return bool(
-            await self._store.update_room_user_message_by_message_id(
-                message_id,
-                user_message,
-            )
+            persisted is not None
+            and isinstance(persisted.extend_info, dict)
+            and persisted.extend_info.get("orchestration_status") == status
+            and (not terminal or persisted.processing_claimed_at is None)
         )
 
     async def handle_a2a_response_for_room(

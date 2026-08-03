@@ -231,7 +231,7 @@ def test_candidate_scope_prefers_run_state_snapshot_over_legacy_argument():
 
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-2"], candidate_scope=snapshot),
-        candidate_scope=[_candidate("agent-1", "Legacy Agent")],
+        candidate_scope=[_candidate("agent-1", "Candidate Agent")],
         message_text="Use the saved scope",
     )
 
@@ -294,7 +294,7 @@ def test_candidate_scope_snapshot_falls_back_to_agent_ids_when_agents_empty():
 
     context = build_orchestration_planner_context(
         run_state=_run_state(candidate_agent_ids=["agent-1"], candidate_scope=snapshot),
-        candidate_scope=[_candidate("agent-2", "Legacy Agent")],
+        candidate_scope=[_candidate("agent-2", "Candidate Agent")],
         message_text="Use the selected agent",
     )
 
@@ -341,7 +341,7 @@ def test_candidate_scope_partial_snapshot_preserves_all_agent_ids_in_order():
 
 def test_context_builder_prefers_run_state_candidate_scope():
     state = _run_state(
-        candidate_agent_ids=["legacy-agent"],
+        candidate_agent_ids=["candidate-agent"],
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1",
             source="explicit_selection",
@@ -353,7 +353,7 @@ def test_context_builder_prefers_run_state_candidate_scope():
 
     context = build_orchestration_planner_context(
         run_state=state,
-        candidate_scope=["legacy-agent"],
+        candidate_scope=["candidate-agent"],
         message_text="Need a quote",
     )
 
@@ -613,7 +613,59 @@ def test_prompt_payload_excludes_shadow_control_state_from_planner():
     assert "recovery_directives" not in state_payload
     assert state_payload["agent_outputs"] == []
     assert state_payload["artifacts"] == []
+    assert payload["planner_feedback"] == []
     assert payload["available_resources"] == []
+
+
+def test_prompt_payload_exposes_sanitized_planner_validation_feedback():
+    state = _run_state(
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="private-failure-id",
+                fingerprint="private-fingerprint",
+                source="planner_validator",
+                error_code="parallel_dependency_unspecified",
+                error_message=(
+                    "multi-target delegate requires one explicit independent "
+                    "parallel_group"
+                ),
+                recoverable=True,
+                retry_count=1,
+                max_retries=2,
+                status="open",
+                recovery_hints=["replan_with_valid_schema"],
+            ),
+            OpenFailureRecord(
+                failure_id="runtime-failure",
+                fingerprint="agent-1:timeout",
+                source="a2a_adapter",
+                error_code="timeout",
+                error_message="Agent timed out",
+                recoverable=True,
+                status="open",
+            ),
+        ]
+    )
+
+    payload = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Continue the workflow",
+    ).prompt_payload()
+
+    assert payload["planner_feedback"] == [
+        {
+            "error_code": "parallel_dependency_unspecified",
+            "error_message": (
+                "multi-target delegate requires one explicit independent parallel_group"
+            ),
+            "retry_count": 1,
+            "max_retries": 2,
+            "recovery_hints": ["replan_with_valid_schema"],
+        }
+    ]
+    assert "private-failure-id" not in str(payload["planner_feedback"])
+    assert "private-fingerprint" not in str(payload["planner_feedback"])
+    assert "timeout" not in str(payload["planner_feedback"])
 
 
 def test_candidate_scope_mapping_falls_back_to_agent_ids_when_agents_empty():
@@ -1012,7 +1064,7 @@ async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_keeps_v2_validation_outside_prompt_text():
+async def test_planner_adapter_keeps_orchestration_validation_outside_prompt_text():
     seen_prompt_values: list[str] = []
 
     async def raw_action(context):

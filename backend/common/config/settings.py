@@ -45,23 +45,11 @@ class Settings(BaseSettings):
     llm_gateway_default_supervisor_model: str = "supervisor_model"
 
     log_level: str = "INFO"
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    log_path: str = "logs/app.log"
-    log_backup_count: int = 5
-    log_max_bytes: int = 10485760  # 10 MB
+    log_format: str = "auto"
 
     # Feature Flags (runtime-toggleable behavior gates)
-    feature_run_dual_write: bool = True
     feature_run_event_sse: bool = False
     feature_run_watchdog: bool = True
-    execution_orchestration_v2: bool = Field(
-        default=False,
-        validation_alias=AliasChoices(
-            "execution_orchestration_v2",
-            "EXECUTION_ORCHESTRATION_V2",
-            "FEATURE_ORCHESTRATION_V2",
-        ),
-    )
     orchestration_outcome_guardrails: bool = True
 
     # Execution Tuning
@@ -241,6 +229,24 @@ class Settings(BaseSettings):
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
 
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def validate_log_level(cls, value):
+        normalized = str(value or "INFO").strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(
+                "LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL"
+            )
+        return normalized
+
+    @field_validator("log_format", mode="before")
+    @classmethod
+    def validate_log_format(cls, value):
+        normalized = str(value or "auto").strip().lower()
+        if normalized not in {"auto", "json", "logfmt"}:
+            raise ValueError("LOG_FORMAT must be auto, json, or logfmt")
+        return normalized
+
     @field_validator("terminal_processing_statuses", mode="before")
     @classmethod
     def parse_terminal_processing_statuses(cls, v):
@@ -268,15 +274,6 @@ class Settings(BaseSettings):
             raise ValueError("WEBHOOK_SIGNING_KEY must be at least 32 bytes")
         return key
 
-    @field_validator("feature_run_dual_write", mode="before")
-    @classmethod
-    def normalize_feature_run_dual_write(cls, value):
-        if value is None or str(value).strip() == "":
-            return True
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() not in {"0", "false", "no", "off"}
-
     @field_validator("feature_run_event_sse", mode="before")
     @classmethod
     def normalize_feature_run_event_sse(cls, value):
@@ -294,15 +291,6 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() not in {"0", "false", "off"}
-
-    @field_validator("execution_orchestration_v2", mode="before")
-    @classmethod
-    def normalize_execution_orchestration_v2(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     @field_validator("orchestration_outcome_guardrails", mode="before")
     @classmethod

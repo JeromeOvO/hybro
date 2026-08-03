@@ -1683,7 +1683,11 @@ class TestInteractiveEvent:
             task_id="t-1",
             context_id="c-1",
         )
-        h._rmc.resume_queue_from_continuation.assert_not_awaited()
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001",
+            task_result_text="",
+            failed=False,
+        )
 
     @pytest.mark.asyncio
     async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(

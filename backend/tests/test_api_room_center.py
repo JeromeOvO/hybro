@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
-from api.room_center import (
+from api_gateway.routes.room_routes import (
     create_new_room,
     inquiry_active_runs,
     inquiry_room_messages,
@@ -102,6 +102,7 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
         user_id="user-1",
         message_content=MessageContent(message_text="Run this"),
         extend_info={"orchestration_run_id": "run-1"},
+        processing_claimed_at=datetime.now(UTC),
     )
     runtime._store = SimpleNamespace(
         get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
@@ -118,10 +119,98 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
         "orchestration_run_id": "run-1",
         "orchestration_status": "canceled",
     }
+    assert user_message.processing_claimed_at is None
     runtime._store.update_room_user_message_by_message_id.assert_awaited_once_with(
         "user-message-1",
         user_message,
     )
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_idempotent_terminal_replay():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "completed",
+        },
+        processing_claimed_at=None,
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_projection_accepts_concurrent_target_winner():
+    runtime = RoomServices()
+    original = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run this"),
+        extend_info={
+            "orchestration_run_id": "run-1",
+            "orchestration_status": "processing",
+        },
+        processing_claimed_at=datetime.now(UTC),
+    )
+    persisted = original.model_copy(deep=True)
+    persisted.extend_info["orchestration_status"] = "completed"
+    persisted.processing_claimed_at = None
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(
+            side_effect=[original, persisted]
+        ),
+        update_room_user_message_by_message_id=AsyncMock(return_value=False),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "completed",
+    )
+
+    assert updated is True
+    assert runtime._store.get_room_user_message_by_message_id.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestration_status_update_ignores_non_orchestration_message():
+    runtime = RoomServices()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="user-message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Queue this"),
+        extend_info={},
+        processing_claimed_at=datetime.now(UTC),
+    )
+    runtime._store = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+        update_room_user_message_by_message_id=AsyncMock(return_value=True),
+    )
+
+    updated = await runtime.update_user_message_orchestration_status(
+        "user-message-1",
+        "canceled",
+    )
+
+    assert updated is True
+    assert user_message.processing_claimed_at is not None
+    runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -356,6 +445,25 @@ class TestRoomCenterAdapter:
 
         assert await center.create_new_room(MagicMock()) == "created"
         service.create_new_room.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_delegates_orchestration_status_projection_to_bound_runtime(self):
+        service = MagicMock()
+        service._bound = True
+        service.update_user_message_orchestration_status = AsyncMock(return_value=True)
+        center = RoomCenter(room_services=service)
+
+        assert (
+            await center.update_user_message_orchestration_status(
+                "user-message-1",
+                "canceled",
+            )
+            is True
+        )
+        service.update_user_message_orchestration_status.assert_awaited_once_with(
+            "user-message-1",
+            "canceled",
+        )
 
 
 class TestVerifyRoomOwnership:
@@ -1198,13 +1306,12 @@ class TestInquiryRoomMessages:
         assert response.success is True
 
     @pytest.mark.asyncio
-    async def test_returns_public_user_message_payload_without_private_extend_info(
+    async def test_returns_public_user_history_without_private_orchestration_state(
         self, mock_user, sample_room, patch_room_center_deps
     ):
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
-
-        private_sentinel = "PRIVATE_SENTINEL_user_extend_info_history_boundary"
+        private_sentinel = "PRIVATE_SENTINEL_user_history_boundary"
         public_extend_info = {
             "quoted_text": "Public quoted excerpt",
             "quoted_sender_name": "Agent One",
@@ -1225,10 +1332,6 @@ class TestInquiryRoomMessages:
                 "orchestration_run_id": private_sentinel,
                 "candidate_scope_snapshot_id": private_sentinel,
                 "candidate_agent_ids": [private_sentinel],
-                "supervisor_trajectory": {
-                    "status": "running",
-                    "entries": [{"prompt": private_sentinel}],
-                },
                 "agent_registry": [{"agent_id": private_sentinel}],
                 "conversation_context": private_sentinel,
                 "room_config": {"explicit_mentions": [private_sentinel]},
@@ -1601,6 +1704,191 @@ class TestSendMessage:
         assert execution_request.target_group == "room_team"
         assert execution_request.message_target_mode == "room_default"
         assert execution_request.mentioned_agent_ids is None
+
+    @pytest.mark.asyncio
+    async def test_replay_returns_same_message_id_without_second_background_task(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        payload = {
+            "room_id": sample_room.room_id,
+            "message": sample_user_message.model_dump(),
+            "message_target_mode": "room_default",
+            "client_request_id": "request-replay-1",
+        }
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value=payload)
+        background_tasks = MagicMock()
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.side_effect = [
+            ExecutionAck(
+                room_id=sample_room.room_id,
+                success=True,
+                message_id="stable-message-id",
+                dispatch_root_message_id="stable-message-id",
+                should_start_orchestration=True,
+            ),
+            ExecutionAck(
+                room_id=sample_room.room_id,
+                success=True,
+                message_id="stable-message-id",
+                dispatch_root_message_id=None,
+                should_start_orchestration=False,
+            ),
+        ]
+
+        first = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+        replay = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert first.message_id == replay.message_id == "stable-message-id"
+        assert replay.success is True
+        background_tasks.add_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_message_trims_client_request_id_before_execution(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "  request-trimmed-1  ",
+            }
+        )
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            success=True,
+            message_id="message-1",
+            should_start_orchestration=False,
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is True
+        execution_request = patch_room_center_deps[
+            "execution_engine"
+        ].execute.await_args.args[0]
+        assert execution_request.client_request_id == "request-trimmed-1"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_request_id", [None, "", "   "])
+    async def test_send_message_rejects_missing_or_blank_client_request_id(
+        self,
+        client_request_id,
+        mock_user,
+        sample_room,
+        sample_user_message,
+        patch_room_center_deps,
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": client_request_id,
+            }
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 400
+        assert response.error == "client_request_id is required"
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_rejects_overlong_client_request_id(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "x" * 129,
+            }
+        )
+
+        response = await send_message(
+            mock_request,
+            MagicMock(),
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 400
+        assert "maximum length of 128" in (response.error or "")
+        patch_room_center_deps["execution_engine"].execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_message_returns_body_level_conflict_without_background_task(
+        self, mock_user, sample_room, sample_user_message, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "room_id": sample_room.room_id,
+                "message": sample_user_message.model_dump(),
+                "message_target_mode": "room_default",
+                "client_request_id": "request-conflict-1",
+            }
+        )
+        background_tasks = MagicMock()
+        patch_room_center_deps[
+            "db_service"
+        ].get_room_by_room_id.return_value = sample_room
+        patch_room_center_deps["execution_engine"].execute.return_value = ExecutionAck(
+            room_id=sample_room.room_id,
+            success=False,
+            error="The client_request_id was already used for a different request",
+            status_code=409,
+            should_start_orchestration=False,
+        )
+
+        response = await send_message(
+            mock_request,
+            background_tasks,
+            mock_user,
+            store=patch_room_center_deps["db_service"],
+            engine=patch_room_center_deps["execution_engine"],
+        )
+
+        assert response.success is False
+        assert response.status_code == 409
+        background_tasks.add_task.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_send_message_rejects_missing_message_target_mode_without_mentions(
@@ -2145,13 +2433,14 @@ class TestSuggestAgents:
     """Tests for suggest_agents endpoint."""
 
     @pytest.mark.asyncio
-    async def test_returns_suggestions_for_valid_message(self):
+    async def test_returns_suggestions_for_valid_message(self, mock_user):
         """Should return agent suggestions for valid message."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
             return_value={
                 "message_text": "Help me write some code",
                 "top_k": 3,
+                "user_id": "untrusted-body-user",
             }
         )
 
@@ -2177,9 +2466,15 @@ class TestSuggestAgents:
 
         response = await suggest_agents(
             mock_request,
+            user=mock_user,
             selection_service=mock_selection_service,
         )
 
+        mock_selection_service.suggest_agents.assert_awaited_once_with(
+            message_text="Help me write some code",
+            top_k=3,
+            user_id=mock_user.user_id,
+        )
         assert response["success"] is True
         assert response["suggested_agents"] == [
             {
@@ -2197,7 +2492,7 @@ class TestSuggestAgents:
         ]
 
     @pytest.mark.asyncio
-    async def test_returns_error_for_empty_message(self):
+    async def test_returns_error_for_empty_message(self, mock_user):
         """Should return error when message_text is empty."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -2207,13 +2502,19 @@ class TestSuggestAgents:
             }
         )
 
-        response = await suggest_agents(mock_request, selection_service=MagicMock())
+        mock_selection_service = MagicMock()
+        response = await suggest_agents(
+            mock_request,
+            user=mock_user,
+            selection_service=mock_selection_service,
+        )
 
+        mock_selection_service.suggest_agents.assert_not_called()
         assert response["success"] is False
         assert response["status_code"] == 400
 
     @pytest.mark.asyncio
-    async def test_handles_service_error(self):
+    async def test_handles_service_error(self, mock_user):
         """Should handle errors from agent selection service."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -2230,8 +2531,14 @@ class TestSuggestAgents:
 
         response = await suggest_agents(
             mock_request,
+            user=mock_user,
             selection_service=mock_selection_service,
         )
 
+        mock_selection_service.suggest_agents.assert_awaited_once_with(
+            message_text="Test message",
+            top_k=3,
+            user_id=mock_user.user_id,
+        )
         assert response["success"] is False
         assert response["status_code"] == 500

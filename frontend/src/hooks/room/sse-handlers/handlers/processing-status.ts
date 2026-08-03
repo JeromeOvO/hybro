@@ -138,6 +138,13 @@ export function handleProcessingStatus(
     || status === PROCESSING_STATUS.PROCESSING
     || status === PROCESSING_STATUS.AWAITING_INPUT
   ) {
+    // A room-level terminal event can arrive before DB hydration has produced
+    // the user entity. In that race there is no entity terminal stamp yet, so
+    // the lifecycle itself is the authoritative absorbing-state guard.
+    if (lifecycle.isProcessingResolved()) {
+      return
+    }
+
     const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
     if (
       pendingAckClientRequestId
@@ -148,12 +155,7 @@ export function handleProcessingStatus(
     }
 
     const lifecycleMessageId = lifecycle.getMessageId()
-    const realMessageId = sseMessage.data.message_id as string | undefined
     const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
-    const existingUserForEventId = findProcessingStatusUserEntity(roomId, {
-      messageId: realMessageId,
-      relatedMessageId,
-    })
 
     const resolvedClientMessageId = correlation.clientReqId
       ? getResolvedMessageId(correlation.clientReqId)
@@ -170,6 +172,12 @@ export function handleProcessingStatus(
       preferClientRequestId: true,
     })
     if (processingUserEntity?.turnTerminalStatus) {
+      if (
+        processingUserEntity.turnTerminalStatus === 'failed'
+        || processingUserEntity.turnTerminalStatus === 'canceled'
+      ) {
+        return
+      }
       const stageMessage = processingDetailsToLogMessage(sseMessage.data.details)?.toLowerCase() ?? ''
       const isOrchestrationStage =
         stageMessage.includes('synthesiz')

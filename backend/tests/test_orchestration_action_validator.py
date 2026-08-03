@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from jsonschema import ValidationError, validate
 
@@ -76,6 +79,7 @@ def _validate(
     steps_used: int = 0,
     step_budget: int = 8,
     has_agent_output: bool = False,
+    resource_fingerprints: dict[str, str] | None = None,
 ):
     return PlannerActionValidator.validate(
         action,
@@ -83,6 +87,7 @@ def _validate(
         steps_used=steps_used,
         step_budget=step_budget,
         has_agent_output=has_agent_output,
+        resource_fingerprints=resource_fingerprints,
     )
 
 
@@ -280,6 +285,52 @@ def test_delegate_rejects_empty_target_task():
 
     with pytest.raises(PlannerActionValidationError, match="task"):
         _validate(action)
+
+
+def test_delegate_rejects_resource_id_in_task_without_selecting_its_ref():
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            _target(
+                task=("Create a structured submission from file:application-pdf-1.")
+            )
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        _validate(
+            action,
+            resource_fingerprints={"file:application-pdf-1": "sha256:abc"},
+        )
+
+    assert exc_info.value.code == "delegate_resource_ref_omitted"
+
+
+def test_delegate_allows_resource_id_in_task_when_selected_explicitly():
+    action = _action(
+        PlannerActionType.DELEGATE,
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task=("Create a structured submission from file:application-pdf-1."),
+                attachment_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.ATTACHMENT,
+                        ref_id="file:application-pdf-1",
+                    )
+                ],
+                required_resource_refs=["file:application-pdf-1"],
+            )
+        ],
+    )
+
+    assert (
+        _validate(
+            action,
+            resource_fingerprints={"file:application-pdf-1": "sha256:abc"},
+        )
+        is action
+    )
 
 
 def test_ask_user_rejects_repeating_answered_supervisor_questions():
@@ -867,7 +918,7 @@ def test_planner_schema_accepts_business_level_delegate_without_control_fields()
     )
 
 
-def test_planner_schema_accepts_business_level_question_without_blocker_keys():
+def test_planner_schema_accepts_business_level_question_with_empty_blocker_keys():
     validate(
         {
             "action": "ask_user",
@@ -879,6 +930,7 @@ def test_planner_schema_accepts_business_level_question_without_blocker_keys():
                     "prompt_type": "text",
                     "choices": None,
                     "reason": "initial_clarification",
+                    "blocker_keys": [],
                 }
             ],
             "synthesis_instruction": None,
@@ -1050,8 +1102,8 @@ def test_completion_validator_ignores_unknown_disposition_revision_metadata():
     assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
-def test_legacy_planner_parser_defaults_absent_outcome_policy_fields():
-    action = RoomSupervisorService._parse_legacy_action_as_planner_action(
+def test_provider_planner_parser_defaults_absent_outcome_policy_fields():
+    action = RoomSupervisorService._parse_provider_action_as_planner_action(
         {
             "action": "delegate",
             "reasoning": "Use the selected specialist.",
@@ -1276,6 +1328,137 @@ def test_planner_prompt_requires_domain_supported_agent_suitability():
     assert "accepting text" in source
     assert "unrelated " in source
     assert '"domain.' in source
+
+
+@pytest.mark.asyncio
+async def test_planner_platform_answer_prompt_forbids_agent_specific_routing_copy():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "platform_answer",
+                "reasoning": "Answer the greeting directly.",
+                "targets": [],
+                "questions": [],
+                "synthesis_instruction": "Reply naturally.",
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="hi",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ]
+    assert "do not mention routing decisions" in system_prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_planner_prompt_keeps_hybro_primary_for_readable_attachments():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "platform_answer",
+                "reasoning": "The platform can answer from the PDF projection.",
+                "targets": [],
+                "questions": [],
+                "synthesis_instruction": "Read and summarize the PDF.",
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Can you read this PDF?",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ].lower()
+    assert "you are hybro, the primary user-facing assistant" in system_prompt
+    assert "speak in the first person as hybro" in system_prompt
+    assert "never refer to yourself as 'the supervisor'" in system_prompt
+    assert "read, explain, or summarize an attachment" in system_prompt
+    assert "should offer exactly one concrete opt-in agent action" in system_prompt
+    assert "treat that as approval" in system_prompt
+    assert "you own the user's goal from beginning to end" in system_prompt
+    assert "an explicit request is already authorization" in system_prompt
+    assert "do not ask the user to confirm the same action again" in system_prompt
+    assert "takes precedence over the attachment direct-answer rule" in system_prompt
+    assert "delegate the first agent whose output is required" in system_prompt
+    assert "can completely satisfy every current requested outcome" in system_prompt
+    assert "do not name connected agents" in system_prompt.lower()
+    assert "do not suggest domain-specific next steps" in system_prompt.lower()
+    assert "limited capabilities" not in system_prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_planner_prompt_keeps_agent_dispatch_payloads_concise():
+    supervisor_service = SimpleNamespace(
+        call_planner_json=AsyncMock(
+            return_value={
+                "action": "delegate",
+                "reasoning": "A specialist workflow materially advances the goal.",
+                "targets": [
+                    {
+                        "agent_id": "agent-1",
+                        "task": "Produce the requested structured artifact.",
+                        "parallel_group": None,
+                        "depends_on": [],
+                        "required_resource_refs": [],
+                    }
+                ],
+                "questions": [],
+            }
+        ),
+        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    )
+    context = build_orchestration_planner_context(
+        run_state=_state_for_validation(),
+        candidate_scope=["agent-1"],
+        message_text="Create the specialist artifact.",
+    )
+    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
+
+    await adapter.plan(context)
+
+    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
+        "system_prompt"
+    ].lower()
+    assert "private execution payloads" in system_prompt
+    assert "keep each target.task concise and operational" in system_prompt
+    assert "do not include planner reasoning" in system_prompt
+    assert "do not duplicate expected_outputs in task" in system_prompt
+    assert "never mention a resource id in task unless that exact id is selected" in (
+        system_prompt
+    )
+    assert "select the smallest sufficient resource set" in system_prompt
+    assert "prefer a structured artifact over copied prose" in system_prompt
+    assert "inspect planner_feedback before choosing the next action" in system_prompt
+    assert "do not repeat an action rejected by the validator" in system_prompt
+    assert "prefer one target per delegate action" in system_prompt
+    assert "delegate sequentially across planner steps" in system_prompt
+    assert (
+        "limit each target to that agent's own advertised capability" in system_prompt
+    )
+    assert "treat advertised capabilities as a closed-world execution boundary" in (
+        system_prompt
+    )
+    assert "never infer actions from an agent's name" in system_prompt
+    assert (
+        "do not assign downstream work that belongs to another agent" in system_prompt
+    )
+    assert "native attachment intake or document-processing capability" in system_prompt
 
 
 def test_complete_allowed_after_agent_output_before_budget_exhaustion():
@@ -1907,7 +2090,7 @@ async def test_planner_adapter_rejects_completion_with_snapshot_only():
 
 
 @pytest.mark.parametrize(
-    ("legacy_action", "planner_action"),
+    ("provider_action", "planner_action"),
     [
         ("clarify", PlannerActionType.ASK_USER),
         ("done", PlannerActionType.COMPLETE),
@@ -1915,10 +2098,12 @@ async def test_planner_adapter_rejects_completion_with_snapshot_only():
         ("synthesize", PlannerActionType.COMPLETE),
     ],
 )
-def test_v2_adapter_maps_legacy_action_names(legacy_action, planner_action):
-    action = RoomSupervisorService._parse_legacy_action_as_planner_action(
+def test_orchestration_adapter_maps_provider_action_aliases(
+    provider_action, planner_action
+):
+    action = RoomSupervisorService._parse_provider_action_as_planner_action(
         {
-            "action": legacy_action,
+            "action": provider_action,
             "reasoning": "test",
             "targets": [
                 {
@@ -1944,9 +2129,9 @@ def test_v2_adapter_maps_legacy_action_names(legacy_action, planner_action):
     assert action.targets[0].task == "do work"
 
 
-def test_v2_adapter_unknown_action_raises():
+def test_orchestration_adapter_unknown_action_raises():
     with pytest.raises(ValueError, match="unknown planner action"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "mystery",
                 "reasoning": "test",
@@ -1954,18 +2139,18 @@ def test_v2_adapter_unknown_action_raises():
         )
 
 
-def test_v2_adapter_missing_action_raises():
+def test_orchestration_adapter_missing_action_raises():
     with pytest.raises(ValueError, match="action"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "reasoning": "test",
             }
         )
 
 
-def test_v2_adapter_rejects_non_list_targets_when_present():
+def test_orchestration_adapter_rejects_non_list_targets_when_present():
     with pytest.raises(ValueError, match="targets"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -1974,9 +2159,9 @@ def test_v2_adapter_rejects_non_list_targets_when_present():
         )
 
 
-def test_v2_adapter_rejects_non_object_target():
+def test_orchestration_adapter_rejects_non_object_target():
     with pytest.raises(ValueError, match="target"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -1985,9 +2170,9 @@ def test_v2_adapter_rejects_non_object_target():
         )
 
 
-def test_v2_adapter_rejects_delegate_target_missing_agent_id():
+def test_orchestration_adapter_rejects_delegate_target_missing_agent_id():
     with pytest.raises(ValueError, match="agent_id"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",
@@ -2002,7 +2187,9 @@ def test_v2_adapter_rejects_delegate_target_missing_agent_id():
 
 
 @pytest.mark.parametrize("task_value", [None, "", "  "])
-def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
+def test_orchestration_adapter_rejects_delegate_target_missing_or_empty_task(
+    task_value,
+):
     target = {
         "agent_id": "agent-1",
         "agent_name": "Agent One",
@@ -2011,7 +2198,7 @@ def test_v2_adapter_rejects_delegate_target_missing_or_empty_task(task_value):
         target["task"] = task_value
 
     with pytest.raises(ValueError, match="task"):
-        RoomSupervisorService._parse_legacy_action_as_planner_action(
+        RoomSupervisorService._parse_provider_action_as_planner_action(
             {
                 "action": "delegate",
                 "reasoning": "test",

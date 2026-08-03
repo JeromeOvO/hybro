@@ -116,7 +116,7 @@ class TestRoomCenterHTTPIntegration:
             )
         )
 
-        from api import room_center as room_api
+        from api_gateway.routes import room_routes as room_api
 
         integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
         try:
@@ -162,7 +162,7 @@ class TestRoomCenterHTTPIntegration:
             return_value=RoomCenterRoomMessageResponse(success=True, message_list=[])
         )
 
-        from api import room_center as room_api
+        from api_gateway.routes import room_routes as room_api
 
         integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
         integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
@@ -196,7 +196,7 @@ class TestAgentHTTPIntegration:
             return_value=AgentCenterResponse(success=True, agents=[])
         )
 
-        from api import agent as agent_api
+        from api_gateway.routes import agent_routes as agent_api
 
         integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
             mock_ac
@@ -215,7 +215,7 @@ class TestAgentHTTPIntegration:
         self, http_client, integration_app
     ):
         """POST /agent/registerAgent should 400 when agent_url missing."""
-        from api import agent as agent_api
+        from api_gateway.routes import agent_routes as agent_api
 
         integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
             MagicMock()
@@ -235,7 +235,7 @@ class TestAgentHTTPIntegration:
     @pytest.mark.asyncio
     async def test_get_agent_validates_empty_id(self, http_client, integration_app):
         """GET /agent/getAgent/ with whitespace ID returns error response."""
-        from api import agent as agent_api
+        from api_gateway.routes import agent_routes as agent_api
 
         integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
             MagicMock()
@@ -279,7 +279,7 @@ class TestHITLHTTPIntegration:
         mock_hitl = MagicMock()
         mock_hitl.get_pending_hitl = AsyncMock(return_value=[])
 
-        from api import hitl as hitl_api
+        from api_gateway.routes import hitl_routes as hitl_api
 
         integration_app.dependency_overrides[hitl_api.get_room_ownership_reader] = (
             lambda: room_ownership_reader

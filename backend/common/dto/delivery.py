@@ -161,8 +161,6 @@ class HITLRequestEvent(DeliveryEventBase):
     group_index: int | None = None
     related_message_id: str | None = None
     client_request_id: str | None = None
-    orchestration_run_id: str | None = None
-    orchestration_schema_version: int | None = None
 
 
 class HITLResolvedEvent(DeliveryEventBase):
@@ -174,8 +172,6 @@ class HITLResolvedEvent(DeliveryEventBase):
     error_message: str | None = None
     related_message_id: str | None = None
     client_request_id: str | None = None
-    orchestration_run_id: str | None = None
-    orchestration_schema_version: int | None = None
 
 
 class HubAgentEvent(DeliveryEventBase):

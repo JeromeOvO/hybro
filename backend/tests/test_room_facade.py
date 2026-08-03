@@ -15,6 +15,7 @@ from common.dto import (
     MembershipUpdateRequest,
     SavedAgentGroupSnapshot,
     UserMessageInput,
+    UserMessageInsertResult,
 )
 from common.types import Task, TaskState, TaskStatus
 from models.quote import QuoteSourceKind
@@ -27,6 +28,7 @@ from models.room import (
     UserAttachment,
 )
 from room import RoomFacade
+from room.idempotency import IdempotencyConflictError
 
 NOW = datetime(2026, 5, 11, tzinfo=UTC)
 
@@ -613,11 +615,78 @@ async def test_legacy_user_message_persistence_strips_ephemeral_fields():
         ),
     )
 
-    assert await facade.persist_user_message(user_message) is True
+    result = await facade.persist_user_message(user_message)
 
+    assert result.created is True
+    assert result.message_id == "legacy-user"
     stored = messages.user_messages["legacy-user"]
     assert "quote" not in stored
     assert "file_url" not in stored["message_content"]["attachments"][0]
+
+
+@pytest.mark.asyncio
+async def test_facade_persists_internal_fingerprint_and_returns_typed_outcome():
+    facade, _, messages, _, _ = _facade(ids=["generated-message-id"])
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="",
+        user_id="user",
+        client_request_id="request-1",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    result = await facade.persist_user_message(
+        user_message,
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert result == UserMessageInsertResult(
+        message_id="generated-message-id",
+        created=True,
+        document=messages.user_messages["generated-message-id"],
+    )
+    stored = messages.user_messages["generated-message-id"]
+    assert stored["idempotency_fingerprint"] == "fingerprint-1"
+    assert stored["idempotency_fingerprint_version"] == 1
+    assert "idempotency_fingerprint" not in user_message.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_internal_idempotency_fields_are_not_exposed_by_user_message_models():
+    facade, _, messages, _, _ = _facade()
+    messages.user_messages["message-1"] = {
+        "room_id": "r1",
+        "message_id": "message-1",
+        "message_type": "user",
+        "user_id": "user",
+        "client_request_id": "request-1",
+        "message_content": {"message_text": "hello"},
+        "message_created_at": NOW,
+        "idempotency_fingerprint": "private-fingerprint",
+        "idempotency_fingerprint_version": 1,
+    }
+
+    message = await facade.get_user_message_model("message-1")
+
+    assert message is not None
+    serialized = message.model_dump(mode="json")
+    assert "idempotency_fingerprint" not in serialized
+    assert "idempotency_fingerprint_version" not in serialized
+
+
+def test_ensure_user_message_id_assigns_once_and_is_idempotent():
+    facade, _, _, _, _ = _facade(ids=["generated-message-id"])
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="",
+        user_id="user",
+        message_content=MessageContent(message_text="hello"),
+    )
+
+    assert facade.ensure_user_message_id(user_message) == "generated-message-id"
+    assert user_message.message_id == "generated-message-id"
+    assert facade.ensure_user_message_id(user_message) == "generated-message-id"
 
 
 @pytest.mark.asyncio
@@ -927,6 +996,42 @@ class FakeMessageRepository:
     async def save_user_message(self, message: dict) -> str:
         self.user_messages[message["message_id"]] = deepcopy(message)
         return message["message_id"]
+
+    async def get_user_message_by_idempotency_key(
+        self, room_id: str, client_request_id: str
+    ) -> dict | None:
+        for message in self.user_messages.values():
+            if (
+                message.get("room_id") == room_id
+                and message.get("client_request_id") == client_request_id
+            ):
+                return deepcopy(message)
+        return None
+
+    async def insert_user_message_idempotently(
+        self, message: dict
+    ) -> UserMessageInsertResult:
+        existing = await self.get_user_message_by_idempotency_key(
+            message["room_id"], message["client_request_id"]
+        )
+        if existing is not None:
+            if existing.get("idempotency_fingerprint") != message.get(
+                "idempotency_fingerprint"
+            ):
+                raise IdempotencyConflictError(
+                    message["room_id"], message["client_request_id"]
+                )
+            return UserMessageInsertResult(
+                message_id=existing["message_id"],
+                created=False,
+                document=existing,
+            )
+        self.user_messages[message["message_id"]] = deepcopy(message)
+        return UserMessageInsertResult(
+            message_id=message["message_id"],
+            created=True,
+            document=deepcopy(message),
+        )
 
     async def save_agent_message(self, message: dict) -> str:
         self.agent_messages[message["message_id"]] = deepcopy(message)

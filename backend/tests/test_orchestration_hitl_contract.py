@@ -45,6 +45,7 @@ def _persistence_mock():
     persistence.get_hitl_request = AsyncMock(return_value=None)
     persistence.get_hitl_group_requests = AsyncMock(return_value=[])
     persistence.cas_update_hitl_request = AsyncMock(return_value=True)
+    persistence.update_hitl_request = AsyncMock(return_value=True)
     persistence.get_and_clear_continuation_on_message = AsyncMock(return_value=None)
     persistence.get_and_clear_continuation_on_user_message = AsyncMock(
         return_value=None
@@ -52,25 +53,22 @@ def _persistence_mock():
     return persistence
 
 
-def test_hitl_request_model_preserves_optional_v2_run_link_fields():
+def test_hitl_request_model_preserves_optional_orchestration_run_link_fields():
     request = HITLRequest(
         room_id="room-1",
         user_message_id="user-msg-1",
         source="supervisor",
         prompt="Clarify?",
         orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
     assert request.orchestration_run_id == "run-msg-1"
-    assert request.orchestration_schema_version == 2
     payload = request.model_dump(mode="json")
     assert payload["orchestration_run_id"] == "run-msg-1"
-    assert payload["orchestration_schema_version"] == 2
 
 
 @pytest.mark.asyncio
-async def test_v2_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
+async def test_orchestration_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
     service = HITLService()
     persistence = _persistence_mock()
     delivery = MagicMock()
@@ -93,22 +91,19 @@ async def test_v2_hitl_creation_persists_run_links_and_keeps_public_sse_ids():
         continuation_message_id="cont-msg-1",
         display_message_id="display-msg-1",
         orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
     assert result is not None
     assert captured_docs[0]["orchestration_run_id"] == "run-msg-1"
-    assert captured_docs[0]["orchestration_schema_version"] == 2
 
     event = delivery.emit.await_args.args[0]
     assert isinstance(event, HITLRequestEvent)
     assert event.message_id == "display-msg-1"
     assert event.related_message_id == "user-msg-1"
-    assert event.orchestration_run_id == "run-msg-1"
-    assert event.orchestration_schema_version == 2
+    assert "orchestration_run_id" not in event.model_dump()
 
 
-def test_hitl_sse_frame_strips_v2_run_links_when_present():
+def test_hitl_delivery_event_has_no_orchestration_run_link():
     event = HITLRequestEvent(
         room_id="room-1",
         request_id="hitl-1",
@@ -117,16 +112,15 @@ def test_hitl_sse_frame_strips_v2_run_links_when_present():
         prompt="Clarify the scope",
         prompt_type="text",
         related_message_id="user-msg-1",
-        orchestration_run_id="run-msg-1",
-        orchestration_schema_version=2,
     )
 
+    assert "orchestration_run_id" not in HITLRequestEvent.model_fields
+    assert "orchestration_run_id" not in event.model_dump()
     frame = to_sse_frame(event, timestamp=NOW)
 
     assert frame["data"]["message_id"] == "display-msg-1"
     assert frame["data"]["related_message_id"] == "user-msg-1"
     assert "orchestration_run_id" not in frame["data"]
-    assert "orchestration_schema_version" not in frame["data"]
     assert "lifecycle_message_id" not in frame["data"]
 
 
@@ -211,6 +205,128 @@ async def test_group_expiry_expires_pending_siblings_once_with_user_correlation(
         "user-msg-1",
         "user-msg-1",
     ]
+
+
+@pytest.mark.asyncio
+async def test_group_expiry_terminalizes_all_legacy_members_beyond_page_size():
+    service = HITLService()
+    persistence = _persistence_mock()
+    delivery = MagicMock()
+    delivery.emit = AsyncMock()
+    group = [
+        _hitl_doc(
+            request_id=f"hitl-{index}",
+            group_id="group-large",
+            group_total=150,
+            group_index=index,
+        )
+        for index in range(150)
+    ]
+    persistence.get_hitl_request.return_value = group[0]
+    persistence.get_pending_hitl_group_requests_strict = AsyncMock(return_value=group)
+    service._persistence = persistence
+    service._delivery = delivery
+
+    await service.expire_request("hitl-0", room_id="room-1")
+
+    assert persistence.cas_update_hitl_request.await_count == 150
+    assert persistence.update_hitl_request.await_count == 150
+    assert delivery.emit.await_count == 150
+
+
+@pytest.mark.asyncio
+async def test_group_expiry_attempts_later_siblings_after_one_effect_fails():
+    service = HITLService()
+    persistence = _persistence_mock()
+    delivery = MagicMock()
+    delivery.emit = AsyncMock(side_effect=[RuntimeError("first delivery failed"), None])
+    current = _hitl_doc(request_id="hitl-1", group_id="group-1", group_index=0)
+    sibling = _hitl_doc(request_id="hitl-2", group_id="group-1", group_index=1)
+    persistence.get_hitl_request.return_value = current
+    persistence.get_hitl_group_requests.return_value = [current, sibling]
+    service._persistence = persistence
+    service._delivery = delivery
+
+    with pytest.raises(RuntimeError, match="side effects remain pending"):
+        await service.expire_request("hitl-1", room_id="room-1")
+
+    assert persistence.cas_update_hitl_request.await_count == 2
+    assert delivery.emit.await_count == 2
+    persistence.update_hitl_request.assert_awaited_once_with(
+        "hitl-2",
+        cancellation_reconciled=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrying_expired_group_root_reconciles_failed_sibling():
+    service = HITLService()
+    persistence = _persistence_mock()
+    delivery = MagicMock()
+    delivery.emit = AsyncMock(
+        side_effect=[None, RuntimeError("sibling delivery failed")]
+    )
+    root = _hitl_doc(request_id="hitl-1", group_id="group-1", group_index=0)
+    sibling = _hitl_doc(request_id="hitl-2", group_id="group-1", group_index=1)
+    persistence.get_hitl_request.return_value = root
+    persistence.get_hitl_group_requests.return_value = [root, sibling]
+    service._persistence = persistence
+    service._delivery = delivery
+
+    with pytest.raises(RuntimeError, match="side effects remain pending"):
+        await service.expire_request("hitl-1", room_id="room-1")
+
+    persistence.get_hitl_request.return_value = {
+        **root,
+        "status": "expired",
+        "cancellation_reconciled": True,
+    }
+    persistence.get_unreconciled_terminal_hitl_group_requests_strict = AsyncMock(
+        return_value=[
+            {
+                **sibling,
+                "status": "expired",
+                "cancellation_reconciled": False,
+            }
+        ]
+    )
+    delivery.emit.side_effect = None
+
+    await service.expire_request("hitl-1", room_id="room-1")
+
+    persistence.get_unreconciled_terminal_hitl_group_requests_strict.assert_awaited_once_with(
+        "group-1",
+        "expired",
+    )
+    assert persistence.update_hitl_request.await_args_list[-1].args == ("hitl-2",)
+
+
+@pytest.mark.asyncio
+async def test_expire_request_retries_incomplete_terminal_side_effects():
+    service = HITLService()
+    persistence = _persistence_mock()
+    delivery = MagicMock()
+    delivery.emit = AsyncMock(side_effect=RuntimeError("temporary delivery failure"))
+    pending = _hitl_doc(request_id="hitl-1")
+    persistence.get_hitl_request.return_value = pending
+    service._persistence = persistence
+    service._delivery = delivery
+
+    with pytest.raises(RuntimeError, match="side effects remain pending"):
+        await service.expire_request("hitl-1", room_id="room-1")
+
+    expired = {**pending, "status": "expired", "cancellation_reconciled": False}
+    persistence.get_hitl_request.return_value = expired
+    delivery.emit.side_effect = None
+
+    await service.expire_request("hitl-1", room_id="room-1")
+
+    persistence.cas_update_hitl_request.assert_awaited_once()
+    persistence.update_hitl_request.assert_awaited_once_with(
+        "hitl-1",
+        cancellation_reconciled=True,
+    )
+    assert delivery.emit.await_count == 2
 
 
 @pytest.mark.asyncio

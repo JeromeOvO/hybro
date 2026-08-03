@@ -19,12 +19,6 @@ def mark_declared_owner(router: APIRouter, owner: str) -> None:
             setattr(endpoint, DECLARED_OWNER_ATTR, owner)
 
 
-def include_owned_router(target: APIRouter, source: APIRouter, *, owner: str) -> None:
-    mark_declared_owner(source, owner)
-    target.include_router(source)
-    mark_declared_owner(target, owner)
-
-
 def resolve_declared_owner(route: Any) -> str:
     route_owner = getattr(route, DECLARED_OWNER_ATTR, None)
     if isinstance(route_owner, str) and route_owner:

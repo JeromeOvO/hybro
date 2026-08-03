@@ -156,7 +156,7 @@ async def test_inspection_falls_back_to_docker_host_for_loopback_card(
     )
     monkeypatch.setattr(inspection, "A2AClient", _A2AClient)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG"):
         result = await inspection.inspect_a2a_connection(
             "http://host.docker.internal:9060",
             timeout=1,
@@ -167,7 +167,7 @@ async def test_inspection_falls_back_to_docker_host_for_loopback_card(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -211,7 +211,7 @@ async def test_inspection_card_fetch_retries_host_gateway_for_loopback_url(
 
     monkeypatch.setattr(inspection, "A2ACardResolver", _CardResolver)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG"):
         result = await inspection._fetch_sdk_agent_card_with_fallback(
             SimpleNamespace(name="httpx-client"),
             "http://127.0.0.1:9060",
@@ -222,4 +222,4 @@ async def test_inspection_card_fetch_retries_host_gateway_for_loopback_url(
         "http://127.0.0.1:9060",
         "http://host.docker.internal:9060",
     ]
-    assert "Retrying A2A request via host gateway" in caplog.text
+    assert "a2a_docker_host_fallback_selected" in caplog.text

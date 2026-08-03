@@ -4,6 +4,10 @@
 if __name__ == "__main__":
     import uvicorn
 
+    from common.observability.bootstrap import (
+        settings as _logging_settings,  # noqa: F401
+    )
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
@@ -19,4 +23,6 @@ if __name__ == "__main__":
             "models",
         ],
         reload_excludes=[".*", "*.pyc", "__pycache__"],
+        log_config=None,
+        access_log=False,
     )

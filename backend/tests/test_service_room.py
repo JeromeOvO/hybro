@@ -16,10 +16,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import MessageCommitted, RoomInfo
+from common.dto import MessageCommitted, RoomInfo, UserMessageInsertResult
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
-from models.room import MessageContent, Room, RoomUserMessage
+from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room.compat.runtime import RoomServices
+from room.idempotency import IdempotencyConflictError, UserMessagePersistenceError
 
 
 @pytest.fixture
@@ -274,7 +275,11 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
     svc._facade = None
     publisher = RecordingEventPublisher()
     facade = AsyncMock()
-    facade.persist_user_message.return_value = True
+    facade.persist_user_message.return_value = UserMessageInsertResult(
+        message_id="u1",
+        created=True,
+        document={},
+    )
     svc.bind_facade(facade)
     svc.bind_message_event_publisher(publisher)
     user_message = RoomUserMessage(
@@ -283,15 +288,18 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
         message_content=MessageContent(message_text="hello"),
     )
 
-    assert (
-        await svc._persist_user_message(
-            user_message,
-            room_agent_set={"a1": "Agent One"},
-        )
-        is True
+    result = await svc._persist_user_message(
+        user_message,
+        room_agent_set={"a1": "Agent One"},
     )
 
-    facade.persist_user_message.assert_awaited_once_with(user_message)
+    assert result.created is True
+    assert result.message_id == "u1"
+    facade.persist_user_message.assert_awaited_once_with(
+        user_message,
+        idempotency_fingerprint=None,
+        idempotency_fingerprint_version=None,
+    )
     svc._store.add_room_user_message.assert_not_awaited()
     assert len(publisher.internal_events) == 1
     event = publisher.internal_events[0]
@@ -311,7 +319,9 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
     svc._facade = None
     publisher = RecordingEventPublisher()
     facade = AsyncMock()
-    facade.persist_user_message.return_value = False
+    facade.persist_user_message.side_effect = UserMessagePersistenceError(
+        "insert failed"
+    )
     svc.bind_facade(facade)
     svc.bind_message_event_publisher(publisher)
     user_message = RoomUserMessage(
@@ -320,10 +330,79 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
         message_content=MessageContent(message_text="hello"),
     )
 
-    assert await svc._persist_user_message(user_message, room_agent_set={}) is False
+    with pytest.raises(UserMessagePersistenceError, match="insert failed"):
+        await svc._persist_user_message(user_message, room_agent_set={})
 
     assert publisher.internal_events == []
     assert publisher.wait_flags == []
+
+
+@pytest.mark.asyncio
+async def test_room_services_assigns_message_id_before_claiming_file_references():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    publisher = RecordingEventPublisher()
+    facade = MagicMock()
+
+    def ensure_user_message_id(user_message):
+        if user_message.message_id == "":
+            user_message.message_id = "generated-message-id"
+        return user_message.message_id
+
+    async def persist_user_message(user_message, **_kwargs):
+        if user_message.message_id == "":
+            user_message.message_id = "generated-message-id"
+        return UserMessageInsertResult(
+            message_id=user_message.message_id,
+            created=True,
+            document={},
+        )
+
+    facade.ensure_user_message_id.side_effect = ensure_user_message_id
+    facade.persist_user_message = AsyncMock(side_effect=persist_user_message)
+    room_files = MagicMock()
+    room_files.claim_references = AsyncMock()
+    room_files.commit_references = AsyncMock()
+    room_files.release_references = AsyncMock()
+    svc.bind_facade(facade)
+    svc.bind_room_files(room_files)
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="What content in this pdf?",
+            attachments=[
+                UserAttachment(
+                    file_id="pdf-1",
+                    mime_type="application/pdf",
+                    file_name="document.pdf",
+                    size_bytes=1024,
+                )
+            ],
+        ),
+    )
+
+    result = await svc._persist_user_message_with_lease(
+        user_message,
+        room_agent_set={},
+    )
+
+    assert result.created is True
+    facade.ensure_user_message_id.assert_called_once_with(user_message)
+    room_files.claim_references.assert_awaited_once_with(
+        room_id="r1",
+        owner_id="user-1",
+        message_id="generated-message-id",
+        file_ids=["pdf-1"],
+    )
+    room_files.commit_references.assert_awaited_once_with(
+        message_id="generated-message-id",
+        file_ids=["pdf-1"],
+    )
+    assert publisher.internal_events[0].message_id == "generated-message-id"
 
 
 @pytest.mark.asyncio
@@ -350,7 +429,11 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     svc._materialize_room_quote = AsyncMock(return_value=None)
     publisher = RecordingEventPublisher()
     facade = AsyncMock()
-    facade.persist_user_message.return_value = True
+    facade.persist_user_message.return_value = UserMessageInsertResult(
+        message_id="u1",
+        created=True,
+        document={},
+    )
     svc.bind_facade(facade)
     svc.bind_message_event_publisher(publisher)
     user_message = RoomUserMessage(
@@ -376,6 +459,438 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     event = publisher.internal_events[0]
     assert isinstance(event, MessageCommitted)
     assert event.room_agent_set == {"a1": "Canonical Agent"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_structured_quote", [False, True])
+async def test_canonical_send_sanitizes_server_owned_user_message_fields(
+    with_structured_quote,
+):
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="r1",
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={},
+            extend_info={},
+        )
+    )
+    svc._bound = False
+    svc._facade = None
+    svc.delivery = MagicMock()
+    svc.delivery.create_token.return_value = object()
+    facade = AsyncMock()
+    facade.get_user_message_by_idempotency_key.return_value = None
+    svc.bind_facade(facade)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+
+    async def persist(user_message, **_kwargs):
+        assert user_message.room_id == "r1"
+        assert user_message.user_id == "trusted-user"
+        assert user_message.message_id == ""
+        assert user_message.message_type == "user"
+        assert user_message.agent_id is None
+        assert user_message.run_id is None
+        assert user_message.step_number is None
+        assert user_message.total_steps is None
+        assert user_message.task_content is None
+        assert user_message.processing_claimed_at is None
+        assert user_message.quote_id is None
+        expected_legacy_quote = (
+            None
+            if with_structured_quote
+            else {
+                "quoted_text": "allowed quote",
+                "quoted_sender_name": "Allowed Sender",
+            }
+        )
+        assert user_message.extend_info == expected_legacy_quote
+        user_message.message_id = "server-message"
+        return UserMessageInsertResult(
+            message_id="server-message",
+            created=True,
+            document={},
+        )
+
+    svc._persist_user_message = AsyncMock(side_effect=persist)
+    request = RoomCenterUserMessageRequest(
+        room_id="r1",
+        user_id="trusted-user",
+        client_request_id="request-1",
+        message=RoomUserMessage(
+            room_id="spoofed-room",
+            message_id="client-message",
+            message_type="agent",
+            user_id="spoofed-user",
+            agent_id="spoofed-agent",
+            run_id="spoofed-run",
+            step_number=9,
+            total_steps=9,
+            task_content="spoofed task",
+            processing_claimed_at="2026-08-01T00:00:00Z",
+            quote_id="spoofed-quote-id",
+            extend_info={
+                "quoted_text": "allowed quote",
+                "quoted_sender_name": "Allowed Sender",
+                "quote_id": "spoofed-quote-id",
+                "turn_completion_kind": "synthesis",
+                "orchestration_status": "completed",
+                "custom_internal": "spoofed",
+            },
+            message_content=MessageContent(message_text="hello"),
+            quote=(
+                {
+                    "text": "structured quote",
+                    "source_message_id": "source-1",
+                    "source_kind": "agent",
+                    "sender_display_name": None,
+                }
+                if with_structured_quote
+                else None
+            ),
+        ),
+    )
+
+    response, context = await svc.persist_message_to_room(
+        request,
+        target_group="all_agents",
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert response.success is True
+    assert response.message_id == "server-message"
+    assert context is not None
+
+
+@pytest.mark.asyncio
+async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._bound = False
+    svc._facade = None
+    svc.delivery = MagicMock()
+    facade = AsyncMock()
+    facade.get_user_message_by_idempotency_key.return_value = {
+        "room_id": "r1",
+        "message_id": "winner-message",
+        "client_request_id": "request-1",
+        "idempotency_fingerprint": "fingerprint-1",
+        "idempotency_fingerprint_version": 1,
+    }
+    svc.bind_facade(facade)
+    svc._validate_send_message_request = MagicMock(
+        side_effect=AssertionError("replay must return before validation")
+    )
+    svc._resolve_and_apply_attachments = AsyncMock(
+        side_effect=AssertionError("replay must not resolve attachments")
+    )
+    svc._materialize_room_quote = AsyncMock(
+        side_effect=AssertionError("replay must not create quote")
+    )
+    publisher = RecordingEventPublisher()
+    svc.bind_message_event_publisher(publisher)
+
+    response, context = await svc.persist_message_to_room(
+        RoomCenterUserMessageRequest(
+            room_id="r1",
+            user_id="user-1",
+            client_request_id=" request-1 ",
+            message=RoomUserMessage(
+                room_id="r1",
+                message_id="loser-message",
+                user_id="user-1",
+                message_content=MessageContent(message_text="hello"),
+            ),
+        ),
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert response.success is True
+    assert response.message_id == "winner-message"
+    assert response.dispatch_root_message_id is None
+    assert context is None
+    facade.get_user_message_by_idempotency_key.assert_awaited_once_with(
+        "r1", "request-1"
+    )
+    facade.persist_user_message.assert_not_awaited()
+    svc.delivery.create_token.assert_not_called()
+    assert publisher.internal_events == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_idempotency_row_replays_without_backfilling_fingerprint(caplog):
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    facade = AsyncMock()
+    facade.get_user_message_by_idempotency_key.return_value = {
+        "room_id": "r1",
+        "message_id": "legacy-message",
+        "client_request_id": "request-legacy",
+    }
+    svc.bind_facade(facade)
+
+    response = await svc.get_idempotent_user_message(
+        room_id="r1",
+        client_request_id="request-legacy",
+        idempotency_fingerprint="new-fingerprint-cannot-be-proven",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert response is not None
+    assert response.success is True
+    assert response.message_id == "legacy-message"
+    assert response.dispatch_root_message_id is None
+    assert "Legacy idempotency replay without fingerprint" in caplog.text
+    facade.update_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["conflict", "replay"])
+async def test_claim_release_failure_preserves_determined_idempotency_outcome(
+    outcome,
+    caplog,
+):
+    class Lease:
+        async def __aenter__(self):
+            return "lease-1"
+
+        async def __aexit__(self, *_args):
+            return False
+
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="r1",
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={},
+            extend_info={},
+        )
+    )
+    svc._bound = False
+    svc._facade = None
+    svc.delivery = MagicMock()
+    facade = MagicMock()
+    facade.get_user_message_by_idempotency_key = AsyncMock(return_value=None)
+
+    def ensure_user_message_id(user_message):
+        user_message.message_id = user_message.message_id or "loser-message"
+        return user_message.message_id
+
+    facade.ensure_user_message_id.side_effect = ensure_user_message_id
+    if outcome == "conflict":
+        facade.persist_user_message = AsyncMock(
+            side_effect=IdempotencyConflictError("r1", "request-1")
+        )
+    else:
+        facade.persist_user_message = AsyncMock(
+            return_value=UserMessageInsertResult(
+                message_id="winner-message",
+                created=False,
+                document={"message_id": "winner-message"},
+            )
+        )
+    svc.bind_facade(facade)
+    room_files = MagicMock()
+    room_files.write_lease.return_value = Lease()
+    room_files.claim_references = AsyncMock()
+    room_files.release_references = AsyncMock(
+        side_effect=RuntimeError("release unavailable")
+    )
+    room_files.commit_references = AsyncMock()
+    svc.bind_room_files(room_files)
+    publisher = RecordingEventPublisher()
+    svc.bind_message_event_publisher(publisher)
+
+    async def resolve_attachments(_request, user_message):
+        user_message.message_content.attachments = [
+            UserAttachment(
+                file_id="file-1",
+                mime_type="text/plain",
+                file_name="note.txt",
+                size_bytes=10,
+            )
+        ]
+        return None
+
+    svc._resolve_and_apply_attachments = AsyncMock(side_effect=resolve_attachments)
+    svc._materialize_room_quote = AsyncMock(return_value=None)
+    svc.run_message_preflight_to_room = AsyncMock()
+    request = RoomCenterUserMessageRequest(
+        room_id="r1",
+        user_id="user-1",
+        client_request_id="request-1",
+        message=RoomUserMessage(
+            room_id="r1",
+            message_id="client-message",
+            user_id="user-1",
+            message_content=MessageContent(message_text="hello"),
+        ),
+    )
+
+    response, context = await svc.persist_message_to_room(
+        request,
+        target_group="all_agents",
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert context is None
+    if outcome == "conflict":
+        assert response.success is False
+        assert response.status_code == 409
+        assert response.message_id is None
+        assert "preserving persistence error" in caplog.text
+    else:
+        assert response.success is True
+        assert response.message_id == "winner-message"
+        assert response.dispatch_root_message_id is None
+        assert "returning replay" in caplog.text
+    room_files.release_references.assert_awaited_once_with(
+        message_id="loser-message",
+        file_ids=["file-1"],
+    )
+    room_files.commit_references.assert_not_awaited()
+    assert publisher.internal_events == []
+    svc.delivery.create_token.assert_not_called()
+    svc.run_message_preflight_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_loser_releases_own_claim_without_touching_winner_commit():
+    svc = object.__new__(RoomServices)
+    svc._bound = False
+    svc._facade = None
+    facade = MagicMock()
+    facade.ensure_user_message_id.side_effect = lambda message: (
+        message.message_id or "loser-message"
+    )
+    facade.persist_user_message = AsyncMock(
+        return_value=UserMessageInsertResult(
+            message_id="winner-message",
+            created=False,
+            document={"message_id": "winner-message"},
+        )
+    )
+    room_files = MagicMock()
+    room_files.claim_references = AsyncMock()
+    room_files.commit_references = AsyncMock()
+    room_files.release_references = AsyncMock()
+    svc.bind_facade(facade)
+    svc.bind_room_files(room_files)
+    publisher = RecordingEventPublisher()
+    svc.bind_message_event_publisher(publisher)
+    user_message = RoomUserMessage(
+        room_id="r1",
+        message_id="loser-message",
+        user_id="user-1",
+        message_content=MessageContent(
+            message_text="hello",
+            attachments=[
+                UserAttachment(
+                    file_id="file-1",
+                    mime_type="text/plain",
+                    file_name="note.txt",
+                    size_bytes=10,
+                )
+            ],
+        ),
+    )
+
+    result = await svc._persist_user_message_with_lease(
+        user_message,
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert result.created is False
+    assert result.message_id == "winner-message"
+    room_files.claim_references.assert_awaited_once_with(
+        room_id="r1",
+        owner_id="user-1",
+        message_id="loser-message",
+        file_ids=["file-1"],
+    )
+    room_files.release_references.assert_awaited_once_with(
+        message_id="loser-message",
+        file_ids=["file-1"],
+    )
+    room_files.commit_references.assert_not_awaited()
+    assert publisher.internal_events == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner():
+    svc = object.__new__(RoomServices)
+    svc._store = MagicMock()
+    svc._store.get_room_by_room_id = AsyncMock(
+        return_value=Room(
+            room_id="r1",
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            room_agent_set={},
+            extend_info={},
+        )
+    )
+    svc._bound = False
+    svc._facade = None
+    svc.delivery = MagicMock()
+    facade = AsyncMock()
+    facade.get_user_message_by_idempotency_key.return_value = None
+    svc.bind_facade(facade)
+    svc._validate_send_message_request = MagicMock(return_value=None)
+    svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
+
+    async def materialize(_room, _request, user_message):
+        user_message.quote_id = "loser-quote"
+        return None
+
+    svc._materialize_room_quote = AsyncMock(side_effect=materialize)
+    svc._persist_user_message = AsyncMock(
+        return_value=UserMessageInsertResult(
+            message_id="winner-message",
+            created=False,
+            document={"message_id": "winner-message", "quote_id": "winner-quote"},
+        )
+    )
+    request = RoomCenterUserMessageRequest(
+        room_id="r1",
+        user_id="user-1",
+        client_request_id="request-1",
+        message=RoomUserMessage(
+            room_id="r1",
+            message_id="loser-message",
+            user_id="user-1",
+            message_content=MessageContent(message_text="hello"),
+        ),
+    )
+
+    response, context = await svc.persist_message_to_room(
+        request,
+        target_group="all_agents",
+        idempotency_fingerprint="fingerprint-1",
+        idempotency_fingerprint_version=1,
+    )
+
+    assert response.success is True
+    assert response.message_id == "winner-message"
+    assert response.dispatch_root_message_id is None
+    assert context is None
+    facade.delete_room_quote.assert_awaited_once_with("loser-quote")
+    assert "winner-quote" not in {
+        call.args[0] for call in facade.delete_room_quote.await_args_list
+    }
+    svc.delivery.create_token.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.observability import get_current_trace_id
+from common.observability import get_current_trace_id, trace_id_context
 from common.protocols import RedisPubSub
 from delivery.config import DeliveryConfig
 from delivery.types import RoomSubscriptionLimitExceeded, TaskRunner
@@ -124,6 +124,7 @@ class CrossInstanceEventBus:
             "kind": "cancellation",
             "origin": self.instance_id,
             "message_id": message_id,
+            "trace_id": get_current_trace_id(),
         }
         await self.redis_pubsub.publish(
             self.config.redis_cancel_channel,
@@ -203,7 +204,8 @@ class CrossInstanceEventBus:
                 "data": data,
             }
         if self._sse_callback is not None:
-            await self._call(self._sse_callback, room_id, frame)
+            with trace_id_context(envelope.get("trace_id")):
+                await self._call(self._sse_callback, room_id, frame)
 
     async def handle_cancellation_message(self, message: str) -> None:
         envelope = self._decode(message, "cancellation")
@@ -211,14 +213,16 @@ class CrossInstanceEventBus:
             return
         message_id = envelope.get("message_id")
         if isinstance(message_id, str) and self._cancellation_callback is not None:
-            await self._call(self._cancellation_callback, message_id)
+            with trace_id_context(envelope.get("trace_id")):
+                await self._call(self._cancellation_callback, message_id)
 
     async def handle_internal_message(self, message: str) -> None:
         envelope = self._decode(message, "internal_event")
         if not envelope or envelope.get("origin") == self.instance_id:
             return
         if self._internal_callback is not None:
-            await self._call(self._internal_callback, envelope)
+            with trace_id_context(envelope.get("trace_id")):
+                await self._call(self._internal_callback, envelope)
 
     async def _subscription_loop(self, channel: str, kind: str) -> None:
         delay = self.config.redis_reconnect_delay

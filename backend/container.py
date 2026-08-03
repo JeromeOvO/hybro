@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
-
-from loguru import logger
 
 from agent import AgentFacade, AgentMongoRepository
 from api_gateway.dependencies import (
@@ -20,7 +17,13 @@ from api_gateway.dependencies import (
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
 from common.health_check import RuntimeHealthCheck
-from common.observability import MetricsCollector, traced_create_task
+from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
+from common.observability import (
+    MetricsCollector,
+    get_instance_id,
+    get_logger,
+    traced_create_task,
+)
 from common.protocols import (
     AgentCallCounter,
     AgentCardResolver,
@@ -94,6 +97,8 @@ from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
 from room_files import LocalFileContentStore, RoomFiles
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from dal.runtime_store import RuntimeRepositoryStore
@@ -620,10 +625,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
                 get_hitl_request=hitl_store.get_hitl_request,
+                update_hitl_request=hitl_store.update_hitl_request,
                 claim_hitl_request=hitl_store.claim_hitl_request,
                 fenced_update_hitl_request=hitl_store.fenced_update_hitl_request,
                 count_pending_in_hitl_group=hitl_store.count_pending_in_hitl_group,
                 get_hitl_group_requests=hitl_store.get_hitl_group_requests,
+                get_pending_hitl_group_requests_strict=(
+                    hitl_store.get_pending_hitl_group_requests_strict
+                ),
+                get_unreconciled_terminal_hitl_group_requests_strict=(
+                    hitl_store.get_unreconciled_terminal_hitl_group_requests_strict
+                ),
                 release_hitl_group_routing=hitl_store.release_hitl_group_routing,
                 claim_hitl_group_routing=hitl_store.claim_hitl_group_routing,
                 reset_last_notified_state=message_store.reset_last_notified_state,
@@ -640,7 +652,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_pending_hitl_requests_for_message=(
                     hitl_store.get_pending_hitl_requests_for_message
                 ),
+                get_pending_hitl_requests_for_message_strict=(
+                    hitl_store.get_pending_hitl_requests_for_message_strict
+                ),
                 cas_update_hitl_request=hitl_store.cas_update_hitl_request,
+                cas_update_hitl_request_strict=(
+                    hitl_store.cas_update_hitl_request_strict
+                ),
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
                 ),
@@ -671,8 +689,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
                 touch_task_message=task_store.touch_task_message,
                 is_message_cancelled=task_store.is_message_cancelled,
+                is_message_cancelled_strict=task_store.is_message_cancelled_strict,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
+                ),
+                get_room_user_message_by_message_id_strict=(
+                    message_store.get_room_user_message_by_message_id_strict
                 ),
                 update_task_on_message=task_store.update_task_on_message,
                 get_and_clear_continuation_on_message=(
@@ -685,13 +707,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.get_room_ids_with_non_terminal_runs
                 ),
                 get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
+                get_stale_claimed_orchestration_messages=(
+                    message_store.get_stale_claimed_orchestration_messages
+                ),
+                update_orchestration_projection_if_status=(
+                    message_store.update_orchestration_projection_if_status
+                ),
+                list_pending_cancellation_markers=(
+                    task_store.list_pending_cancellation_markers
+                ),
+                mark_cancellation_reconciled=(task_store.mark_cancellation_reconciled),
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_stuck_supervisor_trajectory_messages=(
-                    task_store.get_stuck_supervisor_trajectory_messages
-                ),
-                claim_stuck_supervisor_trajectory=(
-                    task_store.claim_stuck_supervisor_trajectory
-                ),
             )
             debate_message_store = SimpleNamespace(
                 get_room_agent_message_by_message_id=(
@@ -763,6 +789,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
+                get_room_user_messages_by_room_id=(
+                    message_store.get_room_user_messages_by_room_id
+                ),
+                is_message_cancelled_strict=(task_store.is_message_cancelled_strict),
             )
             execution_message_writer = SimpleNamespace(
                 accumulate_artifact_on_message=(
@@ -1275,14 +1305,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
+                StaleCancellationFinalizerDeps,
                 StaleHITLDeps,
                 StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
             )
-
-            def run_dual_write_enabled() -> bool:
-                return runtime.settings.feature_run_dual_write
 
             async def emit_watchdog_run_event(
                 *,
@@ -1331,6 +1359,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     orchestration_run_store=orchestration_run_store,
                 )
             )
+            stale_task_checker.set_cancellation_finalizer_deps(
+                StaleCancellationFinalizerDeps(
+                    finalize=execution_facade.finalize_pending_cancellation,
+                )
+            )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
                     recover_stale_processing=hitl_manager.recover_stale_processing,
@@ -1342,7 +1375,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
                     emit_run_event=emit_watchdog_run_event,
                     emit_processing_status=emit_watchdog_processing_status,
-                    run_dual_write_enabled=run_dual_write_enabled,
                 )
             )
         compaction_sweep.set_leader_election(_leader)
@@ -1369,15 +1401,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         _bg_started = True
         await agent_health_service.start()
 
+        await stale_task_checker.start()
+        await stale_task_checker.check_stale_tasks()
         if runtime.settings.webhook_signing_key:
-            await stale_task_checker.start()
-            await stale_task_checker.check_stale_tasks()
             logger.info(
-                "A2A long-running tasks support initialized (using room_agent_messages)"
+                "A2A push-notification support initialized (using room_agent_messages)"
             )
         else:
             logger.warning(
-                "WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled"
+                "WEBHOOK_SIGNING_KEY not set - A2A push notifications disabled; "
+                "durable orchestration recovery remains enabled"
             )
 
         await compaction_sweep.start()
@@ -1730,7 +1763,9 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
+    await _ensure_user_message_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
+    await _ensure_cancellation_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
@@ -1784,7 +1819,6 @@ async def _create_index(
         await collection.create_index(keys, unique=unique, name=name, **kwargs)
         return True
     except Exception as exc:
-        logger = logging.getLogger(__name__)
         if unique and critical:
             logger.error(
                 "Critical index creation failed for %s.%s",
@@ -1879,7 +1913,7 @@ async def _ensure_text_index(
     name: str,
     weights: dict[str, int],
 ) -> bool:
-    log = logging.getLogger(__name__)
+    log = get_logger(__name__)
     try:
         existing = await collection.index_information()
         desired_weights = dict(sorted(weights.items()))
@@ -2049,6 +2083,239 @@ async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
     )
 
 
+async def _ensure_user_message_indexes(mongo: MongoDAL) -> None:
+    collection = mongo.collection("room_user_messages")
+    issues = await _user_message_index_readiness_issues(collection)
+    if issues:
+        details = "; ".join(issues)
+        logger.error(
+            "room_user_messages unique-index readiness failed: %s",
+            details,
+        )
+        raise RuntimeError(
+            "room_user_messages cannot enable correctness-critical unique indexes: "
+            f"{details}. Repair the historical rows explicitly; startup did not "
+            "delete or merge any messages."
+        )
+
+    await _create_index(
+        mongo,
+        "room_user_messages",
+        [("message_id", 1)],
+        name="room_user_message_id_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        mongo,
+        "room_user_messages",
+        [("room_id", 1), ("client_request_id", 1)],
+        name="room_user_client_request_id_unique",
+        unique=True,
+        critical=True,
+        partialFilterExpression={
+            "room_id": {"$type": "string"},
+            "client_request_id": {"$type": "string"},
+        },
+    )
+
+
+async def _user_message_index_readiness_issues(
+    collection: MongoCollection,
+    *,
+    sample_limit: int = 5,
+) -> list[str]:
+    """Audit historical rows server-side before enabling unique constraints."""
+
+    string_message_id = {"$eq": [{"$type": "$message_id"}, "string"]}
+    trimmed_message_id = {
+        "$trim": {"input": {"$cond": [string_message_id, "$message_id", ""]}}
+    }
+    string_room_id = {"$eq": [{"$type": "$room_id"}, "string"]}
+    trimmed_room_id = {"$trim": {"input": {"$cond": [string_room_id, "$room_id", ""]}}}
+    string_client_request_id = {"$eq": [{"$type": "$client_request_id"}, "string"]}
+    normalized_client_request_input = {
+        "$cond": [
+            string_client_request_id,
+            "$client_request_id",
+            "",
+        ]
+    }
+    trimmed_client_request_id = {"$trim": {"input": normalized_client_request_input}}
+    client_request_id_length = {"$strLenCP": normalized_client_request_input}
+
+    checks: list[tuple[str, list[dict[str, Any]]]] = [
+        (
+            "duplicate non-empty message_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$and": [
+                                string_message_id,
+                                {"$ne": [trimmed_message_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$group": {"_id": "$message_id", "occurrences": {"$sum": 1}}},
+                {"$match": {"occurrences": {"$gt": 1}}},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "message_id": "$_id",
+                        "occurrences": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "missing, null, non-string, or empty message_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {"$ne": [{"$type": "$message_id"}, "string"]},
+                                {"$eq": [trimmed_message_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$project": {"_id": 1, "message_id": 1}},
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "duplicate (room_id, normalized client_request_id)",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$and": [
+                                string_room_id,
+                                string_client_request_id,
+                                {"$ne": [trimmed_room_id, ""]},
+                                {"$ne": [trimmed_client_request_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "room_id": 1,
+                        "client_request_id": trimmed_client_request_id,
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "room_id": "$room_id",
+                            "client_request_id": "$client_request_id",
+                        },
+                        "occurrences": {"$sum": 1},
+                    }
+                },
+                {"$match": {"occurrences": {"$gt": 1}}},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "room_id": "$_id.room_id",
+                        "client_request_id": "$_id.client_request_id",
+                        "occurrences": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "invalid or non-normalized client_request_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {
+                                    "$and": [
+                                        string_client_request_id,
+                                        {
+                                            "$or": [
+                                                {
+                                                    "$eq": [
+                                                        trimmed_client_request_id,
+                                                        "",
+                                                    ]
+                                                },
+                                                {
+                                                    "$ne": [
+                                                        trimmed_client_request_id,
+                                                        "$client_request_id",
+                                                    ]
+                                                },
+                                                {
+                                                    "$gt": [
+                                                        client_request_id_length,
+                                                        MAX_CLIENT_REQUEST_ID_LENGTH,
+                                                    ]
+                                                },
+                                            ]
+                                        },
+                                    ]
+                                },
+                                {
+                                    "$not": [
+                                        {
+                                            "$in": [
+                                                {"$type": "$client_request_id"},
+                                                ["missing", "null", "string"],
+                                            ]
+                                        }
+                                    ]
+                                },
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 1,
+                        "room_id": 1,
+                        "client_request_id": 1,
+                    }
+                },
+                {"$limit": sample_limit},
+            ],
+        ),
+        (
+            "missing, null, non-string, or empty room_id",
+            [
+                {
+                    "$match": {
+                        "$expr": {
+                            "$or": [
+                                {"$ne": [{"$type": "$room_id"}, "string"]},
+                                {"$eq": [trimmed_room_id, ""]},
+                            ]
+                        }
+                    }
+                },
+                {"$project": {"_id": 1, "room_id": 1, "message_id": 1}},
+                {"$limit": sample_limit},
+            ],
+        ),
+    ]
+
+    issues: list[str] = []
+    for label, pipeline in checks:
+        samples = await collection.aggregate(pipeline)
+        if samples:
+            issues.append(
+                f"{label}: found at least {len(samples)}; samples={samples!r}"
+            )
+    return issues
+
+
 async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
@@ -2102,6 +2369,15 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
         [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
         name="room_task_created_sparse",
         sparse=True,
+    )
+
+
+async def _ensure_cancellation_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "cancelled_messages",
+        [("reconciliation_status", 1), ("message_id", 1)],
+        name="cancellation_reconciliation_message",
     )
 
 
@@ -2270,7 +2546,9 @@ def create_delivery_facade(
     resolved_config = config or DeliveryConfig()
     resolved_now = now or utcnow
     resolved_id_factory = id_factory or (lambda: uuid4().hex)
-    resolved_instance_id = instance_id or resolved_id_factory()
+    resolved_instance_id = instance_id or (
+        get_instance_id() if id_factory is None else resolved_id_factory()
+    )
     resolved_task_runner = task_runner or traced_create_task
 
     event_bus = CrossInstanceEventBus(

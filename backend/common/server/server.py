@@ -1,5 +1,4 @@
 import json
-import logging
 from collections.abc import AsyncIterable
 from typing import Any
 
@@ -9,6 +8,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from common.middleware.request_logging import RequestLoggingMiddleware
+from common.observability import configure_logging, get_logger, safe_exception_metadata
 from common.server.task_manager import TaskManager
 from common.types import (
     A2ARequest,
@@ -26,7 +27,7 @@ from common.types import (
     TaskResubscriptionRequest,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class A2AServer:
@@ -43,24 +44,25 @@ class A2AServer:
         self.endpoint = endpoint
         self.task_manager = task_manager
         self.agent_card = agent_card
-        self.app = Starlette()
-        self.app.add_route(self.endpoint, self._process_request, methods=["POST"])
+        application = Starlette()
+        application.add_route(self.endpoint, self._process_request, methods=["POST"])
 
         # Support both new and legacy agent card paths
         # New standard path
-        self.app.add_route(
+        application.add_route(
             "/.well-known/agent-card.json", self._get_agent_card, methods=["GET"]
         )
-        self.app.add_route(
+        application.add_route(
             "/.well-known/agent-card.json", self._handle_options, methods=["OPTIONS"]
         )
         # Legacy path for backward compatibility
-        self.app.add_route(
+        application.add_route(
             "/.well-known/agent.json", self._get_agent_card, methods=["GET"]
         )
-        self.app.add_route(
+        application.add_route(
             "/.well-known/agent.json", self._handle_options, methods=["OPTIONS"]
         )
+        self.app = RequestLoggingMiddleware(application)
 
     def start(self):
         if self.agent_card is None:
@@ -71,7 +73,16 @@ class A2AServer:
 
         import uvicorn
 
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        from common.config.settings import settings
+
+        configure_logging(settings)
+        uvicorn.run(
+            self.app,
+            host=self.host,
+            port=self.port,
+            log_config=None,
+            access_log=False,
+        )
 
     def _get_agent_card(self, request: Request) -> JSONResponse:
         headers = {
@@ -134,7 +145,10 @@ class A2AServer:
         elif isinstance(e, ValidationError):
             json_rpc_error = InvalidRequestError(data=json.loads(e.json()))
         else:
-            logger.error(f"Unhandled exception: {e}")
+            logger.error(
+                "a2a_server_request_failed",
+                extra=safe_exception_metadata(e),
+            )
             json_rpc_error = InternalError()
 
         response = JSONRPCResponse(id=None, error=json_rpc_error)
