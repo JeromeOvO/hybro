@@ -40,7 +40,7 @@ const HERO_EXAMPLE_PROMPTS = [
   "Search creators across all social media platform",
 ]
 
-const marqueeFrameworks = FRAMEWORKS.filter((fw) => fw.name !== "More ...")
+const marqueeFrameworks = FRAMEWORKS
 
 export default function OpenSourcePage() {
   const [activeTab, setActiveTab] = useState<"script" | "docker">("script")
@@ -128,16 +128,19 @@ export default function OpenSourcePage() {
       <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-8">
         {/* Hero Section */}
         <section className="pt-16 md:pt-24 pb-12 text-center animate-fade-up">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-muted/60 border border-border/60 text-muted-foreground mb-6 shadow-xs backdrop-blur-md">
-            <span className="w-2 h-2 rounded-full bg-[hsl(var(--color-hybro-hy))] animate-pulse" />
-            <span className="text-[hsl(var(--color-hybro-hy))] font-bold">HYBRO CORE v0.2</span>
-            <span className="text-border">|</span>
-            <span>OPEN SOURCE RELEASE</span>
+          {/* Version tag */}
+          <div className="relative inline-flex items-center gap-2.5 px-5 mb-7 font-mono text-[11px] tracking-[0.2em] uppercase text-muted-foreground/80">
+            <span aria-hidden className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
+            <span aria-hidden className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
+            <span className="text-[hsl(var(--color-hybro-hy))]">hybro/core</span>
+            <span className="text-border">@</span>
+            <span className="text-brand-gradient font-semibold">v0.2</span>
+            <span className="text-border">·</span>
+            <span>open source</span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight mb-6 max-w-4xl mx-auto leading-[1.15]">
-            Launch <span className="text-brand-gradient">a local meeting room</span>
+            Launch a <span className="text-brand-gradient">local meeting room</span>
             <br />
             for your agents
           </h1>
@@ -290,10 +293,10 @@ export default function OpenSourcePage() {
                   </div>
                   <h3 className="text-xl font-semibold mb-2">Local-First & Private</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                    100% data sovereignty. Nothing leaves your machine.
+                    Run completely offline. No telemetry, no tracking, no cloud lock-in. Your data never leaves your machine.
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                {/* <div className="flex flex-wrap gap-2">
                   {["Offline-capable", "No telemetry", "Self-hosted"].map((tag) => (
                     <span
                       key={tag}
@@ -302,7 +305,7 @@ export default function OpenSourcePage() {
                       {tag}
                     </span>
                   ))}
-                </div>
+                </div> */}
               </div>
             </FadeInSection>
 
@@ -312,12 +315,12 @@ export default function OpenSourcePage() {
                   <div className="w-11 h-11 rounded-xl bg-[hsl(var(--color-hybro-bro)/0.12)] flex items-center justify-center mb-4">
                     <GitBranch className="h-5 w-5 text-[hsl(var(--color-hybro-bro))]" />
                   </div>
-                  <h3 className="text-xl font-semibold mb-2">A2A Protocol Standard</h3>
+                  <h3 className="text-xl font-semibold mb-2">Works with any framework</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                    Any framework, one wire format via the Agent2Agent spec.
+                    Using the Agent2Agent protocol standard, agents talk to each other in one shared format.
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                {/* <div className="flex flex-wrap gap-2">
                   {["LangChain", "AutoGen", "CrewAI", "Custom"].map((tag) => (
                     <span
                       key={tag}
@@ -326,7 +329,7 @@ export default function OpenSourcePage() {
                       {tag}
                     </span>
                   ))}
-                </div>
+                </div> */}
               </div>
             </FadeInSection>
           </div>
