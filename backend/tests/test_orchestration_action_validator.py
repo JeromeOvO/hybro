@@ -918,7 +918,7 @@ def test_planner_schema_accepts_business_level_delegate_without_control_fields()
     )
 
 
-def test_planner_schema_accepts_business_level_question_without_blocker_keys():
+def test_planner_schema_accepts_business_level_question_with_empty_blocker_keys():
     validate(
         {
             "action": "ask_user",
@@ -930,6 +930,7 @@ def test_planner_schema_accepts_business_level_question_without_blocker_keys():
                     "prompt_type": "text",
                     "choices": None,
                     "reason": "initial_clarification",
+                    "blocker_keys": [],
                 }
             ],
             "synthesis_instruction": None,

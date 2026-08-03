@@ -126,12 +126,17 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": ["initial_clarification", "blocker"],
                     },
+                    "blocker_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": [
                     "prompt",
                     "prompt_type",
                     "choices",
                     "reason",
+                    "blocker_keys",
                 ],
             },
         },
