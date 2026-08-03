@@ -16,6 +16,7 @@ from api_gateway.viewsets.agent import AgentViewSet
 from common.auth import (
     ClerkUser,
     get_current_user,
+    get_current_user_or_service,
     get_optional_user,
 )
 from common.protocols import AgentRegistry
@@ -34,10 +35,10 @@ router.include_router(agent_viewset.get_router())
 @router.post("/agent/registerAgent")
 async def register_agent(
     request: Request,
-    user: ClerkUser = Depends(get_current_user),
+    user: ClerkUser = Depends(get_current_user_or_service),
     center: AgentCenterCompatibility = Depends(get_agent_center),
 ):
-    """Register a new agent - PROTECTED (requires authentication)"""
+    """Register a new agent - PROTECTED (Clerk user or default-agent registrar service token)"""
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
     # we should use current user's clerk id as provider_id

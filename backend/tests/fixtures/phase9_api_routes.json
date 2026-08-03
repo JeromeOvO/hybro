@@ -216,11 +216,11 @@
   },
   {
     "auth_dependencies": [
-      "get_current_user"
+      "get_current_user_or_service"
     ],
     "dependencies": [
       "get_agent_center",
-      "get_current_user"
+      "get_current_user_or_service"
     ],
     "methods": [
       "POST"

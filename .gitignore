@@ -23,6 +23,8 @@ Thumbs.db
 .env.development.local
 .env.test.local
 .env.production.local
+# Local agent secrets (created from default_agents/.env.example by install.sh)
+default_agents/.env
 
 # Python / Caches
 __pycache__/
@@ -30,7 +32,9 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .ruff_cache/
-.venv/
+# No trailing slash: uv can leave .venv as a symlink to its cache, which a
+# directory-only pattern would not ignore.
+.venv
 venv/
 ENV/
 

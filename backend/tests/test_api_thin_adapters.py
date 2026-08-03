@@ -314,6 +314,7 @@ def test_phase9_route_inventory_matches_live_app_routes():
                 "get_api_key",
                 "get_api_key_no_track",
                 "get_current_user",
+                "get_current_user_or_service",
                 "get_current_user_with_query_token",
                 "get_optional_user",
             }
@@ -349,6 +350,7 @@ def test_route_inventory_auth_dependencies_are_only_auth_dependencies():
         "get_api_key",
         "get_api_key_no_track",
         "get_current_user",
+        "get_current_user_or_service",
         "get_current_user_with_query_token",
         "get_optional_user",
     }

@@ -201,10 +201,10 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_current_user"
+      "get_current_user_or_service"
     ],
     "auth_dependencies": [
-      "get_current_user"
+      "get_current_user_or_service"
     ],
     "include_in_schema": true
   },

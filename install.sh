@@ -52,6 +52,47 @@ if [ ! -f frontend/.env.local ]; then
     fi
 fi
 
+if [ ! -f default_agents/.env ]; then
+    if [ -f default_agents/.env.example ]; then
+        cp default_agents/.env.example default_agents/.env
+        echo "Created default_agents/.env from example"
+        echo "NOTE: set OPENAI_API_KEY in default_agents/.env so the default agents can respond."
+    fi
+fi
+
+# /agent/registerAgent is protected. The one-shot registrar authenticates with a
+# shared service token instead of a Clerk session, so both sides need the same
+# secret or every registration fails with 401. Generate it once, after both .env
+# files exist. Idempotent: an already-configured token is left untouched.
+if [ -f backend/.env ] && [ -f default_agents/.env ]; then
+    sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
+fi
+
+# The default-agent services in docker-compose.yml are generated from
+# default_agents/agents.yaml, which is the single source of truth. Regenerate
+# before starting anything so an edited manifest is reflected in this run -
+# including for the one-shot registrar, which registers whatever Compose
+# brought up. Only git and docker are guaranteed present, so fall back to a
+# container when the host has no python3 + PyYAML.
+echo "Generating default-agent services from default_agents/agents.yaml..."
+if python3 -c "import yaml" >/dev/null 2>&1; then
+    python3 default_agents/render_compose.py
+elif command -v uv >/dev/null 2>&1; then
+    uv run --with pyyaml python default_agents/render_compose.py
+else
+    echo "  (no host python3 + PyYAML; generating via Docker)"
+    # --user keeps the rewritten file owned by the caller rather than root;
+    # HOME must then point somewhere writable or pip's user install fails.
+    docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -e HOME=/tmp \
+        -v "$PWD:/repo" \
+        -w /repo \
+        python:3.12-slim \
+        sh -c "pip install --quiet --disable-pip-version-check pyyaml \
+               && python default_agents/render_compose.py"
+fi
+
 echo "Starting Docker containers..."
 if docker compose version >/dev/null 2>&1; then
     docker compose up -d --build

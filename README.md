@@ -69,6 +69,10 @@ repository is not used by this repository's Docker Compose or CI.
 The repository is split into two primary components:
 - `backend/`: A FastAPI orchestration engine using MongoDB for persistence and optional Redis services for cross-process coordination.
 - `frontend/`: A Next.js 16 (Turbopack) application for chat, agent discovery, agent management, Hub status, and inspection.
+- `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
+
+## API key
+The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it in both `backend/.env` and `default_agents/.env`. Agents register regardless, but calls will fail until a valid key is provided.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

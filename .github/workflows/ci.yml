@@ -58,6 +58,31 @@ jobs:
       - name: Run Backend Tests
         run: uv run pytest
 
+  default-agents-ci:
+    name: Default Agents CI (compose sync)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-suffix: "default-agents-uv"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # docker-compose.yml's default-agent region is generated from
+      # default_agents/agents.yaml. Fail if the manifest was edited without
+      # running: python default_agents/render_compose.py
+      - name: Check docker-compose.yml is in sync with agents.yaml
+        run: uv run --with pyyaml python default_agents/render_compose.py --check
+
   frontend-ci:
     name: Frontend CI (Next.js / React)
     runs-on: ubuntu-latest
