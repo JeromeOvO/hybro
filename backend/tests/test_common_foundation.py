@@ -1087,6 +1087,7 @@ def test_protocol_methods_match_design_doc():
             "get_by_id",
             "get_by_ids",
             "get_for_room",
+            "get_timeline_page",
             "get_thread",
             "update_status",
             "delete_for_room",

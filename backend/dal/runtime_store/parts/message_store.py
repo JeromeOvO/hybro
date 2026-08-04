@@ -5,6 +5,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pymongo.errors import DuplicateKeyError
+
 from common.a2a_constants import TERMINAL_STATES, CommonTaskState
 from common.utils.a2a_helpers import sanitize_artifact_parts
 from common.utils.logger import get_logger
@@ -19,6 +21,7 @@ from dal.runtime_store.parts.parsing import (
     _strip_unset_task_tracking_fields,
 )
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
+from room.timeline import normalize_timeline_document
 
 logger = get_logger(__name__)
 ARTIFACT_MATERIALIZATION_WAIT_SECONDS = 20 * 60 + 60
@@ -181,13 +184,62 @@ class MessageRuntimeStorePart:
         self, room_agent_message: RoomAgentMessage
     ) -> None:
         try:
-            await self._room_agent_messages.replace_one(
-                {"message_id": room_agent_message.message_id},
-                room_agent_message.model_dump(mode="json"),
-                upsert=True,
+            raw_candidate = room_agent_message.model_dump(mode="json")
+            for field in ("room_id", "message_id"):
+                value = raw_candidate.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"Agent-message upsert requires non-empty {field}")
+            candidate = normalize_timeline_document(raw_candidate)
+            message_id = candidate["message_id"]
+            room_id = candidate["room_id"]
+            existing = await self._room_agent_messages.find_one(
+                {"message_id": message_id}
             )
+            if existing is None:
+                try:
+                    await self._room_agent_messages.insert_one(candidate)
+                    return
+                except DuplicateKeyError:
+                    # Another writer won the unique message_id race. Preserve its
+                    # immutable identity and use the normal replacement CAS below.
+                    existing = await self._room_agent_messages.find_one(
+                        {"message_id": message_id}
+                    )
+                    if existing is None:
+                        raise
+
+            if existing.get("room_id") != room_id:
+                raise ValueError("Agent-message upsert room_id mismatch")
+            immutable_fields = (
+                "room_id",
+                "message_id",
+                "message_created_at",
+                "timeline_sort_us",
+            )
+            if any(field not in existing for field in immutable_fields):
+                raise ValueError(
+                    "Existing agent message has incomplete timeline identity"
+                )
+            # Validate the persisted position before carrying it into the full
+            # replacement. This prevents a legacy/corrupt key from being blessed.
+            normalize_timeline_document(existing)
+            immutable = {field: existing[field] for field in immutable_fields}
+            candidate.update(immutable)
+            replaced = await self._room_agent_messages.replace_one(
+                immutable,
+                candidate,
+                upsert=False,
+            )
+            if not replaced:
+                raise RuntimeError("Agent-message upsert lost immutable-identity race")
         except Exception:
-            logger.error("Failed to upsert room agent message", exc_info=True)
+            logger.error(
+                "Failed to upsert room agent message room_id=%s message_id=%s",
+                room_agent_message.room_id,
+                room_agent_message.message_id,
+                exc_info=True,
+            )
+            raise
 
     async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
         try:

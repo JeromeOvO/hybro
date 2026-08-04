@@ -415,7 +415,38 @@ describe('Room API', () => {
 
       expect(result.success).toBe(true)
       expect(result.message_list).toBeDefined()
-      expect(capturedBody).toMatchObject({ room_id: 'room-1' })
+      expect(capturedBody).toEqual({ room_id: 'room-1' })
+    })
+
+    it('optionally sends timeline pagination fields', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryRoomMessagesByRoomId`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: 'room-1',
+            message_list: [],
+            has_more: true,
+            next_cursor: 'next-token'
+          })
+        })
+      )
+
+      const result = await inquiryRoomMessagesByRoomId(
+        'room-1',
+        undefined,
+        undefined,
+        { limit: 37, cursor: 'cursor-token' }
+      )
+
+      expect(capturedBody).toEqual({
+        room_id: 'room-1',
+        limit: 37,
+        cursor: 'cursor-token'
+      })
+      expect(result.has_more).toBe(true)
+      expect(result.next_cursor).toBe('next-token')
     })
   })
 

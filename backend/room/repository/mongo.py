@@ -6,7 +6,12 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from common.dto import UserMessageInsertResult
+from common.dto import (
+    RoomTimelineEntry,
+    RoomTimelinePage,
+    TimelinePosition,
+    UserMessageInsertResult,
+)
 from common.idempotency import (
     MAX_CLIENT_REQUEST_ID_LENGTH,
     normalize_client_request_id,
@@ -20,6 +25,12 @@ from room.idempotency import (
     stored_fingerprint_matches,
 )
 from room.message_graph import normalize_history_rows, status_update_payload
+from room.timeline import (
+    SOURCE_RANK,
+    normalize_timeline_document,
+    timeline_key,
+    timeline_sort_us_from_value,
+)
 
 logger = get_logger(__name__)
 
@@ -133,7 +144,9 @@ class MessageMongoRepository:
         self._cancelled_messages = None
 
     async def save_user_message(self, message: dict) -> str:
-        candidate = _canonical_user_message_document(message)
+        candidate = normalize_timeline_document(
+            _canonical_user_message_document(message)
+        )
         await self._user_messages.insert_one(candidate)
         return candidate["message_id"]
 
@@ -159,7 +172,9 @@ class MessageMongoRepository:
         self,
         document: dict,
     ) -> UserMessageInsertResult:
-        candidate = _canonical_user_message_document(document)
+        candidate = normalize_timeline_document(
+            _canonical_user_message_document(document)
+        )
         room_id = candidate.get("room_id")
         client_request_id = candidate.get("client_request_id")
         fingerprint = candidate.get("idempotency_fingerprint")
@@ -233,8 +248,13 @@ class MessageMongoRepository:
         )
 
     async def save_agent_message(self, message: dict) -> str:
-        inserted_id = await self._agent_messages.insert_one(dict(message))
-        return str(message.get("message_id") or inserted_id)
+        candidate = normalize_timeline_document(message)
+        for field in ("message_id", "room_id"):
+            value = candidate.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Agent-message insert requires non-empty {field}")
+        inserted_id = await self._agent_messages.insert_one(candidate)
+        return str(candidate.get("message_id") or inserted_id)
 
     async def get_by_id(self, message_id: str) -> dict | None:
         user_message = await self._user_messages.find_one({"message_id": message_id})
@@ -280,9 +300,66 @@ class MessageMongoRepository:
     async def get_for_room(
         self, room_id: str, limit: int, before: datetime | None = None
     ) -> list[dict]:
-        user_messages = await self.get_user_messages_for_room(room_id, before=before)
-        agent_messages = await self.get_agent_messages_for_room(room_id, before=before)
-        return normalize_history_rows(user_messages, agent_messages)[:limit]
+        if limit <= 0:
+            return []
+        query: dict[str, Any] = {"room_id": room_id}
+        if before is not None:
+            query["timeline_sort_us"] = {"$lt": timeline_sort_us_from_value(before)}
+        sort = [("timeline_sort_us", -1), ("message_id", -1)]
+        user_messages = await self._user_messages.find(query, sort=sort, limit=limit)
+        agent_messages = await self._agent_messages.find(query, sort=sort, limit=limit)
+        merged = [
+            *[("user", row) for row in user_messages],
+            *[("agent", row) for row in agent_messages],
+        ]
+        merged.sort(key=_typed_row_key, reverse=True)
+        selected = merged[:limit]
+        selected.reverse()
+        return [{**row, "message_type": source} for source, row in selected]
+
+    async def get_timeline_page(
+        self,
+        room_id: str,
+        *,
+        limit: int,
+        before: TimelinePosition | None,
+    ) -> RoomTimelinePage:
+        fetch_limit = limit + 1
+        sort = [("timeline_sort_us", -1), ("message_id", -1)]
+        user_rows = await self._user_messages.find(
+            _timeline_query(room_id, source="user", before=before),
+            sort=sort,
+            limit=fetch_limit,
+        )
+        agent_rows = await self._agent_messages.find(
+            _timeline_query(room_id, source="agent", before=before),
+            sort=sort,
+            limit=fetch_limit,
+        )
+        merged = [
+            *[("user", row) for row in user_rows],
+            *[("agent", row) for row in agent_rows],
+        ]
+        merged.sort(key=_typed_row_key, reverse=True)
+        selected = merged[:limit]
+        has_more = len(merged) > limit
+        next_position = None
+        if has_more and selected:
+            source, row = selected[-1]
+            next_position = TimelinePosition(
+                timeline_sort_us=_valid_timeline_sort_us(row),
+                source=source,
+                message_id=_valid_message_id(row),
+            )
+        selected.reverse()
+        return RoomTimelinePage(
+            entries=[
+                RoomTimelineEntry(source=source, message=dict(row))
+                for source, row in selected
+            ],
+            has_more=has_more,
+            next_position=next_position,
+        )
 
     async def get_user_message_by_id(self, message_id: str) -> dict | None:
         return await self._user_messages.find_one({"message_id": message_id})
@@ -293,14 +370,24 @@ class MessageMongoRepository:
     async def get_user_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
-        query = _room_message_query(room_id, before)
-        return await self._user_messages.find(query, limit=limit)
+        rows = await self._user_messages.find(
+            _room_message_query(room_id, before),
+            sort=[("timeline_sort_us", -1), ("message_id", -1)],
+            limit=limit,
+        )
+        rows.reverse()
+        return rows
 
     async def get_agent_messages_for_room(
         self, room_id: str, limit: int = 100, before: datetime | None = None
     ) -> list[dict]:
-        query = _room_message_query(room_id, before)
-        return await self._agent_messages.find(query, limit=limit)
+        rows = await self._agent_messages.find(
+            _room_message_query(room_id, before),
+            sort=[("timeline_sort_us", -1), ("message_id", -1)],
+            limit=limit,
+        )
+        rows.reverse()
+        return rows
 
     async def get_agent_messages_by_related_message_id(
         self, related_message_id: str
@@ -364,10 +451,15 @@ class MessageMongoRepository:
 
         return thread
 
-    async def update_status(self, message_id: str, status: str, **fields) -> bool:
-        payload = status_update_payload(status, fields)
+    async def update_status(
+        self, target_message_id: str, status: str, **fields
+    ) -> bool:
+        payload = status_update_payload(
+            status,
+            _without_timeline_identity(fields),
+        )
         return await self._agent_messages.update_one(
-            {"message_id": message_id},
+            {"message_id": target_message_id},
             {"$set": payload},
         )
 
@@ -376,6 +468,8 @@ class MessageMongoRepository:
         for immutable_field in (
             "message_id",
             "room_id",
+            "message_created_at",
+            "timeline_sort_us",
             "client_request_id",
             "idempotency_fingerprint",
             "idempotency_fingerprint_version",
@@ -387,9 +481,10 @@ class MessageMongoRepository:
         )
 
     async def update_agent_message(self, message_id: str, updates: dict) -> bool:
+        candidate = _without_timeline_identity(updates)
         updated = await self._agent_messages.update_one(
             {"message_id": message_id},
-            {"$set": dict(updates)},
+            {"$set": candidate},
         )
         if updated:
             return True
@@ -407,7 +502,7 @@ class MessageMongoRepository:
                     "$nin": list(terminal_states)
                 },
             },
-            {"$set": dict(updates)},
+            {"$set": _without_timeline_identity(updates)},
         )
 
     async def count_agent_messages(self, query: dict) -> int:
@@ -422,5 +517,62 @@ class MessageMongoRepository:
 def _room_message_query(room_id: str, before: datetime | None) -> dict[str, Any]:
     query: dict[str, Any] = {"room_id": room_id}
     if before is not None:
-        query["message_created_at"] = {"$lt": before}
+        query["timeline_sort_us"] = {"$lt": timeline_sort_us_from_value(before)}
     return query
+
+
+def _timeline_query(
+    room_id: str,
+    *,
+    source: str,
+    before: TimelinePosition | None,
+) -> dict[str, Any]:
+    query: dict[str, Any] = {"room_id": room_id}
+    if before is None:
+        return query
+
+    source_rank = SOURCE_RANK[source]
+    cursor_rank = SOURCE_RANK[before.source]
+    if source_rank < cursor_rank:
+        query["timeline_sort_us"] = {"$lte": before.timeline_sort_us}
+    elif source_rank > cursor_rank:
+        query["timeline_sort_us"] = {"$lt": before.timeline_sort_us}
+    else:
+        query["$or"] = [
+            {"timeline_sort_us": {"$lt": before.timeline_sort_us}},
+            {
+                "timeline_sort_us": before.timeline_sort_us,
+                "message_id": {"$lt": before.message_id},
+            },
+        ]
+    return query
+
+
+def _valid_timeline_sort_us(row: dict[str, Any]) -> int:
+    value = row.get("timeline_sort_us")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("invalid timeline_sort_us in stored message")
+    return value
+
+
+def _valid_message_id(row: dict[str, Any]) -> str:
+    value = row.get("message_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError("invalid message_id in stored message")
+    return value
+
+
+def _typed_row_key(item: tuple[str, dict[str, Any]]) -> tuple[int, int, str]:
+    source, row = item
+    return timeline_key(
+        timeline_sort_us=_valid_timeline_sort_us(row),
+        source=source,
+        message_id=_valid_message_id(row),
+    )
+
+
+def _without_timeline_identity(updates: dict[str, Any]) -> dict[str, Any]:
+    candidate = dict(updates)
+    for field in ("room_id", "message_id", "message_created_at", "timeline_sort_us"):
+        candidate.pop(field, None)
+    return candidate

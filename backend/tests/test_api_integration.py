@@ -137,6 +137,52 @@ class TestRoomCenterHTTPIntegration:
         assert body["room_id"] == "room-http-001"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pagination",
+        [
+            {"limit": True},
+            {"cursor": "not+base64"},
+        ],
+    )
+    async def test_invalid_room_timeline_pagination_is_body_level_400(
+        self,
+        http_client,
+        integration_app,
+        integration_user,
+        pagination,
+    ):
+        from models.room import Room
+        from room.compat.runtime import RoomServices
+
+        mock_room = Room(
+            room_id="room-http-invalid-page",
+            room_name="Test",
+            room_owner_id=integration_user.user_id,
+            room_owner_name="Tester",
+            room_agent_set={},
+        )
+        mock_db = MagicMock()
+        mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
+
+        from api_gateway.routes import room_routes as room_api
+
+        integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
+        integration_app.dependency_overrides[room_api.get_room_center] = RoomServices
+        try:
+            resp = await http_client.post(
+                "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+                json={"room_id": mock_room.room_id, **pagination},
+            )
+        finally:
+            integration_app.dependency_overrides.pop(room_api.get_room_store, None)
+            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert body["status_code"] == 400
+
+    @pytest.mark.asyncio
     async def test_inquiry_room_messages_returns_json(
         self,
         http_client,

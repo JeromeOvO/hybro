@@ -338,6 +338,8 @@ class RoomCenterMemoryRequest(BaseModel):
 
 class RoomCenterRoomMessageRequest(BaseModel):
     room_id: str | None = None
+    limit: Any | None = None
+    cursor: Any | None = None
     message_id: str | None = None
     message_type: str | None = None
     message_content: str | None = None

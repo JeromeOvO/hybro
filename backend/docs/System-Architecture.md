@@ -1013,6 +1013,75 @@ completed before the crash. Failure to release a losing pending RoomFiles claim
 is logged for durable stale-claim recovery and does not replace an already
 established replay or conflict result.
 
+### Stable Room timeline pagination
+
+`POST /api/v1/roomCenter/inquiryRoomMessagesByRoomId` accepts optional `limit`
+(default and maximum `200`, minimum `1`) and an opaque `cursor`. The first request
+returns the globally newest page across user and Agent collections. A returned
+`next_cursor` loads older data. Each page is projected through the same public
+attachment, artifact/status, HITL, task-label, system-message, and user
+`extend_info` privacy boundary as before and is returned in ascending timeline
+order, so clients prepend continuation pages. `has_more=false` implies
+`next_cursor=null`.
+
+The immutable private ordering key is
+`(timeline_sort_us, source_rank, message_id)`, where `timeline_sort_us` is UTC
+Unix epoch microseconds derived deterministically from `message_created_at`, user
+has rank `0`, and Agent has rank `1`. `step_number` is display-only. Cursor v1 is
+a room-bound base64url JSON token containing only that position and the fixed
+`before` direction; callers must treat it as opaque. Ownership is checked before
+cursor/limit validation.
+
+Every new message write sets `timeline_sort_us`; updates cannot change `room_id`,
+`message_id`, `message_created_at`, or `timeline_sort_us`. Before deploying code
+that creates the indexes, audit and backfill both collections:
+
+```bash
+cd backend
+uv run python -m scripts.migrate_room_timeline_sort_keys          # dry-run
+uv run python -m scripts.migrate_room_timeline_sort_keys --apply  # write
+```
+
+The migration is batched and repeatable. Quiesce room-message writes for the
+entire dry-run and `--apply` audit/write/final-audit window. Apply revalidates
+all rows, including existing keys, and its predicates detect a changed identity,
+timestamp, or concurrently populated key. A complete second audit must observe
+zero missing keys, conflicts, invalid timestamps, and invalid identities before
+the migration writes the versioned `room_timeline_sort_keys_v1` completion marker
+to `migration_markers`, using that value as the document's intrinsically unique
+Mongo `_id` (with `marker_id` retained only as descriptive payload). All reads,
+invalidations, and bootstrap upserts address `_id`; legacy `marker_id`-only rows
+are not readiness evidence. `--apply` first invalidates any prior canonical marker,
+so a failed rerun cannot leave stale readiness evidence. The marker records per-collection
+final-audit counts; it is evidence that the historical mixed-format timestamps
+were deterministically validated, not a snapshot lock. A completion marker is
+never written when apply or final audit fails. New application writes enforce the
+same key invariant after deployment.
+This guarantee therefore depends on keeping old/direct writers quiesced through
+marker creation and deploying only normalized writers afterward.
+
+The migration never substitutes the current time. Invalid `room_id` or
+`message_id` values are reported as bounded key-only samples and require explicit
+manual data repair; migration does not rewrite identity. Missing timeline keys
+are backfilled, while invalid timestamps and conflicting stored integer keys fail.
+Startup readiness separately reports manual identity repair versus migration-
+remediable timeline state, requires the completion marker for non-empty historical
+collections, and checks integer timeline keys before creating these indexes. A
+brand-new database with both message collections empty is a trivially complete
+audit: startup creates the indexes and bootstraps the same zero-count marker so
+later writes and restarts do not require a historical migration:
+
+- `room_user_timeline_desc` on `(room_id ASC, timeline_sort_us DESC, message_id DESC)`;
+- `room_agent_timeline_desc` on `(room_id ASC, timeline_sort_us DESC, message_id DESC)`.
+
+Index failure is fatal; the endpoint does not fall back to an in-memory full scan.
+Deploy in this order: stop/hold writers from the old release as appropriate, run
+dry-run, run apply, deploy the new release, and verify startup readiness/indexes.
+Keyset continuation fixes the page boundary at the cursor key: messages appended
+with later keys after page one do not repeat in older pages. A backdated insert
+behind the cursor may appear in a later page. There is intentionally no snapshot
+isolation across HTTP requests.
+
 ## Agent Dispatch Workflow
 
 Both queue and supervisor execution use `AgentMessageProcessor`.

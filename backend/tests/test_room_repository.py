@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from common.dto import TimelinePosition
 from room.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -260,14 +261,33 @@ async def test_room_repository_create_update_update_fields_set_membership_and_de
 async def test_message_repository_uses_room_message_collections_and_saves_raw_dicts():
     repo, mongo, user_messages, agent_messages = _message_repo()
 
-    user_id = await repo.save_user_message({"message_id": "u1", "room_id": "r1"})
-    agent_id = await repo.save_agent_message({"message_id": "a1", "room_id": "r1"})
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    user_id = await repo.save_user_message(
+        {"message_id": "u1", "room_id": "r1", "message_created_at": created_at}
+    )
+    agent_id = await repo.save_agent_message(
+        {"message_id": "a1", "room_id": "r1", "message_created_at": created_at}
+    )
 
     assert mongo.collection_calls == ["room_user_messages", "room_agent_messages"]
     assert user_id == "u1"
     assert agent_id == "a1"
-    assert user_messages.insert_one_calls == [{"message_id": "u1", "room_id": "r1"}]
-    assert agent_messages.insert_one_calls == [{"message_id": "a1", "room_id": "r1"}]
+    assert user_messages.insert_one_calls == [
+        {
+            "message_id": "u1",
+            "room_id": "r1",
+            "message_created_at": created_at,
+            "timeline_sort_us": 1767225600000000,
+        }
+    ]
+    assert agent_messages.insert_one_calls == [
+        {
+            "message_id": "a1",
+            "room_id": "r1",
+            "message_created_at": created_at,
+            "timeline_sort_us": 1767225600000000,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -277,6 +297,7 @@ async def test_legacy_user_message_save_normalizes_request_key_without_mutating_
         "message_id": "message-1",
         "room_id": "room-1",
         "client_request_id": "  request-1  ",
+        "message_created_at": "2026-01-01T00:00:00Z",
     }
 
     message_id = await repo.save_user_message(message)
@@ -288,6 +309,8 @@ async def test_legacy_user_message_save_normalizes_request_key_without_mutating_
             "message_id": "message-1",
             "room_id": "room-1",
             "client_request_id": "request-1",
+            "message_created_at": "2026-01-01T00:00:00Z",
+            "timeline_sort_us": 1767225600000000,
         }
     ]
 
@@ -340,6 +363,7 @@ def _idempotent_message(
         "idempotency_fingerprint_version": 1,
         "message_type": "user",
         "message_content": {"message_text": "hello"},
+        "message_created_at": "2026-01-01T00:00:00Z",
     }
 
 
@@ -545,6 +569,31 @@ async def test_user_message_update_cannot_rewrite_persistent_identity_fields():
 
 
 @pytest.mark.asyncio
+async def test_message_updates_strip_immutable_timeline_identity():
+    created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    repo, _, users, agents = _message_repo(
+        user_docs=[{"message_id": "u1", "room_id": "r1"}],
+        agent_docs=[{"message_id": "a1", "room_id": "r1"}],
+    )
+    updates = {
+        "message_id": "rewritten",
+        "room_id": "other",
+        "message_created_at": created_at,
+        "timeline_sort_us": 1,
+        "message_content": {"message_text": "allowed"},
+    }
+
+    assert await repo.update_user_message("u1", updates) is True
+    assert await repo.update_agent_message("a1", updates) is True
+    assert users.update_one_calls[-1][1]["$set"] == {
+        "message_content": {"message_text": "allowed"}
+    }
+    assert agents.update_one_calls[-1][1]["$set"] == {
+        "message_content": {"message_text": "allowed"}
+    }
+
+
+@pytest.mark.asyncio
 async def test_message_repository_get_by_id_searches_user_first_then_agent():
     repo, _, user_messages, agent_messages = _message_repo(
         user_docs=[{"message_id": "u1", "message_type": "user"}],
@@ -587,8 +636,15 @@ async def test_message_repository_direct_room_history_methods_pass_limits():
     assert await repo.get_agent_messages_for_room("r1", limit=4) == [
         {"message_id": "a1", "room_id": "r1"}
     ]
-    assert user_messages.find_calls[-1] == ({"room_id": "r1"}, {"limit": 3})
-    assert agent_messages.find_calls[-1] == ({"room_id": "r1"}, {"limit": 4})
+    expected_sort = [("timeline_sort_us", -1), ("message_id", -1)]
+    assert user_messages.find_calls[-1] == (
+        {"room_id": "r1"},
+        {"sort": expected_sort, "limit": 3},
+    )
+    assert agent_messages.find_calls[-1] == (
+        {"room_id": "r1"},
+        {"sort": expected_sort, "limit": 4},
+    )
 
 
 @pytest.mark.asyncio
@@ -1293,7 +1349,7 @@ async def test_runtime_store_sparse_room_update_preserves_membership():
 
 
 @pytest.mark.asyncio
-async def test_runtime_store_upsert_room_agent_message_replaces_full_document():
+async def test_runtime_store_upsert_room_agent_message_preserves_timeline_identity():
     from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -1304,7 +1360,8 @@ async def test_runtime_store_upsert_room_agent_message_replaces_full_document():
                 "room_id": "r1",
                 "message_type": "agent",
                 "agent_id": "agent-1",
-                "message_created_at": datetime(2026, 5, 11, tzinfo=UTC),
+                "message_created_at": datetime(2026, 5, 10, tzinfo=UTC),
+                "timeline_sort_us": 1778371200000000,
                 "message_content": {"message_text": "old"},
                 "orphan_field": "must be removed",
             }
@@ -1327,9 +1384,301 @@ async def test_runtime_store_upsert_room_agent_message_replaces_full_document():
         )
     )
 
-    assert agent_messages.replace_one_calls
-    assert agent_messages.docs[0]["message_content"]["message_text"] == "new"
+    assert agent_messages.update_one_calls == []
+    assert len(agent_messages.replace_one_calls) == 1
+    replace_filter, replacement, kwargs = agent_messages.replace_one_calls[0]
+    assert replace_filter == {
+        "room_id": "r1",
+        "message_id": "summary-1",
+        "message_created_at": datetime(2026, 5, 10, tzinfo=UTC),
+        "timeline_sort_us": 1778371200000000,
+    }
+    assert kwargs == {"upsert": False}
+    assert replacement["message_content"]["message_text"] == "new"
     assert "orphan_field" not in agent_messages.docs[0]
+    assert agent_messages.docs[0]["message_created_at"] == datetime(
+        2026, 5, 10, tzinfo=UTC
+    )
+    assert agent_messages.docs[0]["timeline_sort_us"] == 1778371200000000
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_new_insert_sets_timeline_key():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    agent_messages = FakeCollection()
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    await store.upsert_room_agent_message(
+        RuntimeRoomAgentMessage(
+            room_id="r1",
+            message_id="new-agent",
+            agent_id="agent-1",
+            message_created_at=datetime(1970, 1, 1, 0, 0, 1, 123456, tzinfo=UTC),
+            message_content=RuntimeMessageContent(message_text="new"),
+        )
+    )
+
+    assert agent_messages.replace_one_calls == []
+    assert len(agent_messages.insert_one_calls) == 1
+    assert agent_messages.insert_one_calls[0]["timeline_sort_us"] == 1_123_456
+    assert agent_messages.docs[0]["timeline_sort_us"] == 1_123_456
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_propagates_insert_failure():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    class FailingInsertCollection(FakeCollection):
+        async def insert_one(self, document: dict) -> str:
+            raise RuntimeError("insert failed")
+
+    agent_messages = FailingInsertCollection()
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        await store.upsert_room_agent_message(
+            RuntimeRoomAgentMessage(
+                room_id="r1",
+                message_id="new-agent",
+                agent_id="agent-1",
+                message_created_at=datetime(1970, 1, 1, tzinfo=UTC),
+                message_content=RuntimeMessageContent(message_text="new"),
+            )
+        )
+
+    assert agent_messages.docs == []
+    assert agent_messages.replace_one_calls == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_first_insert_race_preserves_winner_identity():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    winner = {
+        "message_id": "raced-insert",
+        "room_id": "r1",
+        "message_type": "agent",
+        "agent_id": "agent-winner",
+        "message_created_at": "1970-01-01T00:00:01Z",
+        "timeline_sort_us": 1_000_000,
+        "message_content": {"message_text": "winner"},
+        "stale_field": "remove",
+    }
+
+    class RacingInsertCollection(FakeCollection):
+        async def insert_one(self, document: dict) -> str:
+            self.insert_one_calls.append(deepcopy(document))
+            self.docs.append(deepcopy(winner))
+            raise DuplicateKeyError("concurrent winner")
+
+    agent_messages = RacingInsertCollection()
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    await store.upsert_room_agent_message(
+        RuntimeRoomAgentMessage(
+            room_id="r1",
+            message_id="raced-insert",
+            agent_id="agent-incoming",
+            message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
+            message_content=RuntimeMessageContent(message_text="incoming"),
+        )
+    )
+
+    assert len(agent_messages.insert_one_calls) == 1
+    assert len(agent_messages.replace_one_calls) == 1
+    assert agent_messages.docs[0]["room_id"] == "r1"
+    assert agent_messages.docs[0]["message_id"] == "raced-insert"
+    assert agent_messages.docs[0]["message_created_at"] == winner["message_created_at"]
+    assert agent_messages.docs[0]["timeline_sort_us"] == winner["timeline_sort_us"]
+    assert agent_messages.docs[0]["message_content"]["message_text"] == "incoming"
+    assert "stale_field" not in agent_messages.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_first_insert_cross_room_race_is_safe():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    winner = {
+        "message_id": "shared-raced-insert",
+        "room_id": "room-a",
+        "message_type": "agent",
+        "agent_id": "agent-a",
+        "message_created_at": "1970-01-01T00:00:00Z",
+        "timeline_sort_us": 0,
+        "message_content": {"message_text": "private-a"},
+    }
+
+    class CrossRoomRacingInsertCollection(FakeCollection):
+        async def insert_one(self, document: dict) -> str:
+            self.insert_one_calls.append(deepcopy(document))
+            self.docs.append(deepcopy(winner))
+            raise DuplicateKeyError("concurrent cross-room winner")
+
+    agent_messages = CrossRoomRacingInsertCollection()
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    with pytest.raises(ValueError, match="room_id mismatch"):
+        await store.upsert_room_agent_message(
+            RuntimeRoomAgentMessage(
+                room_id="room-b",
+                message_id="shared-raced-insert",
+                agent_id="agent-b",
+                message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
+                message_content=RuntimeMessageContent(message_text="private-b"),
+            )
+        )
+
+    assert agent_messages.docs == [winner]
+    assert len(agent_messages.insert_one_calls) == 1
+    assert agent_messages.replace_one_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("room_id", "message_id"),
+    [("", "message-1"), ("   ", "message-1"), ("room-1", "")],
+)
+async def test_runtime_store_upsert_room_agent_message_rejects_blank_identity(
+    room_id: str,
+    message_id: str,
+):
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    agent_messages = FakeCollection()
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    with pytest.raises(ValueError, match="requires non-empty"):
+        await store.upsert_room_agent_message(
+            RuntimeRoomAgentMessage(
+                room_id=room_id,
+                message_id=message_id,
+                agent_id="agent-1",
+                message_created_at=datetime(1970, 1, 1, tzinfo=UTC),
+                message_content=RuntimeMessageContent(message_text="invalid"),
+            )
+        )
+
+    assert agent_messages.find_one_calls == []
+    assert agent_messages.insert_one_calls == []
+    assert agent_messages.replace_one_calls == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_rejects_cross_room_collision():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    original = {
+        "message_id": "shared-id",
+        "room_id": "room-a",
+        "message_type": "agent",
+        "agent_id": "agent-a",
+        "message_created_at": "1970-01-01T00:00:00Z",
+        "timeline_sort_us": 0,
+        "message_content": {"message_text": "private-a"},
+    }
+    agent_messages = FakeCollection([original])
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    with pytest.raises(ValueError, match="room_id mismatch"):
+        await store.upsert_room_agent_message(
+            RuntimeRoomAgentMessage(
+                room_id="room-b",
+                message_id="shared-id",
+                agent_id="agent-b",
+                message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
+                message_content=RuntimeMessageContent(message_text="private-b"),
+            )
+        )
+
+    assert agent_messages.docs == [original]
+    assert agent_messages.replace_one_calls == []
+    assert agent_messages.update_one_calls == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_room_agent_message_propagates_false_cas():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    class RacingCollection(FakeCollection):
+        async def replace_one(self, query: dict, replacement: dict, **kwargs) -> bool:
+            self.replace_one_calls.append(
+                (deepcopy(query), deepcopy(replacement), deepcopy(kwargs))
+            )
+            self.docs[0]["message_created_at"] = "1970-01-01T00:00:01Z"
+            self.docs[0]["timeline_sort_us"] = 1_000_000
+            return False
+
+    agent_messages = RacingCollection(
+        [
+            {
+                "message_id": "raced",
+                "room_id": "r1",
+                "message_type": "agent",
+                "agent_id": "agent-1",
+                "message_created_at": "1970-01-01T00:00:00Z",
+                "timeline_sort_us": 0,
+                "message_content": {"message_text": "concurrent"},
+            }
+        ]
+    )
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="immutable-identity race"):
+        await store.upsert_room_agent_message(
+            RuntimeRoomAgentMessage(
+                room_id="r1",
+                message_id="raced",
+                agent_id="agent-1",
+                message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
+                message_content=RuntimeMessageContent(message_text="incoming"),
+            )
+        )
+
+    assert agent_messages.docs[0]["message_content"]["message_text"] == "concurrent"
+    assert agent_messages.docs[0]["timeline_sort_us"] == 1_000_000
 
 
 @pytest.mark.asyncio
@@ -1396,22 +1745,36 @@ async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
 async def test_message_repository_combines_history_sorted_with_before_filter():
     older = datetime(2026, 5, 10, tzinfo=UTC)
     newer = datetime(2026, 5, 11, tzinfo=UTC)
+    older_us = int(older.timestamp() * 1_000_000)
+    newer_us = int(newer.timestamp() * 1_000_000)
     repo, _, user_messages, agent_messages = _message_repo(
         user_docs=[
-            {"message_id": "u2", "room_id": "r1", "message_created_at": newer},
-            {"message_id": "u1", "room_id": "r1", "message_created_at": older},
+            {
+                "message_id": "u2",
+                "room_id": "r1",
+                "message_created_at": newer,
+                "timeline_sort_us": newer_us,
+            },
+            {
+                "message_id": "u1",
+                "room_id": "r1",
+                "message_created_at": older,
+                "timeline_sort_us": older_us,
+            },
         ],
         agent_docs=[
             {
                 "message_id": "a1",
                 "room_id": "r1",
                 "message_created_at": older,
+                "timeline_sort_us": older_us,
                 "step_number": 2,
             },
             {
                 "message_id": "a0",
                 "room_id": "r1",
                 "message_created_at": older,
+                "timeline_sort_us": older_us,
                 "step_number": 1,
             },
         ],
@@ -1421,14 +1784,108 @@ async def test_message_repository_combines_history_sorted_with_before_filter():
 
     assert [doc["message_id"] for doc in history] == ["u1", "a0", "a1"]
     assert [doc["message_type"] for doc in history] == ["user", "agent", "agent"]
-    assert user_messages.find_calls[-1] == (
-        {"room_id": "r1", "message_created_at": {"$lt": newer}},
-        {"limit": 100},
+    expected_query = {"room_id": "r1", "timeline_sort_us": {"$lt": newer_us}}
+    expected_options = {
+        "sort": [("timeline_sort_us", -1), ("message_id", -1)],
+        "limit": 3,
+    }
+    assert user_messages.find_calls[-1] == (expected_query, expected_options)
+    assert agent_messages.find_calls[-1] == (expected_query, expected_options)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_size", [1, 2, 5, 37])
+async def test_timeline_cursor_traversal_is_complete_stable_and_bounded(page_size):
+    same_time = 1785700000000000
+    user_docs = [
+        {"room_id": "r1", "message_id": f"u-{index:03d}", "timeline_sort_us": same_time}
+        for index in range(126)
+    ]
+    agent_docs = [
+        {"room_id": "r1", "message_id": f"a-{index:03d}", "timeline_sort_us": same_time}
+        for index in range(125)
+    ]
+    # A message id is only collection-local; both typed messages must survive.
+    user_docs[0]["message_id"] = "same-id"
+    agent_docs[0]["message_id"] = "same-id"
+    repo, _, user_messages, agent_messages = _message_repo(user_docs, agent_docs)
+
+    before = None
+    pages = []
+    while True:
+        page = await repo.get_timeline_page("r1", limit=page_size, before=before)
+        pages.insert(
+            0, [(entry.source, entry.message["message_id"]) for entry in page.entries]
+        )
+        if not page.has_more:
+            assert page.next_position is None
+            break
+        assert page.next_position is not None
+        before = page.next_position
+
+    flattened = [item for page in pages for item in page]
+    expected = sorted(
+        [("user", row["message_id"]) for row in user_docs]
+        + [("agent", row["message_id"]) for row in agent_docs],
+        key=lambda item: (same_time, 0 if item[0] == "user" else 1, item[1]),
     )
-    assert agent_messages.find_calls[-1] == (
-        {"room_id": "r1", "message_created_at": {"$lt": newer}},
-        {"limit": 100},
+    assert flattened == expected
+    assert len(flattened) == len(set(flattened)) == 251
+    expected_options = {
+        "sort": [("timeline_sort_us", -1), ("message_id", -1)],
+        "limit": page_size + 1,
+    }
+    assert all(options == expected_options for _, options in user_messages.find_calls)
+    assert all(options == expected_options for _, options in agent_messages.find_calls)
+    assert "skip" not in repr(user_messages.find_calls + agent_messages.find_calls)
+
+
+@pytest.mark.asyncio
+async def test_timeline_first_page_returns_latest_over_one_hundred_single_source():
+    docs = [
+        {"room_id": "r1", "message_id": f"u-{index:03d}", "timeline_sort_us": index}
+        for index in range(251)
+    ]
+    repo, _, _, _ = _message_repo(user_docs=docs)
+
+    page = await repo.get_timeline_page("r1", limit=200, before=None)
+
+    assert [entry.message["timeline_sort_us"] for entry in page.entries] == list(
+        range(51, 251)
     )
+    assert page.has_more is True
+    assert page.next_position == TimelinePosition(
+        timeline_sort_us=51, source="user", message_id="u-051"
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeline_continuation_ignores_later_concurrent_append():
+    docs = [
+        {"room_id": "r1", "message_id": f"u-{index}", "timeline_sort_us": index}
+        for index in range(5)
+    ]
+    repo, _, users, _ = _message_repo(user_docs=docs)
+    first = await repo.get_timeline_page("r1", limit=2, before=None)
+    users.docs.extend(
+        [
+            {"room_id": "r1", "message_id": "new-later", "timeline_sort_us": 10},
+            {"room_id": "r1", "message_id": "new-backdated", "timeline_sort_us": 1},
+        ]
+    )
+
+    older_ids = set()
+    before = first.next_position
+    while before is not None:
+        page = await repo.get_timeline_page("r1", limit=2, before=before)
+        older_ids.update(entry.message["message_id"] for entry in page.entries)
+        before = page.next_position
+
+    first_ids = {entry.message["message_id"] for entry in first.entries}
+    assert first_ids.isdisjoint(older_ids)
+    assert "new-later" not in older_ids
+    # No cross-request snapshot is promised: a backdated insert can join an older page.
+    assert "new-backdated" in older_ids
 
 
 @pytest.mark.asyncio
@@ -1457,18 +1914,36 @@ async def test_message_repository_update_status_sets_task_state_and_extra_fields
         agent_docs=[
             {
                 "message_id": "a1",
+                "room_id": "room-1",
+                "message_created_at": "2026-01-01T00:00:00Z",
+                "timeline_sort_us": 1767225600000000,
                 "message_content": {"message_task": {"status": {"state": "working"}}},
             }
         ]
     )
 
-    assert await repo.update_status("a1", "completed", task_updated_at="now") is True
+    assert (
+        await repo.update_status(
+            "a1",
+            "completed",
+            task_updated_at="now",
+            room_id="other-room",
+            message_id="rewritten",
+            message_created_at="2030-01-01T00:00:00Z",
+            timeline_sort_us=1,
+        )
+        is True
+    )
 
     assert (
         agent_messages.docs[0]["message_content"]["message_task"]["status"]["state"]
         == "completed"
     )
     assert agent_messages.docs[0]["task_updated_at"] == "now"
+    assert agent_messages.docs[0]["room_id"] == "room-1"
+    assert agent_messages.docs[0]["message_id"] == "a1"
+    assert agent_messages.docs[0]["message_created_at"] == "2026-01-01T00:00:00Z"
+    assert agent_messages.docs[0]["timeline_sort_us"] == 1767225600000000
     assert agent_messages.update_one_calls == [
         (
             {"message_id": "a1"},
@@ -1527,6 +2002,10 @@ def _matches(doc: dict, query: dict) -> bool:  # noqa: C901
                 return False
             if "$lt" in expected and not (
                 actual is not None and actual < expected["$lt"]
+            ):
+                return False
+            if "$lte" in expected and not (
+                actual is not None and actual <= expected["$lte"]
             ):
                 return False
         elif actual != expected:
