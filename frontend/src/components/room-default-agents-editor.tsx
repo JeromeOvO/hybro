@@ -406,7 +406,7 @@ export function RoomDefaultAgentsEditor({
             {groupPickerOpen && (
               <div className="border-t pt-3 mt-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium">Apply from Saved Group</span>
+                  <span className="text-sm font-medium">Apply from Saved Team</span>
                   <button
                     onClick={() => setGroupPickerOpen(false)}
                     className="text-muted-foreground hover:text-foreground"
@@ -415,7 +415,7 @@ export function RoomDefaultAgentsEditor({
                   </button>
                 </div>
                 {userGroups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">No saved groups</p>
+                  <p className="text-sm text-muted-foreground py-4 text-center">No saved teams</p>
                 ) : (
                   <div className="space-y-1 max-h-40 overflow-y-auto">
                     {userGroups.map(group => (
@@ -450,7 +450,7 @@ export function RoomDefaultAgentsEditor({
                 className="mr-auto"
               >
                 <Users className="h-3.5 w-3.5 mr-1.5" />
-                Use Saved Group
+                Use Saved Team
               </Button>
             )}
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -475,7 +475,7 @@ export function RoomDefaultAgentsEditor({
             <AlertDialogTitle>Replace current selection?</AlertDialogTitle>
             <AlertDialogDescription>
               This will replace your current agent selection with the agents from
-              {confirmGroup ? ` "${confirmGroup.name}"` : ' this group'}.
+              {confirmGroup ? ` "${confirmGroup.name}"` : ' this team'}.
               You can still make changes before saving.
             </AlertDialogDescription>
           </AlertDialogHeader>

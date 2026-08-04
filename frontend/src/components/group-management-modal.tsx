@@ -235,7 +235,7 @@ export function GroupManagementModal({
 
   const handleSave = async () => {
     if (!groupName.trim()) {
-      banner.error('Group name is required')
+      banner.error('Team name is required')
       return
     }
 
@@ -261,14 +261,14 @@ export function GroupManagementModal({
         }, getToken)
 
         if (response.success) {
-          banner.success('Group created successfully')
+          banner.success('Team created successfully')
           if (response.group) {
             onGroupCreated?.(response.group)
           }
           onGroupsChange()
           handleBack()
         } else {
-          throw new Error(response.error || 'Failed to create group')
+          throw new Error(response.error || 'Failed to create team')
         }
       } else if (mode === 'edit' && editingGroup) {
         const response = await updateAgentGroup({
@@ -279,16 +279,16 @@ export function GroupManagementModal({
         }, getToken)
 
         if (response.success) {
-          banner.success('Group updated successfully')
+          banner.success('Team updated successfully')
           onGroupsChange()
           handleBack()
         } else {
-          throw new Error(response.error || 'Failed to update group')
+          throw new Error(response.error || 'Failed to update team')
         }
       }
     } catch (error) {
       console.error('Failed to save group:', error)
-      banner.error(error instanceof Error ? error.message : 'Failed to save group')
+      banner.error(error instanceof Error ? error.message : 'Failed to save team')
     } finally {
       setSaving(false)
     }
@@ -302,15 +302,15 @@ export function GroupManagementModal({
       const response = await deleteAgentGroup(groupToDelete.group_id, getToken)
 
       if (response.success) {
-        banner.success('Group deleted successfully')
+        banner.success('Team deleted successfully')
         onGroupsChange()
         handleBack()
       } else {
-        throw new Error(response.error || 'Failed to delete group')
+        throw new Error(response.error || 'Failed to delete team')
       }
     } catch (error) {
       console.error('Failed to delete group:', error)
-      banner.error(error instanceof Error ? error.message : 'Failed to delete group')
+      banner.error(error instanceof Error ? error.message : 'Failed to delete team')
     } finally {
       setDeleting(false)
     }
@@ -323,9 +323,9 @@ export function GroupManagementModal({
         return (
           <>
             <DialogHeader>
-              <DialogTitle>Manage Saved Groups</DialogTitle>
+              <DialogTitle>Manage Saved Teams</DialogTitle>
               <DialogDescription>
-                Create and manage reusable agent groups. Seed a room from a saved group or use it as a send-time override.
+                Create and manage reusable agent teams. Seed a room from a saved team or use it as a send-time override.
               </DialogDescription>
             </DialogHeader>
 
@@ -333,15 +333,15 @@ export function GroupManagementModal({
               {/* Create button */}
               <Button onClick={handleCreate} className="w-full gap-2">
                 <Plus className="h-4 w-4" />
-                Create New Group
+                Create New Team
               </Button>
 
               {/* Groups list */}
               {userGroups.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Users className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>No saved groups yet</p>
-                  <p className="text-sm">Create a saved group to seed rooms or use as a send-time override</p>
+                  <p>No saved teams yet</p>
+                  <p className="text-sm">Create a saved team to seed rooms or use as a send-time override</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -477,18 +477,18 @@ export function GroupManagementModal({
           <>
             <DialogHeader>
               <DialogTitle>
-                {mode === 'create' ? 'Create New Group' : 'Edit Group'}
+                {mode === 'create' ? 'Create New Team' : 'Edit Team'}
               </DialogTitle>
               <DialogDescription>
                 {mode === 'create'
-                  ? 'Name your group and choose which agents to include.'
-                  : 'Update the group name, description, or agent selection.'}
+                  ? 'Name your team and choose which agents to include.'
+                  : 'Update the team name, description, or agent selection.'}
               </DialogDescription>
             </DialogHeader>
 
             <div className="py-4 space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="group-name">Group Name</Label>
+                <Label htmlFor="group-name">Team Name</Label>
                 <Input
                   id="group-name"
                   value={groupName}
@@ -503,7 +503,7 @@ export function GroupManagementModal({
                   id="group-description"
                   value={groupDescription}
                   onChange={(e) => setGroupDescription(e.target.value)}
-                  placeholder="What is this group for?"
+                  placeholder="What is this team for?"
                   rows={2}
                 />
               </div>
@@ -627,7 +627,7 @@ export function GroupManagementModal({
                     Saving...
                   </>
                 ) : (
-                  mode === 'create' ? 'Create Group' : 'Save Changes'
+                  mode === 'create' ? 'Create Team' : 'Save Changes'
                 )}
               </Button>
             </DialogFooter>
@@ -641,7 +641,7 @@ export function GroupManagementModal({
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-amber-700">
                 <AlertTriangle className="h-5 w-5 text-amber-600" />
-                Delete Group
+                Delete Team
               </DialogTitle>
               <DialogDescription>
                 Are you sure you want to delete &quot;{groupToDelete?.name}&quot;? This action cannot be undone.
@@ -651,8 +651,8 @@ export function GroupManagementModal({
             <div className="py-4">
               <div className="p-4 rounded-lg border border-destructive/20 bg-destructive/5">
                 <p className="text-sm text-muted-foreground">
-                  This will permanently delete the saved group. 
-                  Rooms that were seeded from this group keep their snapshot and are not affected.
+                  This will permanently delete the saved team.
+                  Rooms that were seeded from this team keep their snapshot and are not affected.
                 </p>
               </div>
             </div>
@@ -677,7 +677,7 @@ export function GroupManagementModal({
                     Deleting...
                   </>
                 ) : (
-                  'Delete Group'
+                  'Delete Team'
                 )}
               </Button>
             </DialogFooter>

@@ -986,7 +986,7 @@ export function RoomChatInput({
             ) : (
               <div className="px-4 py-6 text-center text-sm text-muted-foreground">
                 <div className="font-medium text-foreground">No agents available</div>
-                <div className="mt-1 text-xs">Try changing the agent group below.</div>
+                <div className="mt-1 text-xs">Try changing the agent team below.</div>
               </div>
             )}
           </div>

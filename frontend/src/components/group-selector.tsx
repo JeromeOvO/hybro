@@ -167,7 +167,7 @@ export function GroupSelector({
     return (
       <div className={cn("flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground", className)}>
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        <span>Loading groups...</span>
+        <span>Loading teams...</span>
       </div>
     )
   }
@@ -309,9 +309,6 @@ export function GroupSelector({
               {userGroups.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
-                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                    Saved Groups
-                  </div>
                   {userGroups.map(group => (
                     <Tooltip key={group.group_id} delayDuration={150}>
                       <TooltipTrigger asChild>
@@ -375,7 +372,7 @@ export function GroupSelector({
                         className="max-w-xs w-fit whitespace-normal wrap-break-word"
                       >
                         {group.agents.length === 0 ? (
-                          <div className="text-xs text-muted-foreground">No agents in this group</div>
+                          <div className="text-xs text-muted-foreground">No agents in this team</div>
                         ) : (
                           <div className="space-y-0.5 max-h-40 overflow-y-auto">
                             {group.agents.map(agentId => (
@@ -404,7 +401,7 @@ export function GroupSelector({
                   className="text-foreground font-medium gap-2 py-2.5 px-3"
                 >
                   <Plus className="h-4 w-4" />
-                  Create Group
+                  Create Team
                 </DropdownMenuItem>
               </>
             )}
