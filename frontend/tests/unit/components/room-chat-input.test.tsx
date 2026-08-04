@@ -188,6 +188,24 @@ describe('RoomChatInput', () => {
       expect(onSubmit).not.toHaveBeenCalled()
     })
 
+    it('submits the supplied room snapshot scope independently of the displayed team', () => {
+      const onSubmit = vi.fn()
+      const { container } = renderInput({
+        onSubmit,
+        selectedGroup: 'source-team',
+        selectedGroupName: 'Source Team',
+        selectedGroupDispatch: { message_target_mode: 'room_default' },
+      })
+
+      const editor = container.querySelector('[contenteditable]') as HTMLElement
+      editor.textContent = 'Hello snapshot'
+      fireEvent.input(editor)
+      fireEvent.click(screen.getAllByTestId('send-button')[0])
+
+      expect(onSubmit).toHaveBeenCalledOnce()
+      expect(onSubmit.mock.calls[0][1]).toEqual({ message_target_mode: 'room_default' })
+    })
+
     it('should not submit when disableSend=true', () => {
       const onSubmit = vi.fn()
       const { container } = renderInput({ onSubmit, disableSend: true })

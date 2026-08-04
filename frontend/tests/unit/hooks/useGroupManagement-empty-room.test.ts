@@ -52,6 +52,126 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
   })
 
+  it('keeps All Agents as the label while routing a manual room snapshot', async () => {
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+  })
+
+  it('preserves source-team provenance and snapshot routing while groups load', () => {
+    mockListAgentGroups.mockReturnValue(new Promise(() => {}))
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: 'team-research',
+        defaultGroupName: 'Research Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.selectedGroupName).toBe('Research Team')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+  })
+
+  it('preserves source-team provenance when the group catalog request fails', async () => {
+    mockListAgentGroups.mockResolvedValue({ success: false, error: 'Unavailable' })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: 'team-research',
+        defaultGroupName: 'Research Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.selectedGroupName).toBe('Research Team')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+  })
+
+  it('preserves source-team provenance when the group catalog request rejects', async () => {
+    mockListAgentGroups.mockRejectedValue(new Error('Network error'))
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: 'team-research',
+        defaultGroupName: 'Research Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.selectedGroupName).toBe('Research Team')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+    consoleSpy.mockRestore()
+  })
+
+  it('does not label a persisted override as All Agents when the catalog fails', async () => {
+    mockListAgentGroups.mockResolvedValue({ success: false, error: 'Unavailable' })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({ roomId: 'room-override' }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    act(() => {
+      result.current.handleGroupChange('team-research', 'Research Team')
+    })
+
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.selectedGroupName).toBe('Research Team')
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'team-research',
+    })
+    expect(localStorage.getItem('room-room-override-override-group-name')).toBe('Research Team')
+  })
+
+  it('uses a neutral Team label for legacy overrides without a persisted name', async () => {
+    mockListAgentGroups.mockResolvedValue({ success: false, error: 'Unavailable' })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({ roomId: 'room-legacy' }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    act(() => {
+      result.current.handleGroupChange('team-legacy')
+    })
+
+    expect(result.current.selectedGroupName).toBe('Selected Team')
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'team-legacy',
+    })
+  })
+
   it('uses the room source team when that team still exists', async () => {
     mockListAgentGroups.mockResolvedValue({
       success: true,
@@ -65,23 +185,32 @@ describe('useGroupManagement – default team behavior', () => {
     })
 
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ defaultGroup: 'team-research' }))
+      useGroupManagement(defaultOptions({
+        defaultGroup: 'team-research',
+        defaultGroupName: 'Research Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
     )
 
     await waitFor(() => {
-      expect(result.current.selectedGroup).toBe('team-research')
+      expect(result.current.groups).toHaveLength(1)
     })
 
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.selectedGroupName).toBe('Research Team')
     expect(result.current.resolvedTargetMode).toEqual({
-      message_target_mode: 'saved_group',
-      target_group_id: 'team-research',
+      message_target_mode: 'room_default',
     })
     expect(result.current.isOverride).toBe(false)
   })
 
   it('falls back to all_agents when the room source team was deleted', async () => {
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ defaultGroup: 'deleted-team' }))
+      useGroupManagement(defaultOptions({
+        defaultGroup: 'deleted-team',
+        defaultGroupName: 'Deleted Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
     )
 
     await waitFor(() => {
@@ -89,7 +218,8 @@ describe('useGroupManagement – default team behavior', () => {
     })
 
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
-    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
+    expect(result.current.selectedGroupName).toBeUndefined()
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
   it('treats the legacy room_team default as all_agents', async () => {
@@ -178,6 +308,9 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
     expect(result.current.isOverride).toBe(false)
+    await waitFor(() => {
+      expect(localStorage.getItem('room-room-empty-override-group')).toBeNull()
+    })
   })
 
   it('clearing override restores the existing default team', async () => {
@@ -196,6 +329,7 @@ describe('useGroupManagement – default team behavior', () => {
       useGroupManagement(defaultOptions({
         roomId: 'room-team',
         defaultGroup: 'team-research',
+        defaultTargetMode: { message_target_mode: 'room_default' },
       }))
     )
 
@@ -212,6 +346,7 @@ describe('useGroupManagement – default team behavior', () => {
       result.current.handleClearOverride()
     })
     expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
     expect(result.current.isOverride).toBe(false)
     expect(localStorage.getItem('room-room-team-override-group')).toBeNull()
   })

@@ -27,6 +27,7 @@ interface MentionedAgent {
 
 interface GroupSelectorProps {
   selectedGroup: string
+  selectedGroupName?: string
   onGroupChange: (groupId: string) => void
   groups: AgentGroup[]
   loadingGroups?: boolean
@@ -42,6 +43,7 @@ interface GroupSelectorProps {
 
 export function GroupSelector({
   selectedGroup,
+  selectedGroupName,
   onGroupChange,
   groups,
   loadingGroups = false,
@@ -112,7 +114,15 @@ export function GroupSelector({
       }
     }
 
-    // Missing or deleted teams fall back to All Agents.
+    // Preserve persisted provenance while the team catalog is loading or unavailable.
+    if (selectedGroupName) {
+      return {
+        icon: <Users className="h-3.5 w-3.5" />,
+        label: selectedGroupName,
+        description: 'Room source team',
+      }
+    }
+
     return {
       icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
       label: 'All Agents',
@@ -125,7 +135,7 @@ export function GroupSelector({
   // Filter groups by type
   const userGroups = groups.filter(g => g.type === 'user')
 
-  if (loadingGroups) {
+  if (loadingGroups && !selectedGroupName) {
     return (
       <div className={cn("flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground", className)}>
         <Loader2 className="h-3.5 w-3.5 animate-spin" />

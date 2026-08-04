@@ -9,7 +9,7 @@ import {
   RoomChatInput,
   type RoomChatInputAgent,
 } from '@/components/room-chat-input'
-import type { AgentGroup, MessageDispatchInput } from '@/lib/types/agent-group'
+import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
@@ -45,13 +45,12 @@ export interface ComposerShellAdapter {
     groups: AgentGroup[]
     loadingGroups: boolean
     selectedGroup: string
-    isOverride: boolean
+    selectedGroupName?: string
+    resolvedTargetMode: TargetModeDispatchInput
     handleGroupChange: (groupId: string) => void
-    handleClearOverride: () => void
     handleCreateGroup: () => void
     handleEditGroup: (group: AgentGroup) => void
     handleDeleteGroup: (group: AgentGroup) => void
-    onEditRoomAgents: () => void
   }
   quoteState: {
     quote: QuoteData | null
@@ -113,6 +112,8 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
         groups={adapter.groupManagement.groups}
         loadingGroups={adapter.groupManagement.loadingGroups}
         selectedGroup={adapter.groupManagement.selectedGroup}
+        selectedGroupName={adapter.groupManagement.selectedGroupName}
+        selectedGroupDispatch={adapter.groupManagement.resolvedTargetMode}
         onGroupChange={adapter.groupManagement.handleGroupChange}
         onCreateGroup={adapter.groupManagement.handleCreateGroup}
         onEditGroup={adapter.groupManagement.handleEditGroup}

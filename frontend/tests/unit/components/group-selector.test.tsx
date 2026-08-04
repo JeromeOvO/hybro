@@ -115,6 +115,21 @@ describe('GroupSelector', () => {
     expect(screen.queryByText('Room Default')).not.toBeInTheDocument()
   })
 
+  it('keeps the persisted source-team label while the catalog is loading', () => {
+    render(
+      <GroupSelector
+        selectedGroup="research"
+        selectedGroupName="Research Team"
+        onGroupChange={vi.fn()}
+        groups={[]}
+        loadingGroups
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /research team/i })).toBeInTheDocument()
+    expect(screen.queryByText('Loading teams...')).not.toBeInTheDocument()
+  })
+
   it('falls back to All Agents when the selected team no longer exists', () => {
     render(
       <GroupSelector

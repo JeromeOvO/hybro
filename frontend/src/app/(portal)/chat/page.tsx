@@ -306,6 +306,8 @@ function ChatPageContent() {
                             groups={gm.groups}
                             loadingGroups={gm.loadingGroups}
                             selectedGroup={gm.selectedGroup}
+                            selectedGroupName={gm.selectedGroupName}
+                            selectedGroupDispatch={gm.resolvedTargetMode}
                             onGroupChange={gm.handleGroupChange}
                             onCreateGroup={gm.handleCreateGroup}
                             onEditGroup={gm.handleEditGroup}

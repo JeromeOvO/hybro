@@ -51,14 +51,12 @@ function makeAdapter(roomId = 'room-1'): TimelineAdapter {
     groupManagement: {
       groups: [],
       loadingGroups: false,
-      selectedGroup: 'all',
-      isOverride: false,
+      selectedGroup: 'all_agents',
+      resolvedTargetMode: { message_target_mode: 'all_agents' as const },
       handleGroupChange: vi.fn(),
-      handleClearOverride: vi.fn(),
       handleCreateGroup: vi.fn(),
       handleEditGroup: vi.fn(),
       handleDeleteGroup: vi.fn(),
-      onEditRoomAgents: vi.fn(),
     },
     quoteState: {
       quote: null,
