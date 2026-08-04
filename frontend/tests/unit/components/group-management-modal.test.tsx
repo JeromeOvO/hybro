@@ -30,7 +30,8 @@ describe('GroupManagementModal team terminology', () => {
 
     expect(screen.getByRole('heading', { name: 'Create New Team' })).toBeInTheDocument()
     expect(screen.getByText('Team Name')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('What is this team for?')).toBeInTheDocument()
+    expect(screen.queryByText('Description (optional)')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('What is this team for?')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create Team' })).toBeInTheDocument()
     expect(screen.queryByText('Group Name')).not.toBeInTheDocument()
   })

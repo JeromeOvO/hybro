@@ -5,7 +5,6 @@ import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Search, X }
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   Dialog,
@@ -63,7 +62,6 @@ export function GroupManagementModal({
   const [mode, setMode] = useState<Mode>('list')
   const [editingGroup, setEditingGroup] = useState<AgentGroup | null>(null)
   const [groupName, setGroupName] = useState('')
-  const [groupDescription, setGroupDescription] = useState('')
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
   const [staleAgentRefs, setStaleAgentRefs] = useState<StaleAgentRef[]>([])
   const [saving, setSaving] = useState(false)
@@ -78,7 +76,6 @@ export function GroupManagementModal({
 
   const resetForm = useCallback(() => {
     setGroupName('')
-    setGroupDescription('')
     setSelectedAgents({})
     setStaleAgentRefs([])
     setAgentSearch('')
@@ -93,7 +90,6 @@ export function GroupManagementModal({
     setMode('edit')
     setEditingGroup(group)
     setGroupName(group.name)
-    setGroupDescription(group.description || '')
     
     const agentsMap: { [agentId: string]: Agent } = {}
     const staleRefs: StaleAgentRef[] = []
@@ -255,7 +251,6 @@ export function GroupManagementModal({
       if (mode === 'create') {
         const response = await createAgentGroup({
           name: groupName.trim(),
-          description: groupDescription.trim() || undefined,
           owner_id: userId,
           agents: agentIds,
         }, getToken)
@@ -274,7 +269,6 @@ export function GroupManagementModal({
         const response = await updateAgentGroup({
           group_id: editingGroup.group_id,
           name: groupName.trim(),
-          description: groupDescription.trim() || undefined,
           agents: agentIds,
         }, getToken)
 
@@ -482,7 +476,7 @@ export function GroupManagementModal({
               <DialogDescription>
                 {mode === 'create'
                   ? 'Name your team and choose which agents to include.'
-                  : 'Update the team name, description, or agent selection.'}
+                  : 'Update the team name or agent selection.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -494,17 +488,6 @@ export function GroupManagementModal({
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
                   placeholder="e.g., Research Team"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="group-description">Description (optional)</Label>
-                <Textarea
-                  id="group-description"
-                  value={groupDescription}
-                  onChange={(e) => setGroupDescription(e.target.value)}
-                  placeholder="What is this team for?"
-                  rows={2}
                 />
               </div>
 
