@@ -27,7 +27,7 @@ function defaultOptions(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('useGroupManagement – empty room behavior', () => {
+describe('useGroupManagement – default team behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
@@ -39,9 +39,9 @@ describe('useGroupManagement – empty room behavior', () => {
     cleanup()
   })
 
-  it('selectedGroup defaults to all_agents when roomAgentCount=0 and no defaultGroup', async () => {
+  it('defaults to all_agents when no default team is provided', async () => {
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 0 }))
+      useGroupManagement(defaultOptions())
     )
 
     await waitFor(() => {
@@ -49,35 +49,39 @@ describe('useGroupManagement – empty room behavior', () => {
     })
 
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
-  })
-
-  it('resolvedTargetMode is all_agents when selectedGroup defaults to all_agents', async () => {
-    const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 0 }))
-    )
-
-    await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
-    })
-
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
   })
 
-  it('selectedGroup is room_team when room has agents', async () => {
+  it('uses the room source team when that team still exists', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [{
+        group_id: 'team-research',
+        name: 'Research Team',
+        type: 'user',
+        owner_id: 'user-1',
+        agents: ['agent-1'],
+      }],
+    })
+
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 3 }))
+      useGroupManagement(defaultOptions({ defaultGroup: 'team-research' }))
     )
 
     await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
+      expect(result.current.selectedGroup).toBe('team-research')
     })
 
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'team-research',
+    })
+    expect(result.current.isOverride).toBe(false)
   })
 
-  it('explicit override works in empty room', async () => {
+  it('falls back to all_agents when the room source team was deleted', async () => {
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 0 }))
+      useGroupManagement(defaultOptions({ defaultGroup: 'deleted-team' }))
     )
 
     await waitFor(() => {
@@ -85,6 +89,39 @@ describe('useGroupManagement – empty room behavior', () => {
     })
 
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
+  })
+
+  it('treats the legacy room_team default as all_agents', async () => {
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({ defaultGroup: BUILTIN_GROUP_ROOM_TEAM }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+  })
+
+  it('explicit override works when the selected team exists', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [{
+        group_id: 'grp-custom',
+        name: 'Custom Team',
+        type: 'user',
+        owner_id: 'user-1',
+        agents: ['agent-1'],
+      }],
+    })
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions())
+    )
+
+    await waitFor(() => {
+      expect(result.current.groups).toHaveLength(1)
+    })
 
     act(() => {
       result.current.handleGroupChange('grp-custom')
@@ -94,13 +131,23 @@ describe('useGroupManagement – empty room behavior', () => {
     expect(result.current.isOverride).toBe(true)
   })
 
-  it('explicit saved_group override works in empty room', async () => {
+  it('explicit saved_group override works and persists for a room', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [{
+        group_id: 'grp-my-saved',
+        name: 'Saved Team',
+        type: 'user',
+        owner_id: 'user-1',
+        agents: ['agent-1'],
+      }],
+    })
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 0, roomId: 'room-empty' }))
+      useGroupManagement(defaultOptions({ roomId: 'room-empty' }))
     )
 
     await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
+      expect(result.current.groups).toHaveLength(1)
     })
 
     act(() => {
@@ -112,11 +159,12 @@ describe('useGroupManagement – empty room behavior', () => {
       message_target_mode: 'saved_group',
       target_group_id: 'grp-my-saved',
     })
+    expect(localStorage.getItem('room-room-empty-override-group')).toBe('grp-my-saved')
   })
 
-  it('clearing override in empty room restores all_agents', async () => {
+  it('falls back to all_agents for a stale explicit override', async () => {
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomAgentCount: 0, roomId: 'room-empty' }))
+      useGroupManagement(defaultOptions({ roomId: 'room-empty' }))
     )
 
     await waitFor(() => {
@@ -124,29 +172,47 @@ describe('useGroupManagement – empty room behavior', () => {
     })
 
     act(() => {
-      result.current.handleGroupChange('grp-custom')
+      result.current.handleGroupChange('deleted-team')
     })
-    expect(result.current.selectedGroup).toBe('grp-custom')
 
-    act(() => {
-      result.current.handleClearOverride()
-    })
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
     expect(result.current.isOverride).toBe(false)
   })
 
-  it('defaultGroup is respected for empty room when provided', async () => {
+  it('clearing override restores the existing default team', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [{
+        group_id: 'team-research',
+        name: 'Research Team',
+        type: 'user',
+        owner_id: 'user-1',
+        agents: ['agent-1'],
+      }],
+    })
+
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        roomAgentCount: 0,
-        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        roomId: 'room-team',
+        defaultGroup: 'team-research',
       }))
     )
 
     await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
+      expect(result.current.selectedGroup).toBe('team-research')
     })
 
+    act(() => {
+      result.current.handleGroupChange(BUILTIN_GROUP_ALL_AGENTS)
+    })
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+
+    act(() => {
+      result.current.handleClearOverride()
+    })
+    expect(result.current.selectedGroup).toBe('team-research')
+    expect(result.current.isOverride).toBe(false)
+    expect(localStorage.getItem('room-room-team-override-group')).toBeNull()
   })
 })

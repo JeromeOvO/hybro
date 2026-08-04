@@ -72,14 +72,10 @@ interface RoomChatInputProps {
   loadingGroups?: boolean
   selectedGroup?: string
   onGroupChange?: (groupId: string) => void
-  roomAgentCount?: number
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
-  onEditRoomAgents?: () => void
   showGroupSelector?: boolean
-  isOverride?: boolean
-  onClearOverride?: () => void
   /**
    * External value to set in the editor (for quick start templates etc.)
    * When this changes to a non-empty value, it updates the editor content.
@@ -118,14 +114,10 @@ export function RoomChatInput({
   loadingGroups = false,
   selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
   onGroupChange,
-  roomAgentCount = 0,
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,
-  onEditRoomAgents,
   showGroupSelector = true,
-  isOverride = false,
-  onClearOverride,
   externalValue,
   onExternalValueConsumed,
   quote,
@@ -172,11 +164,6 @@ export function RoomChatInput({
 
   const handleChatModeChange = (mode: ChatMode) => {
     onChatModeChange?.(mode)
-    focusEditorAtEnd()
-  }
-
-  const handleClearOverride = () => {
-    onClearOverride?.()
     focusEditorAtEnd()
   }
 
@@ -1077,21 +1064,17 @@ export function RoomChatInput({
             <div className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground max-[520px]:w-full max-[520px]:gap-2 max-[520px]:overflow-hidden" data-testid="composer-selectors">
               {showGroupSelector && (
                 <GroupSelector
-                  className="min-w-0 max-w-[11rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
+                  className="w-36 min-w-0 shrink-0 max-[520px]:w-[calc(50%-0.25rem)] max-[520px]:max-w-36"
                   selectedGroup={selectedGroup}
                   onGroupChange={handleGroupChange}
                   groups={groups}
                   loadingGroups={loadingGroups}
-                  roomAgentCount={roomAgentCount}
                   mentionedAgents={mentionedAgents}
                   onCreateGroup={onCreateGroup}
                   onEditGroup={onEditGroup}
                   onDeleteGroup={onDeleteGroup}
-                  onEditRoomAgents={onEditRoomAgents}
                   agentNameMap={agentNameMap}
                   disabled={disabled}
-                  isOverride={isOverride}
-                  onClearOverride={handleClearOverride}
                 />
               )}
               {onChatModeChange && (

@@ -14,7 +14,7 @@ vi.mock('@/lib/api/agent', () => ({
 }))
 
 import { useGroupManagement } from '@/hooks/useGroupManagement'
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 import type { AgentGroup } from '@/lib/types/agent-group'
 
 const mockGetToken = vi.fn().mockResolvedValue('test-token')
@@ -150,11 +150,12 @@ describe('useGroupManagement', () => {
   })
 
   it('should apply group override via handleGroupChange', async () => {
+    mockListAgentGroups.mockResolvedValue({ success: true, groups: [fakeGroup] })
     const opts = { ...defaultOptions(), roomId: 'room-42' }
     const { result } = renderHook(() => useGroupManagement(opts))
 
     await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
+      expect(result.current.groups).toEqual([fakeGroup])
     })
 
     act(() => {

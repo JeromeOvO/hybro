@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef } from 'react'
-import { ChevronDown, Globe, Users, X, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
+import { ChevronDown, Globe, Users, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -30,18 +30,14 @@ interface GroupSelectorProps {
   onGroupChange: (groupId: string) => void
   groups: AgentGroup[]
   loadingGroups?: boolean
-  roomAgentCount?: number
   mentionedAgents?: MentionedAgent[]
   onClearMentions?: () => void
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
-  onEditRoomAgents?: () => void
   agentNameMap?: Record<string, string>
   className?: string
   disabled?: boolean
-  isOverride?: boolean  // Is an override currently active?
-  onClearOverride?: () => void  // Callback when Clear override is clicked
 }
 
 export function GroupSelector({
@@ -49,18 +45,14 @@ export function GroupSelector({
   onGroupChange,
   groups,
   loadingGroups = false,
-  roomAgentCount = 0,
   mentionedAgents = [],
   onClearMentions,
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,
-  onEditRoomAgents,
   agentNameMap = {},
   className,
   disabled = false,
-  isOverride = false,
-  onClearOverride,
 }: GroupSelectorProps) {
   const hasMentions = mentionedAgents.length > 0
 
@@ -90,35 +82,7 @@ export function GroupSelector({
     }, 500)
   }
 
-  const handleClearOverrideSelect = () => {
-    ignoreTooltipRef.current = true
-    setTooltipOpen(false)
-    setMenuOpen(false)
-    if (onClearOverride) {
-      onClearOverride()
-    }
-    setTimeout(() => {
-      ignoreTooltipRef.current = false
-    }, 500)
-  }
-
-  // Get the default display (Room Team if has agents, otherwise All Agents)
-  const getDefaultDisplay = () => {
-    if (roomAgentCount > 0) {
-      return {
-        icon: <Users className="h-3.5 w-3.5" />,
-        label: 'Room Default',
-        description: `${roomAgentCount} agent${roomAgentCount !== 1 ? 's' : ''}`,
-      }
-    }
-    return {
-      icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
-      label: 'All Agents',
-      description: 'All currently available agents',
-    }
-  }
-
-  // Get the display info for current selection
+  // Get the display info for current selection.
   const getDisplayInfo = () => {
     if (hasMentions) {
       return {
@@ -130,21 +94,15 @@ export function GroupSelector({
       }
     }
 
-    // If not in override mode, show the default
-    if (!isOverride) {
-      return getDefaultDisplay()
-    }
-
-    // Override mode - show the selected override group
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
       return {
         icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
         label: 'All Agents',
-        description: 'Find best agents',
+        description: 'All currently available agents',
       }
     }
 
-    // Custom group
+    // Saved team
     const customGroup = groups.find(g => g.group_id === selectedGroup)
     if (customGroup) {
       return {
@@ -154,8 +112,12 @@ export function GroupSelector({
       }
     }
 
-    // Fallback to default
-    return getDefaultDisplay()
+    // Missing or deleted teams fall back to All Agents.
+    return {
+      icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
+      label: 'All Agents',
+      description: 'All currently available agents',
+    }
   }
 
   const displayInfo = getDisplayInfo()
@@ -217,17 +179,16 @@ export function GroupSelector({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className={cn(
-                    "h-8 min-h-8 min-w-0 max-w-full flex-1 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
-                    isOverride && "bg-primary/10"
-                  )}
+                  className="h-8 min-h-8 min-w-0 max-w-full flex-1 px-3 gap-2 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                   onMouseLeave={() => {
                     ignoreTooltipRef.current = false
                   }}
                 >
-                  <span className="shrink-0">{displayInfo.icon}</span>
-                  <span className="min-w-0 truncate font-medium">{displayInfo.label}</span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
+                    {displayInfo.icon}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left font-medium">{displayInfo.label}</span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
@@ -250,7 +211,7 @@ export function GroupSelector({
                     onClick={() => handleGroupSelect(BUILTIN_GROUP_ALL_AGENTS)}
                     className={cn(
                       "flex items-start gap-3 py-2.5",
-                      isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
+                      selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
                     )}
                   >
                     <Globe className="h-4 w-4 mt-0.5 text-blue-500" />
@@ -270,41 +231,6 @@ export function GroupSelector({
                 </TooltipContent>
               </Tooltip>
 
-              {/* Room Default Agents — only visible when room has a snapshot */}
-              {roomAgentCount > 0 && (
-                <DropdownMenuItem
-                  onClick={handleClearOverrideSelect}
-                  className={cn(
-                    "flex items-start gap-3 py-2.5",
-                    !isOverride && "bg-accent"
-                  )}
-                >
-                  <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium">Room Default Agents</div>
-                    <div className="text-xs text-muted-foreground">
-                      {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}
-                    </div>
-                  </div>
-                  {onEditRoomAgents && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      title="Edit room default agents"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        onEditRoomAgents()
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                  )}
-                </DropdownMenuItem>
-              )}
-
               {/* User groups */}
               {userGroups.length > 0 && (
                 <>
@@ -316,7 +242,7 @@ export function GroupSelector({
                           onClick={() => handleGroupSelect(group.group_id)}
                           className={cn(
                             "flex items-start gap-3 py-2.5",
-                            isOverride && selectedGroup === group.group_id && "bg-accent"
+                            selectedGroup === group.group_id && "bg-accent"
                           )}
                         >
                           <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
@@ -408,19 +334,6 @@ export function GroupSelector({
           </DropdownMenuContent>
         </DropdownMenu>
       </TooltipProvider>
-
-      {/* Clear button - only visible when override is active */}
-      {isOverride && onClearOverride && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClearOverride}
-          className="h-8 min-h-8 w-8 shrink-0 px-0 text-muted-foreground hover:text-foreground flex items-center"
-          aria-label="Clear override, use room default"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      )}
     </div>
   )
 }

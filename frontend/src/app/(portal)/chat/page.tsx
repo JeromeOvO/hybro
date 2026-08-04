@@ -123,7 +123,6 @@ function ChatPageContent() {
         userId: user?.id,
         getToken,
         isLoaded,
-        roomAgentCount: preConfiguredRoom?.selectedAgents.length || 0,
         onRequireAuth: handleRequireAuth,
     })
 
@@ -308,12 +307,9 @@ function ChatPageContent() {
                             loadingGroups={gm.loadingGroups}
                             selectedGroup={gm.selectedGroup}
                             onGroupChange={gm.handleGroupChange}
-                            roomAgentCount={preConfiguredRoom?.selectedAgents.length || 0}
                             onCreateGroup={gm.handleCreateGroup}
                             onEditGroup={gm.handleEditGroup}
                             onDeleteGroup={gm.handleDeleteGroup}
-                            isOverride={gm.isOverride}
-                            onClearOverride={gm.handleClearOverride}
                             externalValue={promptPrefill}
                             onExternalValueConsumed={handlePromptPrefillConsumed}
                             chatMode={localChatMode}

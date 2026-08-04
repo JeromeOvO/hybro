@@ -108,6 +108,8 @@ describe('RoomChatInput', () => {
       expect(selectors.className).toContain('min-w-0')
       expect(selectors.className).toContain('max-[520px]:w-full')
       expect(screen.getByTestId('group-selector').className).toContain('min-w-0')
+      expect(screen.getByTestId('group-selector').className).toContain('w-36')
+      expect(screen.getByTestId('group-selector').className).toContain('shrink-0')
       expect(actions.className).not.toContain('gap-1')
       expect(actions.className).toContain('justify-self-end')
       expect(utilities.className).toContain('gap-1.5')

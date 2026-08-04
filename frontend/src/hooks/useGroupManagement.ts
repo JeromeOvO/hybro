@@ -19,8 +19,6 @@ interface UseGroupManagementOptions {
   defaultGroup?: string
   /** Room ID for localStorage persistence (room page only) */
   roomId?: string
-  /** Number of room agents to determine default group */
-  roomAgentCount?: number
   /** Called when an action requires authentication but user is not signed in */
   onRequireAuth?: () => void
 }
@@ -60,21 +58,41 @@ interface GroupManagementActions {
 export function useGroupManagement(
   options: UseGroupManagementOptions
 ): GroupManagementState & GroupManagementActions {
-  const { userId, getToken, isLoaded, defaultGroup, roomId, roomAgentCount = 0, onRequireAuth } = options
+  const { userId, getToken, isLoaded, defaultGroup, roomId, onRequireAuth } = options
 
   // Group state
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [overrideGroup, setOverrideGroup] = useState<string | null>(null)
 
-  // Derived: selectedGroup and isOverride are computed from overrideGroup
-  const selectedGroup = useMemo(() => {
-    if (overrideGroup !== null) return overrideGroup
-    if (roomAgentCount > 0) return BUILTIN_GROUP_ROOM_TEAM
-    return defaultGroup || BUILTIN_GROUP_ALL_AGENTS
-  }, [overrideGroup, roomAgentCount, defaultGroup])
+  // A room seeded from a saved team follows that team while it still exists.
+  // Deleted or inaccessible source teams fall back to All Agents.
+  const validatedDefaultGroup = useMemo(() => {
+    if (!defaultGroup || defaultGroup === BUILTIN_GROUP_ROOM_TEAM) {
+      return BUILTIN_GROUP_ALL_AGENTS
+    }
+    if (defaultGroup === BUILTIN_GROUP_ALL_AGENTS) {
+      return BUILTIN_GROUP_ALL_AGENTS
+    }
+    return groups.some(group => group.type === 'user' && group.group_id === defaultGroup)
+      ? defaultGroup
+      : BUILTIN_GROUP_ALL_AGENTS
+  }, [defaultGroup, groups])
 
-  const isOverride = overrideGroup !== null
+  const overrideIsUsable = overrideGroup === BUILTIN_GROUP_ALL_AGENTS
+    || (overrideGroup !== null
+      && overrideGroup !== BUILTIN_GROUP_ROOM_TEAM
+      && groups.some(group => group.type === 'user' && group.group_id === overrideGroup))
+
+  // Explicit user selections override the room-derived team. Stale selections
+  // immediately render as All Agents while their persisted override is cleared.
+  const selectedGroup = overrideGroup === null
+    ? validatedDefaultGroup
+    : overrideIsUsable
+      ? overrideGroup
+      : BUILTIN_GROUP_ALL_AGENTS
+
+  const isOverride = overrideGroup !== null && overrideIsUsable
 
   // Modal state
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)

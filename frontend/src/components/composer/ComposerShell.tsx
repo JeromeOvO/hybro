@@ -114,13 +114,9 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
         loadingGroups={adapter.groupManagement.loadingGroups}
         selectedGroup={adapter.groupManagement.selectedGroup}
         onGroupChange={adapter.groupManagement.handleGroupChange}
-        roomAgentCount={adapter.roomAgentIds.length}
         onCreateGroup={adapter.groupManagement.handleCreateGroup}
         onEditGroup={adapter.groupManagement.handleEditGroup}
         onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
-        onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
-        isOverride={adapter.groupManagement.isOverride}
-        onClearOverride={adapter.groupManagement.handleClearOverride}
         quote={adapter.quoteState.quote}
         onClearQuote={adapter.quoteState.clearQuote}
         chatMode={adapter.chatMode}

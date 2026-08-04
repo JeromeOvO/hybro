@@ -14,7 +14,6 @@ import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import {
-  BUILTIN_GROUP_ROOM_TEAM,
   BUILTIN_GROUP_ALL_AGENTS,
   isBuiltinGroup,
   isMentionDispatchInput,
@@ -26,7 +25,7 @@ import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
 
 function selectedGroupFromDispatch(dispatch: MessageDispatchInput | undefined): string | undefined {
   if (!dispatch || isMentionDispatchInput(dispatch)) return undefined
-  if (dispatch.message_target_mode === 'room_default') return BUILTIN_GROUP_ROOM_TEAM
+  if (dispatch.message_target_mode === 'room_default') return BUILTIN_GROUP_ALL_AGENTS
   if (dispatch.message_target_mode === 'all_agents') return BUILTIN_GROUP_ALL_AGENTS
   return dispatch.target_group_id
 }
@@ -97,17 +96,21 @@ export default function RoomChatPage() {
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
   const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
+  // A room seeded from a saved team follows that team while it still exists.
+  const roomDefaultTeamId = room?.source_group_id
+    ?? room?.applied_from_group
+    ?? undefined
+
   // Group management (extracted hook)
   const gm = useGroupManagement({
     userId: user?.id,
     getToken,
     isLoaded,
-    defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
+    defaultGroup: roomDefaultTeamId,
     roomId,
-    roomAgentCount,
   })
 
-  // Set default group based on stored selection or room's agent set (runs once when room loads)
+  // Set an explicit override from local or pending state (runs once per room).
   const initialGroupSetRef = useRef(false)
   useEffect(() => {
     if (room && !initialGroupSetRef.current) {
@@ -125,8 +128,7 @@ export default function RoomChatPage() {
       if (localStorageOverride) {
         gm.handleGroupChange(localStorageOverride)
       } else if (pendingGroup) {
-        const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
-        const defaultGroup = hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS
+        const defaultGroup = roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS
         if (pendingGroup !== defaultGroup) {
           gm.handleGroupChange(pendingGroup)
         }
@@ -224,7 +226,7 @@ export default function RoomChatPage() {
           toast.error(preWriteResult.error || 'Failed to set room agents from group')
           return
         }
-        // Refetch room so roomAgentCount updates and selector transitions to Room Default
+        // Refetch room so the selector reflects the updated membership provenance
         await refreshRoomSetting()
         gm.handleClearOverride()
         await sendUserMessage({

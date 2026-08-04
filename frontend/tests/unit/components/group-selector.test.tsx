@@ -47,19 +47,18 @@ describe('GroupSelector', () => {
     expect(screen.getByAltText('Agent Two')).toBeInTheDocument()
   })
 
-  it('does not use a native title tooltip for the clear override control', () => {
+  it('does not render a separate clear control for an override', () => {
     render(
       <GroupSelector
         selectedGroup="all_agents"
         onGroupChange={vi.fn()}
         groups={[]}
-        isOverride
-        onClearOverride={vi.fn()}
       />,
     )
 
-    expect(screen.getByRole('button', { name: /clear override/i })).toBeInTheDocument()
-    expect(screen.queryByTitle('Clear override, use room default')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: /all agents/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument()
   })
 
   it('uses team terminology for saved agent collections', async () => {
@@ -90,9 +89,46 @@ describe('GroupSelector', () => {
     expect(screen.queryByText('Saved Teams')).not.toBeInTheDocument()
     expect(screen.queryByText('Saved Groups')).not.toBeInTheDocument()
     expect(screen.queryByText('Create Group')).not.toBeInTheDocument()
+    expect(screen.queryByText('Room Default Agents')).not.toBeInTheDocument()
   })
 
-  it('keeps override controls inside the constrained selector width', () => {
+  it('shows an existing default team without requiring an override', () => {
+    render(
+      <GroupSelector
+        selectedGroup="research"
+        onGroupChange={vi.fn()}
+        groups={[
+          {
+            group_id: 'research',
+            name: 'Research Team',
+            type: 'user',
+            agents: ['agent-1'],
+            owner_id: 'user-1',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /research team/i })).toBeInTheDocument()
+    expect(screen.queryByText('Room Default')).not.toBeInTheDocument()
+  })
+
+  it('falls back to All Agents when the selected team no longer exists', () => {
+    render(
+      <GroupSelector
+        selectedGroup="deleted-team"
+        onGroupChange={vi.fn()}
+        groups={[]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /all agents/i })).toBeInTheDocument()
+    expect(screen.queryByText('Room Default')).not.toBeInTheDocument()
+  })
+
+  it('keeps the selected override label inside the constrained selector width', () => {
     render(
       <GroupSelector
         selectedGroup="insurance"
@@ -108,13 +144,11 @@ describe('GroupSelector', () => {
             updated_at: '2026-01-01T00:00:00Z',
           },
         ]}
-        isOverride
-        onClearOverride={vi.fn()}
         className="min-w-0 max-w-[11rem]"
       />,
     )
 
     expect(screen.getByRole('button', { name: /insurance group/i }).className).toContain('flex-1')
-    expect(screen.getByRole('button', { name: /clear override/i }).className).toContain('shrink-0')
+    expect(screen.getAllByRole('button')).toHaveLength(1)
   })
 })

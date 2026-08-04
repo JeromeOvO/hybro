@@ -175,10 +175,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
           throw new Error('Room created but no room_id returned')
         }
 
-        // Store initial message and target group in Zustand for the room page to pick up.
-        // Clear the override when the room was seeded with an explicit snapshot:
-        //  - saved group seeded → room has snapshot → default to Room Default (Locked Decision #4)
-        //  - manual selectedAgents → room has snapshot → default to Room Default
+        // Store the initial message and target team for the room page. Rooms
+        // seeded from a saved team derive their selector default from provenance;
+        // manual snapshots fall back to All Agents after the initial handoff.
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
           dispatch: handoffDispatch,
