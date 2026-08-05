@@ -124,10 +124,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       // then saved group selection, then empty snapshot.
       const dispatch = explicitDispatch
         ?? resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS)
-      const handoffDispatch: MessageDispatchInput = explicitDispatch
-        ?? (selectedAgents.length > 0
-        ? { message_target_mode: 'room_default' }
-        : dispatch)
       const handoffTargetGroup = !explicitDispatch && selectedAgents.length === 0 && !isMentionDispatchInput(dispatch)
         ? targetGroup
         : undefined
@@ -144,6 +140,13 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       if (!membership && selectedAgents.length === 0 && handoffTargetGroup && !isBuiltinGroup(handoffTargetGroup)) {
         membership = { membership_seed_input: "saved_group", seed_group_id: handoffTargetGroup }
       }
+
+      // Once membership is copied into a room, subsequent routing must use the
+      // room snapshot rather than live saved-team or global membership.
+      const handoffDispatch: MessageDispatchInput = !isMentionDispatchInput(dispatch)
+        && (selectedAgents.length > 0 || membership !== undefined)
+        ? { message_target_mode: 'room_default' }
+        : dispatch
 
       // Use custom room name if provided, otherwise auto-generate from message
       // Strip mentions from room name (e.g., <@id|name> -> "")
@@ -175,10 +178,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
           throw new Error('Room created but no room_id returned')
         }
 
-        // Store initial message and target group in Zustand for the room page to pick up.
-        // Clear the override when the room was seeded with an explicit snapshot:
-        //  - saved group seeded → room has snapshot → default to Room Default (Locked Decision #4)
-        //  - manual selectedAgents → room has snapshot → default to Room Default
+        // Store the initial message and target team for the room page. Rooms
+        // seeded from a saved team derive their selector label from provenance;
+        // manual snapshots display All Agents while retaining room-default routing.
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
           dispatch: handoffDispatch,

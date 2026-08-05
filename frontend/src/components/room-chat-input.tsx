@@ -12,8 +12,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import type { AgentGroup, MessageDispatchInput } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM, resolveSelectedGroupDispatch } from '@/lib/types/agent-group'
+import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS, resolveSelectedGroupDispatch } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -71,15 +71,13 @@ interface RoomChatInputProps {
   groups?: AgentGroup[]
   loadingGroups?: boolean
   selectedGroup?: string
+  selectedGroupName?: string
+  selectedGroupDispatch?: TargetModeDispatchInput
   onGroupChange?: (groupId: string) => void
-  roomAgentCount?: number
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
-  onEditRoomAgents?: () => void
   showGroupSelector?: boolean
-  isOverride?: boolean
-  onClearOverride?: () => void
   /**
    * External value to set in the editor (for quick start templates etc.)
    * When this changes to a non-empty value, it updates the editor content.
@@ -117,15 +115,13 @@ export function RoomChatInput({
   groups = [],
   loadingGroups = false,
   selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
+  selectedGroupName,
+  selectedGroupDispatch,
   onGroupChange,
-  roomAgentCount = 0,
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,
-  onEditRoomAgents,
   showGroupSelector = true,
-  isOverride = false,
-  onClearOverride,
   externalValue,
   onExternalValueConsumed,
   quote,
@@ -175,23 +171,20 @@ export function RoomChatInput({
     focusEditorAtEnd()
   }
 
-  const handleClearOverride = () => {
-    onClearOverride?.()
-    focusEditorAtEnd()
-  }
-
   const scopedAgents = useMemo(() => {
-    if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) return agents
-    if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
+    const targetMode = selectedGroupDispatch
+      ?? resolveSelectedGroupDispatch(selectedGroup)
+    if (targetMode.message_target_mode === 'all_agents') return agents
+    if (targetMode.message_target_mode === 'room_default') {
       if (roomAgentIds.length === 0) return agents
       const idSet = new Set(roomAgentIds)
       return agents.filter(a => idSet.has(a.id))
     }
-    const group = groups.find(g => g.group_id === selectedGroup)
+    const group = groups.find(g => g.group_id === targetMode.target_group_id)
     if (!group) return agents
     const idSet = new Set(group.agents)
     return agents.filter(a => idSet.has(a.id))
-  }, [agents, selectedGroup, groups, roomAgentIds])
+  }, [agents, selectedGroup, selectedGroupDispatch, groups, roomAgentIds])
 
   const filteredAgents = scopedAgents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
@@ -879,7 +872,8 @@ export function RoomChatInput({
     if (trimmedMessage || attachments.length > 0) {
       const dispatch: MessageDispatchInput = mentionedAgents.length > 0
         ? { mentioned_agent_ids: [mentionedAgents[0].id, ...mentionedAgents.slice(1).map((agent) => agent.id)] }
-        : resolveSelectedGroupDispatch(selectedGroup ?? BUILTIN_GROUP_ALL_AGENTS)
+        : selectedGroupDispatch
+          ?? resolveSelectedGroupDispatch(selectedGroup ?? BUILTIN_GROUP_ALL_AGENTS)
       const submittedAttachments = attachments.length > 0 ? attachments : undefined
 
       setMessage('')
@@ -986,7 +980,7 @@ export function RoomChatInput({
             ) : (
               <div className="px-4 py-6 text-center text-sm text-muted-foreground">
                 <div className="font-medium text-foreground">No agents available</div>
-                <div className="mt-1 text-xs">Try changing the agent group below.</div>
+                <div className="mt-1 text-xs">Try changing the agent team below.</div>
               </div>
             )}
           </div>
@@ -1077,21 +1071,18 @@ export function RoomChatInput({
             <div className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground max-[520px]:w-full max-[520px]:gap-2 max-[520px]:overflow-hidden" data-testid="composer-selectors">
               {showGroupSelector && (
                 <GroupSelector
-                  className="min-w-0 max-w-[11rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
+                  className="w-36 min-w-0 shrink-0 max-[520px]:w-[calc(50%-0.25rem)] max-[520px]:max-w-36"
                   selectedGroup={selectedGroup}
+                  selectedGroupName={selectedGroupName}
                   onGroupChange={handleGroupChange}
                   groups={groups}
                   loadingGroups={loadingGroups}
-                  roomAgentCount={roomAgentCount}
                   mentionedAgents={mentionedAgents}
                   onCreateGroup={onCreateGroup}
                   onEditGroup={onEditGroup}
                   onDeleteGroup={onDeleteGroup}
-                  onEditRoomAgents={onEditRoomAgents}
                   agentNameMap={agentNameMap}
                   disabled={disabled}
-                  isOverride={isOverride}
-                  onClearOverride={handleClearOverride}
                 />
               )}
               {onChatModeChange && (

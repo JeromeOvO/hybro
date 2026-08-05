@@ -237,7 +237,7 @@ describe('useChatRoomCreation', () => {
       const pending = useRoomUiStore.getState().pendingRoomData['room-store']
       expect(pending).toEqual({
         initialMessage: 'Hello',
-        dispatch: { message_target_mode: 'saved_group', target_group_id: 'g-1' },
+        dispatch: { message_target_mode: 'room_default' },
         targetGroup: 'g-1',
         attachments: undefined,
       })

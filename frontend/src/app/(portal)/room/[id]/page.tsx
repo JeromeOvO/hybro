@@ -6,7 +6,6 @@ import { useUser, useAuth } from '@/lib/auth'
 import { RequireAuth } from '@/components/require-auth'
 import { toast } from 'sonner'
 import { GroupManagementModal } from '@/components/group-management-modal'
-import { RoomDefaultAgentsEditor } from '@/components/room-default-agents-editor'
 import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
@@ -14,7 +13,6 @@ import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import {
-  BUILTIN_GROUP_ROOM_TEAM,
   BUILTIN_GROUP_ALL_AGENTS,
   isBuiltinGroup,
   isMentionDispatchInput,
@@ -26,7 +24,7 @@ import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
 
 function selectedGroupFromDispatch(dispatch: MessageDispatchInput | undefined): string | undefined {
   if (!dispatch || isMentionDispatchInput(dispatch)) return undefined
-  if (dispatch.message_target_mode === 'room_default') return BUILTIN_GROUP_ROOM_TEAM
+  if (dispatch.message_target_mode === 'room_default') return undefined
   if (dispatch.message_target_mode === 'all_agents') return BUILTIN_GROUP_ALL_AGENTS
   return dispatch.target_group_id
 }
@@ -36,7 +34,6 @@ export default function RoomChatPage() {
   const roomId = params.id as string
   const { user, isLoaded } = useUser()
   const { getToken } = useAuth()
-  const [editorOpen, setEditorOpen] = useState(false)
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
 
@@ -62,7 +59,6 @@ export default function RoomChatPage() {
     sendUserMessage,
     cancelProcessing,
     respondToHitlRequest,
-    getRoomFormData,
     refreshRoomSetting,
     // SSE state
     sseConnected,
@@ -97,17 +93,25 @@ export default function RoomChatPage() {
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
   const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
+  // A room seeded from a saved team follows that team while it still exists.
+  const roomDefaultTeamId = room?.source_group_id
+    ?? room?.applied_from_group
+    ?? undefined
+
   // Group management (extracted hook)
   const gm = useGroupManagement({
     userId: user?.id,
     getToken,
     isLoaded,
-    defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
+    defaultGroup: roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS,
+    defaultGroupName: room?.source_group_name ?? undefined,
+    defaultTargetMode: roomAgentCount > 0
+      ? { message_target_mode: 'room_default' }
+      : { message_target_mode: 'all_agents' },
     roomId,
-    roomAgentCount,
   })
 
-  // Set default group based on stored selection or room's agent set (runs once when room loads)
+  // Set an explicit override from local or pending state (runs once per room).
   const initialGroupSetRef = useRef(false)
   useEffect(() => {
     if (room && !initialGroupSetRef.current) {
@@ -116,6 +120,7 @@ export default function RoomChatPage() {
       // Priority: localStorage (persistent override) > pending data from chat page > default
       const localStorageKey = `room-${roomId}-override-group`
       const localStorageOverride = localStorage.getItem(localStorageKey)
+      const localStorageOverrideName = localStorage.getItem(`${localStorageKey}-name`)
 
       // Peek at pending room data for target group (don't consume yet)
       const pendingData = useRoomUiStore.getState().pendingRoomData[roomId]
@@ -123,10 +128,9 @@ export default function RoomChatPage() {
         ?? pendingData?.targetGroup
 
       if (localStorageOverride) {
-        gm.handleGroupChange(localStorageOverride)
+        gm.handleGroupChange(localStorageOverride, localStorageOverrideName ?? undefined)
       } else if (pendingGroup) {
-        const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
-        const defaultGroup = hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS
+        const defaultGroup = roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS
         if (pendingGroup !== defaultGroup) {
           gm.handleGroupChange(pendingGroup)
         }
@@ -224,7 +228,7 @@ export default function RoomChatPage() {
           toast.error(preWriteResult.error || 'Failed to set room agents from group')
           return
         }
-        // Refetch room so roomAgentCount updates and selector transitions to Room Default
+        // Refetch room so the selector reflects the updated membership provenance
         await refreshRoomSetting()
         gm.handleClearOverride()
         await sendUserMessage({
@@ -248,27 +252,7 @@ export default function RoomChatPage() {
     })
   }
 
-  // Open room default agents editor (prefetch agents)
-  const handleEditRoomAgents = useCallback(async () => {
-    if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
-      await gm.loadAvailableAgents()
-    }
-    setEditorOpen(true)
-  }, [gm])
-
-  // Save handler for the room default agents editor
-  const handleEditorSave = useCallback(async (membershipAgentIds: string[]) => {
-    const result = await updateRoomAgentSet(
-      roomId, {}, getToken,
-      { membership_seed_input: "manual", room_agent_ids: membershipAgentIds },
-    )
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to update room agents')
-    }
-    setEditorOpen(false)
-  }, [roomId, getToken])
-
-  // Current room agent IDs for the editor
+  // Current room agent IDs for snapshot-scoped mentions
   const currentRoomAgentIds = useMemo(
     () => room ? Object.keys(room.room_agent_set || {}) : [],
     [room]
@@ -282,9 +266,6 @@ export default function RoomChatPage() {
       iconUrl: agent.agent_card.iconUrl,
     }))
   }, [gm.availableAgents])
-
-  // Get room form data for initialization (memoized to avoid unstable references)
-  const roomFormData = useMemo(() => getRoomFormData(), [getRoomFormData])
 
   // Build TimelineAdapter for RoomPageShell
   const timelineAdapter: TimelineAdapter = {
@@ -303,13 +284,12 @@ export default function RoomChatPage() {
       groups: gm.groups,
       loadingGroups: gm.loadingGroups,
       selectedGroup: gm.selectedGroup,
-      isOverride: gm.isOverride,
+      selectedGroupName: gm.selectedGroupName,
+      resolvedTargetMode: gm.resolvedTargetMode,
       handleGroupChange: gm.handleGroupChange,
-      handleClearOverride: gm.handleClearOverride,
       handleCreateGroup: gm.handleCreateGroup,
       handleEditGroup: gm.handleEditGroup,
       handleDeleteGroup: gm.handleDeleteGroup,
-      onEditRoomAgents: handleEditRoomAgents,
     },
     quoteState: {
       quote,
@@ -351,17 +331,6 @@ export default function RoomChatPage() {
           />
         </div>
       </div>
-
-      <RoomDefaultAgentsEditor
-        open={editorOpen}
-        onOpenChange={setEditorOpen}
-        currentRoomAgentIds={currentRoomAgentIds}
-        availableAgents={gm.availableAgents}
-        loadingAgents={gm.loadingAgents}
-        savedGroups={gm.groups}
-        resolvedAgents={roomFormData?.resolvedAgents ?? undefined}
-        onSave={handleEditorSave}
-      />
 
       <GroupManagementModal
         open={gm.groupManagementOpen}

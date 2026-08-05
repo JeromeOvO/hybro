@@ -5,6 +5,7 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 // --- Mocks ---
 
 const mockSendUserMessage = vi.fn().mockResolvedValue(true)
+const mockUseGroupManagement = vi.fn()
 
 // Mock Clerk
 vi.mock("@clerk/nextjs", () => ({
@@ -41,29 +42,32 @@ vi.mock("@/hooks/useRoomWebhook", () => ({
 
 // Mock useGroupManagement
 vi.mock("@/hooks/useGroupManagement", () => ({
-  useGroupManagement: () => ({
-    availableAgents: [],
-    loadingAgents: false,
-    agentsError: null,
-    groups: [],
-    loadingGroups: false,
-    selectedGroup: "room_team",
-    isOverride: false,
-    resolvedTargetMode: { message_target_mode: "room_default" },
-    groupManagementOpen: false,
-    groupAction: null,
-    handleGroupsChange: vi.fn(),
-    handleCreateGroup: vi.fn(),
-    handleEditGroup: vi.fn(),
-    handleDeleteGroup: vi.fn(),
-    handleGroupCreated: vi.fn(),
-    handleGroupChange: vi.fn(),
-    handleClearOverride: vi.fn(),
-    setGroupManagementOpen: vi.fn(),
-    setGroupAction: vi.fn(),
-    loadAvailableAgents: vi.fn(),
-    setAvailableAgents: vi.fn(),
-  }),
+  useGroupManagement: (options: unknown) => {
+    mockUseGroupManagement(options)
+    return {
+      availableAgents: [],
+      loadingAgents: false,
+      agentsError: null,
+      groups: [],
+      loadingGroups: false,
+      selectedGroup: "all_agents",
+      isOverride: false,
+      resolvedTargetMode: { message_target_mode: "room_default" },
+      groupManagementOpen: false,
+      groupAction: null,
+      handleGroupsChange: vi.fn(),
+      handleCreateGroup: vi.fn(),
+      handleEditGroup: vi.fn(),
+      handleDeleteGroup: vi.fn(),
+      handleGroupCreated: vi.fn(),
+      handleGroupChange: vi.fn(),
+      handleClearOverride: vi.fn(),
+      setGroupManagementOpen: vi.fn(),
+      setGroupAction: vi.fn(),
+      loadAvailableAgents: vi.fn(),
+      setAvailableAgents: vi.fn(),
+    }
+  },
 }))
 
 // Mock heavy child components to keep rendering fast
@@ -92,9 +96,6 @@ vi.mock("@/components/require-auth", () => ({
 vi.mock("@/components/group-management-modal", () => ({
   GroupManagementModal: () => null,
 }))
-vi.mock("@/components/room-default-agents-editor", () => ({
-  RoomDefaultAgentsEditor: () => null,
-}))
 
 let RoomChatPage: React.ComponentType
 
@@ -108,6 +109,18 @@ beforeEach(async () => {
 })
 
 describe("Room page — prefill handoff consumer", () => {
+  it("derives room-default routing from a non-empty room snapshot", async () => {
+    render(<RoomChatPage />)
+
+    await waitFor(() => {
+      expect(mockUseGroupManagement).toHaveBeenCalled()
+    })
+    expect(mockUseGroupManagement.mock.calls.at(-1)?.[0]).toMatchObject({
+      defaultGroup: "all_agents",
+      defaultTargetMode: { message_target_mode: "room_default" },
+    })
+  })
+
   it("prefills input (externalValue) instead of auto-sending when handoffMode is 'prefill'", async () => {
     // Seed Zustand store with prefill pending data
     useRoomUiStore.getState().setPendingRoomData("room-abc", {

@@ -151,7 +151,6 @@ src/components/
 |-- room-page-shell.tsx       # room workspace shell
 |-- room-chat-input.tsx       # composer input, mentions, uploads
 |-- room-setting-form.tsx     # room settings and room agent defaults
-|-- room-default-agents-editor.tsx
 |-- group-selector.tsx
 |-- group-management-modal.tsx
 |-- agent-selector.tsx

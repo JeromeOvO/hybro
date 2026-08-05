@@ -92,21 +92,22 @@ beforeEach(async () => {
 })
 
 describe("Chat page — Use Case Cards integration", () => {
-  it("renders use case card titles", async () => {
+  it("renders the two remaining use case cards with the section label", async () => {
     render(<ChatPage />)
     await waitFor(() => {
-      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
       expect(screen.getByText("Travel Planner")).toBeDefined()
       expect(screen.getByText("Story & Image Creator")).toBeDefined()
+      expect(screen.getByText("Featured Use Cases")).toBeDefined()
     })
+    expect(screen.queryByText("Creator Discovery & Export")).toBeNull()
   })
 
   it("calls createFromTemplate with catalog on card click", async () => {
     render(<ChatPage />)
     await waitFor(() => {
-      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
+      expect(screen.getByText("Travel Planner")).toBeDefined()
     })
-    fireEvent.click(screen.getByText("Creator Discovery & Export").closest("button")!)
+    fireEvent.click(screen.getByText("Travel Planner").closest("button")!)
     await waitFor(() => {
       expect(mockCreateFromTemplate).toHaveBeenCalledOnce()
       expect(mockCreateFromTemplate.mock.calls[0][1]).toEqual(agents)
@@ -118,7 +119,7 @@ describe("Chat page — Use Case Cards integration", () => {
     const { container } = render(<ChatPage />)
     await waitFor(() => {
       const cards = container.querySelectorAll("button[disabled]")
-      expect(cards.length).toBeGreaterThanOrEqual(3)
+      expect(cards.length).toBeGreaterThanOrEqual(2)
     })
   })
 

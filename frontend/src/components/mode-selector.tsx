@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { CHAT_MODE } from '@/lib/types/chat-mode'
 
-const MODE_CONFIG = {
+const SELECTABLE_MODE_CONFIG = {
   [CHAT_MODE.ULTIMATE]: {
     label: 'Ultimate',
     icon: Sparkles,
@@ -32,19 +32,15 @@ const MODE_CONFIG = {
     iconColor: 'text-yellow-500',
     description: 'For quick and simple questions',
   },
-  [CHAT_MODE.ULTIMATE_DEBATE]: {
-    label: 'Ultimate - Debate',
-    icon: Swords,
-    iconColor: 'text-primary',
-    description: 'For big tasks where different ideas should be compared',
-  },
-  [CHAT_MODE.FAST_DEBATE]: {
-    label: 'Fast - Debate',
-    icon: Swords,
-    iconColor: 'text-yellow-500',
-    description: 'For quick answers with extra checking',
-  },
 } as const
+
+type SelectableChatMode = keyof typeof SELECTABLE_MODE_CONFIG
+
+function toSelectableMode(mode: ChatMode): SelectableChatMode {
+  return mode === CHAT_MODE.FAST || mode === CHAT_MODE.FAST_DEBATE
+    ? CHAT_MODE.FAST
+    : CHAT_MODE.ULTIMATE
+}
 
 interface ModeSelectorProps {
   mode: ChatMode
@@ -59,7 +55,8 @@ export function ModeSelector({
   disabled = false,
   className,
 }: ModeSelectorProps) {
-  const current = MODE_CONFIG[mode]
+  const currentMode = toSelectableMode(mode)
+  const current = SELECTABLE_MODE_CONFIG[currentMode]
   const CurrentIcon = current.icon
 
   const [tooltipOpen, setTooltipOpen] = useState(false)
@@ -126,10 +123,10 @@ export function ModeSelector({
           <DropdownMenuContent
             side="top"
             align="start"
-            className="min-w-[140px] border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md"
+            className="min-w-[210px] border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md"
           >
-            {Object.entries(MODE_CONFIG).map(([key, config]) => {
-              const modeKey = key as ChatMode
+            {Object.entries(SELECTABLE_MODE_CONFIG).map(([key, config]) => {
+              const modeKey = key as SelectableChatMode
               const Icon = config.icon
               return (
                 <Tooltip key={modeKey} delayDuration={150}>
@@ -138,7 +135,7 @@ export function ModeSelector({
                       onClick={() => handleModeSelect(modeKey)}
                       className={cn(
                         'flex items-center gap-2.5 py-2',
-                        mode === modeKey && 'bg-accent',
+                        currentMode === modeKey && 'bg-accent',
                       )}
                     >
                       <Icon className={cn('h-4 w-4', config.iconColor)} />
@@ -155,6 +152,10 @@ export function ModeSelector({
                 </Tooltip>
               )
             })}
+            <DropdownMenuItem disabled className="flex items-center gap-2.5 py-2">
+              <Swords className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Debate (Coming Soon)</span>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </TooltipProvider>

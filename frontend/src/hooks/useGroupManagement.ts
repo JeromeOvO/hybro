@@ -15,12 +15,14 @@ interface UseGroupManagementOptions {
   userId?: string
   getToken: () => Promise<string | null>
   isLoaded: boolean
-  /** Default group when no override is active */
+  /** Group ID shown when no override is active. */
   defaultGroup?: string
+  /** Persisted source-team name used while the team catalog is unavailable. */
+  defaultGroupName?: string
+  /** Dispatch scope used when no explicit override is active. */
+  defaultTargetMode?: TargetModeDispatchInput
   /** Room ID for localStorage persistence (room page only) */
   roomId?: string
-  /** Number of room agents to determine default group */
-  roomAgentCount?: number
   /** Called when an action requires authentication but user is not signed in */
   onRequireAuth?: () => void
 }
@@ -30,6 +32,7 @@ interface GroupManagementState {
   groups: AgentGroup[]
   loadingGroups: boolean
   selectedGroup: string
+  selectedGroupName?: string
   isOverride: boolean
   resolvedTargetMode: TargetModeDispatchInput
   // Modal state
@@ -48,7 +51,7 @@ interface GroupManagementActions {
   handleEditGroup: (group: AgentGroup) => void
   handleDeleteGroup: (group: AgentGroup) => void
   handleGroupCreated: (group: AgentGroup) => void
-  handleGroupChange: (groupId: string) => void
+  handleGroupChange: (groupId: string, groupName?: string) => void
   handleClearOverride: () => void
   setGroupManagementOpen: (open: boolean) => void
   setGroupAction: (action: { type: 'create' | 'edit' | 'delete'; group?: AgentGroup } | null) => void
@@ -60,21 +63,61 @@ interface GroupManagementActions {
 export function useGroupManagement(
   options: UseGroupManagementOptions
 ): GroupManagementState & GroupManagementActions {
-  const { userId, getToken, isLoaded, defaultGroup, roomId, roomAgentCount = 0, onRequireAuth } = options
+  const {
+    userId,
+    getToken,
+    isLoaded,
+    defaultGroup,
+    defaultGroupName,
+    defaultTargetMode,
+    roomId,
+    onRequireAuth,
+  } = options
 
   // Group state
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
+  const [groupsLoadStatus, setGroupsLoadStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [overrideGroup, setOverrideGroup] = useState<string | null>(null)
+  const [overrideGroupName, setOverrideGroupName] = useState<string | null>(null)
 
-  // Derived: selectedGroup and isOverride are computed from overrideGroup
-  const selectedGroup = useMemo(() => {
-    if (overrideGroup !== null) return overrideGroup
-    if (roomAgentCount > 0) return BUILTIN_GROUP_ROOM_TEAM
-    return defaultGroup || BUILTIN_GROUP_ALL_AGENTS
-  }, [overrideGroup, roomAgentCount, defaultGroup])
+  const groupExists = useCallback(
+    (groupId: string) => groups.some(group => group.type === 'user' && group.group_id === groupId),
+    [groups],
+  )
 
+  // Do not mistake an unloaded or unavailable catalog for a deleted team.
+  // Only a successful catalog response can invalidate a source team or override.
+  const validateGroup = useCallback((groupId: string | undefined) => {
+    if (!groupId || groupId === BUILTIN_GROUP_ROOM_TEAM) return BUILTIN_GROUP_ALL_AGENTS
+    if (groupId === BUILTIN_GROUP_ALL_AGENTS) return BUILTIN_GROUP_ALL_AGENTS
+    if (groupsLoadStatus !== 'success') return groupId
+    return groupExists(groupId) ? groupId : BUILTIN_GROUP_ALL_AGENTS
+  }, [groupExists, groupsLoadStatus])
+
+  const validatedDefaultGroup = validateGroup(defaultGroup)
+  const validatedOverrideGroup = overrideGroup === null
+    ? null
+    : validateGroup(overrideGroup)
   const isOverride = overrideGroup !== null
+    && validatedOverrideGroup === overrideGroup
+  const selectedGroup = isOverride ? overrideGroup : validatedDefaultGroup
+  const selectedGroupRecord = groups.find(group => group.group_id === selectedGroup)
+  const selectedGroupName = selectedGroupRecord?.name
+    ?? (isOverride && selectedGroup !== BUILTIN_GROUP_ALL_AGENTS
+      ? overrideGroupName ?? 'Selected Team'
+      : selectedGroup === defaultGroup
+        ? defaultGroupName
+        : undefined)
+
+  const clearOverrideState = useCallback(() => {
+    setOverrideGroup(null)
+    setOverrideGroupName(null)
+    if (roomId) {
+      localStorage.removeItem(`room-${roomId}-override-group`)
+      localStorage.removeItem(`room-${roomId}-override-group-name`)
+    }
+  }, [roomId])
 
   // Modal state
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
@@ -93,13 +136,18 @@ export function useGroupManagement(
     const loadGroups = async () => {
       if (!userId) return
       setLoadingGroups(true)
+      setGroupsLoadStatus('loading')
       try {
         const response = await listAgentGroups(userId, getToken)
         if (response.success && response.groups) {
           setGroups(response.groups)
+          setGroupsLoadStatus('success')
+        } else {
+          setGroupsLoadStatus('error')
         }
       } catch (error) {
         console.error('Failed to load groups:', error)
+        setGroupsLoadStatus('error')
       } finally {
         setLoadingGroups(false)
       }
@@ -109,6 +157,20 @@ export function useGroupManagement(
       loadGroups()
     }
   }, [isLoaded, userId, getToken])
+
+  // Remove stale persisted overrides only after the catalog confirms deletion.
+  useEffect(() => {
+    if (
+      groupsLoadStatus !== 'success'
+      || overrideGroup === null
+      || overrideGroup === BUILTIN_GROUP_ALL_AGENTS
+      || overrideGroup === BUILTIN_GROUP_ROOM_TEAM
+      || groupExists(overrideGroup)
+    ) {
+      return
+    }
+    clearOverrideState()
+  }, [clearOverrideState, groupExists, groupsLoadStatus, overrideGroup])
 
   // Load available agents
   const loadAvailableAgents = useCallback(async () => {
@@ -144,6 +206,7 @@ export function useGroupManagement(
       const response = await listAgentGroups(userId, getToken)
       if (response.success && response.groups) {
         setGroups(response.groups)
+        setGroupsLoadStatus('success')
       }
     } catch (error) {
       console.error('Failed to refresh groups:', error)
@@ -189,43 +252,59 @@ export function useGroupManagement(
         : [...prev, group]
     })
     setOverrideGroup(group.group_id)
+    setOverrideGroupName(group.name)
 
     // Persist to localStorage for room pages
     if (roomId) {
       localStorage.setItem(`room-${roomId}-override-group`, group.group_id)
+      localStorage.setItem(`room-${roomId}-override-group-name`, group.name)
     }
   }, [roomId])
 
   // Handle group change (override)
-  const handleGroupChange = useCallback((groupId: string) => {
+  const handleGroupChange = useCallback((groupId: string, groupName?: string) => {
+    const isConfirmedMissing = groupsLoadStatus === 'success'
+      && groupId !== BUILTIN_GROUP_ALL_AGENTS
+      && groupId !== BUILTIN_GROUP_ROOM_TEAM
+      && !groupExists(groupId)
+    if (groupId === validatedDefaultGroup || isConfirmedMissing) {
+      clearOverrideState()
+      return
+    }
+
+    const resolvedName = groupName
+      ?? groups.find(group => group.group_id === groupId)?.name
+      ?? null
     setOverrideGroup(groupId)
+    setOverrideGroupName(resolvedName)
 
     // Persist to localStorage for room pages
     if (roomId) {
       localStorage.setItem(`room-${roomId}-override-group`, groupId)
+      if (resolvedName) {
+        localStorage.setItem(`room-${roomId}-override-group-name`, resolvedName)
+      } else {
+        localStorage.removeItem(`room-${roomId}-override-group-name`)
+      }
     }
-  }, [roomId])
+  }, [clearOverrideState, groupExists, groups, groupsLoadStatus, roomId, validatedDefaultGroup])
 
   // Handle clear override - revert to derived default
-  const handleClearOverride = useCallback(() => {
-    setOverrideGroup(null)
+  const handleClearOverride = clearOverrideState
 
-    // Clear from localStorage for room pages
-    if (roomId) {
-      localStorage.removeItem(`room-${roomId}-override-group`)
+  const resolvedTargetMode: TargetModeDispatchInput = useMemo(() => {
+    if (!isOverride) {
+      return defaultTargetMode ?? resolveSelectedGroupDispatch(selectedGroup)
     }
-  }, [roomId])
-
-  const resolvedTargetMode: TargetModeDispatchInput = useMemo(
-    () => resolveSelectedGroupDispatch(selectedGroup),
-    [selectedGroup],
-  )
+    return resolveSelectedGroupDispatch(selectedGroup)
+  }, [defaultTargetMode, isOverride, selectedGroup])
 
   return {
     // State
     groups,
     loadingGroups,
     selectedGroup,
+    selectedGroupName,
     isOverride,
     resolvedTargetMode,
     groupManagementOpen,

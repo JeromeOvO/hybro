@@ -108,6 +108,8 @@ describe('RoomChatInput', () => {
       expect(selectors.className).toContain('min-w-0')
       expect(selectors.className).toContain('max-[520px]:w-full')
       expect(screen.getByTestId('group-selector').className).toContain('min-w-0')
+      expect(screen.getByTestId('group-selector').className).toContain('w-36')
+      expect(screen.getByTestId('group-selector').className).toContain('shrink-0')
       expect(actions.className).not.toContain('gap-1')
       expect(actions.className).toContain('justify-self-end')
       expect(utilities.className).toContain('gap-1.5')
@@ -184,6 +186,24 @@ describe('RoomChatInput', () => {
       const sendBtns = screen.getAllByTestId('send-button')
       fireEvent.click(sendBtns[0])
       expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('submits the supplied room snapshot scope independently of the displayed team', () => {
+      const onSubmit = vi.fn()
+      const { container } = renderInput({
+        onSubmit,
+        selectedGroup: 'source-team',
+        selectedGroupName: 'Source Team',
+        selectedGroupDispatch: { message_target_mode: 'room_default' },
+      })
+
+      const editor = container.querySelector('[contenteditable]') as HTMLElement
+      editor.textContent = 'Hello snapshot'
+      fireEvent.input(editor)
+      fireEvent.click(screen.getAllByTestId('send-button')[0])
+
+      expect(onSubmit).toHaveBeenCalledOnce()
+      expect(onSubmit.mock.calls[0][1]).toEqual({ message_target_mode: 'room_default' })
     })
 
     it('should not submit when disableSend=true', () => {

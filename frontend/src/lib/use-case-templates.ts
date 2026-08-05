@@ -1,4 +1,4 @@
-import { Youtube, Palmtree, BookOpen } from "lucide-react"
+import { Palmtree, BookOpen } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
@@ -51,30 +51,6 @@ export function resolveTemplateAgents(
 // TODO: Replace agentId placeholders with actual production agent IDs.
 // Currently using agent names; the name-fallback ensures they resolve in dev.
 export const useCaseTemplates: UseCaseTemplate[] = [
-  {
-    id: "creator-discovery",
-    icon: Youtube,
-    title: "Creator Discovery & Export",
-    description:
-      "Find YouTube & Twitch creators by topic and export contacts to Excel",
-    agents: [
-      {
-        agentId: "YouTube Creator Discovery",
-        agentName: "YouTube Creator Discovery",
-      },
-      {
-        agentId: "Twitch Creator Discovery",
-        agentName: "Twitch Creator Discovery",
-      },
-      {
-        agentId: "Excel Generator Agent",
-        agentName: "Excel Generator Agent",
-      },
-    ],
-    prefillMessage:
-      "Find Some Youtube and Twitch Creators with New York Culture, and give me an excel with names, profile links, contact emails and follower numbers",
-    tag: "new",
-  },
   {
     id: "travel-planner",
     icon: Palmtree,

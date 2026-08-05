@@ -13,6 +13,7 @@ vi.mock('@/components/room-chat-input', () => ({
       data-disabled={props.disableSend}
       data-processing={props.processing}
       data-has-top-slot={props.topSlot ? 'true' : 'false'}
+      data-target-mode={props.selectedGroupDispatch?.message_target_mode}
     >
       {props.topSlot}
     </div>
@@ -33,14 +34,12 @@ const mockAdapter: ComposerShellAdapter = {
   groupManagement: {
     groups: [],
     loadingGroups: false,
-    selectedGroup: 'room_default',
-    isOverride: false,
+    selectedGroup: 'all_agents',
+    resolvedTargetMode: { message_target_mode: 'room_default' },
     handleGroupChange: vi.fn(),
-    handleClearOverride: vi.fn(),
     handleCreateGroup: vi.fn(),
     handleEditGroup: vi.fn(),
     handleDeleteGroup: vi.fn(),
-    onEditRoomAgents: vi.fn(),
   },
   quoteState: { quote: null, clearQuote: vi.fn() },
   chatMode: 'ultimate',
@@ -57,6 +56,7 @@ describe('ComposerShell', () => {
   it('renders in normal mode', () => {
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByTestId('room-chat-input')).toBeDefined()
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-target-mode')).toBe('room_default')
   })
 
   it('keeps stop mode while the room lifecycle is processing between agent tasks', () => {

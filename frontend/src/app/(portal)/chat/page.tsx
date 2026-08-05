@@ -123,7 +123,6 @@ function ChatPageContent() {
         userId: user?.id,
         getToken,
         isLoaded,
-        roomAgentCount: preConfiguredRoom?.selectedAgents.length || 0,
         onRequireAuth: handleRequireAuth,
     })
 
@@ -307,13 +306,12 @@ function ChatPageContent() {
                             groups={gm.groups}
                             loadingGroups={gm.loadingGroups}
                             selectedGroup={gm.selectedGroup}
+                            selectedGroupName={gm.selectedGroupName}
+                            selectedGroupDispatch={gm.resolvedTargetMode}
                             onGroupChange={gm.handleGroupChange}
-                            roomAgentCount={preConfiguredRoom?.selectedAgents.length || 0}
                             onCreateGroup={gm.handleCreateGroup}
                             onEditGroup={gm.handleEditGroup}
                             onDeleteGroup={gm.handleDeleteGroup}
-                            isOverride={gm.isOverride}
-                            onClearOverride={gm.handleClearOverride}
                             externalValue={promptPrefill}
                             onExternalValueConsumed={handlePromptPrefillConsumed}
                             chatMode={localChatMode}
@@ -322,7 +320,7 @@ function ChatPageContent() {
                     </div>
 
                     {/* Use Case Cards */}
-                    <div className="w-full max-w-5xl mx-auto">
+                    <div className="w-full max-w-3xl mx-auto">
                         {/* Separator */}
                         <div className="flex items-center gap-3 px-4 mb-6">
                             <div className="flex-1 h-px bg-border/60" />
@@ -339,7 +337,7 @@ function ChatPageContent() {
                                 </p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-2">
                                 {useCaseTemplates.map((template) => (
                                     <UseCaseCard
                                         key={template.id}

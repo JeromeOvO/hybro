@@ -1,8 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import type { AgentGroup } from '@/lib/types/agent-group'
-import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
@@ -56,13 +55,12 @@ export interface GroupManagementAdapter {
   groups: AgentGroup[]
   loadingGroups: boolean
   selectedGroup: string
-  isOverride: boolean
+  selectedGroupName?: string
+  resolvedTargetMode: TargetModeDispatchInput
   handleGroupChange: (groupId: string) => void
-  handleClearOverride: () => void
   handleCreateGroup: () => void
   handleEditGroup: (group: AgentGroup) => void
   handleDeleteGroup: (group: AgentGroup) => void
-  onEditRoomAgents: () => void
 }
 
 export interface QuoteState {
