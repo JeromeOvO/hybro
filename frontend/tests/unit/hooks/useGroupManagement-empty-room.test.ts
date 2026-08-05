@@ -68,6 +68,46 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
+  it('reselecting All Agents restores a manual room snapshot', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [{
+        group_id: 'team-research',
+        name: 'Research Team',
+        type: 'user',
+        owner_id: 'user-1',
+        agents: ['agent-1'],
+      }],
+    })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        roomId: 'room-manual',
+        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.groups).toHaveLength(1)
+    })
+    act(() => {
+      result.current.handleGroupChange('team-research')
+    })
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'team-research',
+    })
+
+    act(() => {
+      result.current.handleGroupChange(BUILTIN_GROUP_ALL_AGENTS)
+    })
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.isOverride).toBe(false)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+    expect(localStorage.getItem('room-room-manual-override-group')).toBeNull()
+  })
+
   it('preserves source-team provenance and snapshot routing while groups load', () => {
     mockListAgentGroups.mockReturnValue(new Promise(() => {}))
 
@@ -292,28 +332,51 @@ describe('useGroupManagement – default team behavior', () => {
     expect(localStorage.getItem('room-room-empty-override-group')).toBe('grp-my-saved')
   })
 
-  it('falls back to all_agents for a stale explicit override', async () => {
+  it('clears a stale override after successful catalog validation', async () => {
+    let resolveGroups!: (value: unknown) => void
+    mockListAgentGroups.mockReturnValue(new Promise(resolve => { resolveGroups = resolve }))
+
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ roomId: 'room-empty' }))
+      useGroupManagement(defaultOptions({
+        roomId: 'room-snapshot',
+        defaultGroup: 'team-source',
+        defaultGroupName: 'Source Team',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
     )
 
-    await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
-    })
-
     act(() => {
-      result.current.handleGroupChange('deleted-team')
+      result.current.handleGroupChange('deleted-team', 'Deleted Team')
+    })
+    expect(result.current.isOverride).toBe(true)
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'deleted-team',
     })
 
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
-    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
-    expect(result.current.isOverride).toBe(false)
-    await waitFor(() => {
-      expect(localStorage.getItem('room-room-empty-override-group')).toBeNull()
+    await act(async () => {
+      resolveGroups({
+        success: true,
+        groups: [{
+          group_id: 'team-source',
+          name: 'Source Team',
+          type: 'user',
+          owner_id: 'user-1',
+          agents: ['agent-1'],
+        }],
+      })
     })
+
+    await waitFor(() => {
+      expect(result.current.isOverride).toBe(false)
+    })
+    expect(result.current.selectedGroup).toBe('team-source')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+    expect(localStorage.getItem('room-room-snapshot-override-group')).toBeNull()
+    expect(localStorage.getItem('room-room-snapshot-override-group-name')).toBeNull()
   })
 
-  it('clearing override restores the existing default team', async () => {
+  it('reselecting the source team restores room-default routing', async () => {
     mockListAgentGroups.mockResolvedValue({
       success: true,
       groups: [{
@@ -343,7 +406,7 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
 
     act(() => {
-      result.current.handleClearOverride()
+      result.current.handleGroupChange('team-research')
     })
     expect(result.current.selectedGroup).toBe('team-research')
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })

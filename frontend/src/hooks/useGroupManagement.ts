@@ -99,16 +99,25 @@ export function useGroupManagement(
   const validatedOverrideGroup = overrideGroup === null
     ? null
     : validateGroup(overrideGroup)
-  const selectedGroup = validatedOverrideGroup ?? validatedDefaultGroup
+  const isOverride = overrideGroup !== null
+    && validatedOverrideGroup === overrideGroup
+  const selectedGroup = isOverride ? overrideGroup : validatedDefaultGroup
   const selectedGroupRecord = groups.find(group => group.group_id === selectedGroup)
   const selectedGroupName = selectedGroupRecord?.name
-    ?? (selectedGroup === overrideGroup && selectedGroup !== BUILTIN_GROUP_ALL_AGENTS
+    ?? (isOverride && selectedGroup !== BUILTIN_GROUP_ALL_AGENTS
       ? overrideGroupName ?? 'Selected Team'
       : selectedGroup === defaultGroup
         ? defaultGroupName
         : undefined)
-  const isOverride = overrideGroup !== null
-    && validatedOverrideGroup === overrideGroup
+
+  const clearOverrideState = useCallback(() => {
+    setOverrideGroup(null)
+    setOverrideGroupName(null)
+    if (roomId) {
+      localStorage.removeItem(`room-${roomId}-override-group`)
+      localStorage.removeItem(`room-${roomId}-override-group-name`)
+    }
+  }, [roomId])
 
   // Modal state
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
@@ -160,11 +169,8 @@ export function useGroupManagement(
     ) {
       return
     }
-    if (roomId) {
-      localStorage.removeItem(`room-${roomId}-override-group`)
-      localStorage.removeItem(`room-${roomId}-override-group-name`)
-    }
-  }, [groupExists, groupsLoadStatus, overrideGroup, roomId])
+    clearOverrideState()
+  }, [clearOverrideState, groupExists, groupsLoadStatus, overrideGroup])
 
   // Load available agents
   const loadAvailableAgents = useCallback(async () => {
@@ -257,6 +263,15 @@ export function useGroupManagement(
 
   // Handle group change (override)
   const handleGroupChange = useCallback((groupId: string, groupName?: string) => {
+    const isConfirmedMissing = groupsLoadStatus === 'success'
+      && groupId !== BUILTIN_GROUP_ALL_AGENTS
+      && groupId !== BUILTIN_GROUP_ROOM_TEAM
+      && !groupExists(groupId)
+    if (groupId === validatedDefaultGroup || isConfirmedMissing) {
+      clearOverrideState()
+      return
+    }
+
     const resolvedName = groupName
       ?? groups.find(group => group.group_id === groupId)?.name
       ?? null
@@ -272,26 +287,17 @@ export function useGroupManagement(
         localStorage.removeItem(`room-${roomId}-override-group-name`)
       }
     }
-  }, [groups, roomId])
+  }, [clearOverrideState, groupExists, groups, groupsLoadStatus, roomId, validatedDefaultGroup])
 
   // Handle clear override - revert to derived default
-  const handleClearOverride = useCallback(() => {
-    setOverrideGroup(null)
-    setOverrideGroupName(null)
-
-    // Clear from localStorage for room pages
-    if (roomId) {
-      localStorage.removeItem(`room-${roomId}-override-group`)
-      localStorage.removeItem(`room-${roomId}-override-group-name`)
-    }
-  }, [roomId])
+  const handleClearOverride = clearOverrideState
 
   const resolvedTargetMode: TargetModeDispatchInput = useMemo(() => {
-    if (overrideGroup === null) {
+    if (!isOverride) {
       return defaultTargetMode ?? resolveSelectedGroupDispatch(selectedGroup)
     }
     return resolveSelectedGroupDispatch(selectedGroup)
-  }, [defaultTargetMode, overrideGroup, selectedGroup])
+  }, [defaultTargetMode, isOverride, selectedGroup])
 
   return {
     // State
