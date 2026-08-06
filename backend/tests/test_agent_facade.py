@@ -145,3 +145,13 @@ async def test_delete_agent_only_mutates_mongo_repository():
     repo = Repository([_doc("a1", "Writer")])
     assert await _facade(repo).delete_agent("a1", "owner") is True
     assert repo.docs == {}
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_rejects_discovered_local_agent():
+    local_agent = _doc("local-1", "Local Writer")
+    local_agent["source"] = "hub"
+    repo = Repository([local_agent])
+
+    assert await _facade(repo).delete_agent("local-1", "owner") is False
+    assert "local-1" in repo.docs

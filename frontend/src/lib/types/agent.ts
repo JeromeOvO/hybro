@@ -45,7 +45,7 @@ export interface Agent {
   call_success_count?: number;
   like_count?: number;
   dislike_count?: number;
-  /** Agent source: "cloud" for cloud-hosted, "hub" for local hub agents */
+  /** Agent source: "cloud" for registered Remote agents, "hub" for discovered Local agents */
   source?: "cloud" | "hub";
   /** Hub ID if this is a hub-sourced agent */
   hub_id?: string;

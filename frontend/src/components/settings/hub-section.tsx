@@ -81,8 +81,13 @@ export function HubSection() {
                 <div>
                   <span className="font-medium text-foreground">Create an API key</span>
                   {' — '}
-                  <a href="/manage/api-keys" className="text-primary hover:underline">
-                    Manage &rarr; API Keys
+                  <a
+                    href="https://docs.hybro.ai/hybro-hub"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Hybro Hub setup guide
                   </a>
                 </div>
               </li>

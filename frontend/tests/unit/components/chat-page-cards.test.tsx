@@ -1,6 +1,8 @@
+import { StrictMode } from "react"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react"
 import type { Agent } from "@/lib/types/agent"
+import { useRoomUiStore } from "@/stores/room-ui-store"
 
 // --- Mocks ---
 
@@ -64,6 +66,7 @@ let ChatPage: React.ComponentType
 beforeEach(async () => {
   cleanup()
   vi.clearAllMocks()
+  useRoomUiStore.setState({ pendingChatDraft: null })
   gmState = {
     availableAgents: agents,
     loadingAgents: false,
@@ -121,6 +124,26 @@ describe("Chat page — Use Case Cards integration", () => {
       const cards = container.querySelectorAll("button[disabled]")
       expect(cards.length).toBeGreaterThanOrEqual(2)
     })
+  })
+
+  it("applies an Agent handoff once under Strict Mode", async () => {
+    useRoomUiStore.getState().setPendingChatDraft(
+      "<@a1|YouTube Creator Finder Agent> ",
+    )
+
+    const { container } = render(
+      <StrictMode>
+        <ChatPage />
+      </StrictMode>,
+    )
+
+    await waitFor(() => {
+      expect(container.querySelector('.room-mention')?.textContent).toBe(
+        'YouTube Creator Finder Agent',
+      )
+    })
+    expect(document.activeElement).toHaveAttribute('contenteditable', 'true')
+    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
   })
 
   it("shows To Be Continued when catalog load fails", async () => {

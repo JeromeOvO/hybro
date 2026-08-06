@@ -7,7 +7,6 @@ import { History, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@/lib/auth"
 
 import { NavAgent } from "@/components/nav-agent"
-import { NavManage } from "@/components/portal/nav-manage"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
@@ -136,8 +135,6 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
       </SidebarHeader>
       <SidebarContent>
         <NavAgent navAgents={CONSUMER_NAV} />
-        <div className="mx-3 border-t border-sidebar-border" />
-        <NavManage />
         <div className="mx-3 border-t border-sidebar-border" />
         <NavMain items={navMainData} />
       </SidebarContent>

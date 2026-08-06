@@ -12,7 +12,7 @@ export const CONSUMER_NAV: NavAgentItem[] = [
     colorClass: "text-icon-create",
   },
   {
-    name: "Explore Agents",
+    name: "Agents",
     url: "/agents",
     icon: Globe,
     colorClass: "text-icon-network",

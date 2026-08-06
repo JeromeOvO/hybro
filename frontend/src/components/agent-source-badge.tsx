@@ -25,6 +25,7 @@ export function AgentSourceBadge({
       <Tooltip>
         <TooltipTrigger asChild>
           <House
+            aria-label="Local agent"
             className={cn(
               'shrink-0',
               online
@@ -37,7 +38,7 @@ export function AgentSourceBadge({
         <TooltipContent side="top">
           {online
             ? 'Local agent'
-            : 'Hub offline \u2014 start your hub to use this agent'}
+            : 'Local agent offline'}
         </TooltipContent>
       </Tooltip>
     )
@@ -47,11 +48,12 @@ export function AgentSourceBadge({
     <Tooltip>
       <TooltipTrigger asChild>
         <Cloud
+          aria-label="Remote agent"
           className={cn('shrink-0 text-sky-500', className)}
         />
       </TooltipTrigger>
       <TooltipContent side="top">
-        Cloud agent
+        Remote agent
       </TooltipContent>
     </Tooltip>
   )

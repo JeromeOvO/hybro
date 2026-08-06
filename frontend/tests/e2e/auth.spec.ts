@@ -5,7 +5,7 @@ test.describe('Local auth adapter', () => {
     await page.goto('/room/test-room')
 
     await expect(page).toHaveURL(/\/room\/test-room$/)
-    await expect(page.getByText('Room not found')).toBeVisible({ timeout: 20000 })
+    await expect(page.getByText('Room not found', { exact: true })).toBeVisible({ timeout: 20000 })
     await expect(page).not.toHaveURL(/sign-in/)
   })
 })
@@ -35,7 +35,7 @@ test.describe('Public Pages', () => {
 
   test('should load the agents page', async ({ page }) => {
     await page.goto('/agents')
-    await expect(page.getByRole('heading', { name: 'Explore Agents' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
   })
 })
 
@@ -54,9 +54,10 @@ test.describe('Navigation', () => {
       { timeout: 15000 },
     )
 
-    // The nav item href is "/agents" which Next.js resolves as-is; match by visible
-    // text content in the sidebar instead of href, which may vary by route context.
-    const agentsLink = page.locator('[data-slot="sidebar"] a').filter({ hasText: 'Explore Agents' }).first()
+    // Match the canonical Agents entry in the sidebar.
+    const sidebar = page.locator('[data-slot="sidebar"]')
+    const agentsLink = sidebar.getByRole('link', { name: 'Agents', exact: true })
+    await expect(sidebar.getByRole('button', { name: 'Manage' })).toHaveCount(0)
     await expect(agentsLink).toBeVisible({ timeout: 5000 })
     await agentsLink.click()
     await expect(page).toHaveURL(/agents/)
@@ -65,16 +66,16 @@ test.describe('Navigation', () => {
 
 test.describe('Sidebar local identity', () => {
   test('renders the signed-in user control and no sign-in action', async ({ page }) => {
-    await page.goto('/chat?agentId=test-agent-nav')
+    await page.goto('/chat')
 
     await expect(page.getByTestId('sidebar-sign-in')).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Developer Local/i })).toBeVisible()
   })
 })
 
-test.describe('Manage registration', () => {
+test.describe('Agent registration', () => {
   test('register page loads under the local identity', async ({ page }) => {
-    await page.goto('/manage/agents/new')
+    await page.goto('/agents/new')
 
     await page.waitForFunction(
       () => !document.querySelector('.animate-spin'),

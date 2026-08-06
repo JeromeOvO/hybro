@@ -3,6 +3,7 @@ import { render, screen, cleanup, waitFor } from '../../utils/test-utils'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 import type { AgentCenterResponse, Agent, AgentCard, AgentSkill, AgentCapabilities } from '@/lib/types'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 
 /* ── Mocks ── */
 
@@ -31,13 +32,16 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+const mockGetToken = vi.fn(async () => 'test-token')
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ userId: 'owner-user' }),
+  useAuth: () => ({ getToken: mockGetToken, userId: 'owner-user' }),
 }))
 
 const mockGetAgent = vi.fn<() => Promise<AgentCenterResponse>>()
+const mockDeleteAgent = vi.fn()
 vi.mock('@/lib/api', () => ({
   getAgent: mockGetAgent,
+  deleteAgent: mockDeleteAgent,
 }))
 
 vi.mock('@/components/ui/banner', () => ({
@@ -97,6 +101,8 @@ function buildAgentResponse(
     card?: Partial<AgentCard>
     providerId?: string
     status?: Agent['agent_status']
+    source?: Agent['source']
+    isHubOnline?: boolean
   } = {},
 ): AgentCenterResponse {
   return {
@@ -106,6 +112,8 @@ function buildAgentResponse(
       provider_id: overrides.providerId ?? 'owner-user',
       agent_card: buildCard(overrides.card),
       agent_status: overrides.status ?? 'active',
+      source: overrides.source ?? 'cloud',
+      is_hub_online: overrides.isHubOnline,
     },
   }
 }
@@ -116,6 +124,8 @@ let ConsumerAgentProfilePage: React.ComponentType
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  useRoomUiStore.setState({ pendingChatDraft: null })
+  mockDeleteAgent.mockResolvedValue({ success: true })
   mockParamId.mockReturnValue('agent-test-1')
   const mod = await import('@/app/(portal)/agents/[id]/page')
   ConsumerAgentProfilePage = mod.default
@@ -225,43 +235,61 @@ describe('ConsumerAgentProfilePage', () => {
     })
   })
 
-  describe('owner vs non-owner', () => {
-    it('shows top-right Manage button for owner', async () => {
-      mockGetAgent.mockResolvedValue(
-        buildAgentResponse({ providerId: 'owner-user' }),
-      )
+  describe('source lifecycle', () => {
+    it('allows a Remote agent to be unregistered', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({ source: 'cloud' }))
 
       render(<ConsumerAgentProfilePage />)
 
+      const trigger = await screen.findByRole('button', { name: 'Unregister Agent' })
+      await userEvent.click(trigger)
+      const actions = screen.getAllByRole('button', { name: 'Unregister Agent' })
+      await userEvent.click(actions.at(-1)!)
+
       await waitFor(() => {
-        expect(screen.getByText('Manage')).toBeInTheDocument()
+        expect(mockDeleteAgent).toHaveBeenCalledWith(
+          { agent_id: 'agent-test-1' },
+          mockGetToken,
+        )
       })
+      expect(mockPush).toHaveBeenCalledWith('/agents')
     })
 
-    it('hides Manage button for non-owner', async () => {
-      mockGetAgent.mockResolvedValue(
-        buildAgentResponse({ providerId: 'someone-else' }),
-      )
+    it('hides unregister controls for a Remote agent owned by someone else', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({
+        source: 'cloud',
+        providerId: 'someone-else',
+      }))
 
       render(<ConsumerAgentProfilePage />)
 
-      await waitFor(() => {
-        expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
-      })
-      expect(screen.queryByText('Manage')).not.toBeInTheDocument()
+      expect(await screen.findByText('Remote')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
     })
 
-    it('does not render a second Manage button below CTA', async () => {
-      mockGetAgent.mockResolvedValue(
-        buildAgentResponse({ providerId: 'owner-user' }),
-      )
+    it('shows Local agents as discovery-managed without unregister controls', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({
+        source: 'hub',
+        isHubOnline: true,
+      }))
 
       render(<ConsumerAgentProfilePage />)
 
-      await waitFor(() => {
-        expect(screen.getByText('Manage')).toBeInTheDocument()
-      })
-      expect(screen.queryByText('Manage agent')).not.toBeInTheDocument()
+      expect(await screen.findByText('Local')).toBeInTheDocument()
+      expect(screen.getByText(/managed by automatic discovery/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
+    })
+
+    it('does not show stale Local agent details', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({
+        source: 'hub',
+        isHubOnline: false,
+      }))
+
+      render(<ConsumerAgentProfilePage />)
+
+      expect(await screen.findByText('Local Agent Unavailable')).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: 'Test Agent' })).not.toBeInTheDocument()
     })
   })
 
@@ -362,7 +390,7 @@ describe('ConsumerAgentProfilePage', () => {
   })
 
   describe('CTA', () => {
-    it('navigates to /chat?agentId=<id> on click', async () => {
+    it('hands a mention to the chat composer without URL parameters', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse())
 
       render(<ConsumerAgentProfilePage />)
@@ -377,8 +405,11 @@ describe('ConsumerAgentProfilePage', () => {
         screen.getByRole('button', { name: /Chat with this agent/i }),
       )
 
-      expect(mockPush).toHaveBeenCalledWith('/chat?agentId=agent-test-1')
+      expect(mockPush).toHaveBeenCalledWith('/chat')
       expect(mockPush).toHaveBeenCalledTimes(1)
+      expect(useRoomUiStore.getState().pendingChatDraft).toBe(
+        '<@agent-test-1|Test Agent> ',
+      )
     })
   })
 
