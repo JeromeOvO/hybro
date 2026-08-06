@@ -11,7 +11,6 @@ import {
   Loader2,
   Paperclip,
   Terminal,
-  Zap,
   ExternalLink,
   BookOpen,
 } from "lucide-react"
@@ -128,10 +127,7 @@ export default function OpenSourcePage() {
           <div className="relative inline-flex items-center gap-2.5 px-5 mb-7 font-mono text-[11px] tracking-[0.2em] uppercase text-muted-foreground/80">
             <span aria-hidden className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
             <span aria-hidden className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
-            <span className="text-brand-gradient font-semibold">hybro</span>
-            {/* <span className="text-border">@</span> */}
-            {/* <span className="text-brand-gradient font-semibold">v0.2</span> */}
-            {/* <span className="text-border">·</span> */}
+            <span className="text-brand-gradient font-semibold">hybro core</span>
             <span>open source</span>
           </div>
 
@@ -268,7 +264,7 @@ export default function OpenSourcePage() {
 
         {/* Feature Grid */}
         <section className="py-20">
-          <FadeInSection>
+          <FadeInSection variant="wipe">
             <div className="text-center mb-12">
               <h2 className="text-2xl md:text-4xl font-bold mb-3 tracking-tight">
                 Designed for Developer Autonomy
@@ -280,8 +276,8 @@ export default function OpenSourcePage() {
           </FadeInSection>
 
           {/* Pillar 1 — text left, live terminal right */}
-          <FadeInSection delay={100}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
+            <FadeInSection variant="left" delay={150}>
               <div>
                 <h3 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
                   Local-First &amp; Private
@@ -290,14 +286,16 @@ export default function OpenSourcePage() {
                   Run completely offline. No telemetry, no tracking, no cloud lock-in. Your data never leaves your machine.
                 </p>
               </div>
+            </FadeInSection>
+            <FadeInSection variant="right" delay={450}>
               <TypingTerminal />
-            </div>
-          </FadeInSection>
+            </FadeInSection>
+          </div>
 
           {/* Pillar 2 — staggered logo wall left, text right */}
-          <FadeInSection delay={100}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
-              <div className="group/wall order-2 md:order-1 flex flex-wrap justify-center gap-3 md:gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
+            <FadeInSection variant="left" delay={450} className="order-2 md:order-1">
+              <div className="group/wall flex flex-wrap justify-center gap-3 md:gap-4">
                 {marqueeFrameworks.map((fw, i) => {
                   const offsets = ["md:translate-y-0", "md:translate-y-5", "md:-translate-y-3", "md:translate-y-3", "md:-translate-y-5", "md:translate-y-2", "md:-translate-y-1"]
                   const tile = (
@@ -321,8 +319,10 @@ export default function OpenSourcePage() {
                   )
                 })}
               </div>
+            </FadeInSection>
 
-              <div className="order-1 md:order-2">
+            <FadeInSection variant="right" delay={150} className="order-1 md:order-2">
+              <div>
                 <h3 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
                   Works with any framework
                 </h3>
@@ -330,8 +330,8 @@ export default function OpenSourcePage() {
                   Using the Agent2Agent protocol standard, agents talk to each other in one shared format.
                 </p>
               </div>
-            </div>
-          </FadeInSection>
+            </FadeInSection>
+          </div>
 
           {/* Supporting capabilities — hairline grid, no cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 pt-10 md:pt-14">
@@ -361,7 +361,7 @@ export default function OpenSourcePage() {
                 rule: "bg-[hsl(var(--color-hybro-hy))]",
               },
             ].map((item, i) => (
-              <FadeInSection key={item.title} delay={200 + i * 50}>
+              <FadeInSection key={item.title} variant="rise" delay={i * 160}>
                 <div
                   className={`group/cap relative h-full px-6 py-8 md:px-10 md:py-10 transition-colors duration-300 ${item.tint} ${
                     i % 2 === 1 ? "md:border-l border-border/40" : ""
@@ -385,7 +385,7 @@ export default function OpenSourcePage() {
 
         {/* 3-Step Workflow */}
         <section className="py-16">
-          <FadeInSection>
+          <FadeInSection variant="wipe">
             <h2 className="text-2xl md:text-3xl font-bold mb-14 text-center">
               How to Get Started
             </h2>
@@ -416,7 +416,7 @@ export default function OpenSourcePage() {
                 `color-mix(in oklch, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)) ${Math.round((n / 3) * 100)}%)`
 
               return (
-                <FadeInSection key={step.title} delay={100 + i * 100}>
+                <FadeInSection key={step.title} variant="rise" delay={300 + i * 220}>
                   <div className="group/step relative flex flex-col items-center text-center px-2">
                     <div className="relative mb-3">
                       {/* Ghost numeral watermark, seated left of the title */}
@@ -463,12 +463,9 @@ export default function OpenSourcePage() {
         </section>
 
         {/* Open Source License & Community Footer CTA */}
-        <section className="py-16 border-t border-border/40">
+        <section className="py-16">
           <FadeInSection>
             <div className="rounded-3xl border border-border/60 bg-gradient-to-br from-card via-secondary/20 to-card p-8 md:p-12 text-center max-w-4xl mx-auto shadow-lg relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
-                <Zap className="w-48 h-48 text-[hsl(var(--color-hybro-hy))]" />
-              </div>
               <h2 className="text-3xl font-bold mb-4">Join the Open Source Agent Community</h2>
               <p className="text-muted-foreground max-w-xl mx-auto mb-8">
                 Hybro Core is released under the permissive Apache License 2.0. We welcome contributions, agent integrations, and feedback.
