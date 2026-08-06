@@ -464,25 +464,40 @@ export default function OpenSourcePage() {
 
         {/* Open Source License & Community Footer CTA */}
         <section className="py-16">
-          <FadeInSection>
-            <div className="rounded-3xl border border-border/60 bg-gradient-to-br from-card via-secondary/20 to-card p-8 md:p-12 text-center max-w-4xl mx-auto shadow-lg relative overflow-hidden">
-              <h2 className="text-3xl font-bold mb-4">Join the Open Source Agent Community</h2>
-              <p className="text-muted-foreground max-w-xl mx-auto mb-8">
-                Hybro Core is released under the permissive Apache License 2.0. We welcome contributions, agent integrations, and feedback.
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-4">
-                <Button size="lg" asChild className="btn-brand-gradient">
-                  <a href="https://github.com/hybroai/hybro" target="_blank" rel="noopener noreferrer">
-                    <GithubIcon className="mr-2 h-4 w-4" />
-                    Star on GitHub
-                  </a>
-                </Button>
-                <Button size="lg" variant="outline" asChild>
-                  <a href="https://discord.gg/2S5pCKzUmJ" target="_blank" rel="noopener noreferrer">
-                    <DiscordIcon className="mr-2 h-4 w-4 text-[#7289DA]" />
-                    Join Discord
-                  </a>
-                </Button>
+          <FadeInSection variant="rise">
+            <div className="relative p-8 md:p-14 text-center max-w-5xl mx-auto">
+              {/* Light falling from top center. Blurred blob rather than a
+                  boxed gradient, so it has no edge to clip against. */}
+              <span
+                aria-hidden
+                className="pointer-events-none absolute left-1/2 top-0 h-[34rem] w-[62rem] max-w-[150%] -translate-x-1/2 -translate-y-1/3 rounded-full blur-3xl"
+                style={{
+                  background:
+                    "radial-gradient(ellipse at center, hsl(var(--color-hybro-hy) / 0.18), hsl(var(--color-hybro-bro) / 0.09) 45%, transparent 72%)",
+                }}
+              />
+
+              <div className="relative">
+                <h2 className="text-4xl md:text-5xl lg:text-[2.5rem] font-bold mb-5 tracking-tight leading-[1.15]">
+                  Join the Open Source <span className="text-brand-gradient">Agent Community</span>
+                </h2>
+                <p className="text-base md:text-lg text-muted-foreground max-w-2xl mx-auto mb-8 leading-relaxed text-balance">
+                  Hybro Core is released under the permissive Apache License 2.0. We welcome contributions, agent integrations, and feedback.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-4 mb-10">
+                  <Button size="lg" asChild className="btn-brand-gradient">
+                    <a href="https://github.com/hybroai/hybro" target="_blank" rel="noopener noreferrer">
+                      <GithubIcon className="mr-2 h-4 w-4" />
+                      Star on GitHub
+                    </a>
+                  </Button>
+                  <Button size="lg" variant="outline" asChild>
+                    <a href="https://discord.gg/2S5pCKzUmJ" target="_blank" rel="noopener noreferrer">
+                      <DiscordIcon className="mr-2 h-4 w-4 text-[#7289DA]" />
+                      Join Discord
+                    </a>
+                  </Button>
+                </div>
               </div>
             </div>
           </FadeInSection>
