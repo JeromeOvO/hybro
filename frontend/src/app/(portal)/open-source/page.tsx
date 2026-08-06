@@ -11,12 +11,7 @@ import {
   Loader2,
   Paperclip,
   Terminal,
-  Shield,
   Zap,
-  Network,
-  Code2,
-  Sparkles,
-  GitBranch,
   ExternalLink,
   BookOpen,
 } from "lucide-react"
@@ -29,6 +24,7 @@ import { routes } from "@/lib/routes"
 import { useUser, useAuth } from "@/lib/auth"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { FRAMEWORKS } from "@/components/framework-badges"
+import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
 const QUICK_START_COMMANDS = {
   script: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh",
@@ -140,9 +136,9 @@ export default function OpenSourcePage() {
           </div>
 
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight mb-6 max-w-4xl mx-auto leading-[1.15]">
-            Launch a <span className="text-brand-gradient">local meeting room</span>
+            <span className="text-brand-gradient">The Interoperability Engine</span>
             <br />
-            for your agents
+            for AI Agents
           </h1>
 
           <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed text-balance">
@@ -271,182 +267,193 @@ export default function OpenSourcePage() {
         </section>
 
         {/* Feature Grid */}
-        <section className="py-16 border-t border-border/40">
+        <section className="py-20">
           <FadeInSection>
             <div className="text-center mb-12">
               <h2 className="text-2xl md:text-4xl font-bold mb-3 tracking-tight">
                 Designed for Developer Autonomy
               </h2>
-              <p className="text-muted-foreground max-w-xl mx-auto">
+              <p className="text-muted-foreground max-w-3xl mx-auto text-balance">
                 Everything you need to orchestrate autonomous AI agent workflows locally or at scale.
               </p>
             </div>
           </FadeInSection>
 
-          {/* Featured pillars */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <FadeInSection delay={100}>
-              <div className="h-full p-8 rounded-2xl border border-border/50 bg-gradient-to-br from-card/90 to-card/40 hover:border-[hsl(var(--color-hybro-hy)/0.4)] transition-all duration-300 shadow-xs flex flex-col justify-between">
-                <div>
-                  <div className="w-11 h-11 rounded-xl bg-[hsl(var(--color-hybro-hy)/0.12)] flex items-center justify-center mb-4">
-                    <Shield className="h-5 w-5 text-[hsl(var(--color-hybro-hy))]" />
-                  </div>
-                  <h3 className="text-xl font-semibold mb-2">Local-First & Private</h3>
-                  <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                    Run completely offline. No telemetry, no tracking, no cloud lock-in. Your data never leaves your machine.
-                  </p>
-                </div>
-                {/* <div className="flex flex-wrap gap-2">
-                  {["Offline-capable", "No telemetry", "Self-hosted"].map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-xs font-medium px-2.5 py-1 rounded-full bg-[hsl(var(--color-hybro-hy)/0.1)] text-[hsl(var(--color-hybro-hy))] border border-[hsl(var(--color-hybro-hy)/0.2)]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div> */}
-              </div>
-            </FadeInSection>
-
-            <FadeInSection delay={150}>
-              <div className="h-full p-8 rounded-2xl border border-border/50 bg-gradient-to-br from-card/90 to-card/40 hover:border-[hsl(var(--color-hybro-bro)/0.4)] transition-all duration-300 shadow-xs flex flex-col justify-between">
-                <div>
-                  <div className="w-11 h-11 rounded-xl bg-[hsl(var(--color-hybro-bro)/0.12)] flex items-center justify-center mb-4">
-                    <GitBranch className="h-5 w-5 text-[hsl(var(--color-hybro-bro))]" />
-                  </div>
-                  <h3 className="text-xl font-semibold mb-2">Works with any framework</h3>
-                  <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                    Using the Agent2Agent protocol standard, agents talk to each other in one shared format.
-                  </p>
-                </div>
-                {/* <div className="flex flex-wrap gap-2">
-                  {["LangChain", "AutoGen", "CrewAI", "Custom"].map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-xs font-medium px-2.5 py-1 rounded-full bg-[hsl(var(--color-hybro-bro)/0.1)] text-[hsl(var(--color-hybro-bro))] border border-[hsl(var(--color-hybro-bro)/0.2)]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div> */}
-              </div>
-            </FadeInSection>
-          </div>
-
-          {/* Supporting capabilities */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <FadeInSection delay={200}>
-              <div className="h-full p-5 rounded-xl border border-border/40 bg-card/40 hover:border-[hsl(var(--color-hybro-bro)/0.3)] transition-all duration-300">
-                <div className="w-8 h-8 rounded-lg bg-[hsl(var(--color-hybro-bro)/0.12)] flex items-center justify-center mb-3">
-                  <Terminal className="h-4 w-4 text-[hsl(var(--color-hybro-bro))]" />
-                </div>
-                <h3 className="text-sm font-semibold mb-1">Zero-Config Dev Mode</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Mocked credentials, ready-made templates. Just run it.
+          {/* Pillar 1 — text left, live terminal right */}
+          <FadeInSection delay={100}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
+              <div>
+                <h3 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
+                  Local-First &amp; Private
+                </h3>
+                <p className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-md">
+                  Run completely offline. No telemetry, no tracking, no cloud lock-in. Your data never leaves your machine.
                 </p>
               </div>
-            </FadeInSection>
+              <TypingTerminal />
+            </div>
+          </FadeInSection>
 
-            <FadeInSection delay={250}>
-              <div className="h-full p-5 rounded-xl border border-border/40 bg-card/40 hover:border-[hsl(var(--color-hybro-hy)/0.3)] transition-all duration-300">
-                <div className="w-8 h-8 rounded-lg bg-[hsl(var(--color-hybro-hy)/0.12)] flex items-center justify-center mb-3">
-                  <Network className="h-4 w-4 text-[hsl(var(--color-hybro-hy))]" />
-                </div>
-                <h3 className="text-sm font-semibold mb-1">Multi-Agent Rooms</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Agents collaborate, debate, and solve problems together.
-                </p>
+          {/* Pillar 2 — staggered logo wall left, text right */}
+          <FadeInSection delay={100}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-16 items-center py-10 md:py-14">
+              <div className="group/wall order-2 md:order-1 flex flex-wrap justify-center gap-3 md:gap-4">
+                {marqueeFrameworks.map((fw, i) => {
+                  const offsets = ["md:translate-y-0", "md:translate-y-5", "md:-translate-y-3", "md:translate-y-3", "md:-translate-y-5", "md:translate-y-2", "md:-translate-y-1"]
+                  const tile = (
+                    <>
+                      <span className={fw.color}>{fw.icon}</span>
+                      <span className="text-[11px] font-medium text-muted-foreground whitespace-nowrap">
+                        {fw.name}
+                      </span>
+                    </>
+                  )
+                  const tileClass = `flex flex-col items-center justify-center gap-2 w-[104px] h-[104px] transition-opacity duration-300 ease-out group-hover/wall:opacity-40 hover:opacity-100! ${offsets[i % offsets.length]}`
+
+                  return fw.url ? (
+                    <a key={fw.name} href={fw.url} target="_blank" rel="noopener noreferrer" className={tileClass}>
+                      {tile}
+                    </a>
+                  ) : (
+                    <div key={fw.name} className={`${tileClass} cursor-default`}>
+                      {tile}
+                    </div>
+                  )
+                })}
               </div>
-            </FadeInSection>
 
-            <FadeInSection delay={300}>
-              <div className="h-full p-5 rounded-xl border border-border/40 bg-card/40 hover:border-[hsl(var(--color-hybro-bro)/0.3)] transition-all duration-300">
-                <div className="w-8 h-8 rounded-lg bg-[hsl(var(--color-hybro-bro)/0.12)] flex items-center justify-center mb-3">
-                  <Code2 className="h-4 w-4 text-[hsl(var(--color-hybro-bro))]" />
-                </div>
-                <h3 className="text-sm font-semibold mb-1">Modular Core Architecture</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  FastAPI, Redis, MongoDB, Next.js. Swap any layer.
+              <div className="order-1 md:order-2">
+                <h3 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
+                  Works with any framework
+                </h3>
+                <p className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-md">
+                  Using the Agent2Agent protocol standard, agents talk to each other in one shared format.
                 </p>
-              </div>
-            </FadeInSection>
-
-            <FadeInSection delay={350}>
-              <div className="h-full p-5 rounded-xl border border-border/40 bg-card/40 hover:border-[hsl(var(--color-hybro-hy)/0.3)] transition-all duration-300">
-                <div className="w-8 h-8 rounded-lg bg-[hsl(var(--color-hybro-hy)/0.12)] flex items-center justify-center mb-3">
-                  <Sparkles className="h-4 w-4 text-[hsl(var(--color-hybro-hy))]" />
-                </div>
-                <h3 className="text-sm font-semibold mb-1">Human-in-the-Loop</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Approve, inspect, and override agents mid-task.
-                </p>
-              </div>
-            </FadeInSection>
-          </div>
-
-          {/* Supported frameworks */}
-          <FadeInSection delay={400}>
-            <div className="mt-14">
-              <p className="text-center text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-6">
-                Works with agents built anywhere
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6">
-                {marqueeFrameworks.map((fw) => (
-                  <div key={fw.name} className="flex items-center gap-2.5 opacity-70 hover:opacity-100 transition-opacity">
-                    <span className={fw.color}>{fw.icon}</span>
-                    <span className="text-sm font-medium text-muted-foreground whitespace-nowrap">{fw.name}</span>
-                  </div>
-                ))}
               </div>
             </div>
           </FadeInSection>
+
+          {/* Supporting capabilities — hairline grid, no cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 pt-10 md:pt-14">
+            {[
+              {
+                title: "Zero-Config Dev Mode",
+                body: "Comes with mock credentials and environment templates. Run in one line.",
+                tint: "hover:bg-[hsl(var(--color-hybro-bro)/0.03)]",
+                rule: "bg-[hsl(var(--color-hybro-bro))]",
+              },
+              {
+                title: "Multi-Agent Rooms",
+                body: "Open a room for your agents to collaborate, debate, and solve multi-step problems.",
+                tint: "hover:bg-[hsl(var(--color-hybro-hy)/0.03)]",
+                rule: "bg-[hsl(var(--color-hybro-hy))]",
+              },
+              {
+                title: "Modular Core Architecture",
+                body: "Clean, layered architecture: FastAPI orchestration, Redis pub/sub and MongoDB persistence.",
+                tint: "hover:bg-[hsl(var(--color-hybro-bro)/0.03)]",
+                rule: "bg-[hsl(var(--color-hybro-bro))]",
+              },
+              {
+                title: "Human-in-the-Loop",
+                body: "Delivery is under your control. Approve, reject, or override before it ships.",
+                tint: "hover:bg-[hsl(var(--color-hybro-hy)/0.03)]",
+                rule: "bg-[hsl(var(--color-hybro-hy))]",
+              },
+            ].map((item, i) => (
+              <FadeInSection key={item.title} delay={200 + i * 50}>
+                <div
+                  className={`group/cap relative h-full px-6 py-8 md:px-10 md:py-10 transition-colors duration-300 ${item.tint} ${
+                    i % 2 === 1 ? "md:border-l border-border/40" : ""
+                  } ${i >= 2 ? "border-t border-border/40" : ""}`}
+                >
+                  <span
+                    aria-hidden
+                    className={`absolute left-0 top-8 bottom-8 w-px origin-top scale-y-0 group-hover/cap:scale-y-100 transition-transform duration-500 ease-out ${item.rule}`}
+                  />
+                  <h3 className="text-lg md:text-xl font-semibold mb-2 transition-transform duration-300 group-hover/cap:translate-x-1">
+                    {item.title}
+                  </h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed max-w-sm transition-transform duration-300 group-hover/cap:translate-x-1">
+                    {item.body}
+                  </p>
+                </div>
+              </FadeInSection>
+            ))}
+          </div>
         </section>
 
         {/* 3-Step Workflow */}
-        <section className="py-16 border-t border-border/40">
+        <section className="py-16">
           <FadeInSection>
-            <h2 className="text-2xl md:text-3xl font-bold text-center mb-12">
+            <h2 className="text-2xl md:text-3xl font-bold mb-14">
               How to Get Started
             </h2>
           </FadeInSection>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-            <FadeInSection delay={100}>
-              <div className="flex flex-col items-center text-center p-6 rounded-2xl border border-border/40 bg-card/40">
-                <div className="w-12 h-12 rounded-full btn-brand-gradient flex items-center justify-center text-base font-bold mb-4 shadow-sm">
-                  1
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Spin Up Engine</h3>
-                <p className="text-sm text-muted-foreground">
-                  Run the 1-liner script or Docker Compose to start the local backend and frontend services.
-                </p>
-              </div>
-            </FadeInSection>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-y-12 md:gap-x-10">
+            {[
+              {
+                title: "Spin Up Engine",
+                body: "Run the 1-liner script or Docker Compose to start the local backend and frontend services.",
+                example: "docker compose up -d --build",
+              },
+              {
+                title: "Register Agents",
+                body: "Connect your local Python or remote A2A agents with the Agent2Agent adapter SDK.",
+                example: "POST /api/v1/agent/registerAgent",
+              },
+              {
+                title: "Orchestrate Rooms",
+                body: "Create multi-agent rooms, prompt your cluster, and monitor live task collaboration.",
+                example: "POST /api/v1/roomCenter/createNewRoom",
+              },
+            ].map((step, i) => {
+              // Each numeral fills a consecutive slice of the bro → hy brand gradient,
+              // so the three of them read as one continuous transition across the row.
+              // n runs 0..3, mapping to 0%..100% — staying in range keeps color-mix valid.
+              const stop = (n: number) =>
+                `color-mix(in oklch, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)) ${Math.round((n / 3) * 100)}%)`
 
-            <FadeInSection delay={200}>
-              <div className="flex flex-col items-center text-center p-6 rounded-2xl border border-border/40 bg-card/40">
-                <div className="w-12 h-12 rounded-full btn-brand-gradient flex items-center justify-center text-base font-bold mb-4 shadow-sm">
-                  2
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Register Agents</h3>
-                <p className="text-sm text-muted-foreground">
-                  Connect your local Python or remote A2A agents with the Agent2Agent adapter SDK.
-                </p>
-              </div>
-            </FadeInSection>
+              return (
+                <FadeInSection key={step.title} delay={100 + i * 100}>
+                  <div className="group/step relative">
+                    {/* Numeral + connector rail */}
+                    <div className="flex items-center gap-5 mb-4">
+                      <span
+                        className="font-spaceGrotesk text-3xl font-bold leading-none select-none"
+                        style={{
+                          backgroundImage: `linear-gradient(115deg, ${stop(i)}, ${stop(i + 1)})`,
+                          WebkitBackgroundClip: "text",
+                          backgroundClip: "text",
+                          WebkitTextFillColor: "transparent",
+                        }}
+                      >
+                        {i + 1}
+                      </span>
+                      <span
+                        aria-hidden
+                        className="h-px flex-1"
+                        style={{
+                          backgroundImage: `linear-gradient(to right, ${stop(i + 1)}, transparent)`,
+                          opacity: 0.4,
+                        }}
+                      />
+                    </div>
 
-            <FadeInSection delay={300}>
-              <div className="flex flex-col items-center text-center p-6 rounded-2xl border border-border/40 bg-card/40">
-                <div className="w-12 h-12 rounded-full btn-brand-gradient flex items-center justify-center text-base font-bold mb-4 shadow-sm">
-                  3
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Orchestrate Rooms</h3>
-                <p className="text-sm text-muted-foreground">
-                  Create multi-agent rooms, prompt your cluster, and monitor live task collaboration.
-                </p>
-              </div>
-            </FadeInSection>
+                    <h3 className="text-xl md:text-2xl font-semibold mb-3 tracking-tight">{step.title}</h3>
+                    <p className="text-sm text-muted-foreground leading-relaxed max-w-xs mb-6">
+                      {step.body}
+                    </p>
+
+                    <code className="block font-mono text-xs text-muted-foreground/90 whitespace-nowrap overflow-x-auto">
+                      <span className="text-[hsl(var(--color-hybro-hy))] select-none">$ </span>
+                      {step.example}
+                    </code>
+                  </div>
+                </FadeInSection>
+              )
+            })}
           </div>
         </section>
 
