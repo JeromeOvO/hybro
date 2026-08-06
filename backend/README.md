@@ -1,8 +1,7 @@
 # Hybro Backend
 
-This directory is the canonical backend for the Hybro monorepo. The retired
-standalone `multi-agents-backend` repository is not the source used by the
-current application, Docker Compose configuration, or CI.
+This directory is the canonical backend for the current Hybro repository and is
+the backend used by the application, Docker Compose configuration, and CI.
 
 ## Run from the monorepo
 
@@ -50,8 +49,7 @@ The former `api/` compatibility package has been removed. New routes belong in
 repositories.
 
 See [`docs/System-Architecture.md`](docs/System-Architecture.md) for the current
-runtime architecture. `docs/MODULAR_DECOUPLING_DESIGN.md` is an archived design
-record and must not be treated as a description of the live system.
+runtime architecture.
 
 ## Validation
 

@@ -7,8 +7,8 @@
 - **Why:** Current event-log is in-memory append-only. Page refresh loses all event history. Old turns collapse and don't show events, so this is acceptable for v1, but users who expand old turns after refresh will see no event rail.
 - **Pros:** Full event history survives page refresh. Enables event rail for all turns, not just active.
 - **Cons:** Requires backend SSE protocol changes. Adds persistence and query complexity.
-- **Context:** Codex review identified that the spec designs a UI wanting durable event history while constraining to a snapshot store. The event-log.ts accumulator is the v1 compromise. When backend provides persistent events (likely part of the new hybro-backend Interaction module), replace event-log.ts with backend-sourced events.
-- **Depends on:** hybro-backend Phase 7 (Interaction Layer) providing typed domain events.
+- **Context:** Codex review identified that the spec designs a UI wanting durable event history while constraining it to a snapshot store. The event-log.ts accumulator is the v1 compromise. When this repository's backend provides persistent events, replace event-log.ts with backend-sourced events.
+- **Depends on:** A typed persistent-event API in `backend/`.
 
 ### TODO: Artifact event normalization — preserve emission history
 - **What:** Prevent SSE ingest from destroying artifact emission history by promoting text artifacts into content

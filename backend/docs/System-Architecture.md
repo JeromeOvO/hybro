@@ -1,9 +1,8 @@
 # System Architecture
 
 This document describes the current architecture and core workflows of the
-canonical backend under the Hybro monorepo's `backend/` directory. The retired
-standalone `multi-agents-backend` repository is not the runtime source described
-here. This document focuses on code currently present in the monorepo.
+canonical backend in this repository's `backend/` directory. It focuses on code
+currently present in this repository.
 
 ## High-Level Shape
 
@@ -1158,7 +1157,7 @@ noncompleted artifact/message content, and inline `file.bytes` are not persisted
 or emitted; file artifacts must be converted to
 addressable URIs or dropped from public projection. List/section markdown repair runs only in the
 frontend remark plugin pipeline
-(`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
+(`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
 render time. Hybro-controlled LLM paths (supervisor synthesis,
 `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses
 `###` section headers; third-party agent text is still stored as-is. Backend
