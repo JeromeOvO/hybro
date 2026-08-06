@@ -121,17 +121,17 @@ export default function OpenSourcePage() {
         />
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-8">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-8">
         {/* Hero Section */}
         <section className="pt-16 md:pt-24 pb-12 text-center animate-fade-up">
           {/* Version tag */}
           <div className="relative inline-flex items-center gap-2.5 px-5 mb-7 font-mono text-[11px] tracking-[0.2em] uppercase text-muted-foreground/80">
             <span aria-hidden className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
             <span aria-hidden className="absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-border to-transparent" />
-            <span className="text-[hsl(var(--color-hybro-hy))]">hybro/core</span>
-            <span className="text-border">@</span>
-            <span className="text-brand-gradient font-semibold">v0.2</span>
-            <span className="text-border">·</span>
+            <span className="text-brand-gradient font-semibold">hybro</span>
+            {/* <span className="text-border">@</span> */}
+            {/* <span className="text-brand-gradient font-semibold">v0.2</span> */}
+            {/* <span className="text-border">·</span> */}
             <span>open source</span>
           </div>
 
@@ -386,7 +386,7 @@ export default function OpenSourcePage() {
         {/* 3-Step Workflow */}
         <section className="py-16">
           <FadeInSection>
-            <h2 className="text-2xl md:text-3xl font-bold mb-14">
+            <h2 className="text-2xl md:text-3xl font-bold mb-14 text-center">
               How to Get Started
             </h2>
           </FadeInSection>
@@ -417,11 +417,12 @@ export default function OpenSourcePage() {
 
               return (
                 <FadeInSection key={step.title} delay={100 + i * 100}>
-                  <div className="group/step relative">
-                    {/* Numeral + connector rail */}
-                    <div className="flex items-center gap-5 mb-4">
+                  <div className="group/step relative flex flex-col items-center text-center px-2">
+                    <div className="relative mb-3">
+                      {/* Ghost numeral watermark, seated left of the title */}
                       <span
-                        className="font-spaceGrotesk text-3xl font-bold leading-none select-none"
+                        aria-hidden
+                        className="font-spaceGrotesk text-[4rem] font-bold leading-none select-none pointer-events-none absolute right-full top-1/2 -translate-y-1/2 -mr-3 opacity-[0.17]"
                         style={{
                           backgroundImage: `linear-gradient(115deg, ${stop(i)}, ${stop(i + 1)})`,
                           WebkitBackgroundClip: "text",
@@ -431,23 +432,15 @@ export default function OpenSourcePage() {
                       >
                         {i + 1}
                       </span>
-                      <span
-                        aria-hidden
-                        className="h-px flex-1"
-                        style={{
-                          backgroundImage: `linear-gradient(to right, ${stop(i + 1)}, transparent)`,
-                          opacity: 0.4,
-                        }}
-                      />
-                    </div>
 
-                    <h3 className="text-xl md:text-2xl font-semibold mb-3 tracking-tight">{step.title}</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed max-w-xs mb-6">
+                      <h3 className="relative text-2xl md:text-3xl font-semibold tracking-tight">{step.title}</h3>
+                    </div>
+                    <p className="relative text-sm text-muted-foreground leading-relaxed max-w-xs mb-6">
                       {step.body}
                     </p>
 
-                    <code className="block font-mono text-xs text-muted-foreground/90 whitespace-nowrap overflow-x-auto">
-                      <span className="text-[hsl(var(--color-hybro-hy))] select-none">$ </span>
+                    <code className="relative inline-flex items-center max-w-full overflow-x-auto whitespace-nowrap rounded-lg border border-border/40 bg-muted/30 px-3 py-1.5 font-mono text-xs text-muted-foreground/90">
+                      <span className="text-[hsl(var(--color-hybro-hy))] select-none">$&nbsp;</span>
                       {step.example}
                     </code>
                   </div>
@@ -465,6 +458,7 @@ export default function OpenSourcePage() {
           <VideoEmbed
             videoId="P0kyUQAxnZg"
             title="HYBRO Core Demo - Multi-Agent Collaboration Engine"
+            className="block max-w-4xl mx-auto"
           />
         </section>
 
