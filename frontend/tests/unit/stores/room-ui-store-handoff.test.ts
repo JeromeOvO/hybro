@@ -47,13 +47,15 @@ describe("PendingRoomData handoffMode", () => {
     expect(dataB!.handoffMode).toBeUndefined()
   })
 
-  it("hands an Agent mention to chat exactly once", () => {
+  it("keeps an Agent mention until the chat composer clears it", () => {
     const store = useRoomUiStore.getState()
     store.setPendingChatDraft("<@agent-1|Weather Agent> ")
 
-    expect(useRoomUiStore.getState().consumePendingChatDraft()).toBe(
+    expect(useRoomUiStore.getState().pendingChatDraft).toBe(
       "<@agent-1|Weather Agent> ",
     )
-    expect(useRoomUiStore.getState().consumePendingChatDraft()).toBeNull()
+
+    useRoomUiStore.getState().clearPendingChatDraft()
+    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
   })
 })

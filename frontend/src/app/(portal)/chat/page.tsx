@@ -39,7 +39,9 @@ function ChatPageContent() {
     const [localChatMode, setLocalChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
 
     useEffect(() => {
-        const draft = useRoomUiStore.getState().consumePendingChatDraft()
+        // Peek first so an App Router/Strict Mode remount cannot consume the
+        // handoff before the composer has actually applied it.
+        const draft = useRoomUiStore.getState().pendingChatDraft
         if (draft) setPromptPrefill(draft)
     }, [])
 
@@ -134,9 +136,10 @@ function ChatPageContent() {
       }
     }
 
-    const handlePromptPrefillConsumed = () => {
+    const handlePromptPrefillConsumed = useCallback(() => {
         setPromptPrefill("")
-    }
+        useRoomUiStore.getState().clearPendingChatDraft()
+    }, [])
 
     if (!isLoaded) {
         return (

@@ -1,3 +1,4 @@
+import { StrictMode } from "react"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react"
 import type { Agent } from "@/lib/types/agent"
@@ -125,12 +126,16 @@ describe("Chat page — Use Case Cards integration", () => {
     })
   })
 
-  it("consumes an Agent handoff as a focused mention draft", async () => {
+  it("applies an Agent handoff once under Strict Mode", async () => {
     useRoomUiStore.getState().setPendingChatDraft(
       "<@a1|YouTube Creator Finder Agent> ",
     )
 
-    const { container } = render(<ChatPage />)
+    const { container } = render(
+      <StrictMode>
+        <ChatPage />
+      </StrictMode>,
+    )
 
     await waitFor(() => {
       expect(container.querySelector('.room-mention')?.textContent).toBe(

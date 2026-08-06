@@ -101,7 +101,7 @@ interface RoomUiState {
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
   setPendingChatDraft: (value: string) => void
-  consumePendingChatDraft: () => string | null
+  clearPendingChatDraft: () => void
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
   markLocalSend: (roomId: RoomId) => void
   markInitialHydrated: (roomId: RoomId) => void
@@ -185,11 +185,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     return data
   },
   setPendingChatDraft: (value) => set({ pendingChatDraft: value }),
-  consumePendingChatDraft: () => {
-    const draft = get().pendingChatDraft
-    if (draft !== null) set({ pendingChatDraft: null })
-    return draft
-  },
+  clearPendingChatDraft: () => set({ pendingChatDraft: null }),
   setPendingTurnSkeleton: (roomId, value) =>
     set((state) => {
       const copy = { ...state.pendingTurnSkeletons }
