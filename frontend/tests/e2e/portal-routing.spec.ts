@@ -8,11 +8,8 @@ test.describe('Unified portal routing', () => {
       '/pricing',
       '/chat',
       '/agents',
-      '/hub',
       '/manage/agents',
       '/manage/agents/new',
-      '/manage/api-keys',
-      '/manage/inspector',
     ]) {
       const response = await request.get(path)
       expect(response.status(), `${path} should resolve`).toBe(200)
@@ -23,8 +20,16 @@ test.describe('Unified portal routing', () => {
     await expect(page.getByRole('button', { name: 'Manage' })).toBeVisible()
   })
 
-  test('does not retain legacy portal-prefixed routes', async ({ request }) => {
-    for (const path of ['/c', '/c/chat', '/d', '/d/agents']) {
+  test('does not retain retired routes', async ({ request }) => {
+    for (const path of [
+      '/c',
+      '/c/chat',
+      '/d',
+      '/d/agents',
+      '/hub',
+      '/manage/api-keys',
+      '/manage/inspector',
+    ]) {
       const response = await request.get(path)
       expect(response.status(), `${path} should be retired`).toBe(404)
     }

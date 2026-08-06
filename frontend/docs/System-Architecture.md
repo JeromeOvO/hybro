@@ -104,16 +104,13 @@ src/app/
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
     |-- chat/page.tsx
-    |-- hub/page.tsx
     |-- pricing/page.tsx
     |-- room/[id]/page.tsx
     `-- manage/
         |-- page.tsx
         |-- agents/page.tsx
         |-- agents/[id]/page.tsx
-        |-- agents/new/page.tsx
-        |-- api-keys/page.tsx
-        `-- inspector/page.tsx
+        `-- agents/new/page.tsx
 ```
 
 ### Unified routing
@@ -553,17 +550,15 @@ segment.
 - `/`: landing/entry behavior.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
 - `/agents` and `/agents/[id]`: public agent marketplace/profile.
-- `/hub`: the single Hub status page.
 - `/about`, `/pricing`: public pages.
 - `/manage/agents` and `/manage/agents/[id]`: owned-agent listing and management.
 - `/manage/agents/new`: agent registration.
-- `/manage/api-keys`: discovery API keys.
-- `/manage/inspector`: A2A inspector.
 
 The shared shell is implemented by `src/components/portal/`. The Manage
-sidebar item is an expandable control with links to owned agents, Hub,
-registration, API keys, and Inspector. `src/lib/routes.ts` is the canonical
-route vocabulary for application links.
+sidebar item is an expandable control linking only to owned agents. Agent
+registration remains available from buttons on the My Agents page but is not
+listed in the sidebar. `src/lib/routes.ts` is the canonical route vocabulary
+for application links.
 
 ## 14. Testing Layout
 

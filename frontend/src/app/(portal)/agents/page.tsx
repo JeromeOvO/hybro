@@ -335,10 +335,15 @@ function ConsumerAgentsPageContent() {
                   <p className="font-medium">Create an API key</p>
                   <p className="text-muted-foreground text-xs mt-0.5">
                     Go to{' '}
-                    <a href="/manage/api-keys" className="text-primary hover:underline">
-                      Manage &rarr; API Keys
+                    <a
+                      href="https://docs.hybro.ai/hybro-hub"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Hybro Hub setup guide
                     </a>{' '}
-                    and create a new key.
+                    to configure your key.
                   </p>
                 </div>
               </li>

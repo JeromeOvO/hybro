@@ -10,13 +10,10 @@ export const routes = {
   room: (id: string) => withId('/room', id),
   agents: '/agents',
   agent: (id: string) => withId('/agents', id),
-  hub: '/hub',
   manage: {
     root: '/manage',
     agents: '/manage/agents',
     agent: (id: string) => withId('/manage/agents', id),
     register: '/manage/agents/new',
-    apiKeys: '/manage/api-keys',
-    inspector: '/manage/inspector',
   },
 } as const

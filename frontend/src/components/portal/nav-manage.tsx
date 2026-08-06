@@ -6,10 +6,6 @@ import { useState } from 'react'
 import {
   Bot,
   ChevronRight,
-  House,
-  KeyRound,
-  Plus,
-  Shield,
   SlidersHorizontal,
 } from 'lucide-react'
 
@@ -32,15 +28,11 @@ import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from '@/lib/sidebar-styles'
 
 const items = [
   { title: 'My Agents', url: routes.manage.agents, icon: Bot },
-  { title: 'My Hub', url: routes.hub, icon: House },
-  { title: 'Register Agent', url: routes.manage.register, icon: Plus },
-  { title: 'API Keys', url: routes.manage.apiKeys, icon: KeyRound },
-  { title: 'Inspector', url: routes.manage.inspector, icon: Shield },
 ]
 
 export function NavManage() {
   const pathname = usePathname()
-  const isManageArea = pathname.startsWith(routes.manage.root) || pathname === routes.hub
+  const isManageArea = pathname.startsWith(routes.manage.root)
   const [manualState, setManualState] = useState({
     pathname,
     isOpen: isManageArea,

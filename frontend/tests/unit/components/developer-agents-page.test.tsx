@@ -100,6 +100,17 @@ describe('DeveloperAgentsPage', () => {
       expect(screen.getByRole('button', { name: /Register Your First Agent/i })).toBeInTheDocument()
     })
 
+    it('opens registration from the top-right button', async () => {
+      mockGetAgentsByProviderId.mockResolvedValue(buildAgentsResponse([]))
+
+      render(<DeveloperAgentsPage />)
+
+      const registerButton = await screen.findByRole('button', { name: /Register New Agent/i })
+      await userEvent.click(registerButton)
+
+      expect(mockPush).toHaveBeenCalledWith('/manage/agents/new')
+    })
+
     it('shows error banner when API call fails', async () => {
       mockGetAgentsByProviderId.mockRejectedValue(new Error('network error'))
 

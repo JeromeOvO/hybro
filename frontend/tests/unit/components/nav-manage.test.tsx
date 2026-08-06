@@ -36,7 +36,7 @@ describe('NavManage', () => {
 
   afterEach(cleanup)
 
-  it('uses a non-link Manage trigger and exposes the canonical secondary links', () => {
+  it('uses a non-link Manage trigger and only exposes My Agents', () => {
     render(
       <SidebarProvider>
         <NavManage />
@@ -49,11 +49,10 @@ describe('NavManage', () => {
 
     expect(screen.getByRole('link', { name: /My Agents/i })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: /My Agents/i })).toHaveAttribute('href', '/manage/agents')
-    expect(screen.getByRole('link', { name: /My Hub/i })).toHaveAttribute('href', '/hub')
-    expect(screen.getByRole('link', { name: /My Hub/i })).not.toHaveAttribute('aria-current')
-    expect(screen.getByRole('link', { name: /Register Agent/i })).toHaveAttribute('href', '/manage/agents/new')
-    expect(screen.getByRole('link', { name: /API Keys/i })).toHaveAttribute('href', '/manage/api-keys')
-    expect(screen.getByRole('link', { name: /Inspector/i })).toHaveAttribute('href', '/manage/inspector')
+    expect(screen.queryByRole('link', { name: /My Hub/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Register Agent/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /API Keys/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Inspector/i })).not.toBeInTheDocument()
   })
 
   it('opens when client navigation enters the management area', () => {
@@ -65,7 +64,7 @@ describe('NavManage', () => {
     )
     expect(screen.getByRole('button', { name: /Manage/i })).toHaveAttribute('aria-expanded', 'false')
 
-    mockPathname.mockReturnValue('/hub')
+    mockPathname.mockReturnValue('/manage/agents/a1')
     view.rerender(
       <SidebarProvider>
         <NavManage />
