@@ -46,7 +46,7 @@ export function TypingTerminal() {
   }, [lineIndex, charIndex])
 
   return (
-    <div className="relative rounded-2xl border border-border/50 bg-[hsl(var(--color-background))]/60 p-5 md:p-6 font-mono text-[12px] md:text-[13px] leading-[1.9] overflow-hidden">
+    <div className="relative rounded-sm bg-[hsl(var(--color-background))]/60 p-5 md:p-6 font-mono text-[12px] md:text-[13px] leading-[1.9] overflow-hidden">
       <div className="relative min-h-[170px]">
         {LINES.map((line, i) => {
           if (i > lineIndex) return null

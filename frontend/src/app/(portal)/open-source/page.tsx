@@ -143,7 +143,7 @@ export default function OpenSourcePage() {
 
           {/* Hero Prompt Input */}
           <div
-            className="max-w-xl mx-auto mb-8 rounded-xl bg-muted shadow-sm overflow-hidden text-left"
+            className="max-w-xl mx-auto mb-8 rounded-xl bg-muted overflow-hidden text-left"
             style={{ border: "1px solid var(--conversation-border-light)" }}
           >
             {/* Fake mention chip — decorative only */}
@@ -213,7 +213,7 @@ export default function OpenSourcePage() {
           </div>
 
           {/* Quick Start Terminal Widget */}
-          <div className="max-w-3xl mx-auto rounded-xl border border-border/60 bg-card/80 backdrop-blur-md overflow-hidden shadow-xl text-left">
+          <div className="max-w-3xl mx-auto rounded-xl border border-border/60 bg-card/80 backdrop-blur-md overflow-hidden text-left">
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 bg-muted/40 border-b border-border/50">
               <span className="text-xs font-mono text-muted-foreground flex items-center gap-1.5">
                 <Terminal className="h-3.5 w-3.5 text-[hsl(var(--color-hybro-hy))]" />
@@ -242,7 +242,7 @@ export default function OpenSourcePage() {
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-2 p-4 bg-black/40 font-mono text-xs md:text-sm text-foreground">
+            <div className="flex items-center gap-2 p-4 bg-muted dark:bg-black/40 font-mono text-xs md:text-sm text-foreground">
               <div className="flex-1 min-w-0 overflow-x-auto">
                 <code className="text-[hsl(var(--color-hybro-hy))] whitespace-nowrap">
                   <span className="text-muted-foreground select-none">$ </span>
@@ -255,7 +255,7 @@ export default function OpenSourcePage() {
                 onClick={handleCopy}
                 className="h-8 px-2.5 text-muted-foreground hover:text-foreground shrink-0"
               >
-                {copied ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+                {copied ? <Check className="h-4 w-4 text-green-600 dark:text-green-400" /> : <Copy className="h-4 w-4" />}
                 <span className="sr-only">Copy command</span>
               </Button>
             </div>
