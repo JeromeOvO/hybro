@@ -262,6 +262,8 @@ compatibility facades.
   words and CJK ideographs.
 - Respect visibility rules for public/private agents.
 - Merge hub liveness into agent status when hub agents are involved.
+- Allow registered Remote agents to be removed while rejecting deletion of
+  Hub-discovered Local agents, whose lifecycle is owned by discovery.
 
 Mongo persistence is implemented by `agent.repository.mongo.AgentMongoRepository`.
 Route-facing compatibility, legacy request/response translation, resolver

@@ -226,7 +226,11 @@ class AgentFacade:
 
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
-        if doc is None or doc.get("provider_id") != provider_id:
+        if (
+            doc is None
+            or doc.get("provider_id") != provider_id
+            or doc.get("source") == "hub"
+        ):
             return False
         return bool(await self._repository.delete(agent_id))
 

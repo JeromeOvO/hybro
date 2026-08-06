@@ -10,6 +10,7 @@ export const routes = {
   room: (id: string) => withId('/room', id),
   agents: '/agents',
   agent: (id: string) => withId('/agents', id),
+  registerAgent: '/agents/new',
   manage: {
     root: '/manage',
     agents: '/manage/agents',

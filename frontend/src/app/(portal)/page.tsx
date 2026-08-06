@@ -109,8 +109,8 @@ export default function ConsumerLandingPage() {
                 Connect any agent to the Hybro network. One install, any framework, open source.
               </p>
               <Button size="lg" variant="brandTint" asChild className="w-full max-w-[220px]">
-                <Link href={routes.manage.agents}>
-                  Manage Agents
+                <Link href={routes.agents}>
+                  View Agents
                   <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>

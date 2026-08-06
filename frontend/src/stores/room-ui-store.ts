@@ -71,6 +71,8 @@ interface RoomUiState {
   rooms: Record<RoomId, RoomFlags>
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
+  /** One-shot draft handed from an Agent detail page to the new-chat composer. */
+  pendingChatDraft: string | null
   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
   localSendSeqByRoom: Record<RoomId, number>
   initialHydrationSeqByRoom: Record<RoomId, number>
@@ -98,6 +100,8 @@ interface RoomUiState {
   setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+  setPendingChatDraft: (value: string) => void
+  consumePendingChatDraft: () => string | null
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
   markLocalSend: (roomId: RoomId) => void
   markInitialHydrated: (roomId: RoomId) => void
@@ -117,6 +121,7 @@ function readLocalStorageBool(key: string, fallback: boolean): boolean {
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
+  pendingChatDraft: null,
   pendingTurnSkeletons: {},
   localSendSeqByRoom: {},
   initialHydrationSeqByRoom: {},
@@ -152,6 +157,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     set({
       rooms: {},
       pendingRoomData: {},
+      pendingChatDraft: null,
       pendingTurnSkeletons: {},
       localSendSeqByRoom: {},
       initialHydrationSeqByRoom: {},
@@ -177,6 +183,12 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       })
     }
     return data
+  },
+  setPendingChatDraft: (value) => set({ pendingChatDraft: value }),
+  consumePendingChatDraft: () => {
+    const draft = get().pendingChatDraft
+    if (draft !== null) set({ pendingChatDraft: null })
+    return draft
   },
   setPendingTurnSkeleton: (roomId, value) =>
     set((state) => {

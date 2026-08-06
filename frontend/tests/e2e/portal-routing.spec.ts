@@ -1,23 +1,24 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('Unified portal routing', () => {
-  test('serves canonical routes and redirects /manage to the agent list', async ({ page, request }) => {
+  test('serves canonical routes and redirects legacy management paths', async ({ page, request }) => {
     for (const path of [
       '/',
       '/about',
       '/pricing',
       '/chat',
       '/agents',
-      '/manage/agents',
-      '/manage/agents/new',
+      '/agents/new',
     ]) {
       const response = await request.get(path)
       expect(response.status(), `${path} should resolve`).toBe(200)
     }
 
     await page.goto('/manage')
-    await expect(page).toHaveURL(/\/manage\/agents$/)
-    await expect(page.getByRole('button', { name: 'Manage' })).toBeVisible()
+    await expect(page).toHaveURL(/\/agents$/)
+
+    await page.goto('/manage/agents/new')
+    await expect(page).toHaveURL(/\/agents\/new$/)
   })
 
   test('does not retain retired routes', async ({ request }) => {

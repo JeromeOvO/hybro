@@ -37,7 +37,10 @@ export function NavAgent({
                   <item.icon
                     className={`transition-colors ${item.colorClass ?? "text-icon-navigation"} ${SIDEBAR_ICON_CENTER}`}
                   />
-                  <span className={`leading-7 ${SIDEBAR_ICON_HIDDEN}`}>
+                  <span
+                    className={`leading-7 ${SIDEBAR_ICON_HIDDEN}`}
+                    style={{ wordSpacing: item.name === "New Chat" ? "0.16em" : undefined }}
+                  >
                     {item.name}
                   </span>
                 </Link>

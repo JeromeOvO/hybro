@@ -1,7 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
-import { useSearchParams } from "next/navigation"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useUser, useAuth } from "@/lib/auth"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
@@ -10,7 +9,6 @@ import {
     Loader2,
     AlertCircle,
     RefreshCw,
-    Sparkles,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,87 +19,29 @@ import type { PendingAttachment } from "@/lib/types/attachments"
 import type { ChatMode } from "@/lib/types/chat-mode"
 import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
-import { getAgent } from "@/lib/api"
-import type { Agent } from "@/lib/types/agent"
+import { useRoomUiStore } from "@/stores/room-ui-store"
 import { UseCaseCard } from "@/components/use-case-card"
 import { useCaseTemplates } from "@/lib/use-case-templates"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
 import { isMentionDispatchInput, type MessageDispatchInput } from "@/lib/types/agent-group"
 
 export default function ChatPage() {
-    return (
-        <Suspense fallback={
-            <div className="flex items-center justify-center h-full">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            </div>
-        }>
-            <ChatPageContent />
-        </Suspense>
-    )
+    return <ChatPageContent />
 }
 
 function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
-    const searchParams = useSearchParams()
     const [promptPrefill, setPromptPrefill] = useState("")
     const [hasError, setHasError] = useState(false)
-    const [loadingAgent, setLoadingAgent] = useState(false)
 
     // Local chat mode selection
     const [localChatMode, setLocalChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
 
-    const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
-        roomName: string
-        selectedAgents: Agent[]
-        debateMode: boolean
-    } | null>(null)
-
-    // Pre-configure room when agentId is in URL params
-    const agentIdParam = searchParams.get("agentId")
-    const promptParam = searchParams.get("prompt")
-
     useEffect(() => {
-        if (promptParam) {
-            setPromptPrefill(promptParam)
-        }
-    }, [promptParam])
-
-    const loadAgentForChat = useCallback(async (agentId: string) => {
-        try {
-            setLoadingAgent(true)
-            const response = await getAgent(agentId)
-            if (response.success && response.agent) {
-                const agent = response.agent
-                const chatAgent: Agent = {
-                    agent_id: agent.agent_id,
-                    agent_card: agent.agent_card,
-                    agent_status: agent.agent_status,
-                }
-                setPreConfiguredRoom({
-                    roomName: `Chat with ${agent.agent_card.name}`,
-                    selectedAgents: [chatAgent],
-                    debateMode: false,
-                })
-            } else {
-                console.error("Failed to load agent for chat:", response.error)
-                banner.error("Could not load agent", {
-                    description: "The agent may have been removed or is unavailable."
-                })
-            }
-        } catch (error) {
-            console.error("Failed to load agent for chat:", error)
-            banner.error("Could not load agent")
-        } finally {
-            setLoadingAgent(false)
-        }
+        const draft = useRoomUiStore.getState().consumePendingChatDraft()
+        if (draft) setPromptPrefill(draft)
     }, [])
-
-    useEffect(() => {
-        if (agentIdParam) {
-            loadAgentForChat(agentIdParam)
-        }
-    }, [agentIdParam, loadAgentForChat])
 
     const handleRequireAuth = useCallback(() => {
         window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
@@ -149,10 +89,6 @@ function ChatPageContent() {
             setHasError(false)
 
             const options = {
-                ...(preConfiguredRoom ? {
-                    roomName: preConfiguredRoom.roomName || undefined,
-                    selectedAgents: preConfiguredRoom.selectedAgents,
-                } : {}),
                 debateMode: chatModeToFlags(localChatMode).debateMode,
                 useSupervisor: chatModeToFlags(localChatMode).use_supervisor,
                 dispatch,
@@ -278,20 +214,16 @@ function ChatPageContent() {
                             <span className="ml-2 text-icon-exclaim inline-block text-3xl skew-x-150 scale-150 rotate-6">!</span>
                         </h1>
                         <p className="text-muted-foreground">
-                            {preConfiguredRoom?.selectedAgents.length === 1
-                                ? `Ask ${preConfiguredRoom.selectedAgents[0].agent_card.name} anything`
-                                : "What would you like to work on today?"}
+                            What would you like to work on today?
                         </p>
                     </div>
 
                     {/* Creating state */}
-                    {(creating || loadingAgent) && (
+                    {creating && (
                         <div className="w-full max-w-3xl flex items-center justify-center mb-6">
                             <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                                <span className="text-sm">
-                                    {loadingAgent ? "Loading agent..." : "Finding the best agents for you..."}
-                                </span>
+                                <span className="text-sm">Finding the best agents for you...</span>
                             </div>
                         </div>
                     )}
@@ -351,15 +283,6 @@ function ChatPageContent() {
                         )}
                     </div>
 
-                    {/* Tip — only shown for pre-configured single-agent chat */}
-                    {preConfiguredRoom?.selectedAgents.length === 1 && (
-                        <div className="w-full max-w-3xl mt-6 md:mt-8 text-center px-2">
-                            <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
-                                <Sparkles className="h-3 w-3" />
-                                {`Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`}
-                            </p>
-                        </div>
-                    )}
                 </div>
             </div>
 

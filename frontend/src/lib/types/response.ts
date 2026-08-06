@@ -111,7 +111,7 @@ export interface Agent {
   rate_limit_system_per_hour?: number | null;
   /** Visibility: true = public (everyone can see/use), false = private (owner only) */
   is_public?: boolean;
-  /** Agent source: "cloud" for cloud-hosted, "hub" for local hub agents */
+  /** Agent source: "cloud" for registered Remote agents, "hub" for discovered Local agents */
   source?: "cloud" | "hub";
   /** Hub ID if this is a hub-sourced agent */
   hub_id?: string;

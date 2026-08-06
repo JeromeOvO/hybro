@@ -6,10 +6,7 @@
 
 ## 1. Overview
 
-Hybro Frontend is a Next.js App Router application for the Hybro multi-agent platform. A single codebase serves two portals:
-
-- Consumer portal: chat, agent discovery, room timelines, HITL replies, file attachments, hub status, pricing, and public information pages.
-- Developer portal: developer dashboard, agent registration and management, discovery API keys, agent inspection, documentation, and hub status.
+Hybro Frontend is a Next.js App Router application for the Hybro multi-agent platform. A single unified portal provides chat, agent inventory and registration, room timelines, HITL replies, file attachments, pricing, and public information pages.
 
 The app talks to the backend through REST APIs and room-scoped Server-Sent Events (SSE). The room UI uses normalized message state, transient streaming buffers, selector-driven view models, and a conversation renderer built around turns rather than raw message rows.
 
@@ -103,6 +100,7 @@ src/app/
     |-- open-source/page.tsx
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
+    |-- agents/new/page.tsx
     |-- chat/page.tsx
     |-- pricing/page.tsx
     |-- room/[id]/page.tsx
@@ -115,10 +113,11 @@ src/app/
 
 ### Unified routing
 
-The application exposes one unprefixed route tree. Public discovery and chat
-routes live at `/agents`, `/chat`, and `/room/[id]`; management tools live
-under `/manage`. There is no host-based route rewrite. `/manage` redirects to
-`/manage/agents`.
+The application exposes one unprefixed route tree. Agent inventory, details,
+and registration live at `/agents`, `/agents/[id]`, and `/agents/new`; chat
+routes live at `/chat` and `/room/[id]`. There is no host-based route rewrite.
+Legacy `/manage` and `/manage/agents*` paths redirect to their canonical
+`/agents*` equivalents.
 
 ### Provider hierarchy
 
@@ -206,7 +205,6 @@ src/hooks/
 |-- useHubStatus.ts            # hub availability
 |-- useMessageScrollAnchoring.ts  # legacy scroll anchoring
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
-|-- useMyAgents.ts
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
 |-- useTextSelectionQuote.ts
@@ -549,16 +547,23 @@ segment.
 
 - `/`: landing/entry behavior.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
-- `/agents` and `/agents/[id]`: public agent marketplace/profile.
+- `/agents`: unified local inventory of registered Remote agents and currently
+  discoverable Local agents.
+- `/agents/[id]`: unified AgentCard detail with Share, Chat, and Remote-only
+  Unregister actions.
+- `/agents/new`: Remote agent registration.
 - `/about`, `/pricing`: public pages.
-- `/manage/agents` and `/manage/agents/[id]`: owned-agent listing and management.
-- `/manage/agents/new`: agent registration.
 
-The shared shell is implemented by `src/components/portal/`. The Manage
-sidebar item is an expandable control linking only to owned agents. Agent
-registration remains available from buttons on the My Agents page but is not
-listed in the sidebar. `src/lib/routes.ts` is the canonical route vocabulary
-for application links.
+Remote agents use the persisted backend `agent_status` without frontend health
+probing. Local agents are shown only while `source === "hub"`, status is active,
+and the hub is online; stale Local agents are hidden. Agent-detail chat actions
+write a one-shot mention draft to `room-ui-store` and navigate to `/chat`; the
+composer consumes the draft, renders the Agent mention, and focuses the input
+without URL query parameters or creating a saved Team. The shared shell is
+implemented by `src/components/portal/` and exposes only New Chat and Agents as
+primary navigation before chat history. Legacy `/manage/agents*` routes are
+redirect-only compatibility paths. `src/lib/routes.ts` is the canonical route
+vocabulary for application links.
 
 ## 14. Testing Layout
 

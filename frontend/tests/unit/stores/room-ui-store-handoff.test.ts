@@ -3,7 +3,7 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 
 describe("PendingRoomData handoffMode", () => {
   beforeEach(() => {
-    useRoomUiStore.setState({ pendingRoomData: {} })
+    useRoomUiStore.setState({ pendingRoomData: {}, pendingChatDraft: null })
   })
 
   it("stores and consumes handoffMode: prefill", () => {
@@ -45,5 +45,15 @@ describe("PendingRoomData handoffMode", () => {
     const dataB = useRoomUiStore.getState().consumePendingRoomData("room-b")
     expect(dataA!.handoffMode).toBe("prefill")
     expect(dataB!.handoffMode).toBeUndefined()
+  })
+
+  it("hands an Agent mention to chat exactly once", () => {
+    const store = useRoomUiStore.getState()
+    store.setPendingChatDraft("<@agent-1|Weather Agent> ")
+
+    expect(useRoomUiStore.getState().consumePendingChatDraft()).toBe(
+      "<@agent-1|Weather Agent> ",
+    )
+    expect(useRoomUiStore.getState().consumePendingChatDraft()).toBeNull()
   })
 })

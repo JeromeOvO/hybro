@@ -24,9 +24,10 @@ import {
   Tag,
   Sparkles,
   Share2,
+  Trash2,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -58,12 +59,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { banner } from "@/components/ui/banner"
-import { getAgent } from "@/lib/api"
+import { deleteAgent, getAgent } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { Agent, AgentCenterResponse, AgentCapabilities } from "@/lib/types"
 import type { AgentSkill } from "@/lib/types"
 import { routes } from '@/lib/routes'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
 import { getModeIcon, getModeLabel } from "@/lib/agent-icon-utils"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
@@ -136,9 +149,11 @@ function collectQuickPrompts(skills: AgentSkill[]): string[] {
 export default function ConsumerAgentProfilePage() {
   const params = useParams()
   const router = useRouter()
-  const { userId } = useAuth()
+  const queryClient = useQueryClient()
+  const { getToken, userId } = useAuth()
   const agentId = decodeURIComponent(params.id as string)
   const [techOpen, setTechOpen] = useState(false)
+  const [unregistering, setUnregistering] = useState(false)
   const ctaRef = useRef<HTMLDivElement>(null)
   const [showStickyBar, setShowStickyBar] = useState(false)
 
@@ -146,7 +161,7 @@ export default function ConsumerAgentProfilePage() {
   const { data: agentData, isLoading: loading } = useQuery<AgentCenterResponse>({
     queryKey: ["agent", agentId],
     enabled: !!agentId && !isSystem,
-    queryFn: () => getAgent(agentId),
+    queryFn: () => getAgent(agentId, undefined, getToken),
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   })
@@ -188,6 +203,30 @@ export default function ConsumerAgentProfilePage() {
   const openShareWindow = useCallback((url: string) => {
     window.open(url, "_blank", "noopener,noreferrer,width=600,height=500")
   }, [])
+
+  const handleUnregister = useCallback(async () => {
+    try {
+      setUnregistering(true)
+      const response = await deleteAgent({ agent_id: agentId }, getToken)
+
+      if (!response.success) {
+        banner.error("Failed to unregister agent", {
+          description: response.error || "An unexpected error occurred",
+        })
+        return
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["agents"] })
+      banner.success("Agent unregistered")
+      router.push(routes.agents)
+    } catch (error) {
+      banner.error("Failed to unregister agent", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+      })
+    } finally {
+      setUnregistering(false)
+    }
+  }, [agentId, getToken, queryClient, router])
 
   /* ───────── Loading ───────── */
 
@@ -290,7 +329,35 @@ export default function ConsumerAgentProfilePage() {
 
   const agent = agentData.agent
   const card = agent.agent_card
-  const isOwner = userId && agent.provider_id === userId
+  const isLocal = agent.source === "hub"
+  const canUnregister = !isLocal && userId === agent.provider_id
+  const isVisibleLocal = !isLocal || (
+    agent.agent_status === "active" && agent.is_hub_online === true
+  )
+
+  if (!isVisibleLocal) {
+    return (
+      <div className="page-container">
+        <div className="page-content flex items-center justify-center min-h-[60vh]">
+          <Card className="w-full max-w-md border-dashed">
+            <CardHeader className="text-center">
+              <CardTitle className="text-xl">Local Agent Unavailable</CardTitle>
+              <CardDescription>
+                This agent is not currently discoverable on the local machine.
+              </CardDescription>
+            </CardHeader>
+            <CardFooter className="flex justify-center">
+              <Button onClick={() => router.push(routes.agents)}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Agents
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+      </div>
+    )
+  }
+
   const enabledCaps = visibleCapabilities(card.capabilities)
   const isActive = agent.agent_status === "active"
   const isChatDisabled = !isActive
@@ -304,50 +371,29 @@ export default function ConsumerAgentProfilePage() {
   const quickPrompts = collectQuickPrompts(card.skills)
 
   const navigateToChat = (prompt?: string) => {
-    const params = new URLSearchParams({ agentId })
-    if (prompt) params.set("prompt", prompt)
-    router.push(`/chat?${params.toString()}`)
+    const mention = `<@${agentId}|${card.name}>`
+    const draft = prompt ? `${mention} ${prompt}` : `${mention} `
+    useRoomUiStore.getState().setPendingChatDraft(draft)
+    router.push(routes.chat)
   }
 
   return (
     <div className="page-container animate-in fade-in duration-500">
       <div className="page-content space-y-10 pb-24 lg:pb-10">
         {/* ── Breadcrumb + actions ── */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                <BreadcrumbLink asChild>
-                  <Link href="/agents">Agents</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{card.name}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-
-          <div className="flex items-center gap-2">
-            {isOwner && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="brandTint" size="sm" asChild>
-                      <a
-                        href={routes.manage.agent(agentId)}
-                      >
-                        Manage
-                        <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
-                      </a>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Manage agent</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-          </div>
-        </div>
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild>
+                <Link href="/agents">Agents</Link>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{card.name}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
 
         {/* ── Hero ── */}
         <div className="space-y-5">
@@ -361,14 +407,27 @@ export default function ConsumerAgentProfilePage() {
             </Avatar>
 
             <div className="space-y-2 min-w-0">
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-start gap-3">
                 <h1 className="text-2xl font-bold tracking-tight">{card.name}</h1>
-                {getStatusBadge(agent.agent_status)}
-                <AgentSourceBadge
-                  source={agent.source}
-                  isHubOnline={agent.is_hub_online}
-                  className="h-5 w-5"
-                />
+                <div className="flex flex-col items-start gap-1">
+                  {getStatusBadge(agent.agent_status)}
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "gap-1.5 pl-1.5 pr-2.5 py-0.5 font-normal",
+                      isLocal
+                        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                        : "border-sky-500/40 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                    )}
+                  >
+                    <AgentSourceBadge
+                      source={agent.source}
+                      isHubOnline={agent.is_hub_online}
+                      className="h-3.5 w-3.5"
+                    />
+                    {isLocal ? "Local" : "Remote"}
+                  </Badge>
+                </div>
               </div>
               <p className="text-sm text-muted-foreground font-medium">
                 v{card.version}
@@ -468,7 +527,42 @@ export default function ConsumerAgentProfilePage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {canUnregister && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm" disabled={unregistering}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    {unregistering ? "Unregistering..." : "Unregister Agent"}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Unregister this agent?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This removes &quot;{card.name}&quot; from Hybro&apos;s registry. It does
+                      not stop or delete the remote A2A agent.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleUnregister}
+                      className="bg-destructive text-white hover:bg-destructive/90"
+                    >
+                      Unregister Agent
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
           </div>
+
+          {isLocal && (
+            <p className="text-xs text-muted-foreground">
+              Local agents are managed by automatic discovery and cannot be unregistered.
+            </p>
+          )}
 
           {/* Quick prompts */}
           {quickPrompts.length > 0 && !isChatDisabled && (
