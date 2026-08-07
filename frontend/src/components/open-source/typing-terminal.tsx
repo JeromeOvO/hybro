@@ -4,8 +4,10 @@ import { useEffect, useState } from "react"
 
 type Line = { kind: "cmd" | "ok" | "info"; text: string }
 
+// Keep the install command identical to the Quick Start widget and the
+// README — hybro.ai/install.sh is not a published route.
 const LINES: Line[] = [
-  { kind: "cmd", text: "curl -fsSL hybro.ai/install.sh | sh" },
+  { kind: "cmd", text: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh" },
   { kind: "ok", text: "cloning hybroai/hybro" },
   { kind: "ok", text: "backend/.env created" },
   { kind: "ok", text: "docker compose up -d --build" },

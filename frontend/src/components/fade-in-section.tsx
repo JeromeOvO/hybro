@@ -53,13 +53,14 @@ export function FadeInSection({
           obs.unobserve(el)
         }
       },
-      // Fire a little before the element is fully in view so the long
-      // entrances have room to play out as the user scrolls in.
-      { threshold, rootMargin: "0px 0px -8% 0px" }
+      // The long entrances need to start slightly later so they play out as
+      // the user scrolls in. The default `fade` path is left untouched — it is
+      // shared by other pages that expect the original trigger point.
+      variant === "fade" ? { threshold } : { threshold, rootMargin: "0px 0px -8% 0px" }
     )
     obs.observe(el)
     return () => obs.disconnect()
-  }, [threshold])
+  }, [threshold, variant])
 
   return (
     <div

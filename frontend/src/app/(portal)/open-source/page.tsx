@@ -91,6 +91,12 @@ export default function OpenSourcePage() {
 
   const handleHeroSend = async () => {
     if (creating) return
+    // createAndNavigate only surfaces a banner when userId is missing, so the
+    // sign-in redirect has to be triggered here (same guard as /chat).
+    if (!user?.id) {
+      handleRequireAuth()
+      return
+    }
     const text = heroInput.trim() || HERO_EXAMPLE_PROMPTS[promptIndex]
     await createAndNavigate(text)
   }
@@ -266,10 +272,16 @@ export default function OpenSourcePage() {
         <section className="py-20">
           <FadeInSection variant="wipe">
             <div className="text-center mb-12">
-              <h2 className="text-2xl md:text-4xl font-bold mb-3 tracking-tight">
-                Designed for Developer Autonomy
+              {/* Two staggered lines, kept as one heading for semantics */}
+              <h2 className="inline-block text-left text-3xl sm:text-4xl md:text-6xl font-bold tracking-tight leading-[1.1] mb-6">
+                <span className="block">
+                  <span className="text-hybro-hy">Private</span> by default.
+                </span>
+                <span className="block mt-1 md:mt-2 md:ml-28">
+                  <span className="text-hybro-bro">Open</span> by design.
+                </span>
               </h2>
-              <p className="text-muted-foreground max-w-3xl mx-auto text-balance">
+              <p className="text-muted-foreground/90 max-w-3xl mx-auto text-balance">
                 Everything you need to orchestrate autonomous AI agent workflows locally or at scale.
               </p>
             </div>
