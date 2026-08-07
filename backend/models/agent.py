@@ -96,7 +96,7 @@ class Agent(BaseModel):
     # Visibility: True = public (everyone can see/use), False = private (owner only)
     is_public: bool = True
 
-    # Hub Phase 2 additions (see HYBRO_HUB_DESIGN.md §5.1, §15)
+    # Origin: cloud (registered), local (host-discovered), or hub (relayed).
     source: str = "cloud"
     hub_id: str | None = None
     local_agent_id: str | None = None

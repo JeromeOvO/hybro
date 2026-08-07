@@ -55,10 +55,18 @@ class SyncedHubAgent(FrozenDTO):
     descriptor: HubAgentDescriptor | None = None
 
 
+class LocalAgentUpsertResult(FrozenDTO):
+    agent_id: str
+    managed: bool
+    added: bool = False
+    reactivated: bool = False
+
+
 __all__ = [
     "AgentCardSnapshot",
     "AgentInfo",
     "AgentMatchResult",
     "HubAgentDescriptor",
+    "LocalAgentUpsertResult",
     "SyncedHubAgent",
 ]

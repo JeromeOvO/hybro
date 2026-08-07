@@ -256,6 +256,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _delivery_config = None
     _execution_deps = None
     _mongo_dal = None
+    _local_agent_service = None
+    _local_agent_card_resolver = None
     _bg_started = False
     agent_health_service = None
     redis_kv_ready = False
@@ -312,6 +314,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 RoomMemoryLLMService,
                 SummaryLLMService,
                 SupervisorLLMService,
+            )
+            from local_agents import (
+                HostPortScanner,
+                LocalAgentCardProbe,
+                LocalAgentDiscoveryConfig,
+                LocalAgentService,
             )
             from room.compat.runtime import (
                 build_turn_content,
@@ -510,6 +518,43 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 gateway_base_url=runtime.settings.gateway_base_url,
             )
             _agent_facade = _agent_deps.agent_registry
+            local_agent_config = LocalAgentDiscoveryConfig(
+                enabled=runtime.settings.local_agent_discovery_enabled,
+                host=runtime.settings.local_agent_discovery_host,
+                port_start=runtime.settings.local_agent_discovery_port_start,
+                port_end=runtime.settings.local_agent_discovery_port_end,
+                interval_seconds=(
+                    runtime.settings.local_agent_discovery_interval_seconds
+                ),
+                connect_timeout_seconds=(
+                    runtime.settings.local_agent_discovery_connect_timeout_seconds
+                ),
+                probe_timeout_seconds=(
+                    runtime.settings.local_agent_discovery_probe_timeout_seconds
+                ),
+            )
+            _local_agent_card_resolver = AgentCardResolverImpl(
+                cache_ttl=0,
+                timeout=local_agent_config.probe_timeout_seconds,
+                log_failures=False,
+            )
+            _local_agent_service = LocalAgentService(
+                config=local_agent_config,
+                scanner=HostPortScanner(
+                    host=local_agent_config.host,
+                    port_start=local_agent_config.port_start,
+                    port_end=local_agent_config.port_end,
+                    connect_timeout_seconds=(
+                        local_agent_config.connect_timeout_seconds
+                    ),
+                ),
+                card_probe=LocalAgentCardProbe(
+                    host=local_agent_config.host,
+                    resolver=_local_agent_card_resolver,
+                ),
+                writer=_agent_deps.agent_registry_writer,
+            )
+            app.state.local_agent_service = _local_agent_service
             agent_compat_service = AgentService(facade=_agent_facade)
             route_agent_center = AgentRouteAdapter(service=agent_compat_service)
             agent_matcher = AgentMatcher(facade=_agent_facade)
@@ -1405,6 +1450,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         _bg_started = True
         await agent_health_service.start()
+        if _local_agent_service is not None:
+            await _local_agent_service.start()
 
         await stale_task_checker.start()
         await stale_task_checker.check_stale_tasks()
@@ -1524,6 +1571,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 sse_transport=_delivery_facade,
                 webhook_receiver=create_webhook_transport(),
                 repository_provider=DALViewSetRepositoryProvider(mongo=mongo_dal),
+                local_agent_discovery=_local_agent_service,
             ),
         )
 
@@ -1539,6 +1587,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await orphaned_upload_cleaner.stop()
             if agent_health_service is not None:
                 await agent_health_service.stop()
+            if _local_agent_service is not None:
+                await _local_agent_service.stop()
+        if _local_agent_card_resolver is not None:
+            await _local_agent_card_resolver.aclose()
         if _leader:
             await _leader.release_all(ALL_JOB_NAMES)
         await close_redis_runtime_deps(_redis_runtime)
@@ -1570,6 +1622,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await orphaned_upload_cleaner.stop()
         if agent_health_service is not None:
             await agent_health_service.stop()
+        if _local_agent_service is not None:
+            await _local_agent_service.stop()
+        if _local_agent_card_resolver is not None:
+            await _local_agent_card_resolver.aclose()
 
         # Release any leader locks
         if _leader:

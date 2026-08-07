@@ -163,7 +163,7 @@ export interface TurnSummaryViewModel {
 export interface AgentResultViewModel {
   agentId?: string
   agentName: string
-  agentSource?: 'hub' | 'cloud'
+  agentSource?: 'cloud' | 'local' | 'hub'
   messageId: string
   clientRequestId?: string
   status: 'completed' | 'failed' | 'awaiting_input' | 'working'

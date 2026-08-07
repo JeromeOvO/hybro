@@ -623,6 +623,27 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/local-agents/discovery",
+    "methods": [
+      "POST"
+    ],
+    "name": "discover_local_agents",
+    "endpoint_module": "api_gateway.routes.agent_routes",
+    "declared_owner": "api_gateway.routes.agent_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_local_agent_discovery"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/memoryCenter/addChatContext",
     "methods": [
       "POST"

@@ -20,7 +20,7 @@ interface AgentCardProps {
   interactive?: boolean
   onOpen?: (messageId: string) => void
   rightAction?: ReactNode
-  agentSource?: 'cloud' | 'hub'
+  agentSource?: 'cloud' | 'local' | 'hub'
   /** Single-line strip row: tighter padding, no task row, no card shimmer. */
   compact?: boolean
   /** Appended to status label in compact mode (e.g. artifact count). */

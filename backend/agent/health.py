@@ -344,9 +344,12 @@ class AgentHealthService:
     async def run_health_check_cycle(self):
         """Run a single health check cycle for all agents."""
         try:
+            # Host-discovered agents use the local discovery miss threshold as
+            # their authoritative lifecycle; avoid racing that reconciliation.
             raw_agents = await self._require_repository().list_visible(
                 query={
                     "agent_status": {"$ne": AgentStatus.deleted.value},
+                    "source": {"$ne": "local"},
                     "$or": [
                         {"hub_id": None},
                         {"hub_id": {"$exists": False}},

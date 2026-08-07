@@ -711,6 +711,29 @@
     ],
     "dependencies": [
       "get_current_user",
+      "get_local_agent_discovery"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.agent_routes",
+    "name": "discover_local_agents",
+    "openapi_response_codes": [
+      "200"
+    ],
+    "owning_protocol": "local_agents.protocols.LocalAgentDiscovery",
+    "path": "/api/v1/local-agents/discovery",
+    "response_class": null,
+    "response_model": "LocalAgentDiscoveryResult",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_memory_center"
     ],
     "methods": [

@@ -3,13 +3,14 @@
 import { useMemo, useState } from 'react'
 import { Bot, Plus, RefreshCw, Search } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { ConsumerAgentCard } from '@/components/consumer-agent-card'
 import { Button } from '@/components/ui/button'
+import { banner } from '@/components/ui/banner'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/lib/auth'
-import { getAgentsByProviderId, getAllAgents } from '@/lib/api'
+import { discoverLocalAgents, getAgentsByProviderId, getAllAgents } from '@/lib/api'
 import { routes } from '@/lib/routes'
 import type { Agent, AgentCenterResponse } from '@/lib/types'
 
@@ -18,6 +19,9 @@ function isVisibleAgent(agent: Agent): boolean {
 
   if (agent.source === 'hub') {
     return agent.agent_status === 'active' && agent.is_hub_online === true
+  }
+  if (agent.source === 'local') {
+    return agent.agent_status === 'active'
   }
 
   return true
@@ -41,6 +45,7 @@ function mergeAgents(discovered: Agent[], registered: Agent[]): Agent[] {
 
 export default function AgentsPage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const { getToken } = useAuth()
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -56,6 +61,26 @@ export default function AgentsPage() {
     queryFn: () => getAgentsByProviderId(getToken),
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
+  })
+
+  const discoveryMutation = useMutation({
+    mutationFn: () => discoverLocalAgents(getToken),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['agents', 'discovered'] }),
+        queryClient.invalidateQueries({ queryKey: ['agents', 'registered'] }),
+      ])
+      banner.success(
+        result.agents_found === 1
+          ? 'Found 1 local agent'
+          : `Found ${result.agents_found} local agents`,
+      )
+    },
+    onError: (error) => {
+      banner.error('Failed to discover local agents', {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    },
   })
 
   const agents = useMemo(() => {
@@ -93,13 +118,25 @@ export default function AgentsPage() {
       <div className="page-content space-y-5">
         <div className="flex items-start justify-between gap-4">
           <h1 className="text-2xl font-bold">Agents</h1>
-          <Button
-            className="btn-brand-gradient shrink-0"
-            onClick={() => router.push(routes.registerAgent)}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Register Agent
-          </Button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              className="bg-[hsl(var(--color-hybro-hy))] text-white shadow-sm hover:bg-[hsl(var(--color-hybro-hy-strong))] dark:text-slate-950"
+              disabled={discoveryMutation.isPending}
+              onClick={() => discoveryMutation.mutate()}
+            >
+              <RefreshCw
+                className={`h-4 w-4 mr-2 ${discoveryMutation.isPending ? 'animate-spin' : ''}`}
+              />
+              {discoveryMutation.isPending ? 'Discovering...' : 'Discover Local Agents'}
+            </Button>
+            <Button
+              className="btn-brand-gradient shrink-0"
+              onClick={() => router.push(routes.registerAgent)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Register Agent
+            </Button>
+          </div>
         </div>
 
         <div className="relative">

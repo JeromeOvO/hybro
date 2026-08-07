@@ -526,6 +526,40 @@ describe('convertApiMessageToIncoming', () => {
       expect(JSON.stringify(result)).not.toContain(privateSentinel)
     })
 
+    it('hydrates safe unavailable markers for local output delivery failures', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: { state: 'failed' },
+            metadata: {
+              output_failure_code: 'artifact_delivery_failed',
+              remote_task_state: 'completed',
+            },
+            artifacts: [{
+              artifactId: 'failed-file',
+              parts: [{
+                kind: 'data',
+                data: {
+                  type: 'file_unavailable',
+                  reason: 'invalid_content',
+                },
+              }],
+            }],
+          } as unknown as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.FAILED)
+      expect(result.artifacts?.[0]?.parts[0]?.data).toEqual({
+        type: 'file_unavailable',
+        reason: 'invalid_content',
+      })
+    })
+
     it('normalizes metadata-only room file artifacts', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',

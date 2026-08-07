@@ -106,12 +106,13 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
   const streaming = useStreamingStore.getState()
   const messageId = sseMessage.data.message_id
   const { roomId } = ctx
+  const existing = store.entities[messageId]
   const incomingArtifacts = partsToReplacementArtifacts(
     sseMessage.data.parts as Record<string, unknown>[] | undefined,
     messageId,
+    existing?.artifacts,
   )
 
-  const existing = store.entities[messageId]
   if (existing) {
     const incomingContent = (sseMessage.data.content ?? '').trim()
     const existingContent = (existing.content ?? '').trim()

@@ -67,7 +67,7 @@ export function useRoomSSEConnection(
   lifecycle: ProcessingLifecycle,
   handleSSEMessage: (message: AnySSEFrame) => void,
   getAgentName: (agentId: string) => Promise<string>,
-  getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined,
+  getAgentSource: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
   reconcileWithDb: (roomId: string) => Promise<void>,
   setSseConnected: (v: boolean) => void,

@@ -164,6 +164,20 @@ export function CollapsibleJsonBlock({ data, open, onOpenChange }: {
 
 function DataPartView({ data }: { data: Record<string, unknown> }) {
   const [open, setOpen] = useState(false)
+  if (data.type === 'file_unavailable') {
+    const reason = data.reason === 'size_limit'
+      ? 'This output exceeded the supported file size.'
+      : 'This output could not be processed.'
+    return (
+      <div
+        role="alert"
+        className="my-1 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+      >
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span>{reason}</span>
+      </div>
+    )
+  }
   return <CollapsibleJsonBlock data={data} open={open} onOpenChange={setOpen} />
 }
 

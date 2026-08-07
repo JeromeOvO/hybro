@@ -68,6 +68,7 @@ _SAFE_STATUS_MESSAGE_CODES = {
     "file_too_large",
     "file_prepare_failed",
     "agent_card_unavailable",
+    "artifact_delivery_failed",
 }
 
 _FAILURE_STATUSES = {"failed", "error", "canceled", "rejected"}

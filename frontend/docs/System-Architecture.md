@@ -119,6 +119,13 @@ routes live at `/chat` and `/room/[id]`. There is no host-based route rewrite.
 Legacy `/manage` and `/manage/agents*` paths redirect to their canonical
 `/agents*` equivalents.
 
+The `/agents` inventory merges visible registered agents with locally available
+agents. Its **Discover Local Agents** action calls the authenticated
+`POST /api/v1/local-agents/discovery` endpoint, waits for the backend discovery
+cycle, and then invalidates both agent inventory queries. Directly discovered
+`source=local` agents are displayed while active and use the same Local source
+badge as Hub agents; Hub availability additionally depends on Hub liveness.
+
 ### Provider hierarchy
 
 `src/app/layout.tsx` wraps the app with:
@@ -434,10 +441,14 @@ Backend queue/resume completion paths set `turn_completion_kind` from `_emit_uni
 
 SSE artifact conversion is defensive at the client boundary. `task_update`
 `parts` and `artifact_update` payloads drop legacy inline `file.bytes`; file
-parts are renderable when they carry a durable `file_id` or a URI.
-`PartRenderer` does not create `data:` URLs from inline bytes, so stale or
-malicious legacy SSE cannot surface private file content in message state or
-rendered media.
+parts are renderable when they carry a durable `file_id` or a URI. Canonical
+artifact events and synthetic terminal `${messageId}-parts` projections are
+reconciled by stable part identity (`file_id`, then SHA-256, URI, or canonical
+data), so live detail matches post-refresh hydration without collapsing distinct
+same-name files. `file_unavailable` data renders as a safe unavailable-output
+notice and is not counted as a file. `PartRenderer` does not create `data:` URLs
+from inline bytes, so stale or malicious legacy SSE cannot surface private file
+content in message state or rendered media.
 
 Room DB synchronization lives under `src/lib/room-sync/`:
 

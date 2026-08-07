@@ -4,6 +4,7 @@ from common.dto.agent import (
     AgentInfo,
     AgentMatchResult,
     HubAgentDescriptor,
+    LocalAgentUpsertResult,
     SyncedHubAgent,
 )
 from common.dto.base import FrozenDTO
@@ -238,6 +239,7 @@ __all__ = [
     "SavedAgentGroupSnapshot",
     "SavedUserMessage",
     "SortOrder",
+    "LocalAgentUpsertResult",
     "SyncedHubAgent",
     "TaskSubmittedEvent",
     "TaskUpdateEvent",

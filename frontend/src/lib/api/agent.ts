@@ -9,8 +9,31 @@ import { getApiUrl } from '../utils'
 import { apiGet, apiPost, apiPut } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
+const LOCAL_AGENTS_BASE_URL = getApiUrl('local-agents')
+
+export interface LocalAgentDiscoveryResult {
+  trigger: 'startup' | 'scheduled' | 'manual'
+  open_ports: number
+  agents_found: number
+  agents_added: number
+  agents_reactivated: number
+  agents_deactivated: number
+  duration_ms: number
+  reused_running_discovery: boolean
+}
 
 // ============= PROTECTED ENDPOINTS (Auth Required) =============
+
+// Discover A2A agents running on the Docker host
+export async function discoverLocalAgents(
+  getToken?: () => Promise<string | null>
+): Promise<LocalAgentDiscoveryResult> {
+  return apiPost<LocalAgentDiscoveryResult>(
+    `${LOCAL_AGENTS_BASE_URL}/discovery`,
+    {},
+    getToken
+  )
+}
 
 // Register agent
 export async function registerAgent(

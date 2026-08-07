@@ -532,6 +532,7 @@ class MessageRuntimeStorePart:
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]:
         resolved_message_text = message_text
         try:
@@ -571,6 +572,8 @@ class MessageRuntimeStorePart:
                 updates["message_content.message_task.id"] = task_id
             if context_id is not None:
                 updates["message_content.message_task.contextId"] = context_id
+            if task_metadata is not None:
+                updates["message_content.message_task.metadata"] = task_metadata
 
             terminal_values = sorted(state.value for state in TERMINAL_STATES)
             updated = (
@@ -592,6 +595,7 @@ class MessageRuntimeStorePart:
         *,
         message_text: str | None,
         artifacts: list[dict] | None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None]:
         """Claim a recoverable terminal finalizer without making the task terminal."""
         from common.utils.a2a_helpers import prepare_terminal_agent_content
@@ -608,6 +612,7 @@ class MessageRuntimeStorePart:
             token,
             message_text=message_text,
             artifacts=artifacts,
+            task_metadata=task_metadata,
         ):
             return None, message_text
         return token, message_text
@@ -736,6 +741,7 @@ class MessageRuntimeStorePart:
         *,
         message_text: str | None,
         artifacts: list[dict] | None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> bool:
         from common.utils.a2a_helpers import prepare_terminal_agent_content
 
@@ -751,6 +757,8 @@ class MessageRuntimeStorePart:
             updates["message_content.message_text"] = message_text
         if artifacts is not None:
             updates["message_content.message_task.artifacts"] = artifacts
+        if task_metadata is not None:
+            updates["message_content.message_task.metadata"] = task_metadata
         result = await self._room_agent_messages.update_one(
             {
                 "message_id": message_id,

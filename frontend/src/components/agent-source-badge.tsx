@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/tooltip'
 
 interface AgentSourceBadgeProps {
-  source?: 'cloud' | 'hub'
+  source?: 'cloud' | 'local' | 'hub'
   isHubOnline?: boolean
   className?: string
 }
@@ -19,8 +19,8 @@ export function AgentSourceBadge({
   isHubOnline,
   className,
 }: AgentSourceBadgeProps) {
-  if (source === 'hub') {
-    const online = isHubOnline ?? false
+  if (source === 'hub' || source === 'local') {
+    const online = source === 'local' || (isHubOnline ?? false)
     return (
       <Tooltip>
         <TooltipTrigger asChild>

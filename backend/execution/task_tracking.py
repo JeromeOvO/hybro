@@ -24,6 +24,12 @@ from common.utils.a2a_helpers import (
     extract_parts_from_artifacts,
     materialize_artifacts,
 )
+from common.utils.artifact_delivery import (
+    mark_task_output_delivery_failed,
+    mark_unresolved_file_parts_unavailable,
+    new_materialization_report,
+    output_delivery_failed,
+)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.error import A2AServiceError
@@ -387,13 +393,16 @@ class A2ATaskTrackingService:
             task_id=str(uuid4()),
             artifact_id=str(uuid4()),
         )
+        report = None
         if completed_task.artifacts:
-            await _best_effort_materialize_artifacts(
+            report = await _best_effort_materialize_artifacts(
                 completed_task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
                 context="message",
             )
+        if output_delivery_failed(completed_task.artifacts, report):
+            mark_task_output_delivery_failed(completed_task)
 
         projected_task_data = public_persisted_task_data(completed_task)
         projected_task = _task_model_for_internal_projection(projected_task_data)
@@ -407,8 +416,17 @@ class A2ATaskTrackingService:
             "type": "message",
             "message_id": message_id,
             "content": message_text,
+            "status": _state_value(projected_task.status.state),
             "persisted": persisted,
         }
+        if projected_task.status.state != TaskState.completed:
+            metadata = projected_task.metadata or {}
+            failure_code = metadata.get("output_failure_code")
+            if isinstance(failure_code, str) and failure_code:
+                resp["error_code"] = failure_code
+            error_text = _extract_status_message(projected_task)
+            if error_text:
+                resp["error"] = error_text
         non_text_parts = _non_text_parts(projected_task.artifacts)
         if non_text_parts:
             resp["parts"] = non_text_parts
@@ -456,15 +474,22 @@ class A2ATaskTrackingService:
         message_id: str,
         room_id: str | None,
     ) -> dict[str, Any]:
+        public_status_text = extract_public_completed_status_text(task)
+        report = None
         if task.artifacts:
-            await _best_effort_materialize_artifacts(
+            report = await _best_effort_materialize_artifacts(
                 task.artifacts,
                 room_id=room_id or message_id,
                 message_id=message_id,
                 context="terminal_task",
             )
+        if task.status.state == TaskState.completed and output_delivery_failed(
+            task.artifacts,
+            report,
+            text=public_status_text,
+        ):
+            mark_task_output_delivery_failed(task)
 
-        public_status_text = extract_public_completed_status_text(task)
         projected_data = public_persisted_task_data(task)
         projected_task = _task_model_for_internal_projection(projected_data)
         state = projected_task.status.state
@@ -489,6 +514,10 @@ class A2ATaskTrackingService:
         if non_text_parts:
             resp["parts"] = non_text_parts
         if state != TaskState.completed:
+            metadata = projected_task.metadata or {}
+            failure_code = metadata.get("output_failure_code")
+            if isinstance(failure_code, str) and failure_code:
+                resp["error_code"] = failure_code
             error_text = _extract_status_message(projected_task)
             if error_text:
                 resp["error"] = error_text
@@ -607,21 +636,42 @@ async def _best_effort_materialize_artifacts(
     room_id: str,
     message_id: str,
     context: str,
-) -> None:
+) -> dict[str, Any]:
+    report = new_materialization_report()
     try:
         await materialize_artifacts(
             artifacts,
             room_id=room_id,
             message_id=message_id,
+            report=report,
         )
-    except Exception:
+    except Exception as exc:
+        replaced = mark_unresolved_file_parts_unavailable(artifacts)
+        report["attempted"] = max(
+            int(report.get("attempted", 0)),
+            replaced,
+        )
+        report["unavailable"] = max(
+            int(report.get("unavailable", 0)),
+            replaced,
+        )
+        report.setdefault("failures", []).append(
+            {
+                "code": "materialization_failed",
+                "source": "unknown",
+                "exception_type": type(exc).__name__,
+            }
+        )
         logger.warning(
-            "A2A artifact conversion failed for %s response on message %s; "
-            "continuing with task persistence",
-            context,
-            message_id,
-            exc_info=True,
+            "a2a_artifact_conversion_failed",
+            extra={
+                "response_context": context,
+                "message_id": message_id,
+                "failure_code": "materialization_failed",
+                "exception_type": type(exc).__name__,
+            },
         )
+    return report
 
 
 def _build_push_config(

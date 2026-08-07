@@ -1,9 +1,8 @@
 # System Architecture
 
 This document describes the current architecture and core workflows of the
-canonical backend under the Hybro monorepo's `backend/` directory. The retired
-standalone `multi-agents-backend` repository is not the runtime source described
-here. This document focuses on code currently present in the monorepo.
+canonical backend in this repository's `backend/` directory. It focuses on code
+currently present in this repository.
 
 ## High-Level Shape
 
@@ -140,6 +139,18 @@ Agent dependency assembly is also container-owned. `container.py` constructs
 Agent-owned protocol implementations directly. Agent runtime behavior is owned
 by `agent/`.
 
+`local_agents/` owns Docker-host discovery without owning Agent persistence or
+execution. When enabled, its in-process service scans the configured
+`host.docker.internal` port range at startup and every 120 seconds, probes Agent
+Cards through the SDK-confined `a2a_adapter` resolver, and reconciles results
+through the Agent registry writer. Discovered records use `source=local`, remain
+public and directly callable. Scheduled discovery marks them inactive after
+three successful cycles in which they are absent; the authenticated
+`POST /api/v1/local-agents/discovery` manual refresh immediately reconciles
+missing agents and upgrades any in-flight cycle to a manual refresh. This first
+phase targets the single-process Docker Compose backend; discovery coordination
+and miss counters are intentionally process-local.
+
 ## Major Code Areas
 
 ### `api_gateway`
@@ -151,7 +162,8 @@ bound dependencies.
 Important route groups:
 
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
-- `agent_routes.py`: agent registration, lookup, update, and visibility.
+- `agent_routes.py`: agent registration, lookup, update, visibility, and the
+  authenticated local-agent discovery trigger.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
@@ -1156,9 +1168,15 @@ completed `response` artifact before terminal persistence and delivery. Status
 messages for other roles or states, failure details, interactive prompts,
 noncompleted artifact/message content, and inline `file.bytes` are not persisted
 or emitted; file artifacts must be converted to
-addressable URIs or dropped from public projection. List/section markdown repair runs only in the
+addressable URIs or a safe `file_unavailable` marker before public projection.
+Materialization records payload-free failure categories for observability. A remote
+`completed` task whose advertised files all fail delivery and which has no other
+usable output is projected as a local `artifact_delivery_failed` result; the
+original remote state is retained in task metadata. Valid completed responses with
+no advertised files remain completed, and partial useful output remains usable.
+List/section markdown repair runs only in the
 frontend remark plugin pipeline
-(`hybro-frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
+(`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
 render time. Hybro-controlled LLM paths (supervisor synthesis,
 `SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses
 `###` section headers; third-party agent text is still stored as-is. Backend

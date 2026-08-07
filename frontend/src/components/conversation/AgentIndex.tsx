@@ -7,6 +7,11 @@ import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/ty
 import { getAgentTheme } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import {
+  countDurableArtifactFiles,
+  hasUnavailableArtifactOutput,
+  hasUsableArtifactOutput,
+} from '@/lib/artifacts/artifact-identity'
+import {
   getActivityStripListMaxHeight,
   getAgentIndexSummary,
   defaultAgentIndexOpen,
@@ -34,10 +39,25 @@ function IndexRow({
   onOpenDetail: (messageId: string) => void
 }) {
   const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
-  const display = mapResultDisplayProps(result, isStreaming, content)
+  const baseDisplay = mapResultDisplayProps(result, isStreaming, content)
   const theme = getAgentTheme(result.agentId, result.agentName)
-  const artifactCount = artifacts?.length ?? 0
-  const statusSuffix = artifactCount > 0 ? `${artifactCount} file${artifactCount === 1 ? '' : 's'}` : undefined
+  const fileCount = countDurableArtifactFiles(artifacts)
+  const hasUnavailable = hasUnavailableArtifactOutput(artifacts)
+  const hasUsefulOutput = Boolean(content.trim()) || hasUsableArtifactOutput(artifacts)
+  const outputUnavailable = hasUnavailable && !hasUsefulOutput
+  const display = outputUnavailable
+    ? {
+        label: 'Output unavailable',
+        tone: 'danger' as const,
+        isAnimated: false,
+        ariaLabel: `${result.agentName} — Output unavailable`,
+      }
+    : baseDisplay
+  const statusSuffix = hasUnavailable && hasUsefulOutput
+    ? 'partial output'
+    : fileCount > 0
+      ? `${fileCount} file${fileCount === 1 ? '' : 's'}`
+      : undefined
 
   return (
     <AgentCard

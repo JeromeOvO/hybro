@@ -105,21 +105,21 @@ function getStatusBadge(status: Agent["agent_status"]) {
   switch (status) {
     case "active":
       return (
-        <Badge variant="success" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
+        <Badge variant="success" className="h-6 gap-1.5 pl-1.5 pr-2.5 py-0">
           <CheckCircle2 className="w-3.5 h-3.5 fill-current opacity-80" />
           Active
         </Badge>
       )
     case "inactive":
       return (
-        <Badge variant="inactive" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
+        <Badge variant="inactive" className="h-6 gap-1.5 pl-1.5 pr-2.5 py-0">
           <AlertCircle className="w-3.5 h-3.5 fill-current opacity-80" />
           Inactive
         </Badge>
       )
     case "deleted":
       return (
-        <Badge variant="destructive" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
+        <Badge variant="destructive" className="h-6 gap-1.5 pl-1.5 pr-2.5 py-0">
           <XCircle className="w-3.5 h-3.5 fill-current opacity-80" />
           Deleted
         </Badge>
@@ -329,11 +329,13 @@ export default function ConsumerAgentProfilePage() {
 
   const agent = agentData.agent
   const card = agent.agent_card
-  const isLocal = agent.source === "hub"
+  const isLocal = agent.source === "hub" || agent.source === "local"
   const canUnregister = !isLocal && userId === agent.provider_id
-  const isVisibleLocal = !isLocal || (
-    agent.agent_status === "active" && agent.is_hub_online === true
-  )
+  const isVisibleLocal = agent.source === "hub"
+    ? agent.agent_status === "active" && agent.is_hub_online === true
+    : agent.source === "local"
+      ? agent.agent_status === "active"
+      : true
 
   if (!isVisibleLocal) {
     return (
@@ -414,7 +416,7 @@ export default function ConsumerAgentProfilePage() {
                   <Badge
                     variant="outline"
                     className={cn(
-                      "gap-1.5 pl-1.5 pr-2.5 py-0.5 font-normal",
+                      "h-6 gap-1.5 pl-1.5 pr-2.5 py-0 font-medium",
                       isLocal
                         ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                         : "border-sky-500/40 bg-sky-500/15 text-sky-700 dark:text-sky-300"

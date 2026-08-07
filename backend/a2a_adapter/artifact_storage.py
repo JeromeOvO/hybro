@@ -16,6 +16,14 @@ import aiohttp
 from aiohttp.abc import AbstractResolver
 
 from common.types import DataPart, FileContent, Part
+from common.utils.artifact_delivery import (
+    record_materialization_attempt,
+    record_materialization_failure,
+    record_materialization_success,
+)
+from common.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 MAX_FILE_PARTS = 20
 MAX_FILE_RAW_BYTES = 50 * 1024 * 1024
@@ -24,6 +32,14 @@ MAX_TOTAL_ENCODED_BYTES = 139_810_136
 MAX_REDIRECTS = 3
 
 _room_files: Any | None = None
+
+
+class ArtifactSizeLimitError(ValueError):
+    """An artifact exceeded a platform-owned materialization limit."""
+
+
+class InvalidBase64ArtifactError(ValueError):
+    """An A2A FileWithBytes payload was not strict Base64."""
 
 
 def bind_artifact_files(room_files: Any) -> None:
@@ -78,13 +94,13 @@ def _origin_key(
 
 def _decode_base64(value: str) -> bytes:
     if len(value) > 4 * ((MAX_FILE_RAW_BYTES + 2) // 3):
-        raise ValueError("encoded file exceeds per-file limit")
+        raise ArtifactSizeLimitError("encoded file exceeds per-file limit")
     try:
         decoded = base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ValueError("invalid base64 file content") from exc
+        raise InvalidBase64ArtifactError("invalid base64 file content") from exc
     if len(decoded) > MAX_FILE_RAW_BYTES:
-        raise ValueError("decoded file exceeds per-file limit")
+        raise ArtifactSizeLimitError("decoded file exceeds per-file limit")
     return decoded
 
 
@@ -95,6 +111,58 @@ def _digest(data: bytes) -> str:
 def _decode_base64_with_digest(value: str) -> tuple[bytes, str]:
     data = _decode_base64(value)
     return data, _digest(data)
+
+
+def _failure_code(exc: Exception, *, stage: str) -> str:
+    if isinstance(exc, ArtifactSizeLimitError):
+        return "size_limit"
+    if isinstance(exc, InvalidBase64ArtifactError):
+        return "invalid_base64"
+    if stage == "store":
+        return "storage_failed"
+    if stage == "fetch":
+        return "fetch_failed"
+    if stage == "reference":
+        return "invalid_reference"
+    return "invalid_content"
+
+
+def _public_failure_reason(code: str) -> str:
+    return "size_limit" if code == "size_limit" else "invalid_content"
+
+
+def _record_failure(
+    report: dict[str, Any] | None,
+    *,
+    room_id: str,
+    message_id: str,
+    artifact_slot: str,
+    part_slot: int,
+    source: str,
+    code: str,
+    exc: Exception,
+) -> None:
+    artifact_ref = hashlib.sha256(artifact_slot.encode()).hexdigest()[:16]
+    record_materialization_failure(
+        report,
+        code=code,
+        artifact_ref=artifact_ref,
+        part_slot=part_slot,
+        source=source,
+        exception_type=type(exc).__name__,
+    )
+    logger.warning(
+        "artifact_materialization_failed",
+        extra={
+            "room_id": room_id,
+            "message_id": message_id,
+            "artifact_ref": artifact_ref,
+            "part_slot": part_slot,
+            "content_source": source,
+            "failure_code": code,
+            "exception_type": type(exc).__name__,
+        },
+    )
 
 
 def _unavailable_dict(file_info: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -145,12 +213,18 @@ def _declared_metadata_size(metadata: dict[str, Any]) -> int:
 
 
 def _canonical_reference_metadata(record: dict[str, Any]) -> dict[str, Any]:
+    file_id = record.get("file_id")
+    sha256 = record.get("sha256")
+    if not isinstance(file_id, str) or not file_id:
+        raise ValueError("invalid stored file id")
+    if not isinstance(sha256, str) or not sha256:
+        raise ValueError("invalid stored file digest")
     return {
-        "file_id": str(record["file_id"]),
+        "file_id": file_id,
         "file_name": str(record.get("file_name") or "file"),
         "mime_type": str(record.get("mime_type") or "application/octet-stream"),
         "size_bytes": _authoritative_size(record),
-        "sha256": str(record["sha256"]),
+        "sha256": sha256,
     }
 
 
@@ -245,7 +319,7 @@ async def _consume_precounted_reference(
         + authoritative_size
     )
     if budget["raw"] > MAX_TOTAL_RAW_BYTES:
-        raise ValueError("aggregate raw limit exceeded")
+        raise ArtifactSizeLimitError("aggregate raw limit exceeded")
     _canonicalize_reference_dict(part, file_info, valid)
     return True
 
@@ -258,6 +332,7 @@ async def materialize_inline_file_parts(
     converted_so_far: int = 0,
     budget: dict[str, Any] | None = None,
     artifact_slot: str | None = None,
+    report: dict[str, Any] | None = None,
 ) -> int:
     budget = (
         budget
@@ -270,10 +345,12 @@ async def materialize_inline_file_parts(
         }
     )
     budget.setdefault("attempted", int(budget.get("converted", 0)))
+    resolved_slot = artifact_slot or "message"
 
     for part_slot, part in enumerate(parts):
         if part.get("kind") != "file":
             continue
+        record_materialization_attempt(report)
         file_info = part.get("file")
         if isinstance(file_info, dict):
             try:
@@ -284,30 +361,71 @@ async def materialize_inline_file_parts(
                     message_id=message_id,
                     budget=budget,
                 ):
+                    record_materialization_success(report)
                     continue
             except Exception as exc:
-                reason = "size_limit" if "limit" in str(exc) else "invalid_content"
-                parts[part_slot] = _unavailable_dict(file_info, reason)
+                code = _failure_code(exc, stage="reference")
+                _record_failure(
+                    report,
+                    room_id=room_id,
+                    message_id=message_id,
+                    artifact_slot=resolved_slot,
+                    part_slot=part_slot,
+                    source="reference",
+                    code=code,
+                    exc=exc,
+                )
+                parts[part_slot] = _unavailable_dict(
+                    file_info, _public_failure_reason(code)
+                )
                 continue
         if not _claim_file_attempt(budget):
+            exc = ArtifactSizeLimitError("file part count limit exceeded")
+            _record_failure(
+                report,
+                room_id=room_id,
+                message_id=message_id,
+                artifact_slot=resolved_slot,
+                part_slot=part_slot,
+                source="unknown",
+                code="size_limit",
+                exc=exc,
+            )
             parts[part_slot] = _unavailable_dict(
                 file_info if isinstance(file_info, dict) else {},
                 "size_limit",
             )
             continue
         if not isinstance(file_info, dict):
+            exc = ValueError("missing file descriptor")
+            _record_failure(
+                report,
+                room_id=room_id,
+                message_id=message_id,
+                artifact_slot=resolved_slot,
+                part_slot=part_slot,
+                source="unknown",
+                code="invalid_content",
+                exc=exc,
+            )
             parts[part_slot] = _unavailable_dict({}, "invalid_content")
             continue
+        stage = "content"
+        source = "unknown"
         try:
             encoded = file_info.get("bytes")
             if isinstance(encoded, str) and encoded:
+                source = "bytes"
+                stage = "decode"
                 budget["encoded"] += len(encoded)
                 if budget["encoded"] > MAX_TOTAL_ENCODED_BYTES:
-                    raise ValueError("aggregate encoded limit exceeded")
+                    raise ArtifactSizeLimitError("aggregate encoded limit exceeded")
                 data, content_sha256 = await asyncio.to_thread(
                     _decode_base64_with_digest, encoded
                 )
             else:
+                source = "uri"
+                stage = "fetch"
                 uri = file_info.get("uri")
                 if not isinstance(uri, str) or not uri:
                     raise ValueError("missing file content")
@@ -315,6 +433,7 @@ async def materialize_inline_file_parts(
                 if uri == _room_file_content_url(
                     str((part.get("metadata") or {}).get("file_id") or "")
                 ):
+                    stage = "reference"
                     metadata = part.get("metadata") or {}
                     file_id = str(metadata.get("file_id") or "")
                     valid = await room_files.validate_agent_reference(
@@ -328,8 +447,9 @@ async def materialize_inline_file_parts(
                         budget["converted"] += 1
                         budget["raw"] += authoritative_size
                         if budget["raw"] > MAX_TOTAL_RAW_BYTES:
-                            raise ValueError("aggregate raw limit exceeded")
+                            raise ArtifactSizeLimitError("aggregate raw limit exceeded")
                         _canonicalize_reference_dict(part, file_info, valid)
+                        record_materialization_success(report)
                         continue
                     raise ValueError("untrusted internal file reference")
                 data, detected_mime = await fetch_remote_file(uri)
@@ -337,7 +457,8 @@ async def materialize_inline_file_parts(
                 file_info.setdefault("mimeType", detected_mime)
             budget["raw"] += len(data)
             if budget["raw"] > MAX_TOTAL_RAW_BYTES:
-                raise ValueError("aggregate raw limit exceeded")
+                raise ArtifactSizeLimitError("aggregate raw limit exceeded")
+            stage = "store"
             stored = await _store(
                 data=data,
                 room_id=room_id,
@@ -352,27 +473,34 @@ async def materialize_inline_file_parts(
                 ),
                 content_sha256=content_sha256,
             )
+            stored_metadata = _canonical_reference_metadata(stored)
+            file_info.clear()
+            file_info.update(
+                {
+                    "uri": _room_file_content_url(stored_metadata["file_id"]),
+                    "mimeType": stored_metadata["mime_type"],
+                    "name": stored_metadata["file_name"],
+                }
+            )
+            part["metadata"] = stored_metadata
         except Exception as exc:
-            reason = "size_limit" if "limit" in str(exc) else "invalid_content"
-            parts[part_slot] = _unavailable_dict(file_info, reason)
+            code = _failure_code(exc, stage=stage)
+            _record_failure(
+                report,
+                room_id=room_id,
+                message_id=message_id,
+                artifact_slot=resolved_slot,
+                part_slot=part_slot,
+                source=source,
+                code=code,
+                exc=exc,
+            )
+            parts[part_slot] = _unavailable_dict(
+                file_info, _public_failure_reason(code)
+            )
             continue
 
-        file_id = str(stored["file_id"])
-        file_info.clear()
-        file_info.update(
-            {
-                "uri": _room_file_content_url(file_id),
-                "mimeType": stored["mime_type"],
-                "name": stored["file_name"],
-            }
-        )
-        part["metadata"] = {
-            "file_id": file_id,
-            "file_name": stored["file_name"],
-            "mime_type": stored["mime_type"],
-            "size_bytes": stored["size_bytes"],
-            "sha256": stored["sha256"],
-        }
+        record_materialization_success(report)
         budget["converted"] += 1
     return budget["converted"]
 
@@ -396,6 +524,7 @@ async def materialize_artifacts(
     message_id: str,
     *,
     converted_so_far: int = 0,
+    report: dict[str, Any] | None = None,
 ) -> int:
     converted = converted_so_far
     attempted = converted_so_far
@@ -416,28 +545,57 @@ async def materialize_artifacts(
             root = getattr(part, "root", part)
             if getattr(root, "kind", None) != "file":
                 continue
+            record_materialization_attempt(report)
             file_content = getattr(root, "file", None)
             if attempted >= MAX_FILE_PARTS:
+                exc = ArtifactSizeLimitError("file part count limit exceeded")
+                _record_failure(
+                    report,
+                    room_id=room_id,
+                    message_id=message_id,
+                    artifact_slot=artifact_slot,
+                    part_slot=part_slot,
+                    source="unknown",
+                    code="size_limit",
+                    exc=exc,
+                )
                 artifact.parts[part_slot] = _unavailable_part(
                     file_content, "size_limit"
                 )
                 continue
             attempted += 1
             if file_content is None:
+                exc = ValueError("missing file descriptor")
+                _record_failure(
+                    report,
+                    room_id=room_id,
+                    message_id=message_id,
+                    artifact_slot=artifact_slot,
+                    part_slot=part_slot,
+                    source="unknown",
+                    code="invalid_content",
+                    exc=exc,
+                )
                 artifact.parts[part_slot] = _unavailable_part(
                     file_content, "invalid_content"
                 )
                 continue
+            stage = "content"
+            source = "unknown"
             try:
                 encoded = getattr(file_content, "bytes", None)
                 if encoded:
+                    source = "bytes"
+                    stage = "decode"
                     total_encoded += len(encoded)
                     if total_encoded > MAX_TOTAL_ENCODED_BYTES:
-                        raise ValueError("aggregate encoded limit exceeded")
+                        raise ArtifactSizeLimitError("aggregate encoded limit exceeded")
                     data, content_sha256 = await asyncio.to_thread(
                         _decode_base64_with_digest, encoded
                     )
                 else:
+                    source = "uri"
+                    stage = "fetch"
                     uri = getattr(file_content, "uri", None)
                     if not uri:
                         raise ValueError("missing file content")
@@ -445,6 +603,7 @@ async def materialize_artifacts(
                     metadata = getattr(root, "metadata", None) or {}
                     file_id = str(metadata.get("file_id") or "")
                     if str(uri) == _room_file_content_url(file_id):
+                        stage = "reference"
                         valid = await room_files.validate_agent_reference(
                             room_id=room_id,
                             source_message_id=message_id,
@@ -454,7 +613,9 @@ async def materialize_artifacts(
                         if valid:
                             total_raw += _authoritative_size(valid)
                             if total_raw > MAX_TOTAL_RAW_BYTES:
-                                raise ValueError("aggregate raw limit exceeded")
+                                raise ArtifactSizeLimitError(
+                                    "aggregate raw limit exceeded"
+                                )
                             canonical = _canonical_reference_metadata(valid)
                             root.file = FileContent(
                                 uri=_room_file_content_url(canonical["file_id"]),
@@ -463,6 +624,7 @@ async def materialize_artifacts(
                             )
                             root.metadata = canonical
                             converted += 1
+                            record_materialization_success(report)
                             continue
                         raise ValueError("untrusted internal file reference")
                     data, detected_mime = await fetch_remote_file(str(uri))
@@ -471,7 +633,8 @@ async def materialize_artifacts(
                         file_content.mime_type = detected_mime
                 total_raw += len(data)
                 if total_raw > MAX_TOTAL_RAW_BYTES:
-                    raise ValueError("aggregate raw limit exceeded")
+                    raise ArtifactSizeLimitError("aggregate raw limit exceeded")
+                stage = "store"
                 stored = await _store(
                     data=data,
                     room_id=room_id,
@@ -483,24 +646,31 @@ async def materialize_artifacts(
                     mime_type=_mime(file_content),
                     content_sha256=content_sha256,
                 )
+                stored_metadata = _canonical_reference_metadata(stored)
+                root.file = FileContent(
+                    uri=_room_file_content_url(stored_metadata["file_id"]),
+                    mimeType=stored_metadata["mime_type"],
+                    name=stored_metadata["file_name"],
+                )
+                root.metadata = stored_metadata
             except Exception as exc:
-                reason = "size_limit" if "limit" in str(exc) else "invalid_content"
-                artifact.parts[part_slot] = _unavailable_part(file_content, reason)
+                code = _failure_code(exc, stage=stage)
+                _record_failure(
+                    report,
+                    room_id=room_id,
+                    message_id=message_id,
+                    artifact_slot=artifact_slot,
+                    part_slot=part_slot,
+                    source=source,
+                    code=code,
+                    exc=exc,
+                )
+                artifact.parts[part_slot] = _unavailable_part(
+                    file_content, _public_failure_reason(code)
+                )
                 continue
 
-            file_id = str(stored["file_id"])
-            root.file = FileContent(
-                uri=_room_file_content_url(file_id),
-                mimeType=stored["mime_type"],
-                name=stored["file_name"],
-            )
-            root.metadata = {
-                "file_id": file_id,
-                "file_name": stored["file_name"],
-                "mime_type": stored["mime_type"],
-                "size_bytes": stored["size_bytes"],
-                "sha256": stored["sha256"],
-            }
+            record_materialization_success(report)
             converted += 1
     return converted
 
@@ -603,13 +773,13 @@ async def fetch_remote_file(uri: str) -> tuple[bytes, str]:
                     raise ValueError(f"remote URI returned {response.status}")
                 declared = response.content_length
                 if declared is not None and declared > MAX_FILE_RAW_BYTES:
-                    raise ValueError("remote file exceeds size limit")
+                    raise ArtifactSizeLimitError("remote file exceeds size limit")
                 chunks: list[bytes] = []
                 total = 0
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     total += len(chunk)
                     if total > MAX_FILE_RAW_BYTES:
-                        raise ValueError("remote file exceeds size limit")
+                        raise ArtifactSizeLimitError("remote file exceeds size limit")
                     chunks.append(chunk)
                 mime_type = (
                     response.headers.get("content-type", "application/octet-stream")

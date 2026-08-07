@@ -126,7 +126,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     if (!allAgentsData?.length || !hydratedFromDb) return
     const store = useMessageStore.getState()
     if (store.roomId !== roomId) return
-    const patches: { id: string; agentSource: 'cloud' | 'hub' }[] = []
+    const patches: { id: string; agentSource: 'cloud' | 'local' | 'hub' }[] = []
     for (const entity of Object.values(store.entities)) {
       if (entity.messageType === 'agent' && entity.agentId && !entity.agentSource) {
         const src = getAgentSource(entity.agentId)

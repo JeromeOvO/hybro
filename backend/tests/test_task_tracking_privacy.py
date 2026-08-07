@@ -419,6 +419,47 @@ async def test_terminal_completed_task_result_promotes_agent_status_text_with_da
 
 
 @pytest.mark.asyncio
+async def test_terminal_unavailable_file_propagates_nonrecoverable_delivery_code():
+    store = MagicMock()
+    store.update_task_on_message = AsyncMock(return_value=True)
+    service = A2ATaskTrackingService(store)
+    task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id="image",
+                parts=[
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                bytes="not-base64",
+                                mimeType="image/png",
+                                name="image.png",
+                            )
+                        )
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = await service._handle_terminal_task_result(
+        task,
+        message_id="agent-message-1",
+        room_id="room-1",
+    )
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    assert persisted["status"]["state"] == "failed"
+    assert persisted["metadata"]["remote_task_state"] == "completed"
+    assert result["status"] == "failed"
+    assert result["error_code"] == "artifact_delivery_failed"
+    assert result["parts"][0]["data"]["type"] == "file_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_request():
     private_sentinel = "PRIVATE_SENTINEL_remote_hitl_spoof"
     spoofed_task_metadata = {
@@ -780,3 +821,62 @@ async def test_immediate_message_result_persists_public_projection_after_artifac
     assert persisted["status"]["state"] == "completed"
     assert public_text in json.dumps(persisted)
     assert private_sentinel not in json.dumps(persisted)
+
+
+@pytest.mark.asyncio
+async def test_immediate_message_file_delivery_failure_is_propagated(monkeypatch):
+    async def fail_materialization(artifacts, *_args, report=None, **_kwargs):
+        artifacts[0].parts[0] = Part(
+            root=DataPart(
+                data={
+                    "type": "file_unavailable",
+                    "reason": "invalid_content",
+                }
+            )
+        )
+        report.update(
+            {
+                "attempted": 1,
+                "stored": 0,
+                "unavailable": 1,
+                "failures": [{"code": "invalid_base64"}],
+            }
+        )
+        return 0
+
+    monkeypatch.setattr(
+        "execution.task_tracking.materialize_artifacts",
+        fail_materialization,
+    )
+    store = MagicMock()
+    store.update_task_on_message = AsyncMock(return_value=True)
+    service = A2ATaskTrackingService(store)
+    message = Message(
+        role=MessageRole.AGENT,
+        message_id="remote-message",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="not-base64",
+                        mimeType="image/png",
+                        name="image.png",
+                    )
+                )
+            )
+        ],
+    )
+
+    result = await service._handle_message_result(
+        message,
+        context_id="remote-context",
+        message_id="agent-message-1",
+        room_id="room-1",
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "artifact_delivery_failed"
+    assert result["error"] == "Task failed"
+    persisted = store.update_task_on_message.await_args.args[1]
+    assert persisted["status"]["state"] == "failed"
+    assert persisted["metadata"]["remote_task_state"] == "completed"

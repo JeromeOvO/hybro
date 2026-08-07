@@ -23,6 +23,8 @@ export interface ArtifactData {
   name?: string
   parts: ArtifactPart[]
   isStreaming?: boolean
+  /** Client-only marker for task/response parts lacking a canonical artifact ID. */
+  isSynthetic?: boolean
 }
 
 export type TurnPhaseLog = 'collecting' | 'synthesizing' | 'terminal'
@@ -57,7 +59,7 @@ export interface MessageEntity {
   content: string
   senderName: string
   agentId?: string
-  agentSource?: 'cloud' | 'hub'
+  agentSource?: 'cloud' | 'local' | 'hub'
   userId?: string
   clientRequestId?: string
 
@@ -142,7 +144,7 @@ export interface IncomingMessage {
 
   // All optional — omitted fields preserve existing values on update
   agentId?: string
-  agentSource?: 'cloud' | 'hub'
+  agentSource?: 'cloud' | 'local' | 'hub'
   userId?: string
   clientRequestId?: string
   taskStatus?: TaskState | null

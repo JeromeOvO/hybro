@@ -8,6 +8,7 @@ from common.dto import (
     AgentMatchResult,
     HubAgentCounts,
     HubAgentDescriptor,
+    LocalAgentUpsertResult,
     SyncedHubAgent,
 )
 
@@ -76,6 +77,16 @@ class AgentRegistryWriter(Protocol):
     ) -> list[SyncedHubAgent]: ...
 
     async def mark_hub_agents_offline(self, hub_id: str) -> None: ...
+
+    async def upsert_local_agent(
+        self,
+        discovery_url: str,
+        card: AgentCardSnapshot,
+    ) -> LocalAgentUpsertResult: ...
+
+    async def list_local_agent_ids(self) -> list[str]: ...
+
+    async def mark_local_agents_inactive(self, agent_ids: list[str]) -> int: ...
 
 
 @runtime_checkable

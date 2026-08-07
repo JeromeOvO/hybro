@@ -1,6 +1,5 @@
 """AST gate: no os.getenv / os.environ reads outside common/config/settings.py.
 
-Design ref: docs/MODULAR_DECOUPLING_DESIGN.md Section 7.1 (Phase 0b gate)
 Gate criterion: tracked runtime Python files have no raw env reads except
 common/config/settings.py.
 """
