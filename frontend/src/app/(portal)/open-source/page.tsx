@@ -54,9 +54,9 @@ const QUICK_START_COMMANDS = {
 }
 
 const QUICK_START_TABS = [
-  { key: "script", label: "install.sh" },
-  { key: "docker", label: "Docker Compose" },
-  { key: "ai", label: "Tell my AI" },
+  { key: "script", label: "CURL" },
+  { key: "ai", label: "Agentic" },
+  { key: "docker", label: "Docker" },
 ] as const
 
 type QuickStartTab = (typeof QUICK_START_TABS)[number]["key"]
