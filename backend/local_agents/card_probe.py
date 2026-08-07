@@ -43,7 +43,9 @@ class LocalAgentCardProbe:
                 try:
                     discovery_url = f"http://{self._host}:{port}"
                     card = await self._resolver.resolve_card(discovery_url)
-                    if card is not None and self._matches_discovered_endpoint(card, port):
+                    if card is not None and self._matches_discovered_endpoint(
+                        card, port
+                    ):
                         discovered.append((discovery_url, card))
                 finally:
                     queue.task_done()
