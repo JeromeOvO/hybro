@@ -766,6 +766,73 @@ a.room-mention {
 .animate-fade-up-delay-2 { animation-delay: 200ms; }
 .animate-fade-up-delay-3 { animation-delay: 300ms; }
 
+/* Dramatic scroll reveals — long, weighty entrances used to separate
+   marketing sections. Expo-out easing gives the big overshoot-free drop. */
+@keyframes revealRise {
+  from {
+    opacity: 0;
+    transform: translateY(72px) scale(0.94);
+    filter: blur(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes revealWipe {
+  from {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: translateY(0);
+  }
+}
+
+@keyframes revealLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-72px) scale(0.96);
+    filter: blur(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes revealRight {
+  from {
+    opacity: 0;
+    transform: translateX(72px) scale(0.96);
+    filter: blur(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.animate-reveal-rise {
+  animation: revealRise 1.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-reveal-wipe {
+  animation: revealWipe 1.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-reveal-left {
+  animation: revealLeft 1.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-reveal-right {
+  animation: revealRight 1.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* Amber tip link styling */
 .tip-link {
   font-weight: 500;
