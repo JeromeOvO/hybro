@@ -292,6 +292,7 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
         converted_so_far: int = 0,
         budget: dict | None = None,
         artifact_slot: str | None = None,
+        report: dict | None = None,
     ) -> int:
         assert room_id == "room-1"
         assert message_id == "msg-1"
@@ -313,6 +314,9 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
                 "size_bytes": 1,
                 "sha256": f"hash-{index}",
             }
+            if report is not None:
+                report["attempted"] += 1
+                report["stored"] += 1
         return converted_so_far + 1
 
     with pytest.MonkeyPatch.context() as mp:

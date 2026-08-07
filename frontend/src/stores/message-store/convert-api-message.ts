@@ -7,6 +7,7 @@ import { isSupervisorClarifyAgent } from '@/lib/system-agents'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { parseSummaryOrigin } from '@/lib/room-timeline/derive-final-answer'
+import { deduplicateArtifactsByPart } from '@/lib/artifacts/artifact-identity'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
 
 function parseTurnCompletionKind(raw: unknown): 'synthesis' | 'deterministic' | undefined {
@@ -199,7 +200,14 @@ export async function convertApiMessageToIncoming(
 
   // ── Extract multimodal artifacts from task ───────────────
   let artifacts: ArtifactData[] | undefined
-  const rawArtifacts = taskStatus === TASK_STATE.COMPLETED
+  const outputFailureCode = (messageTask?.metadata as Record<string, unknown> | undefined)
+    ?.output_failure_code
+  const exposesArtifacts = taskStatus === TASK_STATE.COMPLETED
+    || (
+      taskStatus === TASK_STATE.FAILED
+      && outputFailureCode === 'artifact_delivery_failed'
+    )
+  const rawArtifacts = exposesArtifacts
     ? messageTask?.artifacts as Record<string, unknown>[] | undefined
     : undefined
   if (Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
@@ -244,8 +252,7 @@ export async function convertApiMessageToIncoming(
         }
       })
       .filter((a): a is NonNullable<typeof a> => a !== null) as ArtifactData[]
-    artifacts = mapped
-    if (artifacts.length === 0) artifacts = undefined
+    artifacts = deduplicateArtifactsByPart(mapped)
   }
 
   // Answered HITL from DB: supervisor clarify is done; real agents may still be working.

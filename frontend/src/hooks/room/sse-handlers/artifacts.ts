@@ -1,4 +1,9 @@
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
+import {
+  artifactPartIdentities,
+  artifactPartIdentity,
+  deduplicateArtifactsByPart,
+} from '@/lib/artifacts/artifact-identity'
 import { mergeArtifacts } from '@/stores/message-store/upsert'
 
 /** Non-text parts from task_update / agent_response payloads. */
@@ -43,6 +48,25 @@ function artifactPartFromRaw(p: Record<string, unknown>): ArtifactPart | undefin
   }
 }
 
+function syntheticArtifactId(
+  messageId: string,
+  artifacts: ArtifactData[] | undefined,
+): string {
+  const baseId = `${messageId}-parts`
+  const existing = new Map(
+    artifacts?.map(artifact => [artifact.artifactId, artifact]) ?? [],
+  )
+  for (let suffix = 0; ; suffix += 1) {
+    const candidate = suffix === 0
+      ? baseId
+      : suffix === 1
+        ? `${baseId}:synthetic`
+        : `${baseId}:synthetic-${suffix}`
+    const artifact = existing.get(candidate)
+    if (!artifact || artifact.isSynthetic) return candidate
+  }
+}
+
 export function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
   messageId: string,
@@ -54,29 +78,45 @@ export function partsToArtifacts(
     .filter((part): part is ArtifactPart => part !== undefined)
     .filter((part) => part.kind !== 'text' && isRenderableArtifactPart(part))
   if (nonTextParts.length === 0) return existing?.artifacts
+  const existingPartIds = artifactPartIdentities(existing?.artifacts)
+  const uniqueParts = nonTextParts.filter(
+    part => !existingPartIds.has(artifactPartIdentity(part)),
+  )
+  if (uniqueParts.length === 0) return existing?.artifacts
   const inline: ArtifactData = {
-    artifactId: `${messageId}-parts`,
+    artifactId: syntheticArtifactId(messageId, existing?.artifacts),
     name: 'Response files',
-    parts: nonTextParts,
+    parts: uniqueParts,
+    isSynthetic: true,
   }
-  return mergeArtifacts(existing?.artifacts, inline, false)
+  return deduplicateArtifactsByPart(
+    mergeArtifacts(existing?.artifacts, inline, false),
+  )
 }
 
 export function partsToReplacementArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
   messageId: string,
+  existingArtifacts?: ArtifactData[],
 ): ArtifactData[] {
   if (!rawParts || rawParts.length === 0) return []
   const nonTextParts = rawParts
     .map(artifactPartFromRaw)
     .filter((part): part is ArtifactPart => part !== undefined)
     .filter((part) => part.kind !== 'text' && isRenderableArtifactPart(part))
-  if (nonTextParts.length === 0) return []
-  return [{
-    artifactId: `${messageId}-parts`,
-    name: 'Response files',
-    parts: nonTextParts,
-  }]
+  if (nonTextParts.length === 0) return existingArtifacts ?? []
+  const canonicalExisting = existingArtifacts?.filter(
+    artifact => !artifact.isSynthetic,
+  ) ?? []
+  return deduplicateArtifactsByPart([
+    ...canonicalExisting,
+    {
+      artifactId: syntheticArtifactId(messageId, existingArtifacts),
+      name: 'Response files',
+      parts: nonTextParts,
+      isSynthetic: true,
+    },
+  ]) ?? []
 }
 
 export function sseArtifactDataFromPayload(
@@ -88,12 +128,16 @@ export function sseArtifactDataFromPayload(
     ? (artifact.parts as Record<string, unknown>[])
     : []
 
-  return {
+  const normalized: ArtifactData = {
     artifactId: (artifact.artifact_id || artifact.artifactId) as string,
     name: artifact.name as string | undefined,
     parts: rawParts
       .map(artifactPartFromRaw)
       .filter((part): part is ArtifactPart => part !== undefined),
     isStreaming: isAppend ? !lastChunk : false,
+  }
+  return deduplicateArtifactsByPart([normalized])?.[0] ?? {
+    ...normalized,
+    parts: [],
   }
 }

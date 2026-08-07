@@ -89,6 +89,37 @@ describe('streaming display helpers', () => {
     expect(resolveDetailArtifacts(buffer(), [textArtifact])).toBeUndefined()
   })
 
+  it('deduplicates canonical and synthetic artifacts by durable part identity', () => {
+    const canonical = {
+      artifactId: 'artifact-real',
+      parts: [{ kind: 'file' as const, file: { fileId: 'file-123', name: 'image.png' } }],
+    }
+    const synthetic = {
+      artifactId: 'message-1-parts',
+      isSynthetic: true,
+      parts: [{ kind: 'file' as const, file: { fileId: 'file-123', name: 'image.png' } }],
+    }
+
+    expect(resolveNonTextArtifacts(buffer({ artifacts: [synthetic] }), [canonical]))
+      .toEqual([canonical])
+    expect(resolveNonTextArtifacts(buffer({ artifacts: [canonical] }), [synthetic]))
+      .toEqual([canonical])
+  })
+
+  it('does not deduplicate distinct same-name files', () => {
+    const first = {
+      artifactId: 'artifact-1',
+      parts: [{ kind: 'file' as const, file: { uri: '/files/1', name: 'image.png' } }],
+    }
+    const second = {
+      artifactId: 'artifact-2',
+      parts: [{ kind: 'file' as const, file: { uri: '/files/2', name: 'image.png' } }],
+    }
+
+    expect(resolveNonTextArtifacts(buffer({ artifacts: [second] }), [first]))
+      .toEqual([first, second])
+  })
+
   it('resolveStreamBuffer returns the message-scoped buffer only', () => {
     const buffers = {
       'msg-1': buffer({ text: 'agent-a live', clientRequestId: 'req-1' }),

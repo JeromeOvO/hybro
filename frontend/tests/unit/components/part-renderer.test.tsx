@@ -162,4 +162,34 @@ describe('PartRenderer', () => {
 
     expect(container.innerHTML).toBe('')
   })
+
+  it('renders file_unavailable as a safe notice instead of generic JSON', () => {
+    const part: ArtifactPart = {
+      kind: 'data',
+      data: {
+        type: 'file_unavailable',
+        file_name: 'private-name.png',
+        reason: 'invalid_content',
+      },
+    }
+    const { container } = render(<PartRenderer part={part} />)
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'This output could not be processed.',
+    )
+    expect(container.textContent).not.toContain('JSON')
+    expect(container.textContent).not.toContain('private-name.png')
+  })
+
+  it('renders a safe size-limit notice for unavailable files', () => {
+    const part: ArtifactPart = {
+      kind: 'data',
+      data: { type: 'file_unavailable', reason: 'size_limit' },
+    }
+    const { container } = render(<PartRenderer part={part} />)
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'This output exceeded the supported file size.',
+    )
+  })
 })

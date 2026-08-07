@@ -25,6 +25,7 @@ class A2AArtifactFiles(Protocol):
         converted_so_far: int = 0,
         budget: dict[str, Any] | None = None,
         artifact_slot: str | None = None,
+        report: dict[str, Any] | None = None,
     ) -> int: ...
 
     async def materialize_artifacts(
@@ -34,6 +35,7 @@ class A2AArtifactFiles(Protocol):
         message_id: str,
         *,
         converted_so_far: int = 0,
+        report: dict[str, Any] | None = None,
     ) -> int: ...
 
     async def delete_superseded_agent_artifacts(
@@ -499,6 +501,7 @@ async def materialize_inline_file_parts(
     converted_so_far: int = 0,
     budget: dict[str, Any] | None = None,
     artifact_slot: str | None = None,
+    report: dict[str, Any] | None = None,
 ) -> int:
     if not _parts_need_artifact_storage(parts):
         return converted_so_far
@@ -511,6 +514,7 @@ async def materialize_inline_file_parts(
         converted_so_far=converted_so_far,
         budget=budget,
         artifact_slot=artifact_slot,
+        report=report,
     )
 
 
@@ -535,6 +539,7 @@ async def materialize_artifacts(
     message_id: str,
     *,
     converted_so_far: int = 0,
+    report: dict[str, Any] | None = None,
 ) -> int:
     if not _artifacts_need_artifact_storage(artifacts):
         return converted_so_far
@@ -545,6 +550,7 @@ async def materialize_artifacts(
         room_id,
         message_id,
         converted_so_far=converted_so_far,
+        report=report,
     )
 
 

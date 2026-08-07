@@ -23,6 +23,8 @@ export interface ArtifactData {
   name?: string
   parts: ArtifactPart[]
   isStreaming?: boolean
+  /** Client-only marker for task/response parts lacking a canonical artifact ID. */
+  isSynthetic?: boolean
 }
 
 export type TurnPhaseLog = 'collecting' | 'synthesizing' | 'terminal'

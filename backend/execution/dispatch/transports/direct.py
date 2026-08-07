@@ -45,6 +45,14 @@ from common.utils.a2a_helpers import (
     get_message_from_task,
     get_text_from_message,
 )
+from common.utils.artifact_delivery import (
+    OUTPUT_DELIVERY_FAILURE_CODE,
+    OUTPUT_DELIVERY_FAILURE_MESSAGE,
+    mark_task_output_delivery_failed,
+    mark_unresolved_file_parts_unavailable,
+    new_materialization_report,
+    output_delivery_failed,
+)
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
@@ -110,6 +118,9 @@ class MessageStreamingState:
     accumulated_parts: list[Any] = field(default_factory=list)
     non_text_parts: list[dict] = field(default_factory=list)
     inline_conversion_count: int = 0
+    materialization_report: dict[str, Any] = field(
+        default_factory=new_materialization_report
+    )
     stream_finalized: bool = False
     final_state: Any | None = None
 
@@ -147,6 +158,17 @@ class DirectTransport(AgentTransport):
     # ------------------------------------------------------------------
     # Terminal event emission
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _platform_failure(message: RoomAgentMessage) -> tuple[str, str]:
+        task = get_task(message)
+        metadata = getattr(task, "metadata", None) if task is not None else None
+        if (
+            isinstance(metadata, dict)
+            and metadata.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
+        ):
+            return OUTPUT_DELIVERY_FAILURE_MESSAGE, OUTPUT_DELIVERY_FAILURE_CODE
+        return _PUBLIC_AGENT_FAILURE_MESSAGE, _PUBLIC_AGENT_FAILURE_CODE
 
     async def _emit_terminal(
         self,
@@ -196,6 +218,13 @@ class DirectTransport(AgentTransport):
                 agent_name if isinstance(agent_name, str) else msg.agent_id or "agent",
             )
 
+        task = get_task(msg)
+        task_metadata = getattr(task, "metadata", None) if task is not None else None
+        output_failure = bool(
+            isinstance(task_metadata, dict)
+            and task_metadata.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
+        )
+
         await self.response_handler.handle(
             AgentEvent(
                 kind=kind,
@@ -205,6 +234,11 @@ class DirectTransport(AgentTransport):
                 text=event_text,
                 public_text=(explicit_public_text if kind == "response" else None),
                 error_text=error if kind == "error" else None,
+                details=(
+                    {"output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE}
+                    if output_failure
+                    else None
+                ),
                 state=state.value if hasattr(state, "value") else str(state),
                 related_message_id=msg.related_message_id,
                 user_id=msg.user_id or "",
@@ -318,10 +352,11 @@ class DirectTransport(AgentTransport):
                 )
             if status != ProcessingStatus.SUCCESS:
                 if status == ProcessingStatus.FAILED:
+                    failure_message, failure_code = self._platform_failure(message)
                     return ProcessingResult(
                         status,
-                        _PUBLIC_AGENT_FAILURE_MESSAGE,
-                        status_message=_PUBLIC_AGENT_FAILURE_CODE,
+                        failure_message,
+                        status_message=failure_code,
                     )
                 return ProcessingResult(status, full_response_text)
         else:
@@ -351,10 +386,11 @@ class DirectTransport(AgentTransport):
                 )
                 if was_canceled:
                     return ProcessingResult(ProcessingStatus.CANCELED)
+                failure_message, failure_code = self._platform_failure(message)
                 return ProcessingResult(
                     ProcessingStatus.FAILED,
-                    _PUBLIC_AGENT_FAILURE_MESSAGE,
-                    status_message=_PUBLIC_AGENT_FAILURE_CODE,
+                    failure_message,
+                    status_message=failure_code,
                 )
 
         if full_response_text is None and paused_message_id:
@@ -439,6 +475,7 @@ class DirectTransport(AgentTransport):
         message_id: str,
         *,
         converted_so_far: int = 0,
+        report: dict[str, Any] | None = None,
     ) -> int:
         """Materialize accumulated streaming file parts as durable room files.
 
@@ -452,6 +489,7 @@ class DirectTransport(AgentTransport):
             room_id,
             message_id,
             converted_so_far=converted_so_far,
+            report=report,
         )
 
     @staticmethod
@@ -1285,6 +1323,7 @@ class DirectTransport(AgentTransport):
                 ctx.room_id,
                 ctx.current_message.message_id,
                 converted_so_far=streaming_state.inline_conversion_count,
+                report=streaming_state.materialization_report,
             )
             streaming_state.inline_conversion_count = new_total
             if task:
@@ -1292,9 +1331,33 @@ class DirectTransport(AgentTransport):
                     task,
                     streaming_state.non_text_parts,
                 )
-                ctx.current_message.message_content.message_task = (
-                    self._public_task_model(task)
-                )
+
+        delivery_failed = bool(
+            task
+            and output_delivery_failed(
+                task.artifacts,
+                streaming_state.materialization_report,
+                text=(
+                    streaming_state.full_response_text
+                    or streaming_state.public_message_text
+                ),
+            )
+        )
+        if task and delivery_failed:
+            mark_task_output_delivery_failed(task)
+            ctx.current_message.message_content.message_text = (
+                OUTPUT_DELIVERY_FAILURE_MESSAGE
+            )
+            ctx.current_message.message_content.message_task = (
+                self._public_terminal_output_task_model(task)
+            )
+            await self.tsm.persist_message(ctx.current_message)
+            await self._emit_terminal(
+                ctx,
+                CommonTaskState.COMPLETED,
+                parts=streaming_state.non_text_parts,
+            )
+            return ProcessingStatus.FAILED, OUTPUT_DELIVERY_FAILURE_MESSAGE
 
         if task:
             ctx.current_message.message_content.message_task = self._public_task_model(
@@ -1840,6 +1903,7 @@ class DirectTransport(AgentTransport):
             if not isinstance(public_message_text, str):
                 public_message_text = None
             error_text = response.get("error")
+            error_code = response.get("error_code")
             non_text_parts = response.get("parts")
 
             # Respect the actual terminal state from the response.
@@ -1850,10 +1914,15 @@ class DirectTransport(AgentTransport):
                 actual_state = CommonTaskState(actual_state_str)
             else:
                 actual_state = CommonTaskState.COMPLETED
-            public_error_text = error_text
+            public_error_text = (
+                OUTPUT_DELIVERY_FAILURE_MESSAGE
+                if error_code == OUTPUT_DELIVERY_FAILURE_CODE
+                else error_text
+            )
             if error_text and is_failure_state(actual_state):
                 safe_errors = {
                     _PUBLIC_AGENT_FAILURE_MESSAGE,
+                    OUTPUT_DELIVERY_FAILURE_MESSAGE,
                     *_PUBLIC_TASK_TERMINAL_ERRORS.values(),
                 }
                 if error_text not in safe_errors:
@@ -1863,6 +1932,17 @@ class DirectTransport(AgentTransport):
                     )
                     public_error_text = _PUBLIC_AGENT_FAILURE_MESSAGE
 
+            task = get_task(current_message)
+            if task is not None and error_code == OUTPUT_DELIVERY_FAILURE_CODE:
+                metadata = dict(getattr(task, "metadata", None) or {})
+                metadata.update(
+                    {
+                        "output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE,
+                        "remote_task_state": CommonTaskState.COMPLETED.value,
+                    }
+                )
+                task.metadata = metadata
+
             if public_message_text or full_response_text:
                 current_message.message_content.message_text = (
                     public_message_text or full_response_text
@@ -1871,11 +1951,13 @@ class DirectTransport(AgentTransport):
                 current_message.message_content.message_text = public_error_text
 
             # Materialize inline file parts before persistence.
+            materialization_report = new_materialization_report()
             if non_text_parts:
                 await self._materialize_streaming_file_parts(
                     non_text_parts,
                     room_id,
                     message_id,
+                    report=materialization_report,
                 )
                 non_text_parts = [
                     public_part
@@ -1888,8 +1970,22 @@ class DirectTransport(AgentTransport):
                         task,
                         non_text_parts,
                     )
+                    if (
+                        actual_state == CommonTaskState.COMPLETED
+                        and output_delivery_failed(
+                            task.artifacts,
+                            materialization_report,
+                            text=(public_message_text or full_response_text),
+                        )
+                    ):
+                        mark_task_output_delivery_failed(task)
+                        actual_state = CommonTaskState.FAILED
+                        public_error_text = OUTPUT_DELIVERY_FAILURE_MESSAGE
+                        error_code = OUTPUT_DELIVERY_FAILURE_CODE
                     current_message.message_content.message_task = (
-                        self._public_task_model(task)
+                        self._public_terminal_output_task_model(task)
+                        if is_terminal_state(task.status.state)
+                        else self._public_task_model(task)
                     )
 
             # On the tracked path, a2a_transport already persisted the real
@@ -2110,16 +2206,55 @@ class DirectTransport(AgentTransport):
         interactive_status_context: dict[str, str | None] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
+        public_message_text = extract_public_completed_status_text(completed_task)
+        report = None
         if completed_task.artifacts:
             from common.utils.a2a_helpers import materialize_artifacts
 
-            await materialize_artifacts(
+            report = new_materialization_report()
+            try:
+                await materialize_artifacts(
+                    completed_task.artifacts,
+                    room_id,
+                    message_id,
+                    report=report,
+                )
+            except Exception as exc:
+                replaced = mark_unresolved_file_parts_unavailable(
+                    completed_task.artifacts
+                )
+                report["attempted"] = max(
+                    int(report.get("attempted", 0)),
+                    replaced,
+                )
+                report["unavailable"] = max(
+                    int(report.get("unavailable", 0)),
+                    replaced,
+                )
+                report.setdefault("failures", []).append(
+                    {
+                        "code": "materialization_failed",
+                        "source": "unknown",
+                        "exception_type": type(exc).__name__,
+                    }
+                )
+                logger.warning(
+                    "polled_artifact_materialization_failed",
+                    extra={
+                        "message_id": message_id,
+                        "failure_code": "materialization_failed",
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+        if completed_task.status.state == CommonTaskState.COMPLETED and (
+            output_delivery_failed(
                 completed_task.artifacts,
-                room_id,
-                message_id,
+                report,
+                text=public_message_text,
             )
+        ):
+            mark_task_output_delivery_failed(completed_task)
 
-        public_message_text = extract_public_completed_status_text(completed_task)
         projected_task_data = public_persisted_task_data(completed_task)
         public_task = Task.model_validate(projected_task_data)
         state = public_task.status.state
@@ -2167,7 +2302,12 @@ class DirectTransport(AgentTransport):
                     "DirectTransport: raw polled task failure retained internally for %s",
                     message_id,
                 )
-            final_error = _safe_terminal_error(state)
+            metadata = public_task.metadata or {}
+            final_error = (
+                OUTPUT_DELIVERY_FAILURE_MESSAGE
+                if metadata.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
+                else _safe_terminal_error(state)
+            )
 
         if task_info:
             # TODO: Phase 5 -- migrate to incremental update_task_state_on_message.

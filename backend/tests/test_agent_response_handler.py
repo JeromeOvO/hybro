@@ -337,7 +337,9 @@ class TestArtifactUpdateEvent:
             append=False,
         )
 
-        _text, artifacts = await handler._project_completed_output(event)
+        _text, artifacts, _delivery_failed = await handler._project_completed_output(
+            event
+        )
 
         storage.store_agent_artifact.assert_awaited_once()
         assert artifacts is not None
@@ -776,12 +778,94 @@ class TestArtifactUpdateEvent:
             ],
         )
 
-        _text, artifacts = await handler._project_completed_output(event)
+        _text, artifacts, _delivery_failed = await handler._project_completed_output(
+            event
+        )
 
         storage.store_agent_artifact.assert_not_awaited()
         assert artifacts is not None
         assert artifacts[-1]["parts"][0]["kind"] == "data"
         assert artifacts[-1]["parts"][0]["data"]["reason"] == "size_limit"
+
+    @pytest.mark.asyncio
+    async def test_terminal_file_only_materialization_failure_is_reported(self):
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+        handler = _make_handler(db=db)
+        event = AgentEvent(
+            kind="response",
+            **_base_event(),
+            artifacts=[
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "bytes": "not-base64",
+                                "name": "image.png",
+                                "mimeType": "image/png",
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        _text, artifacts, delivery_failed = await handler._project_completed_output(
+            event
+        )
+
+        assert delivery_failed is True
+        assert event.details == {"output_failure_code": "artifact_delivery_failed"}
+        assert artifacts is not None
+        assert artifacts[0]["parts"][0]["data"]["type"] == "file_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_unavailable_only_response_uses_failed_platform_terminal_state(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=(True, None))
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        delivery = MagicMock()
+        notification_impl = AsyncMock(return_value=True)
+        handler = _make_handler(
+            db=db,
+            sse=delivery,
+            task_notification_impl=notification_impl,
+            task_notification_store=MagicMock(),
+        )
+
+        await handler.handle(
+            AgentEvent(
+                kind="response",
+                **_base_event(),
+                artifacts=[
+                    {
+                        "artifactId": "artifact-1",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "bytes": "not-base64",
+                                    "name": "image.png",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            )
+        )
+
+        persist = db.update_task_state_on_message.await_args
+        assert persist.args[:2] == ("msg-001", "failed")
+        assert persist.kwargs["task_metadata"] == {
+            "output_failure_code": "artifact_delivery_failed",
+            "remote_task_state": "completed",
+        }
+        notified = notification_impl.await_args.kwargs
+        assert str(getattr(notified["state"], "value", notified["state"])) == "failed"
+        assert notified["error"] == "Agent output could not be processed."
 
     @pytest.mark.asyncio
     async def test_text_only_artifact_update_is_dropped_without_synthetic_artifact(
@@ -1049,11 +1133,17 @@ class TestResponseEvent:
             )
             await h.handle(event)
 
-        kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
-        assert kwargs["message_text"] is None
-        assert kwargs["artifacts"] is None
-        assert private_text not in repr(kwargs)
-        assert private_bytes not in repr(kwargs)
+        call = h._task_writer.update_task_state_on_message.await_args
+        assert call.args[1] == "failed"
+        assert call.kwargs["message_text"] is None
+        assert call.kwargs["artifacts"][0]["parts"][0]["data"]["type"] == (
+            "file_unavailable"
+        )
+        assert call.kwargs["task_metadata"]["output_failure_code"] == (
+            "artifact_delivery_failed"
+        )
+        assert private_text not in repr(call)
+        assert private_bytes not in repr(call)
 
     @pytest.mark.asyncio
     async def test_parts_only_completed_response_drops_unaddressable_file(self):
@@ -1087,11 +1177,17 @@ class TestResponseEvent:
             )
             await h.handle(event)
 
-        kwargs = h._task_writer.update_task_state_on_message.await_args.kwargs
-        assert kwargs["message_text"] is None
-        assert kwargs["artifacts"] is None
-        assert private_text not in repr(kwargs)
-        assert private_bytes not in repr(kwargs)
+        call = h._task_writer.update_task_state_on_message.await_args
+        assert call.args[1] == "failed"
+        assert call.kwargs["message_text"] is None
+        assert call.kwargs["artifacts"][0]["parts"][0]["data"]["type"] == (
+            "file_unavailable"
+        )
+        assert call.kwargs["task_metadata"]["output_failure_code"] == (
+            "artifact_delivery_failed"
+        )
+        assert private_text not in repr(call)
+        assert private_bytes not in repr(call)
 
     @pytest.mark.asyncio
     async def test_terminal_notification_failure_does_not_block_response_cleanup(self):

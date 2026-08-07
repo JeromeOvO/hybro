@@ -1168,7 +1168,13 @@ completed `response` artifact before terminal persistence and delivery. Status
 messages for other roles or states, failure details, interactive prompts,
 noncompleted artifact/message content, and inline `file.bytes` are not persisted
 or emitted; file artifacts must be converted to
-addressable URIs or dropped from public projection. List/section markdown repair runs only in the
+addressable URIs or a safe `file_unavailable` marker before public projection.
+Materialization records payload-free failure categories for observability. A remote
+`completed` task whose advertised files all fail delivery and which has no other
+usable output is projected as a local `artifact_delivery_failed` result; the
+original remote state is retained in task metadata. Valid completed responses with
+no advertised files remain completed, and partial useful output remains usable.
+List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
 render time. Hybro-controlled LLM paths (supervisor synthesis,

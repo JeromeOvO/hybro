@@ -1,5 +1,6 @@
 import { isTerminalState } from '@/lib/types/sse'
 import type { TaskState } from '@/lib/types/sse'
+import { deduplicateArtifactsByPart } from '@/lib/artifacts/artifact-identity'
 import type { ArtifactData } from '@/stores/message-store/types'
 import type { StreamBuffer } from '@/stores/streaming-store'
 
@@ -20,8 +21,7 @@ function mergeArtifactsById(...lists: (ArtifactData[] | undefined)[]): ArtifactD
       map.set(artifact.artifactId, artifact)
     }
   }
-  const merged = Array.from(map.values())
-  return merged.length > 0 ? merged : undefined
+  return deduplicateArtifactsByPart(Array.from(map.values()))
 }
 
 /** Non-text artifacts from entity and/or live buffer (files, data parts). */

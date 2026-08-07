@@ -34,6 +34,7 @@ _PUBLIC_METADATA_KEYS = frozenset(
     {"file_id", "file_name", "mime_type", "size_bytes", "sha256"}
 )
 _COMPLETED_STATE = "completed"
+_OUTPUT_DELIVERY_FAILURE_CODE = "artifact_delivery_failed"
 
 
 def _plain_model_data(value: Any) -> dict[str, Any]:
@@ -125,6 +126,22 @@ def _public_parts_data(parts: Any) -> list[dict[str, Any]]:
     return public_parts
 
 
+def _public_unavailable_artifacts(artifacts: list[Any]) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        public_artifact = public_artifact_data(artifact)
+        unavailable_parts = []
+        for part in public_artifact.get("parts") or []:
+            root = part.get("root", part)
+            data = root.get("data") if isinstance(root, dict) else None
+            if isinstance(data, dict) and data.get("type") == "file_unavailable":
+                unavailable_parts.append(part)
+        if unavailable_parts:
+            public_artifact["parts"] = unavailable_parts
+            projected.append(public_artifact)
+    return projected
+
+
 def _public_status_message(text: str) -> dict[str, Any]:
     return Message(
         role=Role.AGENT,
@@ -142,10 +159,18 @@ def public_persisted_task_data(
     state_value = _state_value_from_task_data(task_data)
 
     artifacts = task_data.get("artifacts")
+    metadata = task_data.get("metadata")
+    output_delivery_failed = (
+        state_value == "failed"
+        and isinstance(metadata, dict)
+        and metadata.get("output_failure_code") == _OUTPUT_DELIVERY_FAILURE_CODE
+    )
     if state_value == _COMPLETED_STATE and isinstance(artifacts, list):
         task_data["artifacts"] = [
             public_artifact_data(artifact) for artifact in artifacts
         ]
+    elif output_delivery_failed and isinstance(artifacts, list):
+        task_data["artifacts"] = _public_unavailable_artifacts(artifacts) or None
     else:
         task_data["artifacts"] = None
 
@@ -173,6 +198,11 @@ def public_persisted_task_data(
             if key in _TRUSTED_LOCAL_HITL_METADATA_KEYS
         }
         task_data["metadata"] = trusted_metadata or None
+    elif output_delivery_failed:
+        task_data["metadata"] = {
+            "output_failure_code": _OUTPUT_DELIVERY_FAILURE_CODE,
+            "remote_task_state": _COMPLETED_STATE,
+        }
     else:
         task_data["metadata"] = None
     return task_data

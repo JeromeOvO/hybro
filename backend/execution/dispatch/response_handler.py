@@ -22,6 +22,13 @@ from common.utils.a2a_helpers import (
     extract_text_from_artifact_dicts,
     filter_non_text_parts,
 )
+from common.utils.artifact_delivery import (
+    OUTPUT_DELIVERY_FAILURE_CODE,
+    OUTPUT_DELIVERY_FAILURE_MESSAGE,
+    mark_unresolved_file_parts_unavailable,
+    new_materialization_report,
+    output_delivery_failed,
+)
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.orchestration.result_ingestor import AgentResultRead
@@ -503,11 +510,14 @@ class AgentResponseHandler:
                         budget=budget,
                         artifact_slot=artifact_slot,
                     )
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "Could not materialize artifact journal files for %s",
-                        e.message_id,
-                        exc_info=True,
+                        "artifact_journal_materialization_failed",
+                        extra={
+                            "message_id": e.message_id,
+                            "failure_code": "materialization_failed",
+                            "exception_type": type(exc).__name__,
+                        },
                     )
             public_artifact = public_artifact_data(artifact)
             public_artifact["artifactId"] = _artifact_identity(
@@ -632,8 +642,9 @@ class AgentResponseHandler:
     async def _project_completed_output(  # noqa: C901
         self,
         e: AgentEvent,
-    ) -> tuple[str | None, list[dict] | None]:
+    ) -> tuple[str | None, list[dict] | None, bool]:
         had_structured_output = bool(e.parts or e.artifacts)
+        materialization_report = new_materialization_report()
         existing_artifacts = await self._existing_artifact_journal(e.message_id)
         # Materialize inline file parts before public projection.
         if had_structured_output:
@@ -678,6 +689,7 @@ class AgentResponseHandler:
                                 e.message_id,
                                 budget=budget,
                                 artifact_slot=artifact_slot,
+                                report=materialization_report,
                             )
                 elif e.parts:
                     await materialize_inline_file_parts(
@@ -686,13 +698,38 @@ class AgentResponseHandler:
                         e.message_id,
                         budget=budget,
                         artifact_slot=f"id:{e.message_id}-response",
+                        report=materialization_report,
                     )
-            except Exception:
+            except Exception as exc:
+                unresolved = e.artifacts or [
+                    {
+                        "artifactId": f"{e.message_id}-response",
+                        "parts": e.parts or [],
+                    }
+                ]
+                replaced = mark_unresolved_file_parts_unavailable(unresolved)
+                materialization_report["attempted"] = max(
+                    int(materialization_report.get("attempted", 0)),
+                    replaced,
+                )
+                materialization_report["unavailable"] = max(
+                    int(materialization_report.get("unavailable", 0)),
+                    replaced,
+                )
+                materialization_report.setdefault("failures", []).append(
+                    {
+                        "code": "materialization_failed",
+                        "source": "unknown",
+                        "exception_type": type(exc).__name__,
+                    }
+                )
                 logger.warning(
-                    "File materialization failed for terminal artifacts on message %s; "
-                    "dropping unaddressable file bytes before persistence",
-                    e.message_id,
-                    exc_info=True,
+                    "terminal_artifact_materialization_failed",
+                    extra={
+                        "message_id": e.message_id,
+                        "failure_code": "materialization_failed",
+                        "exception_type": type(exc).__name__,
+                    },
                 )
 
         artifacts_for_db: list[dict] | None = None
@@ -748,9 +785,18 @@ class AgentResponseHandler:
             ]
         )
         e.text = display_text or ""
-        e.error_text = None
-        e.details = None
-        return display_text, display_artifacts
+        delivery_failed = output_delivery_failed(
+            display_artifacts,
+            materialization_report,
+            text=display_text,
+        )
+        e.error_text = OUTPUT_DELIVERY_FAILURE_MESSAGE if delivery_failed else None
+        e.details = (
+            {"output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE}
+            if delivery_failed
+            else None
+        )
+        return display_text, display_artifacts, delivery_failed
 
     async def _artifact_budget_from_journal(self, message_id: str) -> dict[str, Any]:
         return self._artifact_budget(await self._existing_artifact_journal(message_id))
@@ -814,19 +860,30 @@ class AgentResponseHandler:
             raise
 
     async def _on_response(self, e: AgentEvent) -> None:  # noqa: C901
+        (
+            display_text,
+            display_artifacts,
+            delivery_failed,
+        ) = await self._project_completed_output(e)
+        platform_state = "failed" if delivery_failed else "completed"
+        platform_error = OUTPUT_DELIVERY_FAILURE_MESSAGE if delivery_failed else None
+        task_metadata = (
+            {
+                "output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE,
+                "remote_task_state": "completed",
+            }
+            if delivery_failed
+            else None
+        )
+
         finalization_token, fenced = await self._begin_terminal_finalization(
-            e, "completed"
+            e, platform_state
         )
         if fenced and finalization_token is None:
-            if await self._terminal_replay_already_applied(e, "completed"):
+            if await self._terminal_replay_already_applied(e, platform_state):
                 return
             self._raise_if_retryable_finalization_conflict(e)
             return
-        display_text, display_artifacts = await self._run_with_finalization_heartbeat(
-            e.message_id,
-            finalization_token,
-            lambda: self._project_completed_output(e),
-        )
         if not e.skip_persist:
             if fenced:
                 persisted = await self._set_terminal_finalization_content(
@@ -834,6 +891,7 @@ class AgentResponseHandler:
                     finalization_token,
                     message_text=display_text,
                     artifacts=display_artifacts,
+                    task_metadata=task_metadata,
                 )
                 resolved_text = display_text
             else:
@@ -843,9 +901,10 @@ class AgentResponseHandler:
                     resolved_text,
                 ) = await self._claim_terminal_finalization(
                     e,
-                    state="completed",
+                    state=platform_state,
                     message_text=display_text,
                     artifacts=display_artifacts,
+                    task_metadata=task_metadata,
                 )
             if not persisted:
                 logger.debug(
@@ -861,7 +920,8 @@ class AgentResponseHandler:
             "notification",
             lambda: self._notify_terminal_best_effort(
                 e,
-                coerce_task_state("completed"),
+                coerce_task_state(platform_state),
+                error=platform_error,
                 emit_processing_status=e.emit_processing_status,
             ),
         )
@@ -871,9 +931,10 @@ class AgentResponseHandler:
             "slot_termination",
             lambda: self._terminate_slot(
                 e,
-                "completed",
+                platform_state,
                 content=display_text,
                 artifacts=display_artifacts,
+                error=platform_error,
             ),
         )
         await self._run_finalization_step(
@@ -882,20 +943,26 @@ class AgentResponseHandler:
             "result_ingestion",
             lambda: self._ingest_orchestration_result(
                 e,
-                status="completed",
+                status=platform_state,
                 text=display_text,
                 artifacts=display_artifacts or [],
+                error=platform_error,
+                error_code=(OUTPUT_DELIVERY_FAILURE_CODE if delivery_failed else None),
             ),
         )
         await self._run_finalization_step(
             e.message_id,
             finalization_token,
             "orchestration_resume",
-            lambda: self._resume_orchestration_event(e, display_text or ""),
+            lambda: self._resume_orchestration_event(
+                e,
+                display_text or "",
+                failed=delivery_failed,
+            ),
         )
         if finalization_token is not None:
             await self._complete_terminal_finalization(
-                e.message_id, finalization_token, "completed"
+                e.message_id, finalization_token, platform_state
             )
 
     async def _on_error(self, e: AgentEvent) -> None:
@@ -905,7 +972,23 @@ class AgentResponseHandler:
             state = source_state
         except (ValueError, KeyError):
             state = "failed"
-        error = _safe_terminal_error(source_state)
+        output_failure = bool(
+            isinstance(e.details, dict)
+            and e.details.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
+        )
+        error = (
+            OUTPUT_DELIVERY_FAILURE_MESSAGE
+            if output_failure
+            else _safe_terminal_error(source_state)
+        )
+        task_metadata = (
+            {
+                "output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE,
+                "remote_task_state": "completed",
+            }
+            if output_failure
+            else None
+        )
         e.text = ""
         e.error_text = error
         e.parts = None
@@ -923,6 +1006,7 @@ class AgentResponseHandler:
                     finalization_token,
                     message_text=error,
                     artifacts=None,
+                    task_metadata=task_metadata,
                 )
             else:
                 (
@@ -934,6 +1018,7 @@ class AgentResponseHandler:
                     state=state,
                     message_text=error,
                     artifacts=None,
+                    task_metadata=task_metadata,
                 )
             if not persisted:
                 return
@@ -969,6 +1054,7 @@ class AgentResponseHandler:
                 text=None,
                 artifacts=[],
                 error=error,
+                error_code=(OUTPUT_DELIVERY_FAILURE_CODE if output_failure else None),
             ),
         )
         await self._run_finalization_step(
@@ -1063,19 +1149,27 @@ class AgentResponseHandler:
         state: str,
         message_text: str | None,
         artifacts: list[dict] | None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, bool, str | None]:
         claim = getattr(self._task_writer, "claim_terminal_finalization", None)
         if callable(claim) and inspect.iscoroutinefunction(claim):
+            claim_kwargs: dict[str, Any] = {
+                "message_text": message_text,
+                "artifacts": artifacts,
+            }
+            if task_metadata is not None:
+                claim_kwargs["task_metadata"] = task_metadata
             token, resolved_text = await claim(
                 e.message_id,
                 state,
-                message_text=message_text,
-                artifacts=artifacts,
+                **claim_kwargs,
             )
             return token, token is not None, resolved_text
         kwargs: dict[str, Any] = {"message_text": message_text}
         if artifacts is not None or state == "completed":
             kwargs["artifacts"] = artifacts
+        if task_metadata is not None:
+            kwargs["task_metadata"] = task_metadata
         update_result = self._task_writer.update_task_state_on_message(
             e.message_id, state, **kwargs
         )
@@ -1136,18 +1230,20 @@ class AgentResponseHandler:
         *,
         message_text: str | None,
         artifacts: list[dict] | None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> bool:
         if token is None:
             return False
         persist = getattr(self._task_writer, "set_terminal_finalization_content", None)
         if not callable(persist):
             return False
-        return await persist(
-            message_id,
-            token,
-            message_text=message_text,
-            artifacts=artifacts,
-        )
+        persist_kwargs: dict[str, Any] = {
+            "message_text": message_text,
+            "artifacts": artifacts,
+        }
+        if task_metadata is not None:
+            persist_kwargs["task_metadata"] = task_metadata
+        return await persist(message_id, token, **persist_kwargs)
 
     async def _complete_terminal_finalization(
         self, message_id: str, token: str, state: str
@@ -1753,6 +1849,7 @@ class AgentResponseHandler:
         text: str | None = None,
         artifacts: list[dict] | None = None,
         error: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         service = _orchestration_result_ingestor
         if service is None:
@@ -1766,6 +1863,7 @@ class AgentResponseHandler:
                 text=text,
                 artifacts=artifacts or [],
                 error=error,
+                error_code=error_code,
             )
             maybe_result = service.ingest_agent_result(result)
             if inspect.isawaitable(maybe_result):

@@ -7,7 +7,7 @@ Tests cover:
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -924,6 +924,64 @@ class TestFinalizeStreamingWritesArtifacts:
         assert (
             persisted_task.artifacts[0].parts[0].root.text == "Final answer from agent."
         )
+
+    @pytest.mark.asyncio
+    async def test_unavailable_only_stream_is_platform_failure(self):
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+
+        async def fail_materialization(parts, *_args, report=None, **_kwargs):
+            parts[0] = {
+                "kind": "data",
+                "data": {
+                    "type": "file_unavailable",
+                    "reason": "invalid_content",
+                },
+            }
+            report.update(
+                {
+                    "attempted": 1,
+                    "stored": 0,
+                    "unavailable": 1,
+                    "failures": [{"code": "invalid_content"}],
+                }
+            )
+            return 0
+
+        proc._materialize_streaming_file_parts = AsyncMock(
+            side_effect=fail_materialization
+        )
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            send_sse=False,
+        )
+        streaming_state = MessageStreamingState(
+            non_text_parts=[
+                {
+                    "kind": "file",
+                    "file": {"bytes": "not-base64", "name": "image.png"},
+                }
+            ]
+        )
+
+        status, text = await proc._finalize_streaming(ctx, streaming_state)
+
+        assert status == ProcessingStatus.FAILED
+        assert text == "Agent output could not be processed."
+        task = current_message.message_content.message_task
+        assert task.status.state == TaskState.failed
+        assert task.metadata["output_failure_code"] == "artifact_delivery_failed"
+        event = proc.response_handler.handle.await_args.args[0]
+        assert event.kind == "response"
+        assert event.state == "completed"
+        assert event.parts[0]["data"]["type"] == "file_unavailable"
 
     @pytest.mark.asyncio
     async def test_already_failed_task_persists_only_public_failure_text(self):
@@ -2603,7 +2661,53 @@ class TestFinalizePolledTaskPrivacy:
             completed_task.artifacts,
             "room-1",
             "agent-msg-1",
+            report=ANY,
         )
+
+    @pytest.mark.asyncio
+    async def test_unavailable_only_polled_task_propagates_delivery_failure(self):
+        proc = _make_processor()
+        proc._task_updater.update_task_on_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "Agent One"
+        completed_task = self._make_completed_task_with_private_history("private")
+        completed_task.artifacts = [
+            Artifact(
+                artifact_id="image",
+                parts=[
+                    Part(
+                        root=FilePart(
+                            file=FileContent(
+                                bytes="not-base64",
+                                mimeType="image/png",
+                                name="image.png",
+                            )
+                        )
+                    )
+                ],
+            )
+        ]
+
+        success, text, _paused, _task_id = await proc._finalize_polled_task(
+            completed_task,
+            current_message,
+            agent_card,
+            room_id="room-1",
+            message_id="agent-msg-1",
+            task_info={"webhook_token": "tok"},
+            ctx=self._make_ctx(current_message, agent_card),
+        )
+
+        assert success is False
+        assert text == "Agent output could not be processed."
+        persisted = proc._task_updater.update_task_on_message.await_args.args[1]
+        assert persisted["status"]["state"] == "failed"
+        assert persisted["metadata"] == {
+            "output_failure_code": "artifact_delivery_failed",
+            "remote_task_state": "completed",
+        }
 
     def _make_ctx(self, current_message, agent_card):
         return ProcessingContext(
