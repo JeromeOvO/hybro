@@ -3,6 +3,7 @@ import { http, HttpResponse, delay } from 'msw'
 import { server } from '../../setup/msw-server'
 import { getApiUrl } from '@/lib/utils'
 import {
+  discoverLocalAgents,
   registerAgent,
   getAgentsByProviderId,
   updateAgent,
@@ -15,10 +16,26 @@ import {
 } from '@/lib/api/agent'
 
 const BASE = getApiUrl('agent')
+const LOCAL_AGENTS_BASE = getApiUrl('local-agents')
 
 describe('Agent API', () => {
   beforeEach(() => {
     server.resetHandlers()
+  })
+
+  // ─── discoverLocalAgents ─────────────────────────────────────
+
+  it('should POST to the local agent discovery endpoint', async () => {
+    server.use(
+      http.post(`${LOCAL_AGENTS_BASE}/discovery`, () =>
+        HttpResponse.json({ trigger: 'manual', agents_found: 2 }),
+      ),
+    )
+
+    const result = await discoverLocalAgents()
+
+    expect(result.trigger).toBe('manual')
+    expect(result.agents_found).toBe(2)
   })
 
   // ─── registerAgent ───────────────────────────────────────────

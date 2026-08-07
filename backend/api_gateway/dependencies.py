@@ -35,6 +35,7 @@ from common.protocols import (
     WebhookReceiver,
 )
 from context_memory.protocols import LegacyChatContextAPI
+from local_agents.protocols import LocalAgentDiscovery
 from room.protocols import RoomCenterCompatibility
 
 
@@ -67,6 +68,7 @@ class APIGatewayDeps:
     sse_transport: SSERouteTransport
     webhook_receiver: WebhookReceiver
     repository_provider: ViewSetRepositoryProvider
+    local_agent_discovery: LocalAgentDiscovery | None = None
 
 
 def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
@@ -79,6 +81,7 @@ def missing_required_deps(deps: APIGatewayDeps | None) -> list[str]:
         "discovery_rate_limiter",
         "gateway_service",
         "gateway_rate_limiter",
+        "local_agent_discovery",
     }
 
     return [
@@ -169,6 +172,12 @@ def get_discovery_default_limit(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> int:
     return deps.discovery_default_limit
+
+
+def get_local_agent_discovery(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> LocalAgentDiscovery | None:
+    return deps.local_agent_discovery
 
 
 def get_file_storage(

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from api_gateway.routes.agent_routes import (
     delete_agent,
+    discover_local_agents,
     get_agent,
     get_agent_by_provider,
     get_agent_card_from_url,
@@ -25,9 +26,37 @@ from api_gateway.routes.agent_routes import (
     register_agent,
     update_agent,
 )
+from local_agents.models import DiscoveryTrigger, LocalAgentDiscoveryResult
 from models.agent import AgentStatus
 from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
+
+# =============================================================================
+# Local Agent Discovery Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_manual_local_agent_discovery_requires_bound_service(mock_user):
+    with pytest.raises(HTTPException) as exc_info:
+        await discover_local_agents(mock_user, discovery=None)
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_manual_local_agent_discovery_waits_for_result(mock_user):
+    discovery = AsyncMock()
+    discovery.request_discovery.return_value = LocalAgentDiscoveryResult(
+        trigger=DiscoveryTrigger.MANUAL,
+        agents_found=2,
+    )
+
+    result = await discover_local_agents(mock_user, discovery=discovery)
+
+    assert result.agents_found == 2
+    discovery.request_discovery.assert_awaited_once_with(DiscoveryTrigger.MANUAL)
+
 
 # =============================================================================
 # Agent Registration Tests

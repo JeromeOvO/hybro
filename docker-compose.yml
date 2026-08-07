@@ -21,7 +21,7 @@ services:
       - "27017"
       - "--quiet"
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -73,6 +73,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - API_PREFIX=/api/v1
       - HYBRO_FILE_DIR=/var/lib/hybro/files
+      - LOCAL_AGENT_DISCOVERY_ENABLED=true
     volumes:
       - room_files:/var/lib/hybro/files
     extra_hosts:

@@ -139,6 +139,18 @@ Agent dependency assembly is also container-owned. `container.py` constructs
 Agent-owned protocol implementations directly. Agent runtime behavior is owned
 by `agent/`.
 
+`local_agents/` owns Docker-host discovery without owning Agent persistence or
+execution. When enabled, its in-process service scans the configured
+`host.docker.internal` port range at startup and every 120 seconds, probes Agent
+Cards through the SDK-confined `a2a_adapter` resolver, and reconciles results
+through the Agent registry writer. Discovered records use `source=local`, remain
+public and directly callable. Scheduled discovery marks them inactive after
+three successful cycles in which they are absent; the authenticated
+`POST /api/v1/local-agents/discovery` manual refresh immediately reconciles
+missing agents and upgrades any in-flight cycle to a manual refresh. This first
+phase targets the single-process Docker Compose backend; discovery coordination
+and miss counters are intentionally process-local.
+
 ## Major Code Areas
 
 ### `api_gateway`
@@ -150,7 +162,8 @@ bound dependencies.
 Important route groups:
 
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
-- `agent_routes.py`: agent registration, lookup, update, and visibility.
+- `agent_routes.py`: agent registration, lookup, update, visibility, and the
+  authenticated local-agent discovery trigger.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.

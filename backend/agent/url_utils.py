@@ -5,6 +5,8 @@ from urllib.parse import urlparse, urlunparse
 from common.url_utils import LOCAL_HOST_ALIASES
 
 WELL_KNOWN_PATHS = ("/.well-known/agent-card.json", "/.well-known/agent.json")
+DOCKER_HOST_ALIAS = "host.docker.internal"
+_NORMALIZED_LOCAL_HOST_ALIASES = LOCAL_HOST_ALIASES | {DOCKER_HOST_ALIAS}
 
 
 def is_local_agent_url(url: str | None) -> bool:
@@ -14,7 +16,7 @@ def is_local_agent_url(url: str | None) -> bool:
         hostname = (urlparse(url).hostname or "").lower()
     except ValueError:
         return False
-    return hostname in LOCAL_HOST_ALIASES
+    return hostname in _NORMALIZED_LOCAL_HOST_ALIASES
 
 
 def normalize_agent_url(url: str | None) -> str | None:
@@ -29,7 +31,7 @@ def normalize_agent_url(url: str | None) -> str | None:
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         return url
-    if hostname in LOCAL_HOST_ALIASES:
+    if hostname in _NORMALIZED_LOCAL_HOST_ALIASES:
         hostname = "localhost"
 
     port = parsed.port

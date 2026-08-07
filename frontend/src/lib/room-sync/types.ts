@@ -11,7 +11,7 @@ export type HydrateRoomPhase =
 
 export interface HydrateRoomAgentResolver {
   getAgentName: (agentId: string) => Promise<string>
-  getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined
+  getAgentSource: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined
 }
 
 export interface HydrateRoomOptions extends HydrateRoomAgentResolver {

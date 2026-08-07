@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -22,7 +23,7 @@ from agent.translators import (
     registration_doc_from_card,
 )
 from agent.url_utils import is_local_agent_url, normalize_agent_url
-from common.dto import HubAgentCounts
+from common.dto import HubAgentCounts, LocalAgentUpsertResult
 from common.dto.agent import (
     AgentCardSnapshot,
     AgentInfo,
@@ -223,6 +224,94 @@ class AgentFacade:
         self._validate_rate_limits(doc)
         await self._repository.upsert(agent_id, doc)
         return agent_info_from_doc(doc)
+
+    async def upsert_local_agent(
+        self,
+        discovery_url: str,
+        card: AgentCardSnapshot,
+    ) -> LocalAgentUpsertResult:
+        normalized_url = normalize_agent_url(card.url or discovery_url)
+        if not normalized_url:
+            raise ValueError("local agent URL could not normalize")
+
+        existing = await self._repository.find_by_normalized_url(normalized_url)
+        if existing is not None and existing.get("source", "cloud") != "local":
+            return LocalAgentUpsertResult(
+                agent_id=existing["agent_id"],
+                managed=False,
+            )
+
+        now = self._now()
+        raw_card = dict(card.raw_card)
+        if not raw_card.get("name"):
+            raw_card["name"] = card.name
+        raw_card.setdefault("description", card.description)
+        if not raw_card.get("url"):
+            raw_card["url"] = card.url or discovery_url
+
+        if existing is not None:
+            stored_card = dict(existing.get("agent_card") or {})
+            merged_card = {**stored_card, **raw_card}
+            for key in AGENT_CARD_NO_OVERWRITE:
+                if stored_card.get(key):
+                    merged_card[key] = stored_card[key]
+            was_inactive = (
+                _status_value(existing.get("agent_status"), default=None) != "active"
+            )
+            await self._repository.update(
+                existing["agent_id"],
+                {
+                    "agent_card": merged_card,
+                    "capabilities": list(card.capabilities),
+                    "agent_status": "active",
+                    "updated_at": now,
+                },
+            )
+            return LocalAgentUpsertResult(
+                agent_id=existing["agent_id"],
+                managed=True,
+                reactivated=was_inactive,
+            )
+
+        agent_id = hashlib.sha256(
+            f"hybro-local-agent:{normalized_url}".encode()
+        ).hexdigest()[:32]
+        await self._repository.upsert(
+            agent_id,
+            {
+                "agent_id": agent_id,
+                "provider_id": None,
+                "agent_card": raw_card,
+                "normalized_url": normalized_url,
+                "public_url": None,
+                "agent_status": "active",
+                "is_public": True,
+                "source": "local",
+                "hub_id": None,
+                "capabilities": list(card.capabilities),
+                "rate_limit_per_user_per_hour": None,
+                "rate_limit_system_per_hour": None,
+                "call_count": 0,
+                "call_success_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return LocalAgentUpsertResult(
+            agent_id=agent_id,
+            managed=True,
+            added=True,
+        )
+
+    async def list_local_agent_ids(self) -> list[str]:
+        docs = await self._repository.get_by_source("local")
+        return [doc["agent_id"] for doc in docs]
+
+    async def mark_local_agents_inactive(self, agent_ids: list[str]) -> int:
+        return await self._repository.mark_agents_inactive(
+            agent_ids,
+            source="local",
+        )
 
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)

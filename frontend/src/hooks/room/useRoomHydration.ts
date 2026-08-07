@@ -11,7 +11,7 @@ export function useRoomHydration(
   room: unknown,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
   getAgentName: (agentId: string) => Promise<string>,
-  getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined,
+  getAgentSource: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
 ) {
   const hydrationStartedRef = useRef<string | null>(null)
   const reconcileInflightRef = useRef<string | null>(null)

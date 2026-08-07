@@ -119,6 +119,13 @@ routes live at `/chat` and `/room/[id]`. There is no host-based route rewrite.
 Legacy `/manage` and `/manage/agents*` paths redirect to their canonical
 `/agents*` equivalents.
 
+The `/agents` inventory merges visible registered agents with locally available
+agents. Its **Discover Local Agents** action calls the authenticated
+`POST /api/v1/local-agents/discovery` endpoint, waits for the backend discovery
+cycle, and then invalidates both agent inventory queries. Directly discovered
+`source=local` agents are displayed while active and use the same Local source
+badge as Hub agents; Hub availability additionally depends on Hub liveness.
+
 ### Provider hierarchy
 
 `src/app/layout.tsx` wraps the app with:

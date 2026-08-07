@@ -21,11 +21,13 @@ class AgentCardResolverImpl:
         self,
         client: httpx.AsyncClient | None = None,
         cache_ttl: int = 300,
-        timeout: int = 10,
+        timeout: float = 10,
+        log_failures: bool = True,
     ) -> None:
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
         self._cache_ttl = cache_ttl
+        self._log_failures = log_failures
         self._cache: dict[str, tuple[float, AgentCardSnapshot]] = {}
 
     async def aclose(self) -> None:
@@ -47,7 +49,7 @@ class AgentCardResolverImpl:
             if fallback_url is not None:
                 snapshot, last_error = await self._resolve_card_from_url(fallback_url)
 
-        if snapshot is None:
+        if snapshot is None and self._log_failures:
             logger.warning(
                 "Failed to resolve A2A agent card for %s: %s",
                 normalized_url,

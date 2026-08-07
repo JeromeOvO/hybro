@@ -2,7 +2,7 @@ import type { TaskState } from '@/lib/types/sse'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import type { IncomingMessage } from '@/stores/message-store/types'
 
-export type HitlAgentSource = 'cloud' | 'hub' | undefined
+export type HitlAgentSource = 'cloud' | 'local' | 'hub' | undefined
 
 export type PendingHitlProjectionInput = {
   roomId: string

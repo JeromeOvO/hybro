@@ -280,6 +280,18 @@ describe('ConsumerAgentProfilePage', () => {
       expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
     })
 
+    it('shows directly discovered Local agents without Hub liveness', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({
+        source: 'local',
+      }))
+
+      render(<ConsumerAgentProfilePage />)
+
+      expect(await screen.findByText('Local')).toBeInTheDocument()
+      expect(screen.getByText(/managed by automatic discovery/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
+    })
+
     it('does not show stale Local agent details', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse({
         source: 'hub',

@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # Agent Health
     agent_health_check_interval: int = 3600
 
+    # Local Agent Discovery (Docker backend -> host gateway)
+    local_agent_discovery_enabled: bool = False
+    local_agent_discovery_host: str = "host.docker.internal"
+    local_agent_discovery_port_start: int = Field(default=1024, ge=1, le=65535)
+    local_agent_discovery_port_end: int = Field(default=65535, ge=1, le=65535)
+    local_agent_discovery_interval_seconds: int = Field(default=120, gt=0)
+    local_agent_discovery_connect_timeout_seconds: float = Field(default=0.05, gt=0)
+    local_agent_discovery_probe_timeout_seconds: float = Field(default=3.0, gt=0)
+
     # Compaction
     compaction_concurrency: int = 5
 

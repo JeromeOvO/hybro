@@ -207,6 +207,7 @@ packages = [
     "hub_runtime_bridge.transport",
     "hub_runtime_bridge.adapters",
     "hub_runtime_bridge.compat",
+    "local_agents",
     "api_gateway",
     "api_gateway.routes",
     "api_gateway.viewsets",

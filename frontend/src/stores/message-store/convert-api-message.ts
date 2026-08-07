@@ -42,7 +42,7 @@ export interface ConvertApiMessageOptions {
   userId?: string
   userName?: string
   getAgentName: (agentId: string) => Promise<string>
-  getAgentSource?: (agentId: string) => 'cloud' | 'hub' | undefined
+  getAgentSource?: (agentId: string) => 'cloud' | 'local' | 'hub' | undefined
 }
 
 /**

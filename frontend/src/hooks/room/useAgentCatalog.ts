@@ -57,14 +57,14 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     return `Agent ${agentId.slice(0, 6)}`
   }, [allAgentsQuery.data])
 
-  const getAgentSource = useCallback((agentId: string | undefined): 'cloud' | 'hub' | undefined => {
+  const getAgentSource = useCallback((agentId: string | undefined): 'cloud' | 'local' | 'hub' | undefined => {
     if (!agentId) return undefined
     const agents = allAgentsQuery.data
     if (!agents) return undefined
     const found = agents.find(a => a.agent_id === agentId)
     if (found) {
       if (found.source === 'hub' || found.hub_id) return 'hub'
-      return (found.source as 'cloud' | 'hub') || 'cloud'
+      return (found.source as 'cloud' | 'local' | 'hub') || 'cloud'
     }
     return undefined
   }, [allAgentsQuery.data])

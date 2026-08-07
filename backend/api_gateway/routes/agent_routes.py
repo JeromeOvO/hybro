@@ -10,6 +10,7 @@ from api_gateway.dependencies import (
     get_agent_liveness_checker,
     get_agent_service,
     get_capability_issue_service,
+    get_local_agent_discovery,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from api_gateway.viewsets.agent import AgentViewSet
@@ -20,6 +21,8 @@ from common.auth import (
     get_optional_user,
 )
 from common.protocols import AgentRegistry
+from local_agents.models import DiscoveryTrigger, LocalAgentDiscoveryResult
+from local_agents.protocols import LocalAgentDiscovery
 from models.agent import IssueStatus
 from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
@@ -30,6 +33,21 @@ router.include_router(agent_viewset.get_router())
 
 
 # ============= PROTECTED ENDPOINTS (Auth Required) =============
+
+
+@router.post("/local-agents/discovery")
+async def discover_local_agents(
+    user: ClerkUser = Depends(get_current_user),
+    discovery: LocalAgentDiscovery | None = Depends(get_local_agent_discovery),
+) -> LocalAgentDiscoveryResult:
+    """Discover A2A agents running on the Docker host."""
+    del user
+    if discovery is None:
+        raise HTTPException(status_code=503, detail="Local agent discovery is disabled")
+    try:
+        return await discovery.request_discovery(DiscoveryTrigger.MANUAL)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/agent/registerAgent")

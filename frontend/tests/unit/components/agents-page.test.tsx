@@ -8,6 +8,7 @@ import type { Agent, AgentCard, AgentCenterResponse } from '@/lib/types'
 const mockPush = vi.fn()
 const mockGetAllAgents = vi.fn<() => Promise<AgentCenterResponse>>()
 const mockGetAgentsByProviderId = vi.fn<() => Promise<AgentCenterResponse>>()
+const mockDiscoverLocalAgents = vi.fn()
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
@@ -18,6 +19,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 
 vi.mock('@/lib/api', () => ({
+  discoverLocalAgents: mockDiscoverLocalAgents,
   getAllAgents: mockGetAllAgents,
   getAgentsByProviderId: mockGetAgentsByProviderId,
 }))
@@ -67,6 +69,16 @@ beforeEach(async () => {
   vi.clearAllMocks()
   mockGetAllAgents.mockResolvedValue({ success: true, agents: [] })
   mockGetAgentsByProviderId.mockResolvedValue({ success: true, agents: [] })
+  mockDiscoverLocalAgents.mockResolvedValue({
+    trigger: 'manual',
+    open_ports: 1,
+    agents_found: 1,
+    agents_added: 1,
+    agents_reactivated: 0,
+    agents_deactivated: 0,
+    duration_ms: 10,
+    reused_running_discovery: false,
+  })
   const mod = await import('@/app/(portal)/agents/page')
   AgentsPage = mod.default
 })
@@ -110,6 +122,36 @@ describe('AgentsPage', () => {
     expect(await screen.findByText('Online Local')).toBeInTheDocument()
     expect(screen.queryByText('Offline Local')).not.toBeInTheDocument()
     expect(screen.queryByText('Inactive Local')).not.toBeInTheDocument()
+  })
+
+  it('discovers local agents and refreshes the catalog', async () => {
+    render(<AgentsPage />)
+
+    const button = await screen.findByRole('button', {
+      name: 'Discover Local Agents',
+    })
+    await userEvent.click(button)
+
+    await waitFor(() => expect(mockDiscoverLocalAgents).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockGetAllAgents.mock.calls.length).toBeGreaterThan(1))
+  })
+
+  it('shows directly discovered Local agents only while active', async () => {
+    mockGetAllAgents.mockResolvedValue({
+      success: true,
+      agents: [
+        buildAgent('local-active', 'Active Direct Local', { source: 'local' }),
+        buildAgent('local-inactive', 'Inactive Direct Local', {
+          source: 'local',
+          agent_status: 'inactive',
+        }),
+      ],
+    })
+
+    render(<AgentsPage />)
+
+    expect(await screen.findByText('Active Direct Local')).toBeInTheDocument()
+    expect(screen.queryByText('Inactive Direct Local')).not.toBeInTheDocument()
   })
 
   it('lets users open the canonical registration page', async () => {

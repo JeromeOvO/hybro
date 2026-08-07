@@ -20,6 +20,9 @@ class AgentMongoRepository:
     async def get_by_provider(self, provider_id: str) -> list[dict]:
         return await self._agents.find({"provider_id": provider_id})
 
+    async def get_by_source(self, source: str) -> list[dict]:
+        return await self._agents.find({"source": source})
+
     async def get_public(self, limit: int = 50) -> list[dict]:
         return await self._agents.find(
             {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
@@ -123,6 +126,23 @@ class AgentMongoRepository:
         await self._agents.update_one(
             {"agent_id": agent_id},
             {"$set": {"agent_status": status}},
+        )
+
+    async def mark_agents_inactive(
+        self,
+        agent_ids: list[str],
+        *,
+        source: str,
+    ) -> int:
+        if not agent_ids:
+            return 0
+        return await self._agents.update_many(
+            {
+                "agent_id": {"$in": agent_ids},
+                "source": source,
+                "agent_status": {"$ne": "inactive"},
+            },
+            {"$set": {"agent_status": "inactive"}},
         )
 
     async def mark_hub_agents_offline(self, hub_id: str) -> int:

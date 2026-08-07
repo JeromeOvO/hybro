@@ -57,7 +57,7 @@ export interface MessageEntity {
   content: string
   senderName: string
   agentId?: string
-  agentSource?: 'cloud' | 'hub'
+  agentSource?: 'cloud' | 'local' | 'hub'
   userId?: string
   clientRequestId?: string
 
@@ -142,7 +142,7 @@ export interface IncomingMessage {
 
   // All optional — omitted fields preserve existing values on update
   agentId?: string
-  agentSource?: 'cloud' | 'hub'
+  agentSource?: 'cloud' | 'local' | 'hub'
   userId?: string
   clientRequestId?: string
   taskStatus?: TaskState | null
