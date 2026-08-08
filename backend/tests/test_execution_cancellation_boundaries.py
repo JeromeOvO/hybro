@@ -10,6 +10,29 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DELIVERY_ROOT = BACKEND_ROOT / "delivery"
 
 
+def test_cancellation_persistence_and_reconciliation_are_execution_owned():
+    orchestration_root = BACKEND_ROOT / "execution" / "orchestration"
+    assert not (orchestration_root / "cancellation_finalizer.py").exists()
+
+    jobs_source = (BACKEND_ROOT / "jobs" / "stale_task_checker.py").read_text()
+    assert "list_pending_cancellation" not in jobs_source
+    assert "mark_cancellation_reconciled" not in jobs_source
+    assert ".mark_reconciled(" not in jobs_source
+
+    runtime_protocols = (
+        BACKEND_ROOT / "common" / "protocols" / "runtime_store_protocols.py"
+    ).read_text()
+    for mutation in (
+        "cancel_message",
+        "list_pending_cancellation_markers",
+        "mark_cancellation_reconciled",
+    ):
+        assert mutation not in runtime_protocols
+
+    assert (BACKEND_ROOT / "execution" / "cancellation" / "finalizer.py").exists()
+    assert (BACKEND_ROOT / "execution" / "cancellation" / "service.py").exists()
+
+
 def test_delivery_runtime_has_no_cancellation_ownership():
     forbidden = {
         "CancellationToken",
@@ -74,6 +97,15 @@ def test_orchestration_does_not_call_cancellation_through_delivery():
         assert "self.delivery.get_token" not in source
         assert "self.delivery.remove_token" not in source
         assert "self.delivery.clear_cancellation" not in source
+
+
+def test_container_wires_one_cancellation_collection_to_execution_service():
+    source = inspect.getsource(__import__("container")._runtime_lifespan)
+    assert "MongoCancellationMarkerRepository" in source
+    assert 'mongo_dal.collection("cancelled_messages")' in source
+    assert "cancellation_message_reader" in source
+    assert "execution_facade.cancellation_service" in source
+    assert "set_cancellation_reconciliation_deps" in source
 
 
 def test_container_starts_cancellation_before_delivery_and_stops_before_mongo():

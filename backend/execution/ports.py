@@ -818,16 +818,6 @@ class CancellationStatePort(Protocol):
     def clear_cancellation(self, message_id: str) -> None: ...
 
 
-class CancellationStorePort(Protocol):
-    async def cancel_message(
-        self,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> bool: ...
-
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool: ...
-
-
 class HITLMessageCancellationPort(Protocol):
     async def cancel_requests_for_message(self, message_id: str) -> None: ...
 

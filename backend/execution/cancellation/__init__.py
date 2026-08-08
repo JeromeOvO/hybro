@@ -1,27 +1,41 @@
 from execution.cancellation.adapters import (
     AgentTaskCleanupAdapter,
     CancellationStateAdapter,
-    CancellationStateC3Adapter,
     HITLMessageCancellationAdapter,
-    MongoCancellationStoreAdapter,
 )
 from execution.cancellation.config import (
     CancellationConfig,
     CancellationStartupPolicy,
 )
+from execution.cancellation.finalizer import (
+    CancellationFinalizationConflict,
+    CancellationFinalizationResult,
+    CancellationFinalizer,
+)
+from execution.cancellation.ports import (
+    CancellationMarkerRepositoryPort,
+    CancellationMessageReaderPort,
+    CancellationReconciliationPort,
+)
 from execution.cancellation.runtime import CancellationRuntime
+from execution.cancellation.service import CancellationService
 from execution.cancellation.transport import RedisCancellationTransport
 from execution.cancellation.watcher import CancellationWatcher
 
 __all__ = [
     "AgentTaskCleanupAdapter",
     "CancellationConfig",
+    "CancellationFinalizationConflict",
+    "CancellationFinalizationResult",
+    "CancellationFinalizer",
+    "CancellationMarkerRepositoryPort",
+    "CancellationMessageReaderPort",
+    "CancellationReconciliationPort",
     "CancellationRuntime",
+    "CancellationService",
     "CancellationStartupPolicy",
     "CancellationStateAdapter",
-    "CancellationStateC3Adapter",
     "CancellationWatcher",
     "HITLMessageCancellationAdapter",
-    "MongoCancellationStoreAdapter",
     "RedisCancellationTransport",
 ]

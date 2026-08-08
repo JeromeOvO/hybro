@@ -86,9 +86,9 @@ def _make_facade(**overrides):
         release_active_token=MagicMock(return_value=True),
         clear_cancellation=MagicMock(),
     )
-    cancellation_store = SimpleNamespace(
-        cancel_message=AsyncMock(return_value=True),
-        mark_cancellation_reconciled=AsyncMock(return_value=True),
+    cancellation_repository = SimpleNamespace(
+        request=AsyncMock(return_value=True),
+        mark_reconciled=AsyncMock(return_value=True),
     )
     hitl_message_cancellation = SimpleNamespace(
         cancel_requests_for_message=AsyncMock(),
@@ -108,7 +108,8 @@ def _make_facade(**overrides):
         "run_lifecycle": run_lifecycle,
         "run_reader": run_reader,
         "cancellation_state": cancellation_state,
-        "cancellation_store": cancellation_store,
+        "cancellation_repository": cancellation_repository,
+        "cancellation_message_reader": AsyncMock(return_value=None),
         "hitl_message_cancellation": hitl_message_cancellation,
         "agent_task_cleanup": agent_task_cleanup,
         "agent_response_handler": agent_response_handler,
@@ -1290,7 +1291,7 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
     deps[
         "hitl_message_cancellation"
     ].cancel_requests_for_message.side_effect = cancel_hitl
-    deps["cancellation_store"].cancel_message.side_effect = persist
+    deps["cancellation_repository"].request.side_effect = persist
     deps["run_lifecycle"].project_run_state.side_effect = record
     deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.side_effect = cleanup
 
@@ -1374,7 +1375,7 @@ async def test_cancel_terminalizes_awaiting_orchestration_and_clears_hitl_state(
         if event.type == OrchestrationEventType.RUN_TERMINAL
     ]
     assert len(terminal_events) == 1
-    assert deps["cancellation_store"].cancel_message.await_count == 2
+    assert deps["cancellation_repository"].request.await_count == 2
     assert deps["cancellation_state"].cancel_message_and_broadcast.await_count == 2
     assert (
         deps["hitl_message_cancellation"].cancel_requests_for_message.await_count == 2
@@ -1414,13 +1415,11 @@ async def test_cancel_does_not_rewrite_budget_exhausted_orchestration():
         "msg-1",
         "budget_exhausted",
     )
-    deps["cancellation_store"].cancel_message.assert_awaited_once_with(
+    deps["cancellation_repository"].request.assert_awaited_once_with(
         "msg-1",
         "user-1",
     )
-    deps["cancellation_store"].mark_cancellation_reconciled.assert_awaited_once_with(
-        "msg-1"
-    )
+    deps["cancellation_repository"].mark_reconciled.assert_awaited_once_with("msg-1")
     deps["cancellation_state"].cancel_message_and_broadcast.assert_not_awaited()
     deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.assert_not_awaited()
     deps["run_lifecycle"].project_run_state.assert_awaited_once_with(
@@ -1460,7 +1459,7 @@ async def test_cancel_rechecks_canonical_state_after_marker_persistence():
         current = completed
         return True
 
-    deps["cancellation_store"].cancel_message.side_effect = persist_marker
+    deps["cancellation_repository"].request.side_effect = persist_marker
 
     assert await facade.cancel(
         "room-1",
@@ -1506,7 +1505,7 @@ async def test_cancel_conflict_does_not_report_success_for_nonterminal_run():
     assert ack.status == "cancellation_pending"
     assert ack.cancellation_applied is False
     assert ack.reconciled is False
-    deps["cancellation_store"].cancel_message.assert_awaited_once()
+    deps["cancellation_repository"].request.assert_awaited_once()
     deps["cancellation_state"].cancel_message_and_broadcast.assert_awaited_once_with(
         "msg-1"
     )
@@ -1517,7 +1516,7 @@ async def test_cancel_conflict_does_not_report_success_for_nonterminal_run():
 @pytest.mark.asyncio
 async def test_cancel_clears_cancellation_when_persistence_fails():
     facade, deps = _make_facade()
-    deps["cancellation_store"].cancel_message.return_value = False
+    deps["cancellation_repository"].request.return_value = False
 
     assert not await facade.cancel(
         "room-1",

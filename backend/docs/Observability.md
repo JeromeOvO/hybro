@@ -51,6 +51,15 @@ execution events are:
 - `delivery_completed`
 - `http_request_completed`
 
+Cancellation persistence/recovery emits
+`cancellation_finalization_pending` when a durable marker is accepted but its
+synchronous finalization fails, and `cancellation_marker_reconciliation_failed`
+when one pending marker fails during a recovery page. Both carry bounded
+message/room identifiers through structured fields and exception metadata; no
+message content is logged. A repository page-scan failure propagates to the
+stale-task checker cycle so the existing `stale_task_checker_failed` event makes
+the failed sweep observable instead of reporting a partial success.
+
 Internal eventing exposes health independently as
 `app.state.eventing_connected`; it is not folded into
 `delivery_pubsub_connected`. The bounded event bus retains eventing-owned dead

@@ -490,28 +490,6 @@ class RuntimeRepositoryStore:
     async def is_message_cancelled_strict(self, message_id: str) -> bool:
         return await self._task_delegate().is_message_cancelled_strict(message_id)
 
-    async def list_pending_cancellation_markers(
-        self,
-        limit: int = 100,
-        after_message_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        return await self._task_delegate().list_pending_cancellation_markers(
-            limit,
-            after_message_id,
-        )
-
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
-        return await self._task_delegate().mark_cancellation_reconciled(message_id)
-
-    async def cancel_message(
-        self,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> bool:
-        return await self._task_delegate().cancel_message(
-            message_id, requested_by_user_id
-        )
-
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         return await self._task_delegate().get_room_ids_with_non_terminal_runs()
 

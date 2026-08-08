@@ -22,25 +22,6 @@ class CancellationStateAdapter:
         self._control.clear_cancellation(message_id)
 
 
-# Compatibility import name retained while ownership now remains in Execution.
-CancellationStateC3Adapter = CancellationStateAdapter
-
-
-class MongoCancellationStoreAdapter:
-    def __init__(self, mongodb) -> None:
-        self._mongodb = mongodb
-
-    async def cancel_message(
-        self,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> bool:
-        return await self._mongodb.cancel_message(message_id, requested_by_user_id)
-
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
-        return await self._mongodb.mark_cancellation_reconciled(message_id)
-
-
 class HITLMessageCancellationAdapter:
     def __init__(self, hitl_manager) -> None:
         self._hitl_manager = hitl_manager
@@ -172,7 +153,5 @@ class AgentTaskCleanupAdapter:
 __all__ = [
     "AgentTaskCleanupAdapter",
     "CancellationStateAdapter",
-    "CancellationStateC3Adapter",
     "HITLMessageCancellationAdapter",
-    "MongoCancellationStoreAdapter",
 ]

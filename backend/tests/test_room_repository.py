@@ -733,33 +733,6 @@ async def test_message_repository_pending_user_tasks_filters_and_sorts():
 
 
 @pytest.mark.asyncio
-async def test_runtime_store_cancel_message_is_idempotent_when_record_exists():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    class ExistingCancellationCollection(FakeCollection):
-        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
-            await super().update_one(query, update, **kwargs)
-            return False
-
-    mongo = FakeMongo({"cancelled_messages": ExistingCancellationCollection()})
-    store = RuntimeRepositoryStore(
-        mongo=mongo,
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-    assert await store.cancel_message("msg-1", "user-1") is True
-    cancelled_messages = mongo.collections["cancelled_messages"]
-    query, update, kwargs = cancelled_messages.update_one_calls[0]
-    assert query == {"message_id": "msg-1"}
-    assert update["$setOnInsert"]["message_id"] == "msg-1"
-    assert update["$setOnInsert"]["user_id"] == "user-1"
-    assert "cancelled_at" in update["$setOnInsert"]
-    assert kwargs == {"upsert": True}
-
-
-@pytest.mark.asyncio
 async def test_runtime_store_updates_last_notified_state_atomically():
     from dal.runtime_store import RuntimeRepositoryStore
 

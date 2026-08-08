@@ -265,7 +265,7 @@ FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
 def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> None:
     from execution.cancellation import (
         AgentTaskCleanupAdapter,
-        CancellationStateC3Adapter,
+        CancellationStateAdapter,
     )
     from execution.hitl.adapters import (
         A2AHITLContinuationAdapter,
@@ -289,7 +289,7 @@ def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> N
             "database_service",
             "db_service",
         },
-        CancellationStateC3Adapter: {
+        CancellationStateAdapter: {
             "sse_manager",
         },
         HITLPersistenceAdapter: {

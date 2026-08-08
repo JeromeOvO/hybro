@@ -18,7 +18,6 @@ from common.idempotency import (
 )
 from common.protocols import MongoDAL
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
 from room.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -268,21 +267,6 @@ class MessageMongoRepository:
         return (
             await self._cancelled_messages.find_one({"message_id": message_id})
         ) is not None
-
-    async def cancel_message(self, message_id: str, user_id: str) -> bool:
-        if self._cancelled_messages is None:
-            self._cancelled_messages = self._mongo.collection("cancelled_messages")
-        return await self._cancelled_messages.update_one(
-            {"message_id": message_id},
-            {
-                "$setOnInsert": {
-                    "message_id": message_id,
-                    "user_id": user_id,
-                    "cancelled_at": utcnow(),
-                }
-            },
-            upsert=True,
-        )
 
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         if not message_ids:

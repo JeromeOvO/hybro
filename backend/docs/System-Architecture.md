@@ -695,7 +695,20 @@ backoff. Pub/Sub iterator
 unsubscribe and close cleanup are bounded so broker shutdown cannot wait
 indefinitely. Redis-free mode remains immediately available.
 
-Cancellation runtime ownership lives in `execution.cancellation`, not Delivery.
+Cancellation ownership lives in `execution.cancellation`, not Delivery,
+Orchestration, or Jobs. `CancellationService` exclusively owns durable marker
+request/finalize/pending reconciliation through the Execution-defined
+`CancellationMarkerRepositoryPort`; the Mongo adapter uses the existing
+`cancelled_messages` collection and indexes. New markers upsert against the
+deterministic Mongo `_id` `cancellation:{message_id}`, preventing two current
+binaries from inserting duplicate first-request markers without requiring a new
+unique index. Existing markers are detected by `message_id`; request and
+reconciliation updates use `update_many` so historical duplicates converge
+together while all externally consumed marker fields remain unchanged. During a
+rolling mixed-version deployment, an older binary can still race a current
+binary and insert one legacy duplicate because the collection intentionally has
+no unique `message_id` index. Current binaries tolerate and bulk-update those
+documents, and the risk ends after older writers leave service.
 `CancellationRuntime` owns TTL-bounded tombstones and a separate active-token
 registry. Creating a token for an already-active message reuses the same token;
 identity-fenced release prevents an old owner from removing a replacement token.
@@ -1310,9 +1323,10 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
-3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
-   nonterminal durable run while preserving a concurrently completed result.
+2. `ExecutionFacade.cancel` delegates to `CancellationService`, which persists a
+   pending cancellation marker through `CancellationMarkerRepositoryPort`.
+3. The shared `CancellationFinalizer` in `execution.cancellation` CAS-terminalizes
+   any nonterminal durable run while preserving a concurrently completed result.
 4. The finalizer updates the message projection, signals the Execution-owned
    cancellation runtime across instances, cancels HITL, emits terminal public
    lifecycle/SSE, and cleans agent tasks.
@@ -1320,9 +1334,13 @@ Cancellation flow:
    without clearing its tombstone; completion-winning finalization leaves active
    execution ownership untouched. The marker is marked reconciled only after
    every idempotent effect succeeds.
-6. The stale-task checker scans only pending markers and invokes the same typed
-   finalizer after crashes or partial failures. Old no-run markers settle only
-   after the orphan threshold, leaving time to catch a late-created run.
+6. The stale-task checker only triggers
+   `CancellationService.reconcile_pending(settle_cutoff=...)`. The service pages
+   pending markers by message ID, resolves room ownership, marks missing-message
+   markers reconciled, and invokes the same typed finalizer after crashes or
+   partial failures. One marker failure remains pending and does not starve later
+   markers; scan failures propagate. Old no-run markers settle only after the
+   orphan threshold, leaving time to catch a late-created run.
 7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so

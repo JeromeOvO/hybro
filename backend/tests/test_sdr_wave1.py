@@ -745,79 +745,45 @@ class TestStaleTaskCheckerSemaphore:
         assert checker._recovery_semaphore.locked() is False
 
     @pytest.mark.asyncio
-    async def test_pending_cancellation_marker_uses_shared_finalizer(self):
+    async def test_pending_cancellations_delegate_to_execution_reconciliation(self):
         from jobs.stale_task_checker import (
-            StaleCancellationFinalizerDeps,
+            StaleCancellationReconciliationDeps,
             StaleTaskChecker,
-            StaleTaskCheckerDeps,
         )
 
-        marker = {
-            "message_id": "message-1",
-            "cancelled_at": utcnow() - timedelta(minutes=10),
-        }
-        store = SimpleNamespace(
-            list_pending_cancellation_markers=AsyncMock(return_value=[marker]),
-            get_room_user_message_by_message_id=AsyncMock(
-                return_value=SimpleNamespace(room_id="room-1")
-            ),
-        )
-        finalize = AsyncMock()
+        reconciliation = SimpleNamespace(reconcile_pending=AsyncMock(return_value=1))
         checker = StaleTaskChecker(orphan_threshold_minutes=2)
-        checker.set_runtime_deps(
-            StaleTaskCheckerDeps(
-                store=store,
-                rooms_collection=None,
-                notify_task_update=AsyncMock(),
-                increment_counter=MagicMock(),
-                a2a_service=SimpleNamespace(),
-            )
-        )
-        checker.set_cancellation_finalizer_deps(
-            StaleCancellationFinalizerDeps(finalize=finalize)
+        checker.set_cancellation_reconciliation_deps(
+            StaleCancellationReconciliationDeps(reconciliation=reconciliation)
         )
 
-        await checker._terminalize_cancellation_marked_runs()
+        before = utcnow() - timedelta(minutes=2)
+        await checker._reconcile_pending_cancellations()
+        after = utcnow() - timedelta(minutes=2)
 
-        finalize.assert_awaited_once_with(
-            room_id="room-1",
-            message_id="message-1",
-            settle_no_run=True,
-        )
+        reconciliation.reconcile_pending.assert_awaited_once()
+        settle_cutoff = reconciliation.reconcile_pending.await_args.kwargs[
+            "settle_cutoff"
+        ]
+        assert before <= settle_cutoff <= after
 
     @pytest.mark.asyncio
-    async def test_deleted_message_cancellation_marker_is_reconciled(self):
+    async def test_cancellation_reconciliation_scan_failure_propagates(self):
         from jobs.stale_task_checker import (
-            StaleCancellationFinalizerDeps,
+            StaleCancellationReconciliationDeps,
             StaleTaskChecker,
-            StaleTaskCheckerDeps,
         )
 
-        marker = {"message_id": "deleted-1", "cancelled_at": utcnow()}
-        store = SimpleNamespace(
-            list_pending_cancellation_markers=AsyncMock(return_value=[marker]),
-            get_room_user_message_by_message_id=AsyncMock(return_value=None),
-            mark_cancellation_reconciled=AsyncMock(return_value=True),
+        reconciliation = SimpleNamespace(
+            reconcile_pending=AsyncMock(side_effect=RuntimeError("scan failed"))
         )
-        finalize = AsyncMock()
         checker = StaleTaskChecker()
-        checker.set_runtime_deps(
-            StaleTaskCheckerDeps(
-                store=store,
-                rooms_collection=None,
-                notify_task_update=AsyncMock(),
-                increment_counter=MagicMock(),
-                a2a_service=SimpleNamespace(),
-            )
-        )
-        checker.set_cancellation_finalizer_deps(
-            StaleCancellationFinalizerDeps(finalize=finalize)
+        checker.set_cancellation_reconciliation_deps(
+            StaleCancellationReconciliationDeps(reconciliation=reconciliation)
         )
 
-        await checker._terminalize_cancellation_marked_runs()
-
-        store.mark_cancellation_reconciled.assert_awaited_once_with("deleted-1")
-        finalize.assert_not_awaited()
+        with pytest.raises(RuntimeError, match="scan failed"):
+            await checker._reconcile_pending_cancellations()
 
     @pytest.mark.asyncio
     async def test_orchestration_recovery_uses_sidecar_run_store(self):

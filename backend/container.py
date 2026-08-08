@@ -489,12 +489,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 repository=agent_capability_issue_repository
             )
             from common.observability.run_metrics import increment_counter
+            from dal.runtime_store.cancellation_repository import (
+                MongoCancellationMarkerRepository,
+            )
             from delivery.task_notifier import TaskUpdateNotifier
             from execution.cancellation import (
                 AgentTaskCleanupAdapter,
-                CancellationStateC3Adapter,
+                CancellationStateAdapter,
                 HITLMessageCancellationAdapter,
-                MongoCancellationStoreAdapter,
             )
             from execution.client_request_id import SSEClientRequestIdResolver
             from execution.dispatch.response_handler import AgentResponseHandler
@@ -820,9 +822,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
-                get_room_user_message_by_message_id_strict=(
-                    message_store.get_room_user_message_by_message_id_strict
-                ),
                 update_task_on_message=task_store.update_task_on_message,
                 get_and_clear_continuation_on_message=(
                     task_store.get_and_clear_continuation_on_message
@@ -840,10 +839,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 update_orchestration_projection_if_status=(
                     message_store.update_orchestration_projection_if_status
                 ),
-                list_pending_cancellation_markers=(
-                    task_store.list_pending_cancellation_markers
-                ),
-                mark_cancellation_reconciled=(task_store.mark_cancellation_reconciled),
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
             )
             debate_message_store = SimpleNamespace(
@@ -1306,8 +1301,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
-                cancellation_state=CancellationStateC3Adapter(_cancellation_runtime),
-                cancellation_store=MongoCancellationStoreAdapter(task_store),
+                cancellation_state=CancellationStateAdapter(_cancellation_runtime),
+                cancellation_repository=MongoCancellationMarkerRepository(
+                    mongo_dal.collection("cancelled_messages")
+                ),
+                cancellation_message_reader=(
+                    message_store.get_room_user_message_by_message_id_strict
+                ),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
                     message_task_store=message_store,
@@ -1448,7 +1448,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
         if _execution_deps is not None:
             from jobs.stale_task_checker import (
-                StaleCancellationFinalizerDeps,
+                StaleCancellationReconciliationDeps,
                 StaleHITLDeps,
                 StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
@@ -1502,9 +1502,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     orchestration_run_store=orchestration_run_store,
                 )
             )
-            stale_task_checker.set_cancellation_finalizer_deps(
-                StaleCancellationFinalizerDeps(
-                    finalize=execution_facade.finalize_pending_cancellation,
+            stale_task_checker.set_cancellation_reconciliation_deps(
+                StaleCancellationReconciliationDeps(
+                    reconciliation=execution_facade.cancellation_service,
                 )
             )
             stale_task_checker.set_hitl_deps(

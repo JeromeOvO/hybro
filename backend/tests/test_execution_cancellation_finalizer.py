@@ -2,9 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.orchestration.cancellation_finalizer import (
-    OrchestrationCancellationFinalizer,
-)
+from execution.cancellation.finalizer import CancellationFinalizer
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.orchestration import (
     OrchestrationEventType,
@@ -39,7 +37,7 @@ def _finalizer(store=None, **overrides):
     }
     deps.update(overrides)
     return (
-        OrchestrationCancellationFinalizer(run_store=store, **deps),
+        CancellationFinalizer(run_store=store, **deps),
         deps,
     )
 

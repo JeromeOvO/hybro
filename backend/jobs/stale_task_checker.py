@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -36,10 +36,8 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from execution.cancellation.ports import CancellationReconciliationPort
 from execution.dispatch.agent_event import AgentEvent
-from execution.orchestration.cancellation_finalizer import (
-    CancellationFinalizationResult,
-)
 from execution.orchestration.run_store import OrchestrationStoreConflict
 from jobs.constants import STALE_TASK_CHECKER
 from models.orchestration import (
@@ -96,19 +94,9 @@ class StaleOrchestrationRunRecoveryDeps:
     orchestration_run_store: Any
 
 
-class CancellationFinalizeCallable(Protocol):
-    async def __call__(
-        self,
-        *,
-        room_id: str,
-        message_id: str,
-        settle_no_run: bool = False,
-    ) -> CancellationFinalizationResult: ...
-
-
 @dataclass(frozen=True)
-class StaleCancellationFinalizerDeps:
-    finalize: CancellationFinalizeCallable
+class StaleCancellationReconciliationDeps:
+    reconciliation: CancellationReconciliationPort
 
 
 @dataclass(frozen=True)
@@ -201,7 +189,9 @@ class StaleTaskChecker:
         self._orchestration_run_recovery_deps: (
             StaleOrchestrationRunRecoveryDeps | None
         ) = None
-        self._cancellation_finalizer_deps: StaleCancellationFinalizerDeps | None = None
+        self._cancellation_reconciliation_deps: (
+            StaleCancellationReconciliationDeps | None
+        ) = None
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
@@ -209,11 +199,11 @@ class StaleTaskChecker:
             None
         )
 
-    def set_cancellation_finalizer_deps(
+    def set_cancellation_reconciliation_deps(
         self,
-        deps: StaleCancellationFinalizerDeps,
+        deps: StaleCancellationReconciliationDeps,
     ) -> None:
-        self._cancellation_finalizer_deps = deps
+        self._cancellation_reconciliation_deps = deps
 
     def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a leader gate instance for distributed leader gating."""
@@ -344,7 +334,7 @@ class StaleTaskChecker:
         This is called periodically by the background loop.
         """
         # Durable user cancellation wins before any polling, expiry, or recovery.
-        await self._terminalize_cancellation_marked_runs()
+        await self._reconcile_pending_cancellations()
 
         # Get non-terminal state values for queries
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
@@ -1168,66 +1158,15 @@ class StaleTaskChecker:
                     },
                 )
 
-    async def _terminalize_cancellation_marked_runs(self) -> None:
-        """Reconcile only pending markers through the shared finalizer."""
-        if self._cancellation_finalizer_deps is None:
-            logger.warning("Cancellation finalizer dependencies are not bound")
+    async def _reconcile_pending_cancellations(self) -> None:
+        """Trigger Execution-owned reconciliation of pending markers."""
+        if self._cancellation_reconciliation_deps is None:
+            logger.warning("Cancellation reconciliation dependency is not bound")
             return
-        batch_size = 100
-        after_message_id: str | None = None
         settle_cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
-        while True:
-            try:
-                markers = await self._store.list_pending_cancellation_markers(
-                    limit=batch_size,
-                    after_message_id=after_message_id,
-                )
-            except Exception:
-                logger.error(
-                    "orchestration_recovery: failed to scan cancellation markers",
-                    exc_info=True,
-                )
-                raise
-            if not markers:
-                return
-            for marker in markers:
-                message_id = marker.get("message_id")
-                if not isinstance(message_id, str) or not message_id:
-                    continue
-                try:
-                    strict_reader = getattr(
-                        self._store,
-                        "get_room_user_message_by_message_id_strict",
-                        self._store.get_room_user_message_by_message_id,
-                    )
-                    message = await strict_reader(message_id)
-                    room_id = getattr(message, "room_id", None)
-                    if not isinstance(room_id, str) or not room_id:
-                        await self._store.mark_cancellation_reconciled(message_id)
-                        continue
-                    canceled_at = marker.get("cancelled_at")
-                    if isinstance(canceled_at, str):
-                        canceled_at = datetime.fromisoformat(canceled_at)
-                    settle_no_run = (
-                        isinstance(canceled_at, datetime)
-                        and ensure_utc(canceled_at) <= settle_cutoff
-                    )
-                    await self._cancellation_finalizer_deps.finalize(
-                        room_id=room_id,
-                        message_id=message_id,
-                        settle_no_run=settle_no_run,
-                    )
-                except Exception:
-                    logger.warning(
-                        "orchestration_recovery: failed cancellation marker %s",
-                        message_id,
-                        exc_info=True,
-                    )
-            if len(markers) < batch_size:
-                return
-            after_message_id = markers[-1].get("message_id")
-            if not isinstance(after_message_id, str) or not after_message_id:
-                return
+        await self._cancellation_reconciliation_deps.reconciliation.reconcile_pending(
+            settle_cutoff=settle_cutoff
+        )
 
     async def _recover_stuck_orchestration_runs(self) -> None:
         """Recover stale durable orchestration runs.
@@ -1257,20 +1196,8 @@ class StaleTaskChecker:
             if ensure_utc(state.updated_at) > cutoff:
                 continue
             if await self._is_message_cancelled_for_recovery(state.user_message_id):
-                if self._cancellation_finalizer_deps is not None:
-                    try:
-                        await self._cancellation_finalizer_deps.finalize(
-                            room_id=state.room_id,
-                            message_id=state.user_message_id,
-                            settle_no_run=False,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "orchestration_recovery: cancellation finalization failed "
-                            "for %s",
-                            state.run_id,
-                            exc_info=True,
-                        )
+                # Pending durable markers are retried by the Execution-owned
+                # reconciliation pass at the start of each checker cycle.
                 continue
             if state.status.value == "awaiting_user":
                 logger.info(

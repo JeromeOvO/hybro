@@ -81,7 +81,7 @@ class CancellationFinalizationPort(Protocol):
     ) -> CancellationFinalizationResult: ...
 
 
-class OrchestrationCancellationFinalizer:
+class CancellationFinalizer:
     """Idempotently reconcile one durable cancellation marker across all surfaces."""
 
     def __init__(
