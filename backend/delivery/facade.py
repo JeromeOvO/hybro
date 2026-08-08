@@ -243,8 +243,6 @@ class DeliveryFacade:
             await self._event_bus.start()
             started.append("bus")
             await self.refresh_health()
-            await self._event_publisher.start()
-            started.append("publisher")
             self._started = True
         except Exception:
             await self._rollback_start(started)
@@ -254,7 +252,6 @@ class DeliveryFacade:
         if not self._started:
             await self._close_kv_once()
             return
-        await self._event_publisher.stop()
         await self._sse_transport.close_all_connections()
         await self._event_bus.stop()
         await self._sse_transport.stop_cancellation_watcher()
@@ -500,8 +497,6 @@ class DeliveryFacade:
         self._sse_transport.set_draining(draining)
 
     async def _rollback_start(self, started: list[str]) -> None:
-        if "publisher" in started:
-            await self._event_publisher.stop()
         if "bus" in started:
             await self._event_bus.stop()
         if "watcher" in started:

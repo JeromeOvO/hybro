@@ -129,18 +129,40 @@ def test_create_token_pre_signals_if_already_cancelled():
     assert token.is_cancelled is True
 
 
-def test_cancellation_token_cache_uses_custom_ttl():
+def test_active_tokens_are_not_evicted_by_ttl_or_compat_maxsize():
+    timer = FakeTimer()
+    watcher = make_watcher(
+        config=DeliveryConfig(
+            cancellation_ttl_seconds=11,
+            cancellation_token_cache_maxsize=1,
+        ),
+        timer=timer,
+    )
+
+    first = watcher.create_token("msg-1")
+    second = watcher.create_token("msg-2")
+    timer.advance(12)
+
+    assert watcher.get_token("msg-1") is first
+    assert watcher.get_token("msg-2") is second
+    watcher.remove_token("msg-1")
+    assert watcher.get_token("msg-1") is None
+
+
+def test_tombstone_ttl_expiry_does_not_evict_active_token():
     timer = FakeTimer()
     watcher = make_watcher(
         config=DeliveryConfig(cancellation_ttl_seconds=11),
         timer=timer,
     )
-
     token = watcher.create_token("msg-1")
-    assert watcher.get_token("msg-1") is token
+    watcher.cancel_message("msg-1")
 
     timer.advance(12)
-    assert watcher.get_token("msg-1") is None
+
+    assert watcher.is_cancelled("msg-1") is False
+    assert watcher.get_token("msg-1") is token
+    assert token.is_cancelled is True
 
 
 @pytest.mark.asyncio

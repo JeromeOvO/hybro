@@ -22,7 +22,7 @@ class FakeRedisKV:
         self.error = error
         self.calls: list[tuple[str, str, int]] = []
         self.values: dict[str, str] = {}
-        self.deleted: list[str] = []
+        self.compare_deleted: list[tuple[str, str]] = []
 
     async def setnx(self, key: str, value: str, ttl: int) -> bool:
         self.calls.append((key, value, ttl))
@@ -32,14 +32,26 @@ class FakeRedisKV:
             self.values[key] = value
         return self.setnx_result
 
-    async def get(self, key: str) -> str | None:
+    async def compare_delete(self, key: str, expected_value: str) -> bool:
+        self.compare_deleted.append((key, expected_value))
         if self.error is not None:
             raise self.error
-        return self.values.get(key)
+        if self.values.get(key) != expected_value:
+            return False
+        self.values.pop(key)
+        return True
 
-    async def delete(self, key: str) -> bool:
-        self.deleted.append(key)
-        return self.values.pop(key, None) is not None
+
+class SharedNXRedisKV(FakeRedisKV):
+    def __init__(self):
+        super().__init__()
+
+    async def setnx(self, key: str, value: str, ttl: int) -> bool:
+        self.calls.append((key, value, ttl))
+        if key in self.values:
+            return False
+        self.values[key] = value
+        return True
 
 
 @pytest.mark.asyncio
@@ -77,7 +89,9 @@ async def test_first_terminal_status_passes_and_second_l1_hit_suppresses():
         status="failed",
     )
 
-    assert redis.calls == [("terminal:room-1:msg-1", "completed", 300)]
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0::2] == ("terminal:room-1:msg-1", 300)
+    assert redis.calls[0][1] != "completed"
 
 
 @pytest.mark.asyncio
@@ -90,7 +104,9 @@ async def test_l2_redis_nx_miss_suppresses_terminal_status():
         message_id="msg-1",
         status="completed",
     )
-    assert redis.calls == [("terminal:room-1:msg-1", "completed", 300)]
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0::2] == ("terminal:room-1:msg-1", 300)
+    assert dedup.cache.get("room-1:msg-1") is None
 
 
 @pytest.mark.asyncio
@@ -108,7 +124,8 @@ async def test_custom_terminal_prefix_and_ttl_are_used_for_l2():
         status="completed",
     )
 
-    assert redis.calls == [("termx:room-1:msg-1", "completed", 7)]
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0::2] == ("termx:room-1:msg-1", 7)
 
 
 @pytest.mark.asyncio
@@ -128,11 +145,59 @@ async def test_failed_delivery_release_clears_owned_l1_and_l2_reservations():
     )
 
     assert "room-1:msg-1" not in dedup.cache
-    assert redis.deleted == ["terminal:room-1:msg-1"]
+    assert redis.compare_deleted == [("terminal:room-1:msg-1", redis.calls[0][1])]
     assert await dedup.should_deliver(
         room_id="room-1",
         message_id="msg-1",
         status="completed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_does_not_delete_a_reclaimed_reservation():
+    redis = FakeRedisKV(setnx_result=True)
+    dedup = TerminalStatusDeduplicator(
+        config=DeliveryConfig(),
+        redis_kv=redis,
+        claim_id_factory=lambda: "owner-1",
+    )
+
+    assert await dedup.should_deliver(
+        room_id="room-1", message_id="msg-1", status="completed"
+    )
+    redis.values["terminal:room-1:msg-1"] = "owner-2"
+
+    await dedup.release(room_id="room-1", message_id="msg-1", status="completed")
+
+    assert redis.values["terminal:room-1:msg-1"] == "owner-2"
+    assert redis.compare_deleted == [("terminal:room-1:msg-1", "owner-1")]
+
+
+@pytest.mark.asyncio
+async def test_multi_instance_loser_does_not_poison_l1_after_owner_release():
+    redis = SharedNXRedisKV()
+    owner = TerminalStatusDeduplicator(
+        config=DeliveryConfig(),
+        redis_kv=redis,
+        claim_id_factory=lambda: "owner",
+    )
+    loser = TerminalStatusDeduplicator(
+        config=DeliveryConfig(),
+        redis_kv=redis,
+        claim_id_factory=lambda: "loser",
+    )
+
+    assert await owner.should_deliver(
+        room_id="room-1", message_id="msg-1", status="completed"
+    )
+    assert not await loser.should_deliver(
+        room_id="room-1", message_id="msg-1", status="completed"
+    )
+    assert "room-1:msg-1" not in loser.cache
+
+    await owner.release(room_id="room-1", message_id="msg-1", status="completed")
+    assert await loser.should_deliver(
+        room_id="room-1", message_id="msg-1", status="completed"
     )
 
 
@@ -180,7 +245,8 @@ async def test_custom_terminal_status_set_controls_dedup():
         message_id="msg-1",
         status="done",
     )
-    assert redis.calls == [("terminal:room-1:msg-1", "done", 300)]
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0::2] == ("terminal:room-1:msg-1", 300)
 
 
 @pytest.mark.asyncio

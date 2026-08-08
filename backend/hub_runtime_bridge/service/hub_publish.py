@@ -46,14 +46,14 @@ class HubPublishService:
         *,
         journal=None,
         dispatcher=None,
-        event_publisher=None,
+        internal_event_publisher=None,
         publish_authorization_reader=None,
         cancellation_reader=None,
         worker_id: str = "local-worker",
     ) -> None:
         self._journal = journal
         self._dispatcher = dispatcher
-        self._event_publisher = event_publisher
+        self._internal_event_publisher = internal_event_publisher
         self._publish_authorization_reader = publish_authorization_reader
         self._cancellation_reader = cancellation_reader
         self._worker_id = worker_id
@@ -136,22 +136,13 @@ class HubPublishService:
                 run_id=internal_payload.get("run_id"),
                 payload=internal_payload,
             )
-            if self._dispatcher:
+            if self._internal_event_publisher:
+                # Every instance receives the same unclaimed event. Its router
+                # competes for the journal claim so exactly one sink executes,
+                # including when task ownership is absent or stale.
+                await self._internal_event_publisher.publish(event)
+            elif self._dispatcher:
                 await self._dispatcher.dispatch_hub_internal_response(event)
-            if self._event_publisher:
-                if self._journal and journal and not journal.get("processed"):
-                    claim = await self._journal.claim_for_processing(
-                        journal["journal_id"], self._worker_id
-                    )
-                    if claim is None:
-                        continue
-                    else:
-                        event = event.model_copy(
-                            update={"claim_token": claim.get("claim_token")}
-                        )
-                        await self._event_publisher.emit_internal(event)
-                        continue
-                await self._event_publisher.emit_internal(event)
 
     async def _authorize_event(
         self,

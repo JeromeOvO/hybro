@@ -192,12 +192,13 @@ def test_delivery_package_skeleton_and_config_exports():
 
     config = DeliveryConfig()
     assert config.heartbeat_interval_seconds == 30.0
+    assert config.sse_connection_queue_maxsize == 100
     assert config.shutdown_drain_seconds == 5.0
     assert config.redis_sse_channel_prefix == "sse:room:"
     assert config.redis_cancel_channel == "cancel:global"
-    assert config.redis_internal_channel == "internal:global"
     assert config.redis_dead_letter_channel == "delivery:dead_letter"
     assert config.redis_room_subscription_production_limit == 40
+    assert config.redis_room_subscription_ready_timeout_seconds == 5.0
     assert config.redis_subscription_reserved_connections == 10
     assert config.redis_max_connections == 50
     assert config.terminal_processing_statuses == frozenset(
@@ -217,6 +218,7 @@ def test_delivery_package_skeleton_and_config_exports():
     ("field", "value"),
     [
         ("heartbeat_interval_seconds", 0),
+        ("sse_connection_queue_maxsize", 0),
         ("shutdown_drain_seconds", 0),
         ("cancellation_ttl_seconds", 0),
         ("terminal_dedup_ttl_seconds", 0),
@@ -224,18 +226,17 @@ def test_delivery_package_skeleton_and_config_exports():
         ("cancellation_token_cache_maxsize", 0),
         ("terminal_dedup_cache_maxsize", 0),
         ("dead_letter_memory_maxlen", 0),
-        ("handler_shutdown_timeout_seconds", 0),
         ("redis_reconnect_delay", 0),
         ("redis_reconnect_max_delay", 0),
         ("redis_max_connections", 0),
         ("redis_subscription_reserved_connections", 0),
         ("redis_room_subscription_production_limit", 0),
+        ("redis_room_subscription_ready_timeout_seconds", 0),
         ("cs_backoff_base", 0),
         ("cs_backoff_max", 0),
         ("cs_backoff_factor", 0.5),
         ("redis_sse_channel_prefix", ""),
         ("redis_cancel_channel", ""),
-        ("redis_internal_channel", ""),
         ("redis_dead_letter_channel", ""),
         ("redis_cancel_key_prefix", ""),
         ("redis_terminal_key_prefix", ""),
@@ -586,7 +587,6 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     assert calls == [
         "transport.start_cancellation_watcher",
         "bus.start",
-        "publisher.start",
     ]
     assert facade.instance_id == "worker-1"
     assert facade.delivery_kv_connected is True
@@ -601,8 +601,7 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     assert transport.draining is True
 
     await facade.stop()
-    assert calls[-4:] == [
-        "publisher.stop",
+    assert calls[-3:] == [
         "transport.close_all_connections",
         "bus.stop",
         "transport.stop_cancellation_watcher",
@@ -642,6 +641,7 @@ def test_container_delivery_factories_and_config_mapping():
     values.update(
         {
             "heartbeat_interval_seconds": 2.5,
+            "sse_connection_queue_maxsize": 23,
             "shutdown_drain_seconds": 1.25,
             "cancellation_ttl_seconds": 42,
             "terminal_dedup_ttl_seconds": 43,
@@ -650,17 +650,16 @@ def test_container_delivery_factories_and_config_mapping():
             "terminal_dedup_cache_maxsize": 46,
             "redis_sse_channel_prefix": "custom:sse:",
             "redis_cancel_channel": "custom:cancel",
-            "redis_internal_channel": "custom:internal",
             "redis_dead_letter_channel": "custom:dead",
             "redis_cancel_key_prefix": "custom:cancelled:",
             "redis_terminal_key_prefix": "custom:terminal:",
             "dead_letter_memory_maxlen": 47,
-            "handler_shutdown_timeout_seconds": 0.5,
             "redis_reconnect_delay": 0.25,
             "redis_reconnect_max_delay": 3.0,
             "redis_max_connections": 120,
             "redis_subscription_reserved_connections": 10,
             "redis_room_subscription_production_limit": 100,
+            "redis_room_subscription_ready_timeout_seconds": 0.75,
             "cs_backoff_base": 0.5,
             "cs_backoff_max": 8.0,
             "cs_backoff_factor": 1.5,
@@ -671,11 +670,12 @@ def test_container_delivery_factories_and_config_mapping():
     config = create_delivery_config(SimpleNamespace(**values))
 
     assert config.heartbeat_interval_seconds == 2.5
+    assert config.sse_connection_queue_maxsize == 23
     assert config.redis_sse_channel_prefix == "custom:sse:"
-    assert config.redis_internal_channel == "custom:internal"
     assert config.redis_dead_letter_channel == "custom:dead"
     assert config.redis_max_connections == 120
     assert config.redis_room_subscription_production_limit == 100
+    assert config.redis_room_subscription_ready_timeout_seconds == 0.75
     assert config.terminal_processing_statuses == frozenset({"done", "failed"})
 
     redis_kv, redis_pubsub = create_delivery_redis_clients(

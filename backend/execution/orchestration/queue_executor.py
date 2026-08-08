@@ -32,7 +32,7 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.room import CoordinatorAgentId, RoomAgentMessage
 
 if TYPE_CHECKING:
-    from common.protocols import EventPublisher
+    from common.eventing import InternalEventPublisher
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.ports import (
         DebateServicePort,
@@ -102,7 +102,7 @@ class QueueExecutor:
         tsm: TaskStateManager,
         delivery: ExecutionDeliveryPort,
         room_runtime: RoomRuntimePort,
-        event_publisher: EventPublisher,
+        internal_event_publisher: InternalEventPublisher,
         message_reader: RoomMessageReader,
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
@@ -119,12 +119,14 @@ class QueueExecutor:
         turn_event_appender=None,
         hitl_coordinator: HITLCoordinator | None = None,
     ) -> None:
-        if event_publisher is None:
-            raise RuntimeError("QueueExecutor event_publisher dependency is required")
+        if internal_event_publisher is None:
+            raise RuntimeError(
+                "QueueExecutor internal_event_publisher dependency is required"
+            )
         self.tsm = tsm
         self.delivery = delivery
         self.room_runtime = room_runtime
-        self.event_publisher = event_publisher
+        self.internal_event_publisher = internal_event_publisher
         self.message_reader = message_reader
         self.message_writer = message_writer
         self.task_state_store = task_state_store
@@ -157,7 +159,7 @@ class QueueExecutor:
         if not message_id:
             return
         await publish_message_committed(
-            self.event_publisher,
+            self.internal_event_publisher,
             room_id=room_id,
             message_id=message_id,
             message_type="agent",

@@ -293,7 +293,7 @@ def _make_room_message_center_port_deps():
         "memory_writer": MagicMock(),
         "hitl_reader": MagicMock(),
         "delivery": MagicMock(),
-        "event_publisher": MagicMock(),
+        "internal_event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),
         "task_notifier": MagicMock(),
@@ -333,7 +333,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.memory_writer is deps["memory_writer"]
     assert runtime.hitl_reader is deps["hitl_reader"]
     assert runtime.delivery is deps["delivery"]
-    assert runtime.event_publisher is deps["event_publisher"]
+    assert runtime.internal_event_publisher is deps["internal_event_publisher"]
     assert runtime.coordinator is deps["coordinator"]
     assert runtime.summary_service is deps["summary_service"]
     assert runtime.task_notification_store is deps["task_notification_store"]
@@ -386,7 +386,10 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.queue_executor.message_writer is deps["message_writer"]
     assert runtime.queue_executor.delivery is deps["delivery"]
     assert runtime.queue_executor.room_runtime is deps["room_runtime"]
-    assert runtime.queue_executor.event_publisher is deps["event_publisher"]
+    assert (
+        runtime.queue_executor.internal_event_publisher
+        is deps["internal_event_publisher"]
+    )
     assert (
         runtime.queue_executor.debate_prompt_injector is deps["debate_prompt_injector"]
     )
@@ -396,7 +399,10 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.supervisor_executor.message_writer is deps["message_writer"]
     assert runtime.supervisor_executor.delivery is deps["delivery"]
     assert runtime.supervisor_executor.room_runtime is deps["room_runtime"]
-    assert runtime.supervisor_executor.event_publisher is deps["event_publisher"]
+    assert (
+        runtime.supervisor_executor.internal_event_publisher
+        is deps["internal_event_publisher"]
+    )
     assert runtime.supervisor_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.hitl_coordinator is deps["hitl_coordinator"]
@@ -405,13 +411,13 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.context_compaction is deps["context_compaction"]
 
 
-def test_room_message_center_factory_requires_event_publisher():
+def test_room_message_center_factory_requires_internal_event_publisher():
     from execution.orchestration.factory import create_room_message_center
 
     deps = _make_room_message_center_port_deps()
-    deps.pop("event_publisher")
+    deps.pop("internal_event_publisher")
 
-    with pytest.raises(RuntimeError, match="event_publisher"):
+    with pytest.raises(RuntimeError, match="internal_event_publisher"):
         create_room_message_center(**deps, debate_rounds=5)
 
 
@@ -489,7 +495,7 @@ def test_container_wires_execution_with_focused_port_names():
         "memory_writer",
         "hitl_reader",
         "delivery",
-        "event_publisher",
+        "internal_event_publisher",
         "coordinator",
         "a2a_transport",
         "remote_task_reader",
@@ -515,7 +521,7 @@ def test_container_wires_execution_with_focused_port_names():
         "a2a_transport": "execution_a2a_transport",
         "remote_task_reader": "execution_remote_task_reader",
         "room_memory": "execution_room_memory",
-        "event_publisher": "_delivery_deps.event_publisher",
+        "internal_event_publisher": ("_eventing_deps.internal_event_publisher"),
         "context_compaction": "context_memory_facade",
         "task_notification_store": "task_notification_store",
     }
@@ -621,13 +627,13 @@ def test_room_message_center_constructor_requires_explicit_dependencies():
     assert legacy_names.isdisjoint(params)
 
 
-def test_room_message_center_constructor_requires_event_publisher():
+def test_room_message_center_constructor_requires_internal_event_publisher():
     from execution.orchestration.room_message_center import RoomMessageCenter
 
     deps = _make_room_message_center_port_deps()
-    deps["event_publisher"] = None
+    deps["internal_event_publisher"] = None
 
-    with pytest.raises(RuntimeError, match="event_publisher"):
+    with pytest.raises(RuntimeError, match="internal_event_publisher"):
         RoomMessageCenter(**deps, debate_rounds=5)
 
 

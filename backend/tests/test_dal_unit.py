@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -941,6 +942,9 @@ async def test_redis_pubsub_impl_yields_only_messages():
 
     pubsub = MagicMock()
     pubsub.subscribe = AsyncMock()
+    pubsub.get_message = AsyncMock(
+        return_value={"type": "subscribe", "channel": "events", "data": 1}
+    )
     pubsub.unsubscribe = AsyncMock()
     pubsub.aclose = AsyncMock()
 
@@ -966,11 +970,71 @@ async def test_redis_pubsub_impl_yields_only_messages():
 
 
 @pytest.mark.asyncio
-async def test_redis_pubsub_impl_allocates_pubsub_lazily():
+async def test_redis_pubsub_iterator_bounds_blocked_unsubscribe_cleanup(monkeypatch):
+    from dal.redis import pubsub as pubsub_module
+
+    monkeypatch.setattr(pubsub_module, "_PUBSUB_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    unsubscribe_started = asyncio.Event()
+
+    async def blocked_unsubscribe(_channel):
+        unsubscribe_started.set()
+        await asyncio.Event().wait()
+
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock()
+    pubsub.get_message = AsyncMock(
+        return_value={"type": "subscribe", "channel": "events", "data": 1}
+    )
+    pubsub.unsubscribe = AsyncMock(side_effect=blocked_unsubscribe)
+    pubsub.aclose = AsyncMock()
+
+    async def listen():
+        yield {"type": "message", "data": "payload"}
+        await asyncio.Future()
+
+    pubsub.listen = listen
+    client = MagicMock()
+    client.pubsub.return_value = pubsub
+    pubsub_impl = pubsub_module.RedisPubSubImpl(client=client)
+    iterator = await pubsub_impl.subscribe("events")
+    assert await anext(iterator) == "payload"
+
+    await asyncio.wait_for(iterator.aclose(), timeout=0.1)
+
+    assert unsubscribe_started.is_set()
+    pubsub.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_close_bounds_blocked_client_cleanup(monkeypatch):
+    from dal.redis import pubsub as pubsub_module
+
+    monkeypatch.setattr(pubsub_module, "_PUBSUB_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    close_started = asyncio.Event()
+
+    async def blocked_close():
+        close_started.set()
+        await asyncio.Event().wait()
+
+    client = MagicMock()
+    client.aclose = AsyncMock(side_effect=blocked_close)
+    pubsub_impl = pubsub_module.RedisPubSubImpl(client=client)
+
+    await asyncio.wait_for(pubsub_impl.close(), timeout=0.1)
+
+    assert close_started.is_set()
+    assert pubsub_impl._client is None
+
+
+@pytest.mark.asyncio
+async def test_redis_pubsub_impl_subscribe_returns_only_after_ready():
     from dal.redis.pubsub import RedisPubSubImpl
 
     pubsub = MagicMock()
     pubsub.subscribe = AsyncMock()
+    pubsub.get_message = AsyncMock(
+        return_value={"type": "subscribe", "channel": "events", "data": 1}
+    )
     pubsub.unsubscribe = AsyncMock()
     pubsub.aclose = AsyncMock()
 
@@ -985,10 +1049,14 @@ async def test_redis_pubsub_impl_allocates_pubsub_lazily():
     pubsub_impl = RedisPubSubImpl(client=client)
 
     iterator = await pubsub_impl.subscribe("events")
-    client.pubsub.assert_not_called()
+    client.pubsub.assert_called_once_with()
+    pubsub.subscribe.assert_awaited_once_with("events")
+    pubsub.get_message.assert_awaited_once_with(
+        ignore_subscribe_messages=False,
+        timeout=None,
+    )
 
     assert await anext(iterator) == "payload"
-    client.pubsub.assert_called_once_with()
     await iterator.aclose()
 
 
@@ -1032,10 +1100,10 @@ async def test_redis_pubsub_impl_surfaces_subscribe_setup_failure():
     client.pubsub.return_value = pubsub
 
     pubsub_impl = RedisPubSubImpl(client=client)
-    iterator = await pubsub_impl.subscribe("events")
 
     with pytest.raises(TransientError):
-        await anext(iterator)
+        await pubsub_impl.subscribe("events")
+    pubsub.aclose.assert_awaited_once()
 
 
 def test_redis_pubsub_impl_accepts_explicit_max_connections(monkeypatch):
@@ -1069,10 +1137,13 @@ async def test_redis_pubsub_impl_gracefully_degrades_without_url(monkeypatch):
 
     await pubsub_impl.publish("events", "payload")
     iterator = await pubsub_impl.subscribe("events")
+    next_message = asyncio.create_task(anext(iterator))
+    await asyncio.sleep(0)
 
-    with pytest.raises(StopAsyncIteration):
-        await anext(iterator)
-
+    assert not next_message.done()
+    next_message.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_message
     assert await pubsub_impl.ping() is False
 
 

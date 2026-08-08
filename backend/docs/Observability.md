@@ -34,8 +34,8 @@ are inherited through `ContextVar`:
 `dispatch_intent_id`.
 
 `request_id` identifies only the current HTTP request. `trace_id` is copied to
-background tasks and delivery envelopes and is restored by cross-instance
-consumers. A valid caller-provided `X-Request-ID` is reused; otherwise the
+background tasks, public delivery envelopes, and generic internal-event
+envelopes and is restored by cross-instance consumers. A valid caller-provided `X-Request-ID` is reused; otherwise the
 gateway generates a UUID and returns it as `X-Request-ID`.
 
 Terminal run and delivery events include `outcome` and `duration_ms`. The main
@@ -50,6 +50,15 @@ execution events are:
 - `supervisor_run_completed`
 - `delivery_completed`
 - `http_request_completed`
+
+Internal eventing exposes health independently as
+`app.state.eventing_connected`; it is not folded into
+`delivery_pubsub_connected`. The bounded event bus retains eventing-owned dead
+letters for `queue_full`, `handler`, `fanout`, and `deserialization` failures and
+best-effort publishes the same structured record on the independent
+`eventing:dead_letter` channel. Dead letters include origin, event type, trace ID, failure stage,
+exception class/message, timestamp, and bounded metadata. Payloads must still
+follow the privacy rules below.
 
 `agent_call_completed` is owned by Supervisor dispatch and represents the
 logical agent operation. `a2a_call_completed` is owned by the A2A client facade

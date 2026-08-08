@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -17,6 +18,7 @@ from common.dto import (
 from common.utils.time import utcnow
 from execution.facade import (
     ExecutionFacade,
+    RoomCenterPort,
     hub_agent_response_internal_to_agent_event,
 )
 from execution.orchestration.run_store import (
@@ -61,6 +63,7 @@ def _make_facade(**overrides):
     room_center.run_message_preflight_to_room = AsyncMock(
         side_effect=run_message_preflight_to_room
     )
+    room_center.discard_message_preflight = MagicMock()
     room_center.update_user_message_orchestration_status = AsyncMock(return_value=True)
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
@@ -161,6 +164,13 @@ def _room_response_with_preflight(**kwargs) -> RoomCenterUserMessageResponse:
     assert dumped["preflight_outcome"] == kwargs.get("preflight_outcome")
     assert dumped["preflight_details"] == kwargs.get("preflight_details")
     return response
+
+
+def test_room_center_port_exposes_sync_preflight_cleanup():
+    signature = inspect.signature(RoomCenterPort.discard_message_preflight)
+
+    assert not inspect.iscoroutinefunction(RoomCenterPort.discard_message_preflight)
+    assert tuple(signature.parameters) == ("self", "context")
 
 
 def test_constructor_core_dependencies_are_typed_ports():
@@ -641,6 +651,100 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
         preflight_context
     )
     room_center.send_message_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellation_during_preflight_processing_status_discards_token():
+    facade, deps = _make_facade()
+    preflight_context = object()
+    deps["room_center"].persist_message_to_room.side_effect = None
+    deps["room_center"].persist_message_to_room.return_value = (
+        RoomCenterUserMessageResponse(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+        ),
+        preflight_context,
+    )
+    facade._emit_room_preflight_processing_status = AsyncMock(
+        side_effect=asyncio.CancelledError
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+
+    deps["room_center"].discard_message_preflight.assert_called_once_with(
+        preflight_context
+    )
+    deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellation_after_ready_preflight_discards_token():
+    facade, deps = _make_facade()
+    preflight_context = object()
+    deps["room_center"].persist_message_to_room.side_effect = None
+    deps["room_center"].persist_message_to_room.return_value = (
+        RoomCenterUserMessageResponse(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+        ),
+        preflight_context,
+    )
+    deps["room_center"].run_message_preflight_to_room.side_effect = None
+    deps[
+        "room_center"
+    ].run_message_preflight_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        dispatch_root_message_id="msg-1",
+        success=True,
+        preflight_outcome="ready",
+    )
+    facade._emit_room_preflight_terminal_status = AsyncMock(
+        side_effect=asyncio.CancelledError
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+
+    deps["room_center"].discard_message_preflight.assert_called_once_with(
+        preflight_context
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_normal_ready_preflight_keeps_token_for_orchestration():
+    facade, deps = _make_facade()
+    preflight_context = object()
+    deps["room_center"].persist_message_to_room.side_effect = None
+    deps["room_center"].persist_message_to_room.return_value = (
+        RoomCenterUserMessageResponse(
+            room_id="room-1",
+            message_id="msg-1",
+            dispatch_root_message_id="msg-1",
+            success=True,
+        ),
+        preflight_context,
+    )
+    deps["room_center"].run_message_preflight_to_room.side_effect = None
+    deps[
+        "room_center"
+    ].run_message_preflight_to_room.return_value = _room_response_with_preflight(
+        room_id="room-1",
+        message_id="msg-1",
+        dispatch_root_message_id="msg-1",
+        success=True,
+        preflight_outcome="ready",
+    )
+
+    ack = await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+
+    assert ack.should_start_orchestration is True
+    deps["room_center"].discard_message_preflight.assert_not_called()
 
 
 @pytest.mark.asyncio

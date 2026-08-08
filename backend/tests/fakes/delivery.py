@@ -139,9 +139,6 @@ class FakeDeliveryCompat:
     async def publish_dead_letter(self, envelope: dict[str, Any]) -> None:
         self.lifecycle_calls.append(("publish_dead_letter", envelope))
 
-    async def publish_internal(self, event: Any) -> None:
-        self.lifecycle_calls.append(("publish_internal", event))
-
     async def refresh_health(self) -> None:
         self.lifecycle_calls.append(("refresh_health", None))
 
@@ -207,24 +204,6 @@ class FakeEventPublisher:
         connections = list(self.compat.room_connections.get(room_id, {}).values())
         for connection in connections:
             await connection.queue.put(frame)
-
-    async def start(self) -> None:
-        self.lifecycle_calls.append(("start", None))
-
-    async def stop(self) -> None:
-        self.lifecycle_calls.append(("stop", None))
-
-    async def emit_internal(
-        self,
-        event,
-        *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
-    ) -> None:
-        self.lifecycle_calls.append(("emit_internal", event))
-
-    def register_internal_handler(self, event_type: str, handler) -> None:
-        self.lifecycle_calls.append(("register_internal_handler", event_type))
 
 
 def make_delivery_facade(

@@ -70,12 +70,12 @@ class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ):
         self.internal_events.append(event)
 

@@ -36,6 +36,7 @@ class SSETransportImpl:
         self._lock = asyncio.Lock()
         self._admission_locks: dict[str, asyncio.Lock] = {}
         self._admission_locks_lock = asyncio.Lock()
+        self._room_cleanup_tasks: dict[str, asyncio.Task] = {}
         self._draining = False
         self._record_connection_gauge()
 
@@ -62,9 +63,11 @@ class SSETransportImpl:
         return await self._admit_connection(room_id, self._id_factory())
 
     async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        unsubscribed_room = await self._remove_connections(room_id, [connection_id])
-        if unsubscribed_room is not None:
-            await self.event_bus.unsubscribe_room(unsubscribed_room)
+        room_became_empty = await self._remove_connections_local(
+            room_id, [connection_id]
+        )
+        if room_became_empty:
+            self._schedule_room_cleanup(room_id)
 
     async def broadcast_frame_to_room(
         self, room_id: str, frame: dict[str, Any]
@@ -78,9 +81,11 @@ class SSETransportImpl:
                 disconnected.append(connection_id)
 
         if disconnected:
-            unsubscribed_room = await self._remove_connections(room_id, disconnected)
-            if unsubscribed_room is not None:
-                await self.event_bus.unsubscribe_room(unsubscribed_room)
+            room_became_empty = await self._remove_connections_local(
+                room_id, disconnected
+            )
+            if room_became_empty:
+                self._schedule_room_cleanup(room_id)
 
     async def close_all_connections(self) -> None:
         async with self._lock:
@@ -96,7 +101,8 @@ class SSETransportImpl:
         for connection in connections:
             connection.close()
         for room_id in rooms:
-            await self.event_bus.unsubscribe_room(room_id)
+            self._schedule_room_cleanup(room_id)
+        await self._drain_room_cleanup_tasks()
         self._record_connection_gauge()
 
     def get_room_status(self, room_id: str) -> dict[str, Any]:
@@ -154,35 +160,45 @@ class SSETransportImpl:
             )
 
         admission_lock = await self._get_admission_lock(room_id)
-        async with admission_lock:
-            if self._draining:
-                raise ConnectionRefusedError(
-                    "Server is draining - rejecting new SSE connections"
-                )
-
-            async with self._lock:
-                first_for_room = not self.room_connections.get(room_id)
-
-            if first_for_room:
-                try:
-                    await self.event_bus.subscribe_room(room_id)
-                except Exception as exc:
+        first_admission_started = False
+        connection_admitted = False
+        try:
+            async with admission_lock:
+                if self._draining:
                     raise ConnectionRefusedError(
-                        f"Unable to subscribe room {room_id}"
-                    ) from exc
+                        "Server is draining - rejecting new SSE connections"
+                    )
 
-            connection = SSEConnection(
-                room_id=room_id,
-                connection_id=connection_id,
-                heartbeat_interval=self.config.heartbeat_interval_seconds,
-                now=self._now,
-            )
-            async with self._lock:
-                room_connections = self.room_connections.setdefault(room_id, {})
-                room_connections[connection_id] = connection
-                self.connection_rooms[connection_id] = room_id
-                self._record_connection_gauge()
-            return connection
+                async with self._lock:
+                    first_for_room = not self.room_connections.get(room_id)
+
+                if first_for_room:
+                    first_admission_started = True
+                    try:
+                        await self.event_bus.subscribe_room(room_id)
+                    except Exception as exc:
+                        raise ConnectionRefusedError(
+                            f"Unable to subscribe room {room_id}"
+                        ) from exc
+
+                connection = SSEConnection(
+                    room_id=room_id,
+                    connection_id=connection_id,
+                    heartbeat_interval=self.config.heartbeat_interval_seconds,
+                    queue_maxsize=self.config.sse_connection_queue_maxsize,
+                    now=self._now,
+                )
+                async with self._lock:
+                    room_connections = self.room_connections.setdefault(room_id, {})
+                    room_connections[connection_id] = connection
+                    self.connection_rooms[connection_id] = room_id
+                    connection_admitted = True
+                    self._record_connection_gauge()
+                return connection
+        except BaseException:
+            if first_admission_started and not connection_admitted:
+                self._schedule_room_cleanup(room_id)
+            raise
 
     async def _get_admission_lock(self, room_id: str) -> asyncio.Lock:
         async with self._admission_locks_lock:
@@ -192,20 +208,21 @@ class SSETransportImpl:
                 self._admission_locks[room_id] = lock
             return lock
 
-    async def _remove_connections(
+    async def _remove_connections_local(
         self,
         room_id: str,
         connection_ids: list[str],
-    ) -> str | None:
+    ) -> bool:
         room_empty = False
         async with self._lock:
             room_connections = self.room_connections.get(room_id)
             if not room_connections:
-                return None
+                return False
 
             for connection_id in connection_ids:
                 connection = room_connections.pop(connection_id, None)
-                self.connection_rooms.pop(connection_id, None)
+                if self.connection_rooms.get(connection_id) == room_id:
+                    self.connection_rooms.pop(connection_id, None)
                 if connection is not None:
                     connection.close()
 
@@ -215,7 +232,52 @@ class SSETransportImpl:
 
             self._record_connection_gauge()
 
-        return room_id if room_empty else None
+        return room_empty
+
+    def _schedule_room_cleanup(self, room_id: str) -> None:
+        existing = self._room_cleanup_tasks.get(room_id)
+        if existing is not None and not existing.done():
+            return
+        task = self._task_runner(
+            self._unsubscribe_if_room_still_empty(room_id),
+            name=f"delivery-sse-room-cleanup-{room_id}",
+        )
+        self._room_cleanup_tasks[room_id] = task
+        task.add_done_callback(
+            lambda completed, cleanup_room_id=room_id: self._finish_room_cleanup(
+                cleanup_room_id, completed
+            )
+        )
+
+    def _finish_room_cleanup(
+        self,
+        room_id: str,
+        task: asyncio.Task,
+    ) -> None:
+        if self._room_cleanup_tasks.get(room_id) is task:
+            self._room_cleanup_tasks.pop(room_id, None)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    async def _drain_room_cleanup_tasks(self) -> None:
+        while self._room_cleanup_tasks:
+            tasks = tuple(self._room_cleanup_tasks.values())
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for room_id, task in tuple(self._room_cleanup_tasks.items()):
+                if task.done():
+                    self._finish_room_cleanup(room_id, task)
+
+    async def _unsubscribe_if_room_still_empty(self, room_id: str) -> None:
+        admission_lock = await self._get_admission_lock(room_id)
+        async with admission_lock:
+            async with self._lock:
+                if self.room_connections.get(room_id):
+                    return
+            await self.event_bus.unsubscribe_room(room_id)
 
     def _active_connection_count(self) -> int:
         return sum(len(connections) for connections in self.room_connections.values())

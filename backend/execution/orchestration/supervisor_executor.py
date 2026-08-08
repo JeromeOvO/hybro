@@ -143,7 +143,7 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from common.protocols import EventPublisher
+    from common.eventing import InternalEventPublisher
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
@@ -306,7 +306,7 @@ class SupervisorExecutor:
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
-        event_publisher: EventPublisher,
+        internal_event_publisher: InternalEventPublisher,
         rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
@@ -319,9 +319,9 @@ class SupervisorExecutor:
         delegation_outcome_evaluator: DelegationOutcomeEvaluator | None = None,
         guardrails_enabled: bool | None = None,
     ) -> None:
-        if event_publisher is None:
+        if internal_event_publisher is None:
             raise RuntimeError(
-                "SupervisorExecutor event_publisher dependency is required"
+                "SupervisorExecutor internal_event_publisher dependency is required"
             )
         self.supervisor_service = supervisor_service
         self.room_runtime = room_runtime
@@ -331,7 +331,7 @@ class SupervisorExecutor:
         self.message_writer = message_writer
         self.task_state_store = task_state_store
         self.continuation_store = continuation_store
-        self.event_publisher = event_publisher
+        self.internal_event_publisher = internal_event_publisher
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
@@ -765,7 +765,7 @@ class SupervisorExecutor:
         if not message_id:
             return
         await publish_message_committed(
-            self.event_publisher,
+            self.internal_event_publisher,
             room_id=room_id,
             message_id=message_id,
             message_type="agent",

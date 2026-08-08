@@ -10,6 +10,7 @@ def _make_client() -> MagicMock:
     client.get = AsyncMock(return_value="test_value")
     client.set = AsyncMock(return_value=True)
     client.delete = AsyncMock(return_value=1)
+    client.eval = AsyncMock(return_value=1)
     client.incrby = AsyncMock(return_value=3)
     client.exists = AsyncMock(return_value=1)
     client.ping = AsyncMock(return_value=True)
@@ -39,13 +40,39 @@ class TestRedisKVImpl:
         await kv.set("test_key", "test_value", ttl=120)
         assert await kv.exists("test_key") is True
         assert await kv.delete("test_key") is True
+        assert await kv.compare_delete("test_key", "owner-1") is True
         assert await kv.increment("counter", amount=2) == 3
 
         client.get.assert_awaited_once_with("test_key")
         client.set.assert_awaited_once_with("test_key", "test_value", ex=120)
         client.exists.assert_awaited_once_with("test_key")
         client.delete.assert_awaited_once_with("test_key")
+        script, key_count, key, owner = client.eval.await_args.args
+        assert "redis.call('GET', KEYS[1]) == ARGV[1]" in script
+        assert (key_count, key, owner) == (1, "test_key", "owner-1")
         client.incrby.assert_awaited_once_with("counter", 2)
+
+    async def test_compare_delete_reports_owner_mismatch_without_delete(self):
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        client.eval = AsyncMock(return_value=0)
+        kv = RedisKVImpl(client=client)
+
+        assert await kv.compare_delete("test_key", "wrong-owner") is False
+
+    async def test_compare_delete_wraps_driver_failure_as_transient(self):
+        from common.errors import TransientError
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        client.eval = AsyncMock(side_effect=RuntimeError("eval failed"))
+        kv = RedisKVImpl(client=client)
+
+        with pytest.raises(TransientError) as exc_info:
+            await kv.compare_delete("test_key", "owner")
+
+        assert exc_info.value.details["operation"] == "compare_delete"
 
     async def test_health_tracks_successful_ping_and_close(self):
         from dal.redis.kv import RedisKVImpl
@@ -87,6 +114,7 @@ class TestRedisKVImpl:
         assert await kv.setnx("test_key", "test_value", ttl=60) is False
         assert await kv.exists("test_key") is False
         assert await kv.delete("test_key") is False
+        assert await kv.compare_delete("test_key", "owner") is False
         assert await kv.increment("counter") == 0
         assert await kv.ping() is False
 

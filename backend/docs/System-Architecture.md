@@ -575,16 +575,16 @@ The facade uses:
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-`container.py` creates the facade before execution orchestration, registers
-`ContextMemoryEventHandler` with Delivery's internal `message_committed` event,
-and exposes the facade through `ContextMemoryDeps.context_memory_runtime` for
-supervisor and agent context assembly. Frontdoor user-message persistence and
+`container.py` creates the facade before execution orchestration and registers
+`ContextMemoryEventHandler` on the independent internal event bus before that bus
+starts. The facade is exposed through `ContextMemoryDeps.context_memory_runtime`
+for supervisor and agent context assembly. Frontdoor user-message persistence and
 execution response paths publish local-only `MessageCommitted` events only after
 the message write succeeds; user-message commits wait for local handler
-completion before preflight continues. Delivery records handler failures in a
-bounded in-memory dead-letter buffer and sends a best-effort Redis dead-letter
-notification rather than propagating failures to the message writer, so this
-wait establishes local ordering but does not guarantee projection success. User
+completion before preflight continues. Eventing records handler failures in its
+bounded dead-letter buffer and sends a best-effort Redis dead-letter notification
+rather than propagating failures to the message writer, so this wait establishes
+local ordering but does not guarantee projection success. User
 commit events carry `room_agent_set` so event projection can clean raw
 `<@id|name>` mentions with canonical room agent names before appending
 attachment descriptions. Agent commit events carry `agent_name` and
@@ -614,9 +614,37 @@ execution room-memory compatibility uses the facade-backed
 `ContextMemoryRoomMemoryAdapter` instead of removed-package memory service
 objects.
 
+### `common.eventing`
+
+Internal domain events are independent from Delivery. `common.eventing` owns the
+generic envelope and dead-letter models, frozen event-model registry, focused
+publisher/bus/transport protocols, and bounded local handler bus. Each registered
+handler has its own bounded FIFO and exactly one worker, preserving per-handler
+order while allowing different handlers to run concurrently. Queue admission,
+handler, fan-out, and deserialization failures use the eventing dead-letter path.
+Trace context is captured in envelopes and restored for local and remote handler
+execution. Startup registers `MessageCommitted`, `RunStateChanged`, and
+`HubAgentResponseInternal` models plus ContextMemory and Hub handlers before
+starting the bus; start freezes the registry. Public publication remains closed
+until transport startup and health finish, while already-received remote
+callbacks wait on that startup transition instead of being dropped. The Hub
+handler waits on an explicit relay-ready gate, so remote startup-window events
+remain in its bounded FIFO until the concrete relay router is bound. Shutdown
+stops ingress and drains eventing while that router is still usable, then stops
+Relay and Delivery.
+
+`dal.redis.internal_eventing.RedisInternalEventTransport` owns a separate
+`RedisPubSubImpl`, generic internal channel subscription/reconnect/health, and the
+independent `eventing:dead_letter` channel. Ping, subscribe, publish, DLT publish,
+iterator cleanup, and close I/O are timeout-bounded. Listener cancellation shields
+and then joins the one in-flight remote callback before transport close. Its client
+is never shared with or closed by the
+Delivery bus. With no Redis configuration, the bounded local handlers remain
+available and only cross-instance fan-out is disabled.
+
 ### `delivery`
 
-`delivery.DeliveryFacade` owns SSE delivery and cross-instance event fan-out.
+`delivery.DeliveryFacade` owns SSE delivery and cross-instance SSE fan-out.
 Backend modules emit typed `common.dto.DeliveryEvent` objects; Delivery is the
 only layer that translates those DTOs into frontend room SSE frames. The wire
 shape is always:
@@ -634,13 +662,51 @@ room processing-status helper; Delivery receives typed DTO fields.
 It is composed from:
 
 - `SSETransportImpl`: local room connection management.
-- `EventPublisherImpl`: emits frames/events and handles deduplication.
+- `EventPublisherImpl`: emits typed public Delivery events, handles terminal
+  deduplication, and records public delivery dead letters.
 - `TaskUpdateNotifier`: execution-facing task update publisher that resolves
   final agent display fields and delegates to `DeliveryFacade.send_task_update`.
-- `CrossInstanceEventBus`: Redis Pub/Sub based fan-out when Redis is enabled.
+- `CrossInstanceEventBus`: Redis Pub/Sub SSE room fan-out and cancellation
+  propagation when Redis is enabled; it has no internal-domain-event API.
 - `CancellationWatcher`: tracks cancellation state through Mongo change streams
   and Redis KV when available.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
+
+Each local SSE connection has a bounded, non-blocking queue. An overflowing
+queue closes and removes only that slow connection, so it cannot apply
+backpressure to other connections in the room. Per-room admission locks
+serialize first-subscribe and last-unsubscribe transitions; local removal still
+happens immediately, followed by a tracked background cleanup task that performs
+a locked empty-room recheck before Redis unsubscribe. Shutdown drains these
+cleanup tasks. This also keeps Redis listener callbacks from synchronously
+unsubscribing and orphaning their own listener task.
+
+When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
+operation has completed, while the subscription task owns the bounded readiness
+timeout. Concurrent admissions share one shielded readiness future, and
+cancelling any waiter cancels only that wait. If a first SSE admission is
+cancelled before it creates a connection, the transport schedules the same
+locked empty-room cleanup after releasing the admission lock. Explicit
+unsubscribe cancels a pending readiness future and wakes all remaining waiters;
+a stopped bus rejects new subscriptions, and stop races resolve pending
+readiness. Failure before readiness removes the desired subscription and task;
+failures after readiness retain the desired subscription and reconnect with
+backoff. Pub/Sub iterator
+unsubscribe and close cleanup are bounded so broker shutdown cannot wait
+indefinitely. Redis-free mode remains immediately available.
+
+Cancellation tombstones remain TTL-bounded, while live cancellation tokens use
+an explicit registry. Room preflight exposes an idempotent synchronous discard
+operation and removes its token on failure, cancellation, or any non-ready
+outcome. Execution guards the entire post-persist sequence (processing status,
+room preflight, and terminal status) with the same discard operation, closing
+cancellation windows before and after preflight. A normally returned ready token
+remains registered for orchestration, which owns its later removal. Terminal
+status claims store unique owner IDs in
+Redis. Losing instances do not
+cache the loss locally, and failed-delivery release uses Redis Lua
+compare-and-delete so an expired and subsequently reclaimed reservation cannot
+be deleted by its former owner.
 
 Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
 through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI

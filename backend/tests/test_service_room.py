@@ -10,6 +10,7 @@ Tests cover:
 """
 
 import ast
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -46,15 +47,53 @@ class RecordingEventPublisher:
         self.internal_events = []
         self.wait_flags = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ) -> None:
         self.internal_events.append(event)
-        self.wait_flags.append(wait_for_local_handlers)
+        self.wait_flags.append(wait_for_handlers)
+
+
+@pytest.mark.asyncio
+async def test_preflight_token_lifecycle_keeps_ready_and_removes_nonready():
+    svc = object.__new__(RoomServices)
+    svc.delivery = MagicMock()
+    context = SimpleNamespace(user_message=SimpleNamespace(message_id="msg-1"))
+
+    for outcome in ("failed", "canceled", "completed"):
+        svc.delivery.remove_token.reset_mock()
+        response = SimpleNamespace(preflight_outcome=outcome)
+        svc._run_message_preflight_to_room = AsyncMock(return_value=response)
+
+        assert await svc.run_message_preflight_to_room(context) is response
+        svc.delivery.remove_token.assert_called_once_with("msg-1")
+
+    svc.delivery.remove_token.reset_mock()
+    ready_response = SimpleNamespace(preflight_outcome="ready")
+    svc._run_message_preflight_to_room = AsyncMock(return_value=ready_response)
+
+    assert await svc.run_message_preflight_to_room(context) is ready_response
+    svc.delivery.remove_token.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("parse failed"), asyncio.CancelledError()]
+)
+async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(failure):
+    svc = object.__new__(RoomServices)
+    svc.delivery = MagicMock()
+    context = SimpleNamespace(user_message=SimpleNamespace(message_id="msg-1"))
+    svc._run_message_preflight_to_room = AsyncMock(side_effect=failure)
+
+    with pytest.raises(type(failure)):
+        await svc.run_message_preflight_to_room(context)
+
+    svc.delivery.remove_token.assert_called_once_with("msg-1")
 
 
 def test_room_services_bind_store_sets_runtime_store():
@@ -281,7 +320,7 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
         document={},
     )
     svc.bind_facade(facade)
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -323,7 +362,7 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
         "insert failed"
     )
     svc.bind_facade(facade)
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -367,7 +406,7 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
     room_files.release_references = AsyncMock()
     svc.bind_facade(facade)
     svc.bind_room_files(room_files)
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="",
@@ -435,7 +474,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
         document={},
     )
     svc.bind_facade(facade)
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -593,7 +632,7 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
         side_effect=AssertionError("replay must not create quote")
     )
     publisher = RecordingEventPublisher()
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
 
     response, context = await svc.persist_message_to_room(
         RoomCenterUserMessageRequest(
@@ -709,7 +748,7 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     room_files.commit_references = AsyncMock()
     svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
 
     async def resolve_attachments(_request, user_message):
         user_message.message_content.attachments = [
@@ -788,7 +827,7 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
     svc.bind_facade(facade)
     svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
-    svc.bind_message_event_publisher(publisher)
+    svc.bind_internal_event_publisher(publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="loser-message",

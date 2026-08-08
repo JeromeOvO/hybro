@@ -738,13 +738,7 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RoomRouteReader: {"get_room_by_room_id"},
         protocols.SSEStateReader: {"get_room_user_message_by_message_id"},
-        protocols.EventPublisher: {
-            "emit",
-            "emit_internal",
-            "register_internal_handler",
-            "start",
-            "stop",
-        },
+        protocols.EventPublisher: {"emit"},
         protocols.SSETransport: {
             "connect",
             "disconnect",
@@ -1037,6 +1031,7 @@ def test_protocol_methods_match_design_doc():
             "get",
             "set",
             "delete",
+            "compare_delete",
             "increment",
             "setnx",
             "exists",

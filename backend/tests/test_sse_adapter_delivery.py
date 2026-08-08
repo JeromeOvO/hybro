@@ -286,4 +286,4 @@ async def test_lifecycle_start_stop_uses_delivery_surfaces():
         ("stop", None),
         ("stop_cancellation_watcher", None),
     ]
-    assert fake_publisher.lifecycle_calls == [("start", None), ("stop", None)]
+    assert fake_publisher.lifecycle_calls == []

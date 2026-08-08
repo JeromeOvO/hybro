@@ -140,17 +140,26 @@ class Settings(BaseSettings):
 
     # Delivery / SSE extraction settings
     heartbeat_interval_seconds: float = 30.0
+    sse_connection_queue_maxsize: int = 100
     cancellation_ttl_seconds: int = 3600
     terminal_dedup_ttl_seconds: int = 300
     cancellation_cache_maxsize: int = 10_000
     cancellation_token_cache_maxsize: int = 10_000
     terminal_dedup_cache_maxsize: int = 10_000
-    redis_internal_channel: str = "internal:global"
     redis_dead_letter_channel: str = "delivery:dead_letter"
     dead_letter_memory_maxlen: int = 1000
-    handler_shutdown_timeout_seconds: float = 5.0
+
+    # Internal eventing (separate Redis client and lifecycle)
+    eventing_redis_channel: str = "internal:global"
+    eventing_redis_dead_letter_channel: str = "eventing:dead_letter"
+    eventing_redis_io_timeout_seconds: float = 5.0
+    eventing_handler_queue_maxsize: int = 1000
+    eventing_enqueue_timeout_seconds: float = 1.0
+    eventing_shutdown_timeout_seconds: float = 5.0
+    eventing_dead_letter_memory_maxlen: int = 1000
     redis_subscription_reserved_connections: int = 10
     redis_room_subscription_production_limit: int = 40
+    redis_room_subscription_ready_timeout_seconds: float = 5.0
     terminal_processing_statuses: frozenset[str] = frozenset(
         {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
     )

@@ -30,12 +30,12 @@ class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ):
         self.internal_events.append(event)
 
@@ -68,12 +68,12 @@ def test_constructor_memory_reader_is_typed_as_room_memory_reader():
     assert annotation == "RoomMemoryReader"
 
 
-def test_constructor_requires_event_publisher():
+def test_constructor_requires_internal_event_publisher():
     deps = {
         "tsm": MagicMock(),
         "delivery": MagicMock(),
         "room_runtime": MagicMock(),
-        "event_publisher": None,
+        "internal_event_publisher": None,
         "message_reader": MagicMock(),
         "message_writer": MagicMock(),
         "task_state_store": MagicMock(),
@@ -88,7 +88,7 @@ def test_constructor_requires_event_publisher():
         "response_handler": MagicMock(),
     }
 
-    with pytest.raises(RuntimeError, match="event_publisher"):
+    with pytest.raises(RuntimeError, match="internal_event_publisher"):
         QueueExecutor(**deps)
 
 
@@ -121,7 +121,7 @@ def _make_queue_executor():
     qe.delivery.send_task_submitted = AsyncMock()
     qe.delivery.send_task_update = AsyncMock()
     qe.room_runtime = MagicMock()
-    qe.event_publisher = RecordingEventPublisher()
+    qe.internal_event_publisher = RecordingEventPublisher()
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
@@ -714,8 +714,8 @@ class TestProcessQueue:
         assert result.room_id == "room-1"
         assert result.user_message_id == "umsg-1"
         qe.process_queue.assert_called_once()
-        assert len(qe.event_publisher.internal_events) == 1
-        event = qe.event_publisher.internal_events[0]
+        assert len(qe.internal_event_publisher.internal_events) == 1
+        event = qe.internal_event_publisher.internal_events[0]
         assert isinstance(event, MessageCommitted)
         assert event.room_id == "room-1"
         assert event.message_id == "paused-msg"

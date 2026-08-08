@@ -150,6 +150,8 @@ class RoomCenterPort(Protocol):
 
     async def run_message_preflight_to_room(self, context: Any) -> Any: ...
 
+    def discard_message_preflight(self, context: Any) -> None: ...
+
     async def update_user_message_orchestration_status(
         self,
         message_id: str,
@@ -681,28 +683,34 @@ class ExecutionFacade:
             idempotency_fingerprint=idempotency.fingerprint,
             idempotency_fingerprint_version=idempotency.fingerprint_version,
         )
-        persisted_ack = room_response_to_execution_ack(persisted_response)
         if preflight_context is None:
-            return persisted_ack
+            return room_response_to_execution_ack(persisted_response)
         try:
-            await self._emit_room_preflight_processing_status(request, persisted_ack)
-        except Exception:
-            logger.warning(
-                "room preflight processing status emission failed after persistence",
-                exc_info=True,
+            persisted_ack = room_response_to_execution_ack(persisted_response)
+            try:
+                await self._emit_room_preflight_processing_status(
+                    request, persisted_ack
+                )
+            except Exception:
+                logger.warning(
+                    "room preflight processing status emission failed after persistence",
+                    exc_info=True,
+                )
+            response = await self._room_center.run_message_preflight_to_room(
+                preflight_context
             )
-        response = await self._room_center.run_message_preflight_to_room(
-            preflight_context
-        )
-        ack = room_response_to_execution_ack(response)
-        try:
-            await self._emit_room_preflight_terminal_status(request, ack)
-        except Exception:
-            logger.warning(
-                "room preflight terminal status emission failed after preflight",
-                exc_info=True,
-            )
-        return ack
+            ack = room_response_to_execution_ack(response)
+            try:
+                await self._emit_room_preflight_terminal_status(request, ack)
+            except Exception:
+                logger.warning(
+                    "room preflight terminal status emission failed after preflight",
+                    exc_info=True,
+                )
+            return ack
+        except BaseException:
+            self._room_center.discard_message_preflight(preflight_context)
+            raise
 
     async def start_orchestration(
         self,

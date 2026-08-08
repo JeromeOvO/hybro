@@ -21,12 +21,19 @@ class RuntimeHealthCheck:
         delivery_facade = getattr(request.app.state, "delivery_facade", None)
         if delivery_facade is not None:
             await delivery_facade.refresh_health()
+        eventing_bus = getattr(request.app.state, "eventing_bus", None)
+        if eventing_bus is not None:
+            await eventing_bus.refresh_health()
         redis_runtime = getattr(request.app.state, "redis_runtime", None)
         redis_service = getattr(redis_runtime, "command_client", None)
         relay_streams = getattr(redis_runtime, "relay_streams", None)
         result = self._compute_health_status(
             delivery_pubsub_connected=bool(
                 delivery_facade and delivery_facade.delivery_pubsub_connected
+            ),
+            eventing_connected=(
+                not bool(self._redis_url)
+                or bool(eventing_bus and eventing_bus.is_connected)
             ),
             delivery_kv_connected=bool(
                 delivery_facade and delivery_facade.delivery_kv_connected

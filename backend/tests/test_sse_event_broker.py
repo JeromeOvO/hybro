@@ -85,6 +85,27 @@ class TestHealthStatus:
             is (result["body"]["redis_runtime_connected"])
         )
 
+    def test_health_status_reports_eventing_independently(self):
+        from main import compute_health_status
+
+        result = compute_health_status(
+            delivery_pubsub_connected=True,
+            eventing_connected=False,
+            delivery_kv_connected=True,
+            redis_runtime_connected=True,
+            relay_streams_available=True,
+            redis_url="redis://localhost:6379/0",
+            change_stream_connected=True,
+            agent_search_index_ready=True,
+            memory_search_index_ready=True,
+            search_indexes_ready=True,
+        )
+
+        assert result["body"]["delivery_pubsub_connected"] is True
+        assert result["body"]["eventing_connected"] is False
+        assert result["body"]["status"] == "degraded"
+        assert result["status_code"] == 503
+
     def test_health_status_ok_when_all_expected_services_connected(self):
         from main import compute_health_status
 

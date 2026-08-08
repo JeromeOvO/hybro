@@ -27,16 +27,11 @@ class CancellationWatcher:
             "maxsize": config.cancellation_cache_maxsize,
             "ttl": config.cancellation_ttl_seconds,
         }
-        token_cache_kwargs = {
-            "maxsize": config.cancellation_token_cache_maxsize,
-            "ttl": config.cancellation_ttl_seconds,
-        }
         if timer is not None:
             cache_kwargs["timer"] = timer
-            token_cache_kwargs["timer"] = timer
 
         self.cancelled_messages: TTLCache[str, bool] = TTLCache(**cache_kwargs)
-        self._tokens: TTLCache[str, CancellationToken] = TTLCache(**token_cache_kwargs)
+        self._tokens: dict[str, CancellationToken] = {}
         self.collection = collection
         self.redis_kv = redis_kv
         self.event_bus = event_bus

@@ -240,7 +240,7 @@ class RoomServices:
         self._bound = False
         self._context_memory_manager = None
         self._context_memory_runtime: ContextMemoryRuntime | None = None
-        self._message_event_publisher = None
+        self._internal_event_publisher = None
         self._attachment_metadata_reader = None
         self._attachment_content_reader = None
         self._a2a_inline_file_max_raw_bytes = 5 * 1024 * 1024
@@ -292,8 +292,8 @@ class RoomServices:
         self._context_memory_manager = memory_manager
         self._context_memory_runtime = context_memory_runtime or memory_manager
 
-    def bind_message_event_publisher(self, event_publisher) -> None:
-        self._message_event_publisher = event_publisher
+    def bind_internal_event_publisher(self, internal_event_publisher) -> None:
+        self._internal_event_publisher = internal_event_publisher
 
     def bind_message_parser_service(self, service) -> None:
         self.message_parser_service = service
@@ -2650,6 +2650,25 @@ class RoomServices:
         self,
         context: RoomMessagePreflightContext,
     ) -> RoomCenterUserMessageResponse:
+        try:
+            response = await self._run_message_preflight_to_room(context)
+        except BaseException:
+            self.discard_message_preflight(context)
+            raise
+        if response.preflight_outcome != "ready":
+            self.discard_message_preflight(context)
+        return response
+
+    def discard_message_preflight(
+        self,
+        context: RoomMessagePreflightContext,
+    ) -> None:
+        self.delivery.remove_token(context.user_message.message_id)
+
+    async def _run_message_preflight_to_room(
+        self,
+        context: RoomMessagePreflightContext,
+    ) -> RoomCenterUserMessageResponse:
         request = context.request
         target_group = context.target_group
         user_message = context.user_message
@@ -3104,20 +3123,19 @@ class RoomServices:
                     user_message.message_id,
                     exc_info=True,
                 )
-        event_publisher = getattr(self, "_message_event_publisher", None)
-        if event_publisher is None:
+        internal_event_publisher = getattr(self, "_internal_event_publisher", None)
+        if internal_event_publisher is None:
             raise RuntimeError(
-                "RoomServices.bind_message_event_publisher() not called - startup incomplete"
+                "RoomServices.bind_internal_event_publisher() not called - startup incomplete"
             )
-        # Wait for local handler completion before preflight can enqueue or
-        # process agent messages. Delivery still dead-letters handler failures.
+        # Wait for local projection before preflight can process agent messages.
         await publish_message_committed(
-            event_publisher,
+            internal_event_publisher,
             room_id=user_message.room_id,
             message_id=user_message.message_id,
             message_type="user",
             room_agent_set=room_agent_set or {},
-            wait_for_local_handlers=True,
+            wait_for_handlers=True,
         )
         return persistence
 

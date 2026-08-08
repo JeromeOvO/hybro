@@ -706,7 +706,7 @@ def _executor(
         continuation_store=SimpleNamespace(
             save_continuation_on_user_message=AsyncMock(return_value=True)
         ),
-        event_publisher=SimpleNamespace(emit_internal=AsyncMock()),
+        internal_event_publisher=SimpleNamespace(publish=AsyncMock()),
         rate_limit_service=None,
         agent_dispatcher=SimpleNamespace(
             resolve_agent=AsyncMock(

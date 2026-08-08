@@ -31,7 +31,7 @@ def create_room_message_center(
         "memory_writer": default_store,
         "hitl_reader": default_store,
         "delivery": _defaults.delivery,
-        "event_publisher": _defaults.event_publisher,
+        "internal_event_publisher": _defaults.internal_event_publisher,
         "coordinator": _defaults.coordinator,
         "summary_service": _defaults.summary_service,
         "task_notifier": _defaults.task_notifier,
@@ -62,8 +62,10 @@ def create_room_message_center(
         "cloud_health_check_timeout": 5.0,
     }
     deps.update(kwargs)
-    if deps.get("event_publisher") is None:
-        raise RuntimeError("RoomMessageCenter event_publisher dependency is required")
+    if deps.get("internal_event_publisher") is None:
+        raise RuntimeError(
+            "RoomMessageCenter internal_event_publisher dependency is required"
+        )
     room_message_center = RoomMessageCenter(**deps)
     if guardrails_enabled is not None:
         room_message_center.supervisor_executor.guardrails_enabled = bool(

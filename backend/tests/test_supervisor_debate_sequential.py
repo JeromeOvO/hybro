@@ -47,12 +47,12 @@ class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ):
         self.internal_events.append(event)
 
@@ -315,7 +315,7 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     se.tsm = MagicMock()
     se.agent_dispatcher = MagicMock()
     se.agent_message_processor = MagicMock()
-    se.event_publisher = RecordingEventPublisher()
+    se.internal_event_publisher = RecordingEventPublisher()
     se.rate_limit_service = MagicMock()
     se.debate_rounds = 1
     se.orchestration_run_store = InMemoryOrchestrationRunStore()
@@ -324,7 +324,7 @@ def _make_supervisor_executor() -> SupervisorExecutor:
     return se
 
 
-def test_constructor_requires_event_publisher():
+def test_constructor_requires_internal_event_publisher():
     deps = {
         "supervisor_service": MagicMock(),
         "room_runtime": MagicMock(),
@@ -334,13 +334,13 @@ def test_constructor_requires_event_publisher():
         "message_writer": MagicMock(),
         "task_state_store": MagicMock(),
         "continuation_store": MagicMock(),
-        "event_publisher": None,
+        "internal_event_publisher": None,
         "rate_limit_service": MagicMock(),
         "agent_dispatcher": MagicMock(),
         "agent_message_processor": MagicMock(),
     }
 
-    with pytest.raises(RuntimeError, match="event_publisher"):
+    with pytest.raises(RuntimeError, match="internal_event_publisher"):
         SupervisorExecutor(**deps)
 
 
@@ -717,7 +717,7 @@ class TestSequentialDebateDispatch:
         assert dispatch_calls[1] == ["a2"]
         committed_events = [
             event
-            for event in se.event_publisher.internal_events
+            for event in se.internal_event_publisher.internal_events
             if isinstance(event, MessageCommitted)
         ]
         assert [event.message_id for event in committed_events] == [

@@ -16,6 +16,13 @@ from api_gateway.dependencies import (
 )
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
+from common.eventing import (
+    BoundedInternalEventBus,
+    EventingConfig,
+    EventModelRegistry,
+    InternalEventBus,
+    InternalEventPublisher,
+)
 from common.health_check import RuntimeHealthCheck
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.observability import (
@@ -114,6 +121,7 @@ def check_multi_worker_safety(
     *,
     is_gunicorn: bool,
     delivery_pubsub_connected: bool,
+    eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_service_connected: bool,
     relay_streams_connected: bool,
@@ -136,6 +144,8 @@ def check_multi_worker_safety(
     problems = []
     if not delivery_pubsub_connected:
         problems.append("Delivery Pub/Sub not connected")
+    if not eventing_connected:
+        problems.append("Internal eventing Pub/Sub not connected")
     if not delivery_kv_connected:
         problems.append("Delivery KV not connected")
     if not redis_service_connected:
@@ -153,6 +163,31 @@ def check_multi_worker_safety(
             "or use 'uvicorn main:app' for single-process mode."
         )
     logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
+
+
+class RelayReadyHubInternalHandler:
+    """Queues Hub events until the relay router is fully constructed."""
+
+    def __init__(self) -> None:
+        self._ready = asyncio.Event()
+        self._router: Any | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready.is_set()
+
+    def bind(self, router: Any) -> None:
+        if router is None:
+            raise ValueError("Hub internal response router is required")
+        self._router = router
+        self._ready.set()
+
+    async def __call__(self, event: Any) -> None:
+        await self._ready.wait()
+        router = self._router
+        if router is None:
+            raise RuntimeError("Hub internal response router is not bound")
+        await router.dispatch_hub_internal_response(event)
 
 
 @dataclass
@@ -254,6 +289,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _agent_deps = None
     _delivery_facade = None
     _delivery_config = None
+    _eventing_bus = None
+    _eventing_deps = None
+    _relay_ready_handler = RelayReadyHubInternalHandler()
     _execution_deps = None
     _mongo_dal = None
     _local_agent_service = None
@@ -397,6 +435,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _delivery_deps = create_delivery_deps(_delivery_facade)
             app.state.delivery_facade = _delivery_facade
             app.state.delivery_deps = _delivery_deps
+
+            _eventing_bus = create_internal_event_bus(
+                redis_url=runtime.settings.redis_url,
+                instance_id=_delivery_facade.instance_id,
+                app_settings=runtime.settings,
+            )
+            register_internal_event_models(_eventing_bus.registry)
+            _eventing_deps = create_eventing_deps(_eventing_bus)
+            app.state.eventing_bus = _eventing_bus
+            app.state.eventing_deps = _eventing_deps
+            app.state.eventing_connected = False
 
             from a2a_adapter.runtime_service import (
                 A2ARuntimeConfig,
@@ -1071,7 +1120,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 remote_task_reader=remote_task_reader,
             )
             room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_message_event_publisher(_delivery_deps.event_publisher)
+            room_runtime.bind_internal_event_publisher(
+                _eventing_deps.internal_event_publisher
+            )
             room_runtime.bind_room_files(file_storage)
             room_runtime.bind_attachment_metadata_reader(file_storage)
             room_runtime.bind_attachment_content_reader(file_storage)
@@ -1148,7 +1199,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 memory_writer=execution_memory_writer,
                 hitl_reader=execution_hitl_reader,
                 delivery=execution_delivery,
-                event_publisher=_delivery_deps.event_publisher,
+                internal_event_publisher=_eventing_deps.internal_event_publisher,
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
                 task_notifier=task_notifier,
@@ -1259,9 +1310,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_deps = _execution_deps
 
             register_context_memory_event_handlers(
-                event_publisher=_delivery_deps.event_publisher,
+                event_bus=_eventing_deps.event_bus,
                 context_memory_facade=context_memory_facade,
             )
+
+            _eventing_deps.event_bus.register_handler(
+                "hub_agent_response_internal",
+                _relay_ready_handler,
+            )
+            await _eventing_deps.event_bus.start()
+            await _eventing_deps.event_bus.refresh_health()
+            app.state.eventing_connected = _eventing_deps.event_bus.is_connected
             room_runtime.bind_context_memory(
                 _context_memory_deps.memory_manager,
                 _context_memory_deps.context_memory_runtime,
@@ -1316,6 +1375,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             is_gunicorn=runtime.settings.is_gunicorn,
             delivery_pubsub_connected=bool(
                 _delivery_facade and _delivery_facade.delivery_pubsub_connected
+            ),
+            eventing_connected=(
+                not bool(runtime.settings.redis_url)
+                or bool(_eventing_bus and _eventing_bus.is_connected)
             ),
             delivery_kv_connected=bool(
                 _delivery_facade and _delivery_facade.delivery_kv_connected
@@ -1497,7 +1560,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             db=relay_runtime_store,
             room_message_center=_rmc,
             hitl_coordinator=hitl_manager,
-            event_publisher=_delivery_deps.event_publisher if _delivery_deps else None,
+            internal_event_publisher=(
+                _eventing_deps.internal_event_publisher if _eventing_deps else None
+            ),
             worker_id=(
                 _delivery_facade.instance_id if _delivery_facade is not None else None
             ),
@@ -1509,14 +1574,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             config=config_from_settings(settings),
         )
         app.state.relay_service = _relay_svc
-        if _delivery_deps is not None:
-            router = _relay_svc.internal_response_dispatcher
-            if router is None:
-                raise RuntimeError("Hub internal response router is not bound")
-            _delivery_deps.event_publisher.register_internal_handler(
-                "hub_agent_response_internal",
-                router.dispatch_hub_internal_response,
-            )
+        router = _relay_svc.internal_response_dispatcher
+        if router is None:
+            raise RuntimeError("Hub internal response router is not bound")
+        _relay_ready_handler.bind(router)
         _relay_svc.set_leader_election(_leader)
         if _agent_deps is not None:
             hub_liveness_reader = RelayHubLivenessReader(_relay_svc)
@@ -1579,6 +1640,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # ── Startup failure: tear down only what was opened ──
         # Do not call set_draining() on startup failure; normal shutdown owns
         # the drain window after the adapter has been successfully bound.
+        if _eventing_bus is not None:
+            await _eventing_bus.stop()
+        app.state.eventing_bus = None
+        app.state.eventing_connected = False
         if _relay_svc:
             await _relay_svc.stop()
         if _bg_started:
@@ -1613,8 +1678,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             relay_service as _relay_svc_shutdown,
         )
 
-        if _relay_svc_shutdown:
-            await _relay_svc_shutdown.stop()
+        # Keep the relay router alive until internal-event ingress has stopped
+        # and all accepted handler work has drained.
 
         # Stop background services
         await stale_task_checker.stop()
@@ -1648,6 +1713,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             else runtime.settings.shutdown_drain_seconds
         )
 
+        if _eventing_bus is not None:
+            await _eventing_bus.stop()
+        app.state.eventing_bus = None
+        app.state.eventing_connected = False
+        if _relay_svc_shutdown:
+            await _relay_svc_shutdown.stop()
         try:
             if _delivery_facade is not None:
                 await _delivery_facade.stop()
@@ -1703,6 +1774,12 @@ class ContextMemoryDeps:
 class DeliveryDeps:
     event_publisher: EventPublisher
     sse_transport: SSETransport
+
+
+@dataclass(frozen=True)
+class EventingDeps:
+    event_bus: InternalEventBus
+    internal_event_publisher: InternalEventPublisher
 
 
 @dataclass(frozen=True)
@@ -2733,6 +2810,60 @@ def create_delivery_redis_clients(
     )
 
 
+def create_internal_event_bus(
+    *,
+    redis_url: str,
+    instance_id: str,
+    app_settings: Any = settings,
+) -> BoundedInternalEventBus:
+    transport = None
+    if redis_url:
+        from dal.redis.internal_eventing import RedisInternalEventTransport
+        from dal.redis.pubsub import RedisPubSubImpl
+
+        transport = RedisInternalEventTransport(
+            redis_pubsub=RedisPubSubImpl(
+                url=redis_url,
+                max_connections=app_settings.redis_max_connections,
+            ),
+            channel=app_settings.eventing_redis_channel,
+            dead_letter_channel=app_settings.eventing_redis_dead_letter_channel,
+            reconnect_delay=app_settings.redis_reconnect_delay,
+            reconnect_max_delay=app_settings.redis_reconnect_max_delay,
+            subscription_ready_timeout=(
+                app_settings.redis_room_subscription_ready_timeout_seconds
+            ),
+            io_timeout=app_settings.eventing_redis_io_timeout_seconds,
+        )
+    return BoundedInternalEventBus(
+        registry=EventModelRegistry(),
+        instance_id=instance_id,
+        now=utcnow,
+        transport=transport,
+        config=EventingConfig(
+            handler_queue_maxsize=app_settings.eventing_handler_queue_maxsize,
+            enqueue_timeout_seconds=app_settings.eventing_enqueue_timeout_seconds,
+            shutdown_timeout_seconds=app_settings.eventing_shutdown_timeout_seconds,
+            dead_letter_memory_maxlen=(app_settings.eventing_dead_letter_memory_maxlen),
+        ),
+    )
+
+
+def register_internal_event_models(registry: EventModelRegistry) -> None:
+    from common.dto import HubAgentResponseInternal, MessageCommitted, RunStateChanged
+
+    registry.register("message_committed", MessageCommitted)
+    registry.register("run_state_changed", RunStateChanged)
+    registry.register("hub_agent_response_internal", HubAgentResponseInternal)
+
+
+def create_eventing_deps(event_bus: InternalEventBus) -> EventingDeps:
+    return EventingDeps(
+        event_bus=event_bus,
+        internal_event_publisher=event_bus,
+    )
+
+
 def create_delivery_cancellation_collection(*, mongo: MongoDAL) -> MongoCollection:
     return mongo.collection("cancelled_messages")
 
@@ -2796,12 +2927,10 @@ def create_delivery_facade(
         config=resolved_config,
         now=resolved_now,
         instance_id=resolved_instance_id,
-        task_runner=resolved_task_runner,
         metrics=metrics,
     )
     event_bus.set_sse_callback(sse_transport.broadcast_frame_to_room)
     event_bus.set_cancellation_callback(cancellation_watcher.handle_remote_cancellation)
-    event_bus.set_internal_callback(event_publisher.handle_remote_internal_event)
 
     return DeliveryFacade(
         event_publisher=event_publisher,
@@ -2990,7 +3119,7 @@ def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps
 
 def register_context_memory_event_handlers(
     *,
-    event_publisher: EventPublisher,
+    event_bus: InternalEventBus,
     context_memory_facade: ContextMemoryFacade,
 ):
     from context_memory.events import ContextMemoryEventHandler
@@ -2999,7 +3128,7 @@ def register_context_memory_event_handlers(
         projector=context_memory_facade,
         project_for_event=context_memory_facade.project_message_for_event,
     )
-    event_publisher.register_internal_handler(
+    event_bus.register_handler(
         "message_committed",
         handler.handle_message_committed,
     )

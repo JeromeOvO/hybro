@@ -11,9 +11,10 @@ from uuid import uuid4
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.dto import RoomMessageSummary
+from common.eventing import InternalEventPublisher
 from common.message_commit_events import publish_message_committed
 from common.observability import traced_create_task
-from common.protocols import ContextMemoryRuntime, EventPublisher, RoomDistributedLock
+from common.protocols import ContextMemoryRuntime, RoomDistributedLock
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
@@ -91,7 +92,7 @@ room_supervisor_service = None
 orchestration_run_store = InMemoryOrchestrationRunStore()
 orchestration_planner = None
 delivery = None
-event_publisher = None
+internal_event_publisher = None
 remote_task_reader = None
 context_memory_runtime = None
 context_compaction = None
@@ -180,11 +181,11 @@ class RoomMessageCenter:
         orchestration_resource_provider=None,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
-        event_publisher: EventPublisher | None = None,
+        internal_event_publisher: InternalEventPublisher | None = None,
     ):
-        if event_publisher is None:
+        if internal_event_publisher is None:
             raise RuntimeError(
-                "RoomMessageCenter event_publisher dependency is required"
+                "RoomMessageCenter internal_event_publisher dependency is required"
             )
         self.room_runtime = room_runtime
         self.message_reader = message_reader
@@ -199,7 +200,7 @@ class RoomMessageCenter:
         self.memory_writer = memory_writer
         self.hitl_reader = hitl_reader
         self.delivery = delivery
-        self.event_publisher = event_publisher
+        self.internal_event_publisher = internal_event_publisher
         self.coordinator = coordinator
         self.summary_service = summary_service
         self.task_notifications = task_notifications
@@ -293,7 +294,7 @@ class RoomMessageCenter:
             tsm=self.tsm,
             delivery=self.delivery,
             room_runtime=self.room_runtime,
-            event_publisher=event_publisher,
+            internal_event_publisher=internal_event_publisher,
             message_reader=self.message_reader,
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
@@ -317,7 +318,7 @@ class RoomMessageCenter:
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
             continuation_store=self.continuation_store,
-            event_publisher=event_publisher,
+            internal_event_publisher=internal_event_publisher,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -370,10 +371,10 @@ class RoomMessageCenter:
     ) -> None:
         if not message_id:
             return
-        if self.event_publisher is None:
-            raise RuntimeError("RoomMessageCenter event_publisher not bound")
+        if self.internal_event_publisher is None:
+            raise RuntimeError("RoomMessageCenter internal_event_publisher not bound")
         await publish_message_committed(
-            self.event_publisher,
+            self.internal_event_publisher,
             room_id=room_id,
             message_id=message_id,
             message_type="agent",

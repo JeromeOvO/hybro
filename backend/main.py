@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
 def compute_health_status(
     *,
     delivery_pubsub_connected: bool,
+    eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_runtime_connected: bool,
     relay_streams_available: bool = False,
@@ -64,6 +65,7 @@ def compute_health_status(
     redis_expected = bool(redis_url)
     redis_degraded = redis_expected and not (
         delivery_pubsub_connected
+        and eventing_connected
         and delivery_kv_connected
         and redis_runtime_connected
         and relay_streams_available
@@ -74,6 +76,7 @@ def compute_health_status(
             "status": "degraded" if degraded else "ok",
             "change_stream_connected": change_stream_connected,
             "delivery_pubsub_connected": delivery_pubsub_connected,
+            "eventing_connected": eventing_connected,
             "delivery_kv_connected": delivery_kv_connected,
             "redis_runtime_connected": redis_runtime_connected,
             "relay_streams_available": relay_streams_available,

@@ -7,6 +7,13 @@ import redis.asyncio as aioredis
 from common.config import settings
 from common.errors import TransientError
 
+_COMPARE_DELETE_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+""".strip()
+
 
 class RedisKVImpl:
     """Redis key-value DAL backed directly by redis.asyncio."""
@@ -73,6 +80,17 @@ class RedisKVImpl:
             return bool(await client.delete(key))
         except Exception as exc:
             raise self._transient("delete", exc) from exc
+
+    async def compare_delete(self, key: str, expected_value: str) -> bool:
+        client = self._ensure_client()
+        if client is None:
+            return False
+        try:
+            return bool(
+                await client.eval(_COMPARE_DELETE_SCRIPT, 1, key, expected_value)
+            )
+        except Exception as exc:
+            raise self._transient("compare_delete", exc) from exc
 
     async def increment(self, key: str, amount: int = 1) -> int:
         client = self._ensure_client()

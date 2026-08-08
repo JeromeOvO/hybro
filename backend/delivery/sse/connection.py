@@ -12,12 +12,13 @@ class SSEConnection:
         room_id: str,
         connection_id: str,
         heartbeat_interval: float,
+        queue_maxsize: int = 100,
         now: Callable[[], datetime],
     ) -> None:
         self.room_id = room_id
         self.connection_id = connection_id
         self.heartbeat_interval = heartbeat_interval
-        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=queue_maxsize)
         self.connected_at = now()
         self.is_active = True
         self._now = now
@@ -26,9 +27,9 @@ class SSEConnection:
         if not self.is_active:
             return False
         try:
-            await self.queue.put(frame)
-        except Exception:
-            self.is_active = False
+            self.queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            self.close()
             return False
         return True
 

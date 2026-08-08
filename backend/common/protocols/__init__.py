@@ -36,6 +36,7 @@ from common.protocols.dal_protocols import (
     RedisStreams,
 )
 from common.protocols.delivery_protocols import (
+    DeliveryEventPublisher,
     EventPublisher,
     SSEConnectionLike,
     SSERouteTransport,
@@ -164,6 +165,7 @@ __all__ = [
     "ContextAssembler",
     "ContentStorageRepository",
     "DistributedLock",
+    "DeliveryEventPublisher",
     "EventPublisher",
     "ExecutionEngine",
     "FileStorage",

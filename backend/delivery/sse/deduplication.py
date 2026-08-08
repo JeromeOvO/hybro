@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from uuid import uuid4
 
 from cachetools import TTLCache
 
@@ -13,16 +14,18 @@ class TerminalStatusDeduplicator:
         config: DeliveryConfig,
         redis_kv: RedisKV | None = None,
         timer: Callable[[], float] | None = None,
+        claim_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.config = config
         self.redis_kv = redis_kv
+        self._claim_id_factory = claim_id_factory or (lambda: uuid4().hex)
         cache_kwargs = {
             "maxsize": config.terminal_dedup_cache_maxsize,
             "ttl": config.terminal_dedup_ttl_seconds,
         }
         if timer is not None:
             cache_kwargs["timer"] = timer
-        self.cache: TTLCache[str, str] = TTLCache(**cache_kwargs)
+        self.cache: TTLCache[str, tuple[str, str]] = TTLCache(**cache_kwargs)
 
     async def should_deliver(
         self,
@@ -42,22 +45,22 @@ class TerminalStatusDeduplicator:
         if dedup_key in self.cache:
             return False
 
+        claim_id = self._claim_id_factory()
         if self.redis_kv is not None:
             redis_key = f"{self.config.redis_terminal_key_prefix}{dedup_key}"
             try:
                 was_first = await self.redis_kv.setnx(
                     redis_key,
-                    normalized_status,
+                    claim_id,
                     ttl=self.config.terminal_dedup_ttl_seconds,
                 )
             except Exception:
-                self.cache[dedup_key] = normalized_status
+                self.cache[dedup_key] = (normalized_status, claim_id)
                 return True
             if not was_first:
-                self.cache[dedup_key] = normalized_status
                 return False
 
-        self.cache[dedup_key] = normalized_status
+        self.cache[dedup_key] = (normalized_status, claim_id)
         return True
 
     async def release(
@@ -77,7 +80,8 @@ class TerminalStatusDeduplicator:
             return
 
         dedup_key = f"{room_id}:{message_id}"
-        if self.cache.get(dedup_key) != normalized_status:
+        claim = self.cache.get(dedup_key)
+        if claim is None or claim[0] != normalized_status:
             return
         self.cache.pop(dedup_key, None)
 
@@ -85,8 +89,7 @@ class TerminalStatusDeduplicator:
             return
         redis_key = f"{self.config.redis_terminal_key_prefix}{dedup_key}"
         try:
-            if await self.redis_kv.get(redis_key) == normalized_status:
-                await self.redis_kv.delete(redis_key)
+            await self.redis_kv.compare_delete(redis_key, claim[1])
         except Exception:
             return
 

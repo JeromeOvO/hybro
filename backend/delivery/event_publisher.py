@@ -1,13 +1,9 @@
-import asyncio
-import inspect
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from pydantic import TypeAdapter
-
-from common.dto import DeliveryEvent, InternalEvent, ProcessingStatusEvent
+from common.dto import DeliveryEvent, ProcessingStatusEvent
 from common.observability import (
     MetricsCollector,
     NoopMetricsCollector,
@@ -18,7 +14,6 @@ from delivery.config import DeliveryConfig
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.translator import to_sse_frame
-from delivery.types import TaskRunner
 
 
 class EventPublisherImpl:
@@ -31,7 +26,6 @@ class EventPublisherImpl:
         config: DeliveryConfig,
         now: Callable[[], datetime],
         instance_id: str,
-        task_runner: TaskRunner,
         metrics: MetricsCollector | None = None,
     ) -> None:
         self.sse_transport = sse_transport
@@ -40,15 +34,10 @@ class EventPublisherImpl:
         self.config = config
         self._now = now
         self.instance_id = instance_id
-        self._task_runner = task_runner
         self._metrics = metrics or NoopMetricsCollector()
-        self._handlers: dict[str, list[Callable[[Any], Any]]] = defaultdict(list)
-        self._handler_tasks: set[asyncio.Task] = set()
         self.dead_letters: deque[dict[str, Any]] = deque(
             maxlen=config.dead_letter_memory_maxlen
         )
-        self._internal_event_adapter = TypeAdapter(InternalEvent)
-        self._stopping = False
 
     async def emit(self, event: DeliveryEvent) -> bool:
         terminal_reserved = False
@@ -84,53 +73,6 @@ class EventPublisherImpl:
         if not delivered:
             await self._release_typed_delivery(event)
         return delivered
-
-    async def emit_internal(
-        self,
-        event: InternalEvent,
-        *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
-    ) -> None:
-        handler_tasks = self._schedule_internal_handlers(event)
-        if broadcast:
-            try:
-                await self.event_bus.publish_internal(event)
-            except Exception as exc:
-                await self._dead_letter("internal_fanout", event, exc)
-        if wait_for_local_handlers and handler_tasks:
-            await asyncio.gather(*handler_tasks, return_exceptions=True)
-
-    def register_internal_handler(self, event_type: str, handler: Callable) -> None:
-        self._handlers[event_type].append(handler)
-
-    async def start(self) -> None:
-        self._stopping = False
-
-    async def stop(self) -> None:
-        self._stopping = True
-        if self._handler_tasks:
-            _, pending = await asyncio.wait(
-                self._handler_tasks,
-                timeout=self.config.handler_shutdown_timeout_seconds,
-            )
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-    async def handle_remote_internal_event(self, envelope: dict[str, Any]) -> None:
-        if envelope.get("origin") == self.instance_id:
-            return
-        try:
-            event = self._internal_event_adapter.validate_python(envelope.get("event"))
-        except Exception as exc:
-            await self._dead_letter("internal_deserialize", envelope, exc)
-            return
-        if envelope.get("event_type") != event.event_type:
-            return
-        with trace_id_context(envelope.get("trace_id")):
-            self._schedule_internal_handlers(event)
 
     async def _deliver_frontend(
         self,
@@ -186,28 +128,6 @@ class EventPublisherImpl:
             isinstance(event, ProcessingStatusEvent)
             and event.status in self.config.terminal_processing_statuses
         )
-
-    def _schedule_internal_handlers(self, event: InternalEvent) -> list[asyncio.Task]:
-        if self._stopping:
-            return []
-        tasks: list[asyncio.Task] = []
-        for handler in self._handlers.get(event.event_type, []):
-            task = self._task_runner(
-                self._run_handler(handler, event),
-                name=f"delivery-handler-{event.event_type}",
-            )
-            self._handler_tasks.add(task)
-            task.add_done_callback(self._handler_tasks.discard)
-            tasks.append(task)
-        return tasks
-
-    async def _run_handler(self, handler: Callable, event: InternalEvent) -> None:
-        try:
-            result = handler(event)
-            if inspect.isawaitable(result):
-                await result
-        except Exception as exc:
-            await self._dead_letter("internal_handler", event, exc)
 
     async def _dead_letter(self, stage: str, payload: Any, exc: Exception) -> None:
         envelope = {
