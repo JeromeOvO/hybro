@@ -323,6 +323,20 @@ def _normalize_part_root(root: dict) -> dict | None:
 
     if kind == "file":
         if "file" not in root or root.get("file") is None:
+            metadata = root.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("file_id"):
+                file_id = metadata["file_id"]
+                file_info: dict[str, Any] = {
+                    "uri": f"/api/v1/files/{file_id}/content",
+                }
+                name = metadata.get("file_name") or metadata.get("name")
+                if name:
+                    file_info["name"] = name
+                mime_type = metadata.get("mime_type") or metadata.get("mimeType")
+                if mime_type:
+                    file_info["mimeType"] = mime_type
+                out = {"kind": "file", "file": file_info, "metadata": metadata}
+                return out
             return None
         return root
 
@@ -330,6 +344,20 @@ def _normalize_part_root(root: dict) -> dict | None:
         if "data" not in root or root.get("data") is None:
             return None
         return root
+
+    if "metadata" in root and isinstance(root["metadata"], dict) and root["metadata"].get("file_id"):
+        meta = root["metadata"]
+        file_id = meta["file_id"]
+        file_info = {
+            "uri": f"/api/v1/files/{file_id}/content",
+        }
+        name = meta.get("file_name") or meta.get("name")
+        if name:
+            file_info["name"] = name
+        mime_type = meta.get("mime_type") or meta.get("mimeType")
+        if mime_type:
+            file_info["mimeType"] = mime_type
+        return {"kind": "file", "file": file_info, "metadata": meta}
 
     if "text" in root and root.get("text") is not None:
         out: dict[str, Any] = {"kind": "text", "text": root["text"]}

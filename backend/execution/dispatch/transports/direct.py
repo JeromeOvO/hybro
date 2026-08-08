@@ -1774,6 +1774,7 @@ class DirectTransport(AgentTransport):
                     message_id=message_id,
                     webhook_token=task_info["webhook_token"],
                     context_id=task_info["context_id"],
+                    room_id=current_message.room_id,
                     agent_id=current_message.agent_id,
                 )
             else:

@@ -195,4 +195,28 @@ describe('preprocessConversationMarkdown', () => {
 
     expect(preprocessConversationMarkdown(input, { streaming: true })).toBe(input)
   })
+
+  it('strips pseudo-protocol and unrenderable local image links', () => {
+    const input = [
+      'Here is the story.',
+      '',
+      '![Quantum Carnival](attachment://quantum_carnival_image.png)',
+      '![Test File](file://path/to/image.png)',
+      '![Local Image](carnival.png)',
+      '',
+      'End of story.',
+    ].join('\n')
+
+    const out = preprocessConversationMarkdown(input)
+    expect(out).not.toContain('attachment://')
+    expect(out).not.toContain('file://')
+    expect(out).not.toContain('carnival.png')
+    expect(out).toContain('Here is the story.')
+    expect(out).toContain('End of story.')
+  })
+
+  it('preserves valid web image links', () => {
+    const input = '![Web Image](https://example.com/image.png)'
+    expect(preprocessConversationMarkdown(input)).toBe(input)
+  })
 })

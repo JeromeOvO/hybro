@@ -25,17 +25,26 @@ export interface SynthesisContentBodyProps {
   content: string
   isStreaming: boolean
   artifacts: ArtifactData[] | undefined
+  turnArtifacts?: ArtifactData[] | undefined
   messageId?: string
   agentName?: string
 }
 
 /** Presentational synthesis body — no store subscription. */
-export function SynthesisContentBody({ content, isStreaming, artifacts, messageId, agentName }: SynthesisContentBodyProps) {
+export function SynthesisContentBody({
+  content,
+  isStreaming,
+  artifacts,
+  turnArtifacts,
+  messageId,
+  agentName,
+}: SynthesisContentBodyProps) {
   if (!content.trim() && isStreaming) {
     return <SynthesisStreamingPlaceholder />
   }
 
-  const nonTextArtifacts = artifacts?.filter(
+  const effectiveArtifacts = (artifacts && artifacts.length > 0) ? artifacts : turnArtifacts
+  const nonTextArtifacts = effectiveArtifacts?.filter(
     a => !a.parts.every(p => p.kind === 'text'),
   )
 
@@ -53,16 +62,18 @@ export function SynthesisContentBody({ content, isStreaming, artifacts, messageI
 
 interface SynthesisContentProps {
   summaryResult: AgentResultViewModel
+  turnArtifacts?: ArtifactData[]
 }
 
 /** Subscribes to stream buffer for summaryResult; use SynthesisContentBody when parent already has stream. */
-export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
+export function SynthesisContent({ summaryResult, turnArtifacts }: SynthesisContentProps) {
   const stream = useResultStreamDisplay(summaryResult)
   return (
     <SynthesisContentBody
       content={stream.content}
       isStreaming={stream.isStreaming}
       artifacts={stream.artifacts}
+      turnArtifacts={turnArtifacts}
       messageId={summaryResult.messageId}
       agentName={summaryResult.agentName}
     />
@@ -72,10 +83,12 @@ export function SynthesisContent({ summaryResult }: SynthesisContentProps) {
 /** Render synthesis body from a precomputed stream overlay (no extra subscription). */
 export function SynthesisContentFromStream({
   stream,
+  turnArtifacts,
   messageId,
   agentName,
 }: {
   stream: ResultStreamDisplay
+  turnArtifacts?: ArtifactData[]
   messageId?: string
   agentName?: string
 }) {
@@ -84,6 +97,7 @@ export function SynthesisContentFromStream({
       content={stream.content}
       isStreaming={stream.isStreaming}
       artifacts={stream.artifacts}
+      turnArtifacts={turnArtifacts}
       messageId={messageId}
       agentName={agentName}
     />
