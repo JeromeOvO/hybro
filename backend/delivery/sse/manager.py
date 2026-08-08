@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any
 
 from common.observability import MetricsCollector, NoopMetricsCollector
-from common.utils.cancellation import CancellationToken
 from delivery.config import DeliveryConfig
 from delivery.sse.connection import SSEConnection
 from delivery.types import TaskRunner
@@ -14,7 +13,6 @@ class SSETransportImpl:
     def __init__(
         self,
         *,
-        cancellation_watcher: Any,
         event_bus: Any,
         config: DeliveryConfig,
         now: Callable[[], datetime],
@@ -23,7 +21,6 @@ class SSETransportImpl:
         task_runner: TaskRunner,
         metrics: MetricsCollector | None = None,
     ) -> None:
-        self.cancellation_watcher = cancellation_watcher
         self.event_bus = event_bus
         self.config = config
         self._now = now
@@ -113,41 +110,8 @@ class SSETransportImpl:
             "connections": list(room_connections),
         }
 
-    def is_cancelled(self, message_id: str) -> bool:
-        return self.cancellation_watcher.is_cancelled(message_id)
-
-    async def mark_cancelled(self, message_id: str) -> None:
-        await self.cancellation_watcher.mark_cancelled(message_id)
-
-    def cancel_message(self, message_id: str) -> None:
-        self.cancellation_watcher.cancel_message(message_id)
-
-    async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self.cancellation_watcher.mark_cancelled(message_id)
-
-    async def check_cancelled(self, message_id: str) -> bool:
-        return await self.cancellation_watcher.check_cancelled(message_id)
-
-    def clear_cancellation(self, message_id: str) -> None:
-        self.cancellation_watcher.clear_cancellation(message_id)
-
-    def create_token(self, message_id: str) -> CancellationToken:
-        return self.cancellation_watcher.create_token(message_id)
-
-    def get_token(self, message_id: str) -> CancellationToken | None:
-        return self.cancellation_watcher.get_token(message_id)
-
-    def remove_token(self, message_id: str) -> None:
-        self.cancellation_watcher.remove_token(message_id)
-
     def set_draining(self, draining: bool) -> None:
         self._draining = draining
-
-    async def start_cancellation_watcher(self) -> None:
-        await self.cancellation_watcher.start()
-
-    async def stop_cancellation_watcher(self) -> None:
-        await self.cancellation_watcher.stop()
 
     async def _admit_connection(
         self,

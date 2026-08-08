@@ -1,12 +1,11 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from common.errors import TransientError
-from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.sse.manager import SSETransportImpl
@@ -165,106 +164,6 @@ async def test_incoming_legacy_sse_envelope_is_reconstructed():
 
 
 @pytest.mark.asyncio
-async def test_publish_and_handle_cancellation_use_configured_channel():
-    redis = FakeRedisPubSub()
-    config = DeliveryConfig(redis_cancel_channel="custom:cancel")
-    bus = make_bus(redis=redis, config=config)
-    cancelled: list[str] = []
-    bus.set_cancellation_callback(lambda message_id: cancelled.append(message_id))
-
-    await bus.publish_cancellation("msg-1")
-    await bus.handle_cancellation_message(
-        json.dumps(
-            {"kind": "cancellation", "origin": "worker-2", "message_id": "msg-2"}
-        )
-    )
-
-    channel, envelope = decode_publish(redis)
-    assert channel == "custom:cancel"
-    assert envelope["kind"] == "cancellation"
-    assert envelope["origin"] == "worker-1"
-    assert envelope["message_id"] == "msg-1"
-    assert envelope["trace_id"] is None
-    assert cancelled == ["msg-2"]
-
-
-@pytest.mark.asyncio
-async def test_cross_instance_callbacks_replace_ambient_trace_context():
-    bus = make_bus(redis=FakeRedisPubSub())
-    observed: list[tuple[str, str | None]] = []
-
-    async def cancellation_callback(message_id: str) -> None:
-        observed.append((message_id, get_current_trace_id()))
-
-    bus.set_cancellation_callback(cancellation_callback)
-
-    with trace_id_context("ambient-trace"):
-        await bus.handle_cancellation_message(
-            json.dumps(
-                {
-                    "kind": "cancellation",
-                    "origin": "worker-2",
-                    "message_id": "msg-1",
-                }
-            )
-        )
-        assert get_current_trace_id() == "ambient-trace"
-
-    assert observed == [("msg-1", None)]
-
-
-@pytest.mark.asyncio
-async def test_cancellation_envelope_propagates_trace_context():
-    redis = FakeRedisPubSub()
-    bus = make_bus(redis=redis)
-    observed: list[str | None] = []
-    bus.set_cancellation_callback(
-        lambda _message_id: observed.append(get_current_trace_id())
-    )
-
-    with trace_id_context("trace-123"):
-        await bus.publish_cancellation("msg-1")
-
-    _, envelope = decode_publish(redis)
-    await bus.handle_cancellation_message(
-        json.dumps(
-            {
-                **envelope,
-                "origin": "worker-2",
-            }
-        )
-    )
-
-    assert envelope["trace_id"] == "trace-123"
-    assert observed == ["trace-123"]
-
-
-@pytest.mark.asyncio
-async def test_cross_instance_callbacks_reject_malformed_trace_context():
-    bus = make_bus(redis=FakeRedisPubSub())
-    observed: list[str | None] = []
-    bus.set_cancellation_callback(
-        lambda _message_id: observed.append(get_current_trace_id())
-    )
-
-    with trace_id_context("ambient-trace"):
-        for trace_id in ({"PRIVATE_TRACE": "payload"}, "x" * 129):
-            await bus.handle_cancellation_message(
-                json.dumps(
-                    {
-                        "kind": "cancellation",
-                        "origin": "worker-2",
-                        "message_id": "msg-1",
-                        "trace_id": trace_id,
-                    }
-                )
-            )
-        assert get_current_trace_id() == "ambient-trace"
-
-    assert observed == [None, None]
-
-
-@pytest.mark.asyncio
 async def test_publish_dead_letter_uses_configured_channel():
     redis = FakeRedisPubSub()
     config = DeliveryConfig(redis_dead_letter_channel="custom:dead")
@@ -293,7 +192,6 @@ async def test_no_redis_mode_is_noop():
 
     await bus.start()
     await bus.publish_sse("room-1", {"type": "update"})
-    await bus.publish_cancellation("msg-1")
     await bus.publish_dead_letter({"x": 1})
     await bus.subscribe_room("room-1")
     await bus.unsubscribe_room("room-1")
@@ -491,7 +389,6 @@ async def test_redis_callback_overflow_tracks_and_finishes_listener_cleanup():
     config = DeliveryConfig(sse_connection_queue_maxsize=1)
     bus = make_bus(redis=redis, config=config)
     transport = SSETransportImpl(
-        cancellation_watcher=MagicMock(),
         event_bus=bus,
         config=config,
         now=fixed_now,
@@ -538,7 +435,6 @@ async def test_cancelled_first_admission_cleans_room_subscription_and_capacity()
     )
     bus = make_bus(redis=redis, config=config)
     transport = SSETransportImpl(
-        cancellation_watcher=MagicMock(),
         event_bus=bus,
         config=config,
         now=fixed_now,
@@ -636,4 +532,3 @@ async def test_malformed_messages_are_dropped_without_raising():
     bus = make_bus(redis=FakeRedisPubSub())
 
     await bus.handle_sse_message("{not json")
-    await bus.handle_cancellation_message(json.dumps({"kind": "wrong"}))

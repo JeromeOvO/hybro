@@ -257,19 +257,6 @@ async def test_successful_retry_after_failed_handoff_logs_success(caplog):
 
 
 @pytest.mark.asyncio
-async def test_cancellation_helpers_delegate_to_transport():
-    facade = _bind()
-
-    token = facade.create_token("msg-1")
-    facade.cancel_message("msg-1")
-    assert facade.is_cancelled("msg-1") is True
-    assert token.is_cancelled is True
-    assert await facade.check_cancelled("msg-1") is True
-    facade.clear_cancellation("msg-1")
-    assert facade.is_cancelled("msg-1") is False
-
-
-@pytest.mark.asyncio
 async def test_lifecycle_start_stop_uses_delivery_surfaces():
     compat = FakeDeliveryCompat()
     fake_publisher = FakeEventPublisher()
@@ -279,11 +266,9 @@ async def test_lifecycle_start_stop_uses_delivery_surfaces():
     await facade.stop()
 
     assert compat.lifecycle_calls == [
-        ("start_cancellation_watcher", None),
         ("start", None),
         ("refresh_health", None),
         ("close_all_connections", None),
         ("stop", None),
-        ("stop_cancellation_watcher", None),
     ]
     assert fake_publisher.lifecycle_calls == []

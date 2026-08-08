@@ -45,6 +45,10 @@ class MessageCancellationPort(Protocol):
     async def __call__(self, message_id: str) -> None: ...
 
 
+class ActiveTokenReleasePort(Protocol):
+    def __call__(self, message_id: str) -> bool: ...
+
+
 class PublicTerminalProjectionPort(Protocol):
     async def __call__(
         self,
@@ -86,6 +90,7 @@ class OrchestrationCancellationFinalizer:
         run_store: OrchestrationRunStore | None,
         project_status: StatusProjectionPort,
         broadcast_cancellation: MessageCancellationPort,
+        release_active_token: ActiveTokenReleasePort,
         cancel_hitl: MessageCancellationPort,
         project_public_terminal: PublicTerminalProjectionPort,
         cleanup_agent_tasks: AgentTaskCleanupPort,
@@ -95,6 +100,7 @@ class OrchestrationCancellationFinalizer:
         self._run_store = run_store
         self._project_status = project_status
         self._broadcast_cancellation = broadcast_cancellation
+        self._release_active_token = release_active_token
         self._cancel_hitl = cancel_hitl
         self._project_public_terminal = project_public_terminal
         self._cleanup_agent_tasks = cleanup_agent_tasks
@@ -288,6 +294,8 @@ class OrchestrationCancellationFinalizer:
             if state is not None and state.status in TERMINAL_ORCHESTRATION_STATUSES
             else OrchestrationStatus.CANCELED
         )
+        if final_status == OrchestrationStatus.CANCELED:
+            self._release_active_token(message_id)
         return CancellationFinalizationResult(
             status=final_status,
             cancellation_applied=final_status == OrchestrationStatus.CANCELED,

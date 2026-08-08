@@ -13,7 +13,7 @@ The backend is a FastAPI monolith that coordinates:
 - A2A agent communication, including synchronous, streaming, and webhook-based
   long-running task updates.
 - Context memory projection, search, and compaction.
-- Cross-instance SSE delivery, cancellation, and background recovery jobs.
+- Cross-instance SSE delivery, Execution-owned cancellation, and background recovery jobs.
 
 The application entry point is `main.py`. Dependency construction is centralized
 in `container.py`, while request routers live under `api_gateway/routes`.
@@ -74,7 +74,7 @@ Startup has three practical phases:
      runtime adapters.
 
 2. Runtime guard and background services:
-   - Start Delivery/SSE runtime.
+   - Start the Execution cancellation runtime, then Delivery/SSE runtime.
    - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
@@ -83,7 +83,9 @@ Startup has three practical phases:
    - Verify all required bindings in `validate_runtime_bindings`.
    - Serve `/health` and `/api/v1/*`.
    - On shutdown, stop relay, jobs, leader locks, in-flight execution tasks,
-     Delivery/SSE connections, Redis, and MongoDB.
+     Delivery/SSE connections, the cancellation watcher, Redis, and MongoDB.
+     Cleanup stages are failure-isolated: the first error is preserved while
+     later resource owners still receive their close call.
 
 The application router is mounted from `api_gateway.router` under the configured
 API prefix, defaulting to `/api/v1`.
@@ -666,10 +668,8 @@ It is composed from:
   deduplication, and records public delivery dead letters.
 - `TaskUpdateNotifier`: execution-facing task update publisher that resolves
   final agent display fields and delegates to `DeliveryFacade.send_task_update`.
-- `CrossInstanceEventBus`: Redis Pub/Sub SSE room fan-out and cancellation
-  propagation when Redis is enabled; it has no internal-domain-event API.
-- `CancellationWatcher`: tracks cancellation state through Mongo change streams
-  and Redis KV when available.
+- `CrossInstanceEventBus`: Redis Pub/Sub SSE room fan-out when Redis is enabled;
+  it has no cancellation or internal-domain-event API.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
 Each local SSE connection has a bounded, non-blocking queue. An overflowing
@@ -695,16 +695,26 @@ backoff. Pub/Sub iterator
 unsubscribe and close cleanup are bounded so broker shutdown cannot wait
 indefinitely. Redis-free mode remains immediately available.
 
-Cancellation tombstones remain TTL-bounded, while live cancellation tokens use
-an explicit registry. Room preflight exposes an idempotent synchronous discard
-operation and removes its token on failure, cancellation, or any non-ready
-outcome. Execution guards the entire post-persist sequence (processing status,
-room preflight, and terminal status) with the same discard operation, closing
-cancellation windows before and after preflight. A normally returned ready token
-remains registered for orchestration, which owns its later removal. Terminal
-status claims store unique owner IDs in
-Redis. Losing instances do not
-cache the loss locally, and failed-delivery release uses Redis Lua
+Cancellation runtime ownership lives in `execution.cancellation`, not Delivery.
+`CancellationRuntime` owns TTL-bounded tombstones and a separate active-token
+registry. Creating a token for an already-active message reuses the same token;
+identity-fenced release prevents an old owner from removing a replacement token.
+The Execution-owned Mongo watcher projects durable marker inserts locally. It
+retains resume tokens across ordinary stream errors and resets one only when
+Mongo labels the error `NonResumableChangeStreamError`. An independent Redis
+KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
+`cancelled:` key compatibility. Execution starts this runtime before Delivery and
+stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
+state immediately after token creation and identity-releases that token for every
+outcome, including ready. Admitted orchestration independently creates and
+hydrates its own token after winning the processing claim. Execution and
+continuation owners release their exact token on terminal paths; paused work
+retains it until resume, durable recovery, or successful cancellation
+finalization. Cancellation finalization drops only the active token while
+retaining the tombstone, and a concurrent completion winner does not release an
+active execution token. Shutdown clears the registry after in-flight execution
+is stopped. Terminal status claims store unique owner IDs in
+Redis. Losing instances do not cache the loss locally, and failed-delivery release uses Redis Lua
 compare-and-delete so an expired and subsequently reclaimed reservation cannot
 be deleted by its former owner.
 
@@ -1303,10 +1313,13 @@ Cancellation flow:
 2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
 3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
    nonterminal durable run while preserving a concurrently completed result.
-4. The finalizer updates the message projection, broadcasts the cancellation
-   token, cancels HITL, emits terminal public lifecycle/SSE, and cleans agent
-   tasks.
-5. The marker is marked reconciled only after every idempotent effect succeeds.
+4. The finalizer updates the message projection, signals the Execution-owned
+   cancellation runtime across instances, cancels HITL, emits terminal public
+   lifecycle/SSE, and cleans agent tasks.
+5. After cancellation terminalization succeeds, the active token is released
+   without clearing its tombstone; completion-winning finalization leaves active
+   execution ownership untouched. The marker is marked reconciled only after
+   every idempotent effect succeeds.
 6. The stale-task checker scans only pending markers and invokes the same typed
    finalizer after crashes or partial failures. Old no-run markers settle only
    after the orphan threshold, leaving time to catch a late-created run.

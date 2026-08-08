@@ -7698,10 +7698,10 @@ async def test_durable_envelope_routes_to_single_orchestration_path():
     )
     rmc.message_writer = SimpleNamespace()
     rmc._turn_event_appender = None
-    rmc.delivery = SimpleNamespace(
-        get_token=MagicMock(return_value=token),
-        create_token=MagicMock(return_value=token),
-        remove_token=MagicMock(),
+    rmc.delivery = SimpleNamespace()
+    rmc.cancellation_control = SimpleNamespace(
+        release_token=MagicMock(return_value=True),
+        clear_cancellation=MagicMock(),
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock(
@@ -7746,6 +7746,7 @@ async def test_durable_envelope_routes_to_single_orchestration_path():
         ),
         "room-1",
         "message-1",
+        token=token,
     )
 
     assert response == OrchestrationResponse(
@@ -7787,10 +7788,10 @@ async def test_orchestration_initial_run_receives_context_memory():
     )
     rmc.message_writer = SimpleNamespace()
     rmc._turn_event_appender = None
-    rmc.delivery = SimpleNamespace(
-        get_token=MagicMock(return_value=token),
-        create_token=MagicMock(return_value=token),
-        remove_token=MagicMock(),
+    rmc.delivery = SimpleNamespace()
+    rmc.cancellation_control = SimpleNamespace(
+        release_token=MagicMock(return_value=True),
+        clear_cancellation=MagicMock(),
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock()
@@ -7839,6 +7840,7 @@ async def test_orchestration_initial_run_receives_context_memory():
         ),
         "room-1",
         "message-1",
+        token=token,
     )
 
     assert response.success is True

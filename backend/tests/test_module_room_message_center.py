@@ -18,6 +18,7 @@ import pytest
 from a2a.types import TaskState
 
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
+from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
@@ -48,6 +49,7 @@ async def test_processing_claim_heartbeat_refreshes_until_cancelled(monkeypatch)
     from execution.orchestration import room_message_center as module
 
     rmc = object.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     rmc.orphan_threshold_minutes = 2
     rmc.message_writer = SimpleNamespace(
         refresh_processing_claim=AsyncMock(return_value=True)
@@ -61,9 +63,73 @@ async def test_processing_claim_heartbeat_refreshes_until_cancelled(monkeypatch)
     rmc.message_writer.refresh_processing_claim.assert_awaited_once_with("message-1")
 
 
+@pytest.mark.asyncio
+async def test_duplicate_claim_loser_does_not_release_winner_token():
+    rmc = object.__new__(RoomMessageCenter)
+    winner = CancellationToken(message_id="message-1")
+    rmc.cancellation_control = make_cancellation_control(winner)
+    rmc._validate_room_message_request = MagicMock(return_value=None)
+    rmc._claim_user_message = AsyncMock(return_value=False)
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="message-1",
+        is_recovery=False,
+    )
+
+    response = await rmc.process_room_user_message(request)
+
+    assert response.status_code == 409
+    rmc.cancellation_control.create_token.assert_not_called()
+    rmc.cancellation_control.release_token.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execution_entry_hydrates_redis_tombstone_before_token_checkpoint():
+    rmc = object.__new__(RoomMessageCenter)
+    token = CancellationToken(message_id="message-1")
+    control = make_cancellation_control(token)
+
+    async def hydrate(_message_id):
+        token.cancel()
+        return True
+
+    control.check_cancelled = AsyncMock(side_effect=hydrate)
+    rmc.cancellation_control = control
+    rmc._validate_room_message_request = MagicMock(return_value=None)
+    rmc._claim_user_message = AsyncMock(return_value=True)
+    rmc._acquire_room_lock = AsyncMock(return_value=None)
+    rmc.message_writer = SimpleNamespace(
+        unclaim_user_message=AsyncMock(),
+    )
+    rmc._notify_all_non_terminal_tasks_failed = AsyncMock()
+    rmc._emit_processing_status = AsyncMock()
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="message-1",
+        is_recovery=True,
+    )
+
+    response = await rmc.process_room_user_message(request)
+
+    assert response.status_code == 429
+    assert token.is_cancelled is True
+    control.check_cancelled.assert_awaited_once_with("message-1")
+    control.release_token.assert_called_once_with("message-1", token)
+
+
 # =============================================================================
 # _validate_room_message_request Tests
 # =============================================================================
+
+
+def make_cancellation_control(token=None):
+    resolved = token or CancellationToken(message_id="user-msg-1")
+    control = MagicMock()
+    control.create_token.return_value = resolved
+    control.get_token.return_value = resolved
+    control.check_cancelled = AsyncMock(return_value=False)
+    control.release_token.return_value = True
+    return control
 
 
 class RecordingEventPublisher:
@@ -125,6 +191,7 @@ class TestValidateRoomMessageRequest:
 class TestRoomFacadeBinding:
     def test_unbound_room_facade_fails_fast(self):
         rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+        rmc.cancellation_control = make_cancellation_control()
         rmc._room_facade = None
         rmc._room_bound = False
 
@@ -136,6 +203,7 @@ class TestRoomFacadeBinding:
 
     def test_bind_facade_makes_room_persistence_available(self):
         rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+        rmc.cancellation_control = make_cancellation_control()
         facade = MagicMock()
 
         rmc.bind_facade(facade)
@@ -175,6 +243,7 @@ async def test_async_agent_callback_reenters_durable_orchestration_without_conti
         message_content=MessageContent(message_text="Webhook result"),
     )
     rmc = object.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     rmc.continuation_store = SimpleNamespace(
         get_pending_continuation_on_message=AsyncMock(return_value=None)
     )
@@ -199,6 +268,7 @@ async def test_async_agent_callback_reenters_durable_orchestration_without_conti
 @pytest.mark.asyncio
 async def test_failed_supervisor_result_projects_terminal_summary_to_client_boundaries():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     summary = {
         "code": "orchestration_failed",
         "reason": "delegate_no_progress_repeat",
@@ -278,6 +348,7 @@ async def test_failed_supervisor_result_projects_terminal_summary_to_client_boun
 @pytest.mark.asyncio
 async def test_graceful_shutdown_while_waiting_for_room_lock_leaves_claim_for_recovery():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     request = SimpleNamespace(
         room_id="room-1",
         room_user_message_id="user-msg-1",
@@ -308,6 +379,7 @@ async def test_graceful_shutdown_while_waiting_for_room_lock_leaves_claim_for_re
 @pytest.mark.asyncio
 async def test_process_room_user_message_cancelled_error_emits_canceled_and_reraises():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     request = SimpleNamespace(
         room_id="room-1",
         room_user_message_id="user-msg-1",
@@ -342,7 +414,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
         message_id="user-msg-1",
         lifecycle_message_id="user-msg-1",
     )
-    rmc.delivery.clear_cancellation.assert_called_once_with("user-msg-1")
+    rmc.cancellation_control.clear_cancellation.assert_called_once_with("user-msg-1")
     rmc._release_room_lock.assert_awaited_once_with(
         "room-1",
         "owner-1",
@@ -355,6 +427,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
 @pytest.mark.asyncio
 async def test_graceful_shutdown_interrupt_leaves_turn_recoverable():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     request = SimpleNamespace(
         room_id="room-1",
         room_user_message_id="user-msg-1",
@@ -381,7 +454,7 @@ async def test_graceful_shutdown_interrupt_leaves_turn_recoverable():
     rmc._turn_event_appender.append.assert_not_awaited()
     rmc._notify_all_non_terminal_tasks_failed.assert_not_awaited()
     rmc._emit_processing_status.assert_not_awaited()
-    rmc.delivery.clear_cancellation.assert_not_called()
+    rmc.cancellation_control.clear_cancellation.assert_not_called()
     rmc._release_room_lock.assert_awaited_once()
 
 
@@ -641,6 +714,7 @@ def _assert_before(
 @pytest.mark.asyncio
 async def test_failed_room_lock_still_emits_terminal_status_when_task_transition_fails():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     request = SimpleNamespace(
         room_id="room-1",
         room_user_message_id="umsg-1",
@@ -797,6 +871,7 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
 @pytest.mark.asyncio
 async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="msg-1",
@@ -851,6 +926,7 @@ async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs(
 @pytest.mark.asyncio
 async def test_completed_state_run_result_adds_synthesis_history_with_projection():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     rmc.room_memory = SimpleNamespace(
         add_synthesis_to_history=AsyncMock(return_value="turn-1"),
     )
@@ -896,6 +972,7 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
     orchestration_status,
 ):
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="msg-1",
@@ -960,6 +1037,7 @@ async def test_terminal_state_run_result_cleans_descendants_from_run_state_outpu
 @pytest.mark.asyncio
 async def test_orchestration_envelope_routes_to_supervisor_executor():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -980,6 +1058,7 @@ async def test_orchestration_envelope_routes_to_supervisor_executor():
         "agent-2": _supervisor_agent("agent-2", "Agent Two"),
     }
     token = SimpleNamespace(is_cancelled=False)
+    rmc.cancellation_control = make_cancellation_control(token)
     supervisor_result = SimpleNamespace(
         status=RunStatus.COMPLETED,
         trajectory=SimpleNamespace(clarify_original_message_id=None),
@@ -1037,6 +1116,7 @@ async def test_orchestration_envelope_routes_to_supervisor_executor():
         request,
         "room-1",
         "message-1",
+        token=token,
     )
 
     assert response == OrchestrationResponse(

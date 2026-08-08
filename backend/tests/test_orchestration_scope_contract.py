@@ -171,6 +171,7 @@ def _execution_facade_for_scope_test(room_center):
         ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
+            release_active_token=MagicMock(return_value=True),
             clear_cancellation=MagicMock(),
         ),
         cancellation_store=SimpleNamespace(

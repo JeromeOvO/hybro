@@ -742,10 +742,7 @@ def test_protocol_methods_match_design_doc():
         protocols.SSETransport: {
             "connect",
             "disconnect",
-            "is_cancelled",
-            "mark_cancelled",
             "set_draining",
-            "start_cancellation_watcher",
         },
         protocols.SSEConnectionLike: {"get_message"},
         protocols.SSERouteTransport: {

@@ -743,6 +743,7 @@ class TestCompactionTrigger:
         rmc.message_writer = AsyncMock()
         rmc.room_reader = AsyncMock()
         rmc.delivery = AsyncMock()
+        rmc.cancellation_control = rmc.delivery
         rmc.delivery.remove_token = MagicMock()
         rmc.delivery.clear_cancellation = MagicMock()
         rmc.coordinator = AsyncMock()
@@ -1190,6 +1191,7 @@ class TestHandleRunResultUnifiedSummary:
 
             rmc = create_room_message_center(
                 debate_rounds=2,
+                cancellation_control=mock_delivery,
                 internal_event_publisher=RecordingEventPublisher(),
             )
             rmc._emit_unified_summary = AsyncMock(

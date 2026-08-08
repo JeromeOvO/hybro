@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -84,14 +85,19 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
-from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.event_publisher import EventPublisherImpl
 from delivery.facade import DeliveryFacade
-from delivery.sse.cancellation_watcher import CancellationWatcher
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
+from execution.cancellation import (
+    CancellationConfig,
+    CancellationRuntime,
+    CancellationStartupPolicy,
+    RedisCancellationTransport,
+)
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
@@ -196,6 +202,21 @@ class ApplicationRuntime:
     _lifespan_context: Any | None = None
 
 
+async def _run_cleanup_steps(
+    steps: list[tuple[str, Callable[[], Awaitable[Any]]]],
+) -> BaseException | None:
+    """Run every shutdown stage and return the first failure after logging all."""
+    first_error: BaseException | None = None
+    for name, cleanup in steps:
+        try:
+            await cleanup()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+            logger.warning("runtime cleanup step failed: %s", name, exc_info=True)
+    return first_error
+
+
 def create_application_runtime(app_settings: Any = settings) -> ApplicationRuntime:
     return ApplicationRuntime(settings=app_settings)
 
@@ -289,6 +310,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _agent_deps = None
     _delivery_facade = None
     _delivery_config = None
+    _cancellation_runtime = None
     _eventing_bus = None
     _eventing_deps = None
     _relay_ready_handler = RelayReadyHubInternalHandler()
@@ -413,23 +435,29 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             synthesis_coordinator = SynthesisCoordinator()
             remote_task_reader = RemoteTaskReader()
             _delivery_config = create_delivery_config(runtime.settings)
-            delivery_startup_policy = create_delivery_startup_policy(
+            cancellation_startup_policy = create_cancellation_startup_policy(
                 redis_url=runtime.settings.redis_url,
                 multi_worker=runtime.settings.is_gunicorn,
             )
+            runtime_instance_id = get_instance_id()
+            _cancellation_runtime = create_cancellation_runtime(
+                mongo=mongo_dal,
+                redis_url=runtime.settings.redis_url,
+                instance_id=runtime_instance_id,
+                startup_policy=cancellation_startup_policy,
+                app_settings=runtime.settings,
+            )
+            await _cancellation_runtime.start()
+            app.state.cancellation_runtime = _cancellation_runtime
             delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
                 redis_url=runtime.settings.redis_url,
                 config=_delivery_config,
             )
-            cancellation_collection = create_delivery_cancellation_collection(
-                mongo=mongo_dal
-            )
             _delivery_facade = create_delivery_facade(
-                cancellation_collection=cancellation_collection,
-                startup_policy=delivery_startup_policy,
                 redis_kv=delivery_redis_kv,
                 redis_pubsub=delivery_redis_pubsub,
                 config=_delivery_config,
+                instance_id=runtime_instance_id,
             )
             await _delivery_facade.start()
             _delivery_deps = create_delivery_deps(_delivery_facade)
@@ -1118,6 +1146,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_service=a2a_service,
                 delivery=execution_delivery,
                 remote_task_reader=remote_task_reader,
+                cancellation_control=_cancellation_runtime,
             )
             room_runtime.bind_facade(_room_facade)
             room_runtime.bind_internal_event_publisher(
@@ -1199,6 +1228,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 memory_writer=execution_memory_writer,
                 hitl_reader=execution_hitl_reader,
                 delivery=execution_delivery,
+                cancellation_control=_cancellation_runtime,
                 internal_event_publisher=_eventing_deps.internal_event_publisher,
                 coordinator=execution_coordinator,
                 summary_service=summary_llm_service,
@@ -1276,7 +1306,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
-                cancellation_state=CancellationStateC3Adapter(execution_delivery),
+                cancellation_state=CancellationStateC3Adapter(_cancellation_runtime),
                 cancellation_store=MongoCancellationStoreAdapter(task_store),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
                 agent_task_cleanup=AgentTaskCleanupAdapter(
@@ -1374,7 +1404,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         check_multi_worker_safety(
             is_gunicorn=runtime.settings.is_gunicorn,
             delivery_pubsub_connected=bool(
-                _delivery_facade and _delivery_facade.delivery_pubsub_connected
+                _delivery_facade
+                and _delivery_facade.delivery_pubsub_connected
+                and _cancellation_runtime.redis_connected
             ),
             eventing_connected=(
                 not bool(runtime.settings.redis_url)
@@ -1385,9 +1417,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             ),
             redis_service_connected=redis_kv_ready,
             relay_streams_connected=redis_streams_ready,
-            change_stream_connected=bool(
-                _delivery_facade and _delivery_facade.change_stream_connected
-            ),
+            change_stream_connected=bool(_cancellation_runtime.change_stream_connected),
         )
 
         # ── Phase 2: Background services (only after guard passes) ──
@@ -1637,98 +1667,119 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
 
     except BaseException:
-        # ── Startup failure: tear down only what was opened ──
-        # Do not call set_draining() on startup failure; normal shutdown owns
-        # the drain window after the adapter has been successfully bound.
+        # Startup cleanup never replaces the original failure. Every opened
+        # stage is attempted even if an earlier close fails.
+        startup_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
+        if _bg_started:
+            startup_steps.extend(
+                [
+                    ("stale-task-checker", stale_task_checker.stop),
+                    ("compaction-sweep", compaction_sweep.stop),
+                    ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
+                ]
+            )
+            if agent_health_service is not None:
+                startup_steps.append(("agent-health", agent_health_service.stop))
+            if _local_agent_service is not None:
+                startup_steps.append(("local-agent", _local_agent_service.stop))
+        if _local_agent_card_resolver is not None:
+            startup_steps.append(
+                ("local-agent-card-resolver", _local_agent_card_resolver.aclose)
+            )
+        if _leader:
+            startup_steps.append(
+                ("leader-locks", lambda: _leader.release_all(ALL_JOB_NAMES))
+            )
         if _eventing_bus is not None:
-            await _eventing_bus.stop()
+            startup_steps.append(("eventing", _eventing_bus.stop))
+        if _relay_svc:
+            startup_steps.append(("relay", _relay_svc.stop))
+        if _delivery_facade is not None:
+            startup_steps.append(("delivery", _delivery_facade.stop))
+        if _cancellation_runtime is not None:
+            startup_steps.append(("cancellation", _cancellation_runtime.stop))
+        startup_steps.append(
+            ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
+        )
+        if _mongo_dal is not None:
+            startup_steps.append(("mongo", _mongo_dal.close))
+        await _run_cleanup_steps(startup_steps)
         app.state.eventing_bus = None
         app.state.eventing_connected = False
-        if _relay_svc:
-            await _relay_svc.stop()
-        if _bg_started:
-            await stale_task_checker.stop()
-            await compaction_sweep.stop()
-            await orphaned_upload_cleaner.stop()
-            if agent_health_service is not None:
-                await agent_health_service.stop()
-            if _local_agent_service is not None:
-                await _local_agent_service.stop()
-        if _local_agent_card_resolver is not None:
-            await _local_agent_card_resolver.aclose()
-        if _leader:
-            await _leader.release_all(ALL_JOB_NAMES)
-        await close_redis_runtime_deps(_redis_runtime)
-        if _mongo_dal is not None:
-            await _mongo_dal.close()
-            app.state.mongo_dal = None
-        try:
-            if _delivery_facade is not None:
-                await _delivery_facade.stop()
-        finally:
-            app.state.delivery_facade = None
+        app.state.delivery_facade = None
+        app.state.cancellation_runtime = None
+        app.state.mongo_dal = None
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
     try:
         yield
     finally:
-        # Stop the relay service heartbeat checker
+        body_error = sys.exc_info()[1]
         from hub_runtime_bridge.compat.relay_service import (
             relay_service as _relay_svc_shutdown,
         )
 
-        # Keep the relay router alive until internal-event ingress has stopped
-        # and all accepted handler work has drained.
+        async def cancel_execution() -> None:
+            execution_deps = app.state.execution_deps
+            cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
+            if cancelled:
+                logger.info(
+                    "shutdown: cancelled %s in-flight execution task(s)",
+                    cancelled,
+                )
 
-        # Stop background services
-        await stale_task_checker.stop()
-        await compaction_sweep.stop()
-        await orphaned_upload_cleaner.stop()
-        if agent_health_service is not None:
-            await agent_health_service.stop()
-        if _local_agent_service is not None:
-            await _local_agent_service.stop()
-        if _local_agent_card_resolver is not None:
-            await _local_agent_card_resolver.aclose()
-
-        # Release any leader locks
-        if _leader:
-            await _leader.release_all(ALL_JOB_NAMES)
-
-        execution_deps = app.state.execution_deps
-        cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
-        if cancelled:
-            logger.info(
-                "shutdown: cancelled %s in-flight execution task(s)",
-                cancelled,
+        async def drain_delivery() -> None:
+            if _delivery_facade is not None:
+                _delivery_facade.set_draining(True)
+            await asyncio.sleep(
+                _delivery_config.shutdown_drain_seconds
+                if _delivery_config is not None
+                else runtime.settings.shutdown_drain_seconds
             )
 
-        # Drain: stop accepting new SSE connections and allow in-flight events to finish
-        if _delivery_facade is not None:
-            _delivery_facade.set_draining(True)
-        await asyncio.sleep(
-            _delivery_config.shutdown_drain_seconds
-            if _delivery_config is not None
-            else runtime.settings.shutdown_drain_seconds
+        shutdown_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = [
+            ("stale-task-checker", stale_task_checker.stop),
+            ("compaction-sweep", compaction_sweep.stop),
+            ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
+        ]
+        if agent_health_service is not None:
+            shutdown_steps.append(("agent-health", agent_health_service.stop))
+        if _local_agent_service is not None:
+            shutdown_steps.append(("local-agent", _local_agent_service.stop))
+        if _local_agent_card_resolver is not None:
+            shutdown_steps.append(
+                ("local-agent-card-resolver", _local_agent_card_resolver.aclose)
+            )
+        if _leader:
+            shutdown_steps.append(
+                ("leader-locks", lambda: _leader.release_all(ALL_JOB_NAMES))
+            )
+        shutdown_steps.extend(
+            [("execution", cancel_execution), ("delivery-drain", drain_delivery)]
         )
-
         if _eventing_bus is not None:
-            await _eventing_bus.stop()
+            shutdown_steps.append(("eventing", _eventing_bus.stop))
+        if _relay_svc_shutdown:
+            shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
+        if _delivery_facade is not None:
+            shutdown_steps.append(("delivery", _delivery_facade.stop))
+        if _cancellation_runtime is not None:
+            shutdown_steps.append(("cancellation", _cancellation_runtime.stop))
+        shutdown_steps.append(
+            ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
+        )
+        if _mongo_dal is not None:
+            shutdown_steps.append(("mongo", _mongo_dal.close))
+
+        cleanup_error = await _run_cleanup_steps(shutdown_steps)
         app.state.eventing_bus = None
         app.state.eventing_connected = False
-        if _relay_svc_shutdown:
-            await _relay_svc_shutdown.stop()
-        try:
-            if _delivery_facade is not None:
-                await _delivery_facade.stop()
-        finally:
-            app.state.delivery_facade = None
-
-        await close_redis_runtime_deps(_redis_runtime)
-        if _mongo_dal is not None:
-            await _mongo_dal.close()
-            app.state.mongo_dal = None
+        app.state.delivery_facade = None
+        app.state.cancellation_runtime = None
+        app.state.mongo_dal = None
+        if cleanup_error is not None and body_error is None:
+            raise cleanup_error
 
 
 def create_execution_repositories(*, mongo: MongoDAL):
@@ -2777,16 +2828,69 @@ def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
     return DeliveryConfig(**values)
 
 
-def create_delivery_startup_policy(
+def create_cancellation_startup_policy(
     *,
     redis_url: str,
     multi_worker: bool,
-) -> DeliveryStartupPolicy:
+) -> CancellationStartupPolicy:
     redis_expected = bool(redis_url)
-    return DeliveryStartupPolicy(
+    return CancellationStartupPolicy(
         redis_expected=redis_expected,
         multi_worker=multi_worker,
         allow_degraded_change_stream=not redis_expected and not multi_worker,
+    )
+
+
+def create_cancellation_config(app_settings: Any = settings) -> CancellationConfig:
+    return CancellationConfig(
+        ttl_seconds=app_settings.cancellation_ttl_seconds,
+        cache_maxsize=app_settings.cancellation_cache_maxsize,
+        redis_channel=app_settings.redis_cancel_channel,
+        redis_key_prefix=app_settings.redis_cancel_key_prefix,
+        redis_reconnect_delay=app_settings.redis_reconnect_delay,
+        redis_reconnect_max_delay=app_settings.redis_reconnect_max_delay,
+        redis_subscription_ready_timeout_seconds=(
+            app_settings.redis_room_subscription_ready_timeout_seconds
+        ),
+        change_stream_backoff_base=app_settings.cs_backoff_base,
+        change_stream_backoff_max=app_settings.cs_backoff_max,
+        change_stream_backoff_factor=app_settings.cs_backoff_factor,
+        change_stream_jitter_fraction=app_settings.cs_jitter_fraction,
+    )
+
+
+def create_cancellation_runtime(
+    *,
+    mongo: MongoDAL,
+    redis_url: str,
+    instance_id: str,
+    startup_policy: CancellationStartupPolicy,
+    app_settings: Any = settings,
+    task_runner: TaskRunner = traced_create_task,
+) -> CancellationRuntime:
+    redis_kv = None
+    transport = None
+    config = create_cancellation_config(app_settings)
+    if redis_url:
+        from dal.redis.kv import RedisKVImpl
+        from dal.redis.pubsub import RedisPubSubImpl
+
+        redis_kv = RedisKVImpl(url=redis_url)
+        transport = RedisCancellationTransport(
+            redis_pubsub=RedisPubSubImpl(
+                url=redis_url,
+                max_connections=app_settings.redis_max_connections,
+            ),
+            config=config,
+            instance_id=instance_id,
+        )
+    return CancellationRuntime(
+        collection=create_cancellation_collection(mongo=mongo),
+        redis_kv=redis_kv,
+        transport=transport,
+        config=config,
+        task_runner=task_runner,
+        allow_degraded_change_stream=startup_policy.allow_degraded_change_stream,
     )
 
 
@@ -2864,14 +2968,12 @@ def create_eventing_deps(event_bus: InternalEventBus) -> EventingDeps:
     )
 
 
-def create_delivery_cancellation_collection(*, mongo: MongoDAL) -> MongoCollection:
+def create_cancellation_collection(*, mongo: MongoDAL) -> MongoCollection:
     return mongo.collection("cancelled_messages")
 
 
 def create_delivery_facade(
     *,
-    cancellation_collection: MongoCollection,
-    startup_policy: DeliveryStartupPolicy,
     redis_kv: RedisKV | None = None,
     redis_pubsub: RedisPubSub | None = None,
     config: DeliveryConfig | None = None,
@@ -2881,9 +2983,6 @@ def create_delivery_facade(
     task_runner: TaskRunner | None = None,
     metrics: MetricsCollector | None = None,
 ) -> DeliveryFacade:
-    if cancellation_collection is None:
-        raise ValueError("cancellation_collection is required")
-
     resolved_config = config or DeliveryConfig()
     resolved_now = now or utcnow
     resolved_id_factory = id_factory or (lambda: uuid4().hex)
@@ -2899,15 +2998,7 @@ def create_delivery_facade(
         task_runner=resolved_task_runner,
         now=resolved_now,
     )
-    cancellation_watcher = CancellationWatcher(
-        collection=cancellation_collection,
-        redis_kv=redis_kv,
-        event_bus=event_bus,
-        config=resolved_config,
-        task_runner=resolved_task_runner,
-    )
     sse_transport = SSETransportImpl(
-        cancellation_watcher=cancellation_watcher,
         event_bus=event_bus,
         config=resolved_config,
         now=resolved_now,
@@ -2930,16 +3021,13 @@ def create_delivery_facade(
         metrics=metrics,
     )
     event_bus.set_sse_callback(sse_transport.broadcast_frame_to_room)
-    event_bus.set_cancellation_callback(cancellation_watcher.handle_remote_cancellation)
 
     return DeliveryFacade(
         event_publisher=event_publisher,
         sse_transport=sse_transport,
         event_bus=event_bus,
-        cancellation_watcher=cancellation_watcher,
         redis_kv=redis_kv,
         config=resolved_config,
-        startup_policy=startup_policy,
         instance_id=resolved_instance_id,
     )
 

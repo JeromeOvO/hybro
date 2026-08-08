@@ -177,8 +177,11 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             )
         )
     )
-    room_services.delivery = SimpleNamespace(
-        create_token=MagicMock(return_value=object())
+    room_services.delivery = SimpleNamespace()
+    room_services.cancellation_control = SimpleNamespace(
+        create_token=MagicMock(return_value=object()),
+        release_token=MagicMock(return_value=True),
+        check_cancelled=AsyncMock(return_value=False),
     )
     room_files = _RoomFiles()
     room_services.bind_room_files(room_files)
@@ -230,6 +233,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
+            release_active_token=MagicMock(return_value=True),
         ),
         cancellation_store=SimpleNamespace(
             mark_cancellation_reconciled=AsyncMock(),
@@ -272,7 +276,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert len(internal_publisher.internal_events) == 1
     assert run_lifecycle.record_processing_status.await_count == 1
     assert len(delivery_publisher.public_events) == 1
-    assert room_services.delivery.create_token.call_count == 1
+    assert room_services.cancellation_control.create_token.call_count == 1
     assert len(room_files.claims) == 2
     assert len(set(room_files.claims)) == 2
     assert "same-client-supplied-message-id" not in room_files.claims

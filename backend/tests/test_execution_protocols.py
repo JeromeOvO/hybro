@@ -293,6 +293,7 @@ def _make_room_message_center_port_deps():
         "memory_writer": MagicMock(),
         "hitl_reader": MagicMock(),
         "delivery": MagicMock(),
+        "cancellation_control": MagicMock(),
         "internal_event_publisher": MagicMock(),
         "coordinator": MagicMock(),
         "summary_service": MagicMock(),

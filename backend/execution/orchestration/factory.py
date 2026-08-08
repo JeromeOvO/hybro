@@ -62,6 +62,10 @@ def create_room_message_center(
         "cloud_health_check_timeout": 5.0,
     }
     deps.update(kwargs)
+    if deps.get("cancellation_control") is None:
+        raise RuntimeError(
+            "RoomMessageCenter cancellation_control dependency is required"
+        )
     if deps.get("internal_event_publisher") is None:
         raise RuntimeError(
             "RoomMessageCenter internal_event_publisher dependency is required"

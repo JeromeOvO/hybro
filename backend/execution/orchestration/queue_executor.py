@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from common.eventing import InternalEventPublisher
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.ports import (
+        CancellationControlPort,
         DebateServicePort,
         ExecutionDeliveryPort,
         HITLCoordinator,
@@ -101,6 +102,7 @@ class QueueExecutor:
         *,
         tsm: TaskStateManager,
         delivery: ExecutionDeliveryPort,
+        cancellation_control: CancellationControlPort,
         room_runtime: RoomRuntimePort,
         internal_event_publisher: InternalEventPublisher,
         message_reader: RoomMessageReader,
@@ -125,6 +127,9 @@ class QueueExecutor:
             )
         self.tsm = tsm
         self.delivery = delivery
+        if cancellation_control is None:
+            raise RuntimeError("QueueExecutor cancellation_control is required")
+        self.cancellation_control = cancellation_control
         self.room_runtime = room_runtime
         self.internal_event_publisher = internal_event_publisher
         self.message_reader = message_reader
@@ -143,6 +148,13 @@ class QueueExecutor:
         self._turn_event_appender = turn_event_appender
         self.hitl_coordinator = hitl_coordinator
         self._processing_status_emitter = None
+
+    def _release_cancellation_token(
+        self,
+        message_id: str,
+        token: CancellationToken,
+    ) -> None:
+        self.cancellation_control.release_token(message_id, token)
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
@@ -607,7 +619,7 @@ class QueueExecutor:
                 lifecycle_message_id=user_message_id,
             )
             if clear_cancel:
-                self.delivery.clear_cancellation(user_message_id)
+                self.cancellation_control.clear_cancellation(user_message_id)
 
         if queue_result == QueueResult.COMPLETED:
             logger.info("QueueExecutor: Finished processing message queue")
@@ -934,58 +946,91 @@ class QueueExecutor:
             len(continuation.get("remaining_queue", [])),
         )
 
-        remaining_queue = deque()
-        for msg_data in continuation.get("remaining_queue", []):
-            remaining_queue.append(RoomAgentMessage.model_validate(msg_data))
-
         room_id = continuation.get("room_id")
         user_message_id = continuation.get("user_message_id")
         request_user_id = continuation.get("request_user_id")
 
-        if not room_id or not user_message_id:
+        if not user_message_id:
+            # The destructive continuation claim owns cleanup. Recover the
+            # root ID from the agent message when legacy/corrupt continuation
+            # data omitted it, then identity-release the paused token.
+            agent_message = (
+                await self.message_reader.get_room_agent_message_by_message_id(
+                    message_id
+                )
+            )
+            recovered_id = getattr(agent_message, "related_message_id", None)
+            if isinstance(recovered_id, str) and recovered_id:
+                token = self.cancellation_control.get_token(recovered_id)
+                self._release_cancellation_token(recovered_id, token)
             logger.error(
                 "QueueExecutor: Invalid continuation data for message %s",
                 message_id,
             )
             return ResumeResult(success=False)
 
-        quoted_text_resume: str | None = None
-        um_resume = await self.message_reader.get_room_user_message_by_message_id(
-            user_message_id
-        )
-        if um_resume:
-            from execution.orchestration.turn_context import (
-                TurnQuoteMissingError,
-                load_turn_context,
-            )
-
-            try:
-                tc = await load_turn_context(self.message_reader, um_resume)
-                quoted_text_resume = tc.quoted_text
-            except TurnQuoteMissingError:
+        # Destructive continuation claim transfers ownership of the paused
+        # token to this resume attempt. Hydrate Redis before sync checkpoints.
+        token = self.cancellation_control.create_token(user_message_id)
+        try:
+            await self.cancellation_control.check_cancelled(user_message_id)
+            if token.is_cancelled:
+                self._release_cancellation_token(user_message_id, token)
+                return ResumeResult(success=True)
+            if not room_id:
                 logger.error(
-                    "QueueExecutor: missing quoted snippet for turn %s on resume",
-                    user_message_id,
+                    "QueueExecutor: Invalid continuation data for message %s",
+                    message_id,
                 )
+                self._release_cancellation_token(user_message_id, token)
                 return ResumeResult(success=False)
-            if quoted_text_resume is None and isinstance(um_resume.extend_info, dict):
-                quoted_text_resume = um_resume.extend_info.get("quoted_text")
 
-        if task_result_text:
-            current_agent_id = continuation.get("current_agent_id")
-            current_agent_name = continuation.get("current_agent_name", "Agent")
-            await self._publish_agent_message_committed(
-                room_id=room_id,
-                agent_id=current_agent_id,
-                agent_name=current_agent_name,
-                was_successful=True,
-                message_id=message_id,
+            remaining_queue = deque(
+                RoomAgentMessage.model_validate(msg_data)
+                for msg_data in continuation.get("remaining_queue", [])
             )
+            quoted_text_resume: str | None = None
+            um_resume = await self.message_reader.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            if um_resume:
+                from execution.orchestration.turn_context import (
+                    TurnQuoteMissingError,
+                    load_turn_context,
+                )
 
-        if len(remaining_queue) > 0:
-            token = self.delivery.get_token(user_message_id)
-            if token is None:
-                token = self.delivery.create_token(user_message_id)
+                try:
+                    tc = await load_turn_context(self.message_reader, um_resume)
+                    quoted_text_resume = tc.quoted_text
+                except TurnQuoteMissingError:
+                    logger.error(
+                        "QueueExecutor: missing quoted snippet for turn %s on resume",
+                        user_message_id,
+                    )
+                    self._release_cancellation_token(user_message_id, token)
+                    return ResumeResult(success=False)
+                if quoted_text_resume is None and isinstance(
+                    um_resume.extend_info, dict
+                ):
+                    quoted_text_resume = um_resume.extend_info.get("quoted_text")
+
+            if task_result_text:
+                await self._publish_agent_message_committed(
+                    room_id=room_id,
+                    agent_id=continuation.get("current_agent_id"),
+                    agent_name=continuation.get("current_agent_name", "Agent"),
+                    was_successful=True,
+                    message_id=message_id,
+                )
+
+            if not remaining_queue:
+                self._release_cancellation_token(user_message_id, token)
+                return ResumeResult(
+                    success=True,
+                    needs_completion=True,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
 
             queue_processing_result = await self.process_queue(
                 remaining_queue,
@@ -995,32 +1040,30 @@ class QueueExecutor:
                 request_user_id=request_user_id,
                 quoted_text=quoted_text_resume,
             )
+        except BaseException:
+            self._release_cancellation_token(user_message_id, token)
+            raise
 
-            if queue_processing_result.result == QueueResult.PAUSED:
-                return ResumeResult(success=True)
-            if queue_processing_result.result == QueueResult.FAILED:
-                if before_terminal_failure is not None:
-                    await before_terminal_failure(room_id, user_message_id)
-                await self._emit_processing_status(
-                    room_id=room_id,
-                    status=SSEProcessingStatus.FAILED,
-                    message_id=user_message_id,
-                    lifecycle_message_id=user_message_id,
-                )
-                return ResumeResult(
-                    success=False,
-                    room_id=room_id,
-                    user_message_id=user_message_id,
-                )
-            if queue_processing_result.result == QueueResult.CANCELED:
-                return ResumeResult(success=True)
+        if queue_processing_result.result == QueueResult.PAUSED:
+            return ResumeResult(success=True)
 
+        self._release_cancellation_token(user_message_id, token)
+        if queue_processing_result.result == QueueResult.FAILED:
+            if before_terminal_failure is not None:
+                await before_terminal_failure(room_id, user_message_id)
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=user_message_id,
+                lifecycle_message_id=user_message_id,
+            )
             return ResumeResult(
-                success=True,
-                needs_completion=True,
+                success=False,
                 room_id=room_id,
                 user_message_id=user_message_id,
             )
+        if queue_processing_result.result == QueueResult.CANCELED:
+            return ResumeResult(success=True)
 
         return ResumeResult(
             success=True,

@@ -4,7 +4,7 @@ from typing import Any
 
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
-from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+from delivery.config import DeliveryConfig
 from delivery.facade import DeliveryFacade
 from delivery.sse.connection import SSEConnection
 from delivery.translator import to_sse_frame
@@ -96,6 +96,9 @@ class FakeDeliveryCompat:
         self.tokens.pop(message_id, None)
 
     def create_token(self, message_id: str) -> CancellationToken:
+        existing = self.tokens.get(message_id)
+        if existing is not None:
+            return existing
         token = CancellationToken(message_id=message_id)
         if message_id in self.cancelled_messages:
             token.cancel()
@@ -105,8 +108,20 @@ class FakeDeliveryCompat:
     def get_token(self, message_id: str) -> CancellationToken | None:
         return self.tokens.get(message_id)
 
+    def release_token(self, message_id: str, token: CancellationToken | None) -> bool:
+        if token is None or self.tokens.get(message_id) is not token:
+            return False
+        self.tokens.pop(message_id, None)
+        return True
+
+    def release_active_token(self, message_id: str) -> bool:
+        return self.tokens.pop(message_id, None) is not None
+
     def remove_token(self, message_id: str) -> None:
         self.tokens.pop(message_id, None)
+
+    async def signal(self, message_id: str) -> None:
+        await self.cancel_message_and_broadcast(message_id)
 
     async def start(self) -> None:
         self.lifecycle_calls.append(("start", None))
@@ -222,14 +237,8 @@ def make_delivery_facade(
         event_publisher=publisher,
         sse_transport=compat,
         event_bus=compat,
-        cancellation_watcher=compat,
         redis_kv=None,
         config=DeliveryConfig(),
-        startup_policy=DeliveryStartupPolicy(
-            redis_expected=False,
-            multi_worker=False,
-            allow_degraded_change_stream=True,
-        ),
         instance_id=instance_id,
     )
     return facade

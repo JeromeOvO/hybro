@@ -91,7 +91,6 @@ def make_transport(
     id_factory: IdFactory | None = None,
 ):
     return SSETransportImpl(
-        cancellation_watcher=FakeCancellationWatcher(),
         event_bus=event_bus or FakeEventBus(),
         config=config or DeliveryConfig(),
         now=fixed_now,

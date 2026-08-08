@@ -83,6 +83,7 @@ def _make_facade(**overrides):
     )
     cancellation_state = SimpleNamespace(
         cancel_message_and_broadcast=AsyncMock(),
+        release_active_token=MagicMock(return_value=True),
         clear_cancellation=MagicMock(),
     )
     cancellation_store = SimpleNamespace(
@@ -717,7 +718,7 @@ async def test_execute_cancellation_after_ready_preflight_discards_token():
 
 
 @pytest.mark.asyncio
-async def test_execute_normal_ready_preflight_keeps_token_for_orchestration():
+async def test_execute_normal_ready_preflight_does_not_discard_twice():
     facade, deps = _make_facade()
     preflight_context = object()
     deps["room_center"].persist_message_to_room.side_effect = None
@@ -1020,6 +1021,7 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
     assert orchestration_request.user_id == "user-1"
     assert orchestration_request.client_request_id == "cr-1"
     assert orchestration_request.room_related_message_id == "parent-1"
+    assert deps["room_message_center"].process_room_user_message.call_args.kwargs == {}
     assert task_factory.calls == ["execution-orchestrate-msg-1"]
     assert facade._inflight == set()
 

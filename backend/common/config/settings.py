@@ -138,13 +138,10 @@ class Settings(BaseSettings):
         30  # Clear stuck processing status older than this
     )
 
-    # Delivery / SSE extraction settings
+    # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
     sse_connection_queue_maxsize: int = 100
-    cancellation_ttl_seconds: int = 3600
     terminal_dedup_ttl_seconds: int = 300
-    cancellation_cache_maxsize: int = 10_000
-    cancellation_token_cache_maxsize: int = 10_000
     terminal_dedup_cache_maxsize: int = 10_000
     redis_dead_letter_channel: str = "delivery:dead_letter"
     dead_letter_memory_maxlen: int = 1000
@@ -164,13 +161,17 @@ class Settings(BaseSettings):
         {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
     )
 
-    # Change stream reconnection backoff
+    # Execution cancellation runtime (environment names remain compatible)
+    cancellation_ttl_seconds: int = 3600
+    cancellation_cache_maxsize: int = 10_000
+
+    # Cancellation change stream reconnection backoff
     cs_backoff_base: float = 1.0  # initial delay in seconds
     cs_backoff_max: float = 30.0  # ceiling delay in seconds
     cs_backoff_factor: float = 2.0  # multiplier per retry
     cs_jitter_fraction: float = 0.25  # +/-25% random jitter
 
-    # Event Broker (cross-instance SSE fan-out + cancellation)
+    # Redis transports (Delivery SSE and Execution cancellation use separate clients)
     redis_url: str = (
         ""  # e.g. "redis://localhost:6379/0" - empty string disables broker
     )

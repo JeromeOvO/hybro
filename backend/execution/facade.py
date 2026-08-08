@@ -438,6 +438,7 @@ class ExecutionFacade:
             run_store=orchestration_run_store,
             project_status=self._project_orchestration_status,
             broadcast_cancellation=cancellation_state.cancel_message_and_broadcast,
+            release_active_token=cancellation_state.release_active_token,
             cancel_hitl=hitl_message_cancellation.cancel_requests_for_message,
             project_public_terminal=self._project_public_terminal_status,
             cleanup_agent_tasks=agent_task_cleanup.cleanup_cancelled_message_tasks,
@@ -734,7 +735,7 @@ class ExecutionFacade:
         ):
             task = self._spawn_orchestration(
                 self._room_message_center.process_room_user_message(
-                    orchestration_request
+                    orchestration_request,
                 ),
                 name=f"execution-orchestrate-{ack.message_id}",
             )

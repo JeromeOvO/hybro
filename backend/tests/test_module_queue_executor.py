@@ -24,6 +24,7 @@ from execution.orchestration.queue_executor import (
     QueueResult,
 )
 from models.processing import ProcessingResult, ProcessingStatus
+from models.room import MessageContent, RoomUserMessage
 
 
 class RecordingEventPublisher:
@@ -72,6 +73,7 @@ def test_constructor_requires_internal_event_publisher():
     deps = {
         "tsm": MagicMock(),
         "delivery": MagicMock(),
+        "cancellation_control": MagicMock(),
         "room_runtime": MagicMock(),
         "internal_event_publisher": None,
         "message_reader": MagicMock(),
@@ -101,6 +103,11 @@ def _make_queue_executor():
     qe = object.__new__(QueueExecutor)
     qe.rate_limit_service = MagicMock()
     qe.delivery = MagicMock()
+    qe.cancellation_control = MagicMock()
+    qe.cancellation_control.check_cancelled = AsyncMock(return_value=False)
+    qe.cancellation_control.create_token.side_effect = lambda message_id: (
+        CancellationToken(message_id=message_id)
+    )
     qe.tsm = MagicMock()
     qe.message_reader = MagicMock()
     qe.message_writer = MagicMock()
@@ -202,6 +209,99 @@ class TestCheckRateLimit:
 # =============================================================================
 # TestProcessQueue — process_queue, single-message dispatch, continuation
 # =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_invalid_continuation_releases_paused_token():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={"remaining_queue": [], "user_message_id": "user-1"}
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_resume_quote_failure_releases_paused_token():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+    qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+        return_value=RoomUserMessage(
+            room_id="room-1",
+            message_id="user-1",
+            message_content=MessageContent(message_text="question"),
+            extend_info={"quote_id": "missing-quote"},
+        )
+    )
+    qe.message_reader.get_quoted_snippet_by_id = AsyncMock(return_value=None)
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_empty_continuation_releases_paused_token():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is True
+    assert result.needs_completion is True
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_empty_continuation_does_not_request_completion():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+
+    async def hydrate_cancellation(_message_id):
+        token.cancel()
+        return True
+
+    qe.cancellation_control.check_cancelled.side_effect = hydrate_cancellation
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is True
+    assert result.needs_completion is False
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
 
 
 class TestProcessQueue:
@@ -481,7 +581,7 @@ class TestProcessQueue:
         token.cancel()
 
         qe.tsm.transition_task = AsyncMock()
-        qe.delivery.clear_cancellation = MagicMock()
+        qe.cancellation_control.clear_cancellation = MagicMock()
         qe.message_writer.cancel_descendants = AsyncMock()
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
         qe.bind_execution_event_deps(emit)
@@ -495,7 +595,7 @@ class TestProcessQueue:
         emit.assert_awaited_once()
         qe.delivery.send_processing_status.assert_not_called()
         assert order == ["emit"]
-        qe.delivery.clear_cancellation.assert_called_once_with("umsg-1")
+        qe.cancellation_control.clear_cancellation.assert_called_once_with("umsg-1")
 
     @pytest.mark.asyncio
     async def test_process_queue_records_before_awaiting_input_send(self):
@@ -572,7 +672,7 @@ class TestProcessQueue:
         qe.message_writer.cancel_descendants = AsyncMock(
             side_effect=lambda *a, **k: order.append("cancel-descendants")
         )
-        qe.delivery.clear_cancellation = MagicMock(
+        qe.cancellation_control.clear_cancellation = MagicMock(
             side_effect=lambda *a, **k: order.append("clear-token")
         )
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
@@ -609,8 +709,8 @@ class TestProcessQueue:
         qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
             return_value=continuation
         )
-        qe.delivery.get_token = MagicMock(return_value=None)
-        qe.delivery.create_token = MagicMock(
+        qe.cancellation_control.get_token = MagicMock(return_value=None)
+        qe.cancellation_control.create_token = MagicMock(
             return_value=CancellationToken(message_id="umsg-1")
         )
         qe.process_queue = AsyncMock(
@@ -693,8 +793,8 @@ class TestProcessQueue:
         qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
             return_value=continuation
         )
-        qe.delivery.get_token = MagicMock(return_value=None)
-        qe.delivery.create_token = MagicMock(
+        qe.cancellation_control.get_token = MagicMock(return_value=None)
+        qe.cancellation_control.create_token = MagicMock(
             return_value=CancellationToken(message_id="umsg-1")
         )
         qe.process_queue = AsyncMock(

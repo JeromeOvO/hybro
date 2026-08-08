@@ -8,15 +8,22 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class CancellationStateC3Adapter:
-    def __init__(self, delivery) -> None:
-        self._delivery = delivery
+class CancellationStateAdapter:
+    def __init__(self, control) -> None:
+        self._control = control
 
     async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self._delivery.cancel_message_and_broadcast(message_id)
+        await self._control.signal(message_id)
+
+    def release_active_token(self, message_id: str) -> bool:
+        return self._control.release_active_token(message_id)
 
     def clear_cancellation(self, message_id: str) -> None:
-        self._delivery.clear_cancellation(message_id)
+        self._control.clear_cancellation(message_id)
+
+
+# Compatibility import name retained while ownership now remains in Execution.
+CancellationStateC3Adapter = CancellationStateAdapter
 
 
 class MongoCancellationStoreAdapter:
@@ -164,6 +171,7 @@ class AgentTaskCleanupAdapter:
 
 __all__ = [
     "AgentTaskCleanupAdapter",
+    "CancellationStateAdapter",
     "CancellationStateC3Adapter",
     "HITLMessageCancellationAdapter",
     "MongoCancellationStoreAdapter",

@@ -84,13 +84,13 @@ def test_container_stops_eventing_before_relay_and_delivery():
     )[0]
     normal_shutdown = source.split("# ── Phase 3", 1)[1]
 
-    assert startup_failure.index("await _eventing_bus.stop()") < startup_failure.index(
-        "await _relay_svc.stop()"
+    assert startup_failure.index('("eventing", _eventing_bus.stop)') < (
+        startup_failure.index('("relay", _relay_svc.stop)')
     )
     assert (
-        normal_shutdown.index("await _eventing_bus.stop()")
-        < normal_shutdown.index("await _relay_svc_shutdown.stop()")
-        < normal_shutdown.index("await _delivery_facade.stop()")
+        normal_shutdown.index('("eventing", _eventing_bus.stop)')
+        < normal_shutdown.index('("relay", _relay_svc_shutdown.stop)')
+        < normal_shutdown.index('("delivery", _delivery_facade.stop)')
     )
 
 

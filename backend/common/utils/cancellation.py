@@ -3,14 +3,11 @@
 Provides a ``CancellationToken`` that is threaded through the processing
 pipeline and a ``CancellationError`` raised when a cancellation is detected.
 
-Architecture note (A-3):
-    Instead of polling ``SSEManager.is_cancelled(message_id)`` at discrete
-    checkpoints, callers hold a reference to a ``CancellationToken``.  The
-    cancel endpoint (or MongoDB change-stream watcher) sets the internal
-    ``asyncio.Event`` on the token, which can instantly unblock any coroutine
-    waiting in ``token.race()``.  The ``token.check()`` method works as a
-    lightweight, synchronous checkpoint — identical semantics to the old
-    ``is_cancelled()`` call, but with no dependency on the SSE manager.
+Architecture note:
+    This module contains only the cooperative primitive. Execution owns token
+    registration, durable tombstone hydration, and lifecycle release. The
+    cancel endpoint, Mongo watcher, or Redis callback signals the registered
+    token, which can instantly unblock a coroutine waiting in ``token.race()``.
 """
 
 from __future__ import annotations
@@ -39,13 +36,13 @@ class CancellationToken:
 
     Lifecycle
     ---------
-    1. Created by ``SSEManager.create_token(message_id)`` at the start of
-       a processing pipeline.
-    2. Threaded through ``ProcessingContext`` so every sub-handler has access.
-    3. Signalled by ``SSEManager.cancel_message()`` or the change-stream
-       watcher when a cancellation request arrives.
-    4. Consumed by processing code via ``check()`` (synchronous checkpoint)
-       or ``race()`` (async — aborts a blocking coroutine immediately).
+    1. Registered by the Execution cancellation runtime for one processing
+       owner after durable admission succeeds.
+    2. Threaded through processing contexts so sub-handlers share one token.
+    3. Signalled by the Execution runtime when a cancellation request arrives.
+    4. Released identity-safely by the owner on terminal completion; paused
+       work retains it until continuation, reconciliation, or shutdown.
+    5. Consumed via ``check()`` or ``race()``.
     """
 
     message_id: str
@@ -76,8 +73,7 @@ class CancellationToken:
     def check(self) -> None:
         """Raise ``CancellationError`` if cancelled.
 
-        Drop-in replacement for the old ``if sse_manager.is_cancelled(…):``
-        pattern, but the caller catches ``CancellationError`` instead.
+        Processing code catches ``CancellationError`` for cooperative teardown.
         """
         if self._event.is_set():
             raise CancellationError(self.message_id)

@@ -234,6 +234,7 @@ class RoomServices:
         self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
         self.delivery = UNBOUND_DELIVERY
+        self.cancellation_control = UNBOUND_DELIVERY
         self.remote_task_reader = UNBOUND_TASK_SERVICE
         self._room_files = None
         self._facade = None
@@ -248,6 +249,18 @@ class RoomServices:
         self._attachment_cleanup = None
         self._quote_writer = None
         self._capability_issue_reader = None
+
+    @property
+    def _cancellation(self):
+        return self.cancellation_control
+
+    def _release_cancellation_token(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> None:
+        if token is not None:
+            self._cancellation.release_token(message_id, token)
 
     def bind_room_files(self, room_files) -> None:
         self._room_files = room_files
@@ -264,11 +277,15 @@ class RoomServices:
         a2a_service,
         delivery,
         remote_task_reader,
+        cancellation_control,
     ) -> None:
         self.agent_service = agent_service
         self.agent_selection_service = agent_selection_service
         self.a2a_service = a2a_service
         self.delivery = delivery
+        if cancellation_control is None:
+            raise RuntimeError("RoomServices cancellation_control is required")
+        self.cancellation_control = cancellation_control
         self.remote_task_reader = remote_task_reader
 
     @property
@@ -2108,7 +2125,7 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
             )
-            self.delivery.clear_cancellation(user_message_id)
+            self._cancellation.clear_cancellation(user_message_id)
             return ParseResult(success=False, canceled=True)
 
         # Direct chat: single agent + no debate = skip LLM parsing entirely
@@ -2608,7 +2625,14 @@ class RoomServices:
         # (and later the queue step in RoomMessageCenter) can detect cancels
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
-        token = self.delivery.create_token(user_message.message_id)
+        token = self._cancellation.create_token(user_message.message_id)
+        try:
+            # Hydrate an L1 miss before the long post-persistence parse begins.
+            # check_cancelled signals the newly owned token when Redis has a tombstone.
+            await self._cancellation.check_cancelled(user_message.message_id)
+        except BaseException:
+            self._release_cancellation_token(user_message.message_id, token)
+            raise
         logger.info(
             "room_send_message_persisted room_id=%s message_id=%s "
             "client_request_id=%s supervisor=%s target_group=%s",
@@ -2651,19 +2675,20 @@ class RoomServices:
         context: RoomMessagePreflightContext,
     ) -> RoomCenterUserMessageResponse:
         try:
-            response = await self._run_message_preflight_to_room(context)
-        except BaseException:
+            return await self._run_message_preflight_to_room(context)
+        finally:
+            # The preflight token never crosses into orchestration. A ready ack
+            # starts a separate execution which creates and hydrates its own token.
             self.discard_message_preflight(context)
-            raise
-        if response.preflight_outcome != "ready":
-            self.discard_message_preflight(context)
-        return response
 
     def discard_message_preflight(
         self,
         context: RoomMessagePreflightContext,
     ) -> None:
-        self.delivery.remove_token(context.user_message.message_id)
+        self._release_cancellation_token(
+            context.user_message.message_id,
+            getattr(context, "token", None),
+        )
 
     async def _run_message_preflight_to_room(
         self,

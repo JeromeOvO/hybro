@@ -13,15 +13,10 @@ class DeliveryConfig:
     heartbeat_interval_seconds: float = 30.0
     sse_connection_queue_maxsize: int = 100
     shutdown_drain_seconds: float = 5.0
-    cancellation_ttl_seconds: int = 3600
     terminal_dedup_ttl_seconds: int = 300
-    cancellation_cache_maxsize: int = 10_000
-    cancellation_token_cache_maxsize: int = 10_000
     terminal_dedup_cache_maxsize: int = 10_000
     redis_sse_channel_prefix: str = "sse:room:"
-    redis_cancel_channel: str = "cancel:global"
     redis_dead_letter_channel: str = "delivery:dead_letter"
-    redis_cancel_key_prefix: str = "cancelled:"
     redis_terminal_key_prefix: str = "terminal:"
     dead_letter_memory_maxlen: int = 1000
     redis_reconnect_delay: float = 1.0
@@ -30,10 +25,6 @@ class DeliveryConfig:
     redis_subscription_reserved_connections: int = 10
     redis_room_subscription_production_limit: int = 40
     redis_room_subscription_ready_timeout_seconds: float = 5.0
-    cs_backoff_base: float = 1.0
-    cs_backoff_max: float = 30.0
-    cs_backoff_factor: float = 2.0
-    cs_jitter_fraction: float = 0.25
     terminal_processing_statuses: frozenset[str] | Iterable[str] = field(
         default_factory=lambda: DEFAULT_TERMINAL_PROCESSING_STATUSES
     )
@@ -44,13 +35,7 @@ class DeliveryConfig:
             "sse_connection_queue_maxsize", self.sse_connection_queue_maxsize
         )
         _require_positive("shutdown_drain_seconds", self.shutdown_drain_seconds)
-        _require_positive("cancellation_ttl_seconds", self.cancellation_ttl_seconds)
         _require_positive("terminal_dedup_ttl_seconds", self.terminal_dedup_ttl_seconds)
-        _require_positive("cancellation_cache_maxsize", self.cancellation_cache_maxsize)
-        _require_positive(
-            "cancellation_token_cache_maxsize",
-            self.cancellation_token_cache_maxsize,
-        )
         _require_positive(
             "terminal_dedup_cache_maxsize",
             self.terminal_dedup_cache_maxsize,
@@ -71,19 +56,9 @@ class DeliveryConfig:
             "redis_room_subscription_ready_timeout_seconds",
             self.redis_room_subscription_ready_timeout_seconds,
         )
-        _require_positive("cs_backoff_base", self.cs_backoff_base)
-        _require_positive("cs_backoff_max", self.cs_backoff_max)
-        _require_at_least("cs_backoff_factor", self.cs_backoff_factor, 1.0)
-        if not 0 <= self.cs_jitter_fraction <= 1:
-            raise ValueError("cs_jitter_fraction must be between 0 and 1")
-
         if self.redis_reconnect_max_delay < self.redis_reconnect_delay:
             raise ValueError(
                 "redis_reconnect_max_delay must be greater than or equal to redis_reconnect_delay"
-            )
-        if self.cs_backoff_max < self.cs_backoff_base:
-            raise ValueError(
-                "cs_backoff_max must be greater than or equal to cs_backoff_base"
             )
         if (
             self.redis_room_subscription_production_limit
@@ -97,9 +72,7 @@ class DeliveryConfig:
 
         for field_name in (
             "redis_sse_channel_prefix",
-            "redis_cancel_channel",
             "redis_dead_letter_channel",
-            "redis_cancel_key_prefix",
             "redis_terminal_key_prefix",
         ):
             value = getattr(self, field_name)
@@ -111,21 +84,6 @@ class DeliveryConfig:
             "terminal_processing_statuses",
             _normalize_terminal_statuses(self.terminal_processing_statuses),
         )
-
-
-@dataclass(frozen=True)
-class DeliveryStartupPolicy:
-    redis_expected: bool
-    multi_worker: bool
-    allow_degraded_change_stream: bool = False
-
-    def __post_init__(self) -> None:
-        if self.allow_degraded_change_stream and (
-            self.redis_expected or self.multi_worker
-        ):
-            raise ValueError(
-                "degraded change stream mode is only valid without Redis and without multi-worker mode"
-            )
 
 
 def _require_positive(field_name: str, value: float | int) -> None:
@@ -165,4 +123,4 @@ def _normalize_terminal_statuses(
     return frozenset(statuses)
 
 
-__all__ = ["DeliveryConfig", "DeliveryStartupPolicy"]
+__all__ = ["DeliveryConfig"]

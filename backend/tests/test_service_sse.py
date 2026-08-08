@@ -2,8 +2,6 @@
 
 Tests cover:
 - SSEConnection: send_message, get_message (with timeout/heartbeat), close
-- DeliveryFacade: cancel_message/is_cancelled/clear_cancellation lifecycle
-- DeliveryFacade: CancellationToken creation and pre-signalling
 - DeliveryFacade: add_connection/remove_connection and typed delivery helpers
 """
 
@@ -75,66 +73,6 @@ class TestSSEConnection:
 
         # =============================================================================
         # DeliveryFacade Cancellation Tests
-        # =============================================================================
-
-
-class TestDeliveryFacadeCancellation:
-    """Tests for message cancellation lifecycle."""
-
-    def test_cancel_then_is_cancelled(self):
-        mgr = make_delivery_facade()
-        assert mgr.is_cancelled("msg-1") is False
-        mgr.cancel_message("msg-1")
-        assert mgr.is_cancelled("msg-1") is True
-
-    def test_clear_cancellation(self):
-        mgr = make_delivery_facade()
-        mgr.cancel_message("msg-1")
-        mgr.clear_cancellation("msg-1")
-        assert mgr.is_cancelled("msg-1") is False
-
-    def test_clear_also_removes_token(self):
-        mgr = make_delivery_facade()
-        mgr.create_token("msg-1")
-        mgr.clear_cancellation("msg-1")
-        assert mgr.get_token("msg-1") is None
-
-        # =============================================================================
-        # CancellationToken Tests
-        # =============================================================================
-
-
-class TestCancellationToken:
-    """Tests for CancellationToken creation and pre-signalling."""
-
-    def test_create_token_returns_token(self):
-        mgr = make_delivery_facade()
-        token = mgr.create_token("msg-1")
-        assert token is not None
-        assert token.message_id == "msg-1"
-        assert mgr.get_token("msg-1") is token
-
-    def test_create_token_pre_signals_if_already_cancelled(self):
-        mgr = make_delivery_facade()
-        mgr.cancel_message("msg-1")
-        token = mgr.create_token("msg-1")
-        assert token.is_cancelled is True
-
-    def test_cancel_signals_existing_token(self):
-        mgr = make_delivery_facade()
-        token = mgr.create_token("msg-1")
-        assert token.is_cancelled is False
-        mgr.cancel_message("msg-1")
-        assert token.is_cancelled is True
-
-    def test_remove_token(self):
-        mgr = make_delivery_facade()
-        mgr.create_token("msg-1")
-        mgr.remove_token("msg-1")
-        assert mgr.get_token("msg-1") is None
-
-        # =============================================================================
-        # DeliveryFacade Connection Tests
         # =============================================================================
 
 

@@ -29,11 +29,9 @@ class CrossInstanceEventBus:
         self._now = now
         self._sleeper = sleeper
         self._sse_callback: Callable[[str, dict[str, Any]], Any] | None = None
-        self._cancellation_callback: Callable[[str], Any] | None = None
         self._room_tasks: dict[str, asyncio.Task] = {}
         self._room_channels: dict[str, str] = {}
         self._room_readiness: dict[str, asyncio.Future[None]] = {}
-        self._global_tasks: dict[str, asyncio.Task] = {}
         self._channel_generations: dict[str, object] = {}
         self._active_generations: dict[str, object] = {}
         self._active_channels: set[str] = set()
@@ -48,15 +46,12 @@ class CrossInstanceEventBus:
     def is_connected(self) -> bool:
         if self.redis_pubsub is None:
             return False
-        desired_globals = {self.config.redis_cancel_channel}
-        desired = set(self._room_tasks) | desired_globals
-        return self._redis_reachable and desired.issubset(self._active_channels)
+        return self._redis_reachable and set(self._room_tasks).issubset(
+            self._active_channels
+        )
 
     def set_sse_callback(self, callback: Callable[[str, dict[str, Any]], Any]) -> None:
         self._sse_callback = callback
-
-    def set_cancellation_callback(self, callback: Callable[[str], Any]) -> None:
-        self._cancellation_callback = callback
 
     async def start(self) -> None:
         self._stopped = False
@@ -64,18 +59,14 @@ class CrossInstanceEventBus:
             self._redis_reachable = False
             return
         await self.refresh_health()
-        self._ensure_global_subscription(
-            self.config.redis_cancel_channel, "cancellation"
-        )
 
     async def stop(self) -> None:
         self._stopped = True
-        tasks = list(self._room_tasks.values()) + list(self._global_tasks.values())
+        tasks = list(self._room_tasks.values())
         self._room_tasks.clear()
         self._room_channels.clear()
         readiness = list(self._room_readiness.values())
         self._room_readiness.clear()
-        self._global_tasks.clear()
         self._channel_generations.clear()
         self._active_generations.clear()
         for future in readiness:
@@ -116,20 +107,6 @@ class CrossInstanceEventBus:
         }
         await self.redis_pubsub.publish(
             self._room_channel(room_id),
-            json.dumps(envelope),
-        )
-
-    async def publish_cancellation(self, message_id: str) -> None:
-        if self.redis_pubsub is None:
-            return
-        envelope = {
-            "kind": "cancellation",
-            "origin": self.instance_id,
-            "message_id": message_id,
-            "trace_id": get_current_trace_id(),
-        }
-        await self.redis_pubsub.publish(
-            self.config.redis_cancel_channel,
             json.dumps(envelope),
         )
 
@@ -202,15 +179,6 @@ class CrossInstanceEventBus:
             with trace_id_context(envelope.get("trace_id")):
                 await self._call(self._sse_callback, room_id, frame)
 
-    async def handle_cancellation_message(self, message: str) -> None:
-        envelope = self._decode(message, "cancellation")
-        if not envelope or envelope.get("origin") == self.instance_id:
-            return
-        message_id = envelope.get("message_id")
-        if isinstance(message_id, str) and self._cancellation_callback is not None:
-            with trace_id_context(envelope.get("trace_id")):
-                await self._call(self._cancellation_callback, message_id)
-
     async def _subscription_loop(
         self,
         channel: str,
@@ -263,8 +231,6 @@ class CrossInstanceEventBus:
     async def _handle_subscription_message(self, kind: str, message: str) -> None:
         if kind == "sse":
             await self.handle_sse_message(message)
-        elif kind == "cancellation":
-            await self.handle_cancellation_message(message)
 
     async def _close_subscription_iterator(self, messages: Any | None) -> None:
         close = getattr(messages, "aclose", None)
@@ -301,19 +267,10 @@ class CrossInstanceEventBus:
             except asyncio.CancelledError:
                 pass
 
-    def _ensure_global_subscription(self, channel: str, kind: str) -> None:
-        if channel in self._global_tasks:
-            return
-        generation = object()
-        self._channel_generations[channel] = generation
-        self._global_tasks[channel] = self._task_runner(
-            self._subscription_loop(channel, kind, generation=generation),
-            name=f"delivery-redis-{kind}",
-        )
-
     def _subscription_desired(self, channel: str, generation: object) -> bool:
-        return self._channel_generations.get(channel) is generation and (
-            channel in self._room_tasks or channel in self._global_tasks
+        return (
+            self._channel_generations.get(channel) is generation
+            and channel in self._room_tasks
         )
 
     def _mark_channel_active(self, channel: str, generation: object) -> None:

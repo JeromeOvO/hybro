@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,6 +30,7 @@ def _finalizer(store=None, **overrides):
     deps = {
         "project_status": AsyncMock(return_value=True),
         "broadcast_cancellation": AsyncMock(),
+        "release_active_token": MagicMock(return_value=True),
         "cancel_hitl": AsyncMock(),
         "project_public_terminal": AsyncMock(),
         "cleanup_agent_tasks": AsyncMock(),
@@ -72,6 +73,7 @@ async def test_finalizer_cancels_awaiting_run_and_all_surfaces():
         room_id="room-1", message_id="message-1"
     )
     deps["mark_reconciled"].assert_awaited_once_with("message-1")
+    deps["release_active_token"].assert_called_once_with("message-1")
 
 
 @pytest.mark.asyncio
@@ -98,6 +100,7 @@ async def test_finalizer_preserves_completion_winner_without_destructive_effects
     )
     deps["cleanup_agent_tasks"].assert_not_awaited()
     deps["mark_reconciled"].assert_awaited_once_with("message-1")
+    deps["release_active_token"].assert_not_called()
 
 
 @pytest.mark.asyncio

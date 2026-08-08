@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections import deque
 from datetime import timedelta
@@ -30,6 +31,7 @@ from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.ports import (
     A2ATransportPort,
+    CancellationControlPort,
     CoordinatorSynthesisPort,
     ExecutionDeliveryPort,
     HITLCoordinator,
@@ -153,6 +155,7 @@ class RoomMessageCenter:
         memory_writer,
         hitl_reader: HITLReaderPort,
         delivery: ExecutionDeliveryPort,
+        cancellation_control: CancellationControlPort,
         coordinator: CoordinatorSynthesisPort,
         task_notifier: NotificationServicePort,
         task_notification_store: TaskNotificationStorePort,
@@ -200,6 +203,9 @@ class RoomMessageCenter:
         self.memory_writer = memory_writer
         self.hitl_reader = hitl_reader
         self.delivery = delivery
+        if cancellation_control is None:
+            raise RuntimeError("RoomMessageCenter cancellation_control is required")
+        self.cancellation_control = cancellation_control
         self.internal_event_publisher = internal_event_publisher
         self.coordinator = coordinator
         self.summary_service = summary_service
@@ -293,6 +299,7 @@ class RoomMessageCenter:
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             delivery=self.delivery,
+            cancellation_control=self.cancellation_control,
             room_runtime=self.room_runtime,
             internal_event_publisher=internal_event_publisher,
             message_reader=self.message_reader,
@@ -348,6 +355,10 @@ class RoomMessageCenter:
         # preserve defensive getattr/None checks in legacy code paths.
 
     # -- Redis wiring (called from main.py at startup) ---------------------
+
+    def _release_cancellation_token(self, message_id: str, token) -> None:
+        if token is not None:
+            self.cancellation_control.release_token(message_id, token)
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
@@ -806,7 +817,8 @@ class RoomMessageCenter:
     # ------------------------------------------------------------------
 
     async def process_room_user_message(
-        self, request: OrchestrationRequest
+        self,
+        request: OrchestrationRequest,
     ) -> OrchestrationResponse:
         """
         Process a room user message by executing all related agent messages in sequence.
@@ -835,7 +847,8 @@ class RoomMessageCenter:
         if validation_response:
             return validation_response
 
-        # Idempotency guard (SDR 2.5)
+        # Idempotency guard (SDR 2.5). A losing caller never acquires or
+        # releases the registry token owned by the admitted execution.
         claimed = await self._claim_user_message(request)
 
         if not claimed:
@@ -853,9 +866,21 @@ class RoomMessageCenter:
 
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
+        owned_token = self.cancellation_control.create_token(room_user_message_id)
+        try:
+            # Hydrate an L1 miss from Redis before the first synchronous
+            # cancellation checkpoint. check_cancelled signals the active token.
+            await self.cancellation_control.check_cancelled(room_user_message_id)
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            raise
 
         # ----- Per-room lock: serialise all processing within a room -----
-        lock_owner = await self._acquire_room_lock(room_id)
+        try:
+            lock_owner = await self._acquire_room_lock(room_id)
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            raise
         lock_acquired_at = time.monotonic()
         if lock_owner is None:
             logger.error(
@@ -864,6 +889,7 @@ class RoomMessageCenter:
                 room_id,
                 room_user_message_id,
             )
+            self._release_cancellation_token(room_user_message_id, owned_token)
             # Release the claim so the message can be retried (by user or
             # stale-recovery) instead of staying permanently orphaned.
             await self.message_writer.unclaim_user_message(room_user_message_id)
@@ -897,19 +923,33 @@ class RoomMessageCenter:
         # stale task checker (orphan_threshold_minutes=2 min) might consider
         # the message orphaned.  Touching the timestamp here resets the clock
         # so processing won't be reclaimed prematurely.
-        await self.message_writer.refresh_processing_claim(room_user_message_id)
-        claim_heartbeat = traced_create_task(
-            self._heartbeat_processing_claim(room_user_message_id),
-            name=f"processing-claim-heartbeat:{room_user_message_id}",
-        )
+        try:
+            await self.message_writer.refresh_processing_claim(room_user_message_id)
+            claim_heartbeat = traced_create_task(
+                self._heartbeat_processing_claim(room_user_message_id),
+                name=f"processing-claim-heartbeat:{room_user_message_id}",
+            )
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            try:
+                await self._release_room_lock(
+                    room_id, lock_owner, acquired_at=lock_acquired_at
+                )
+            except Exception:
+                logger.warning("failed to release room lock", exc_info=True)
+            raise
 
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
         try:
             return await self._process_room_user_message_locked(
-                request, room_id, room_user_message_id
+                request,
+                room_id,
+                room_user_message_id,
+                token=owned_token,
             )
         except asyncio.CancelledError as exc:
+            self._release_cancellation_token(room_user_message_id, owned_token)
             if is_graceful_shutdown_cancellation(exc):
                 logger.info(
                     "RoomMessageCenter: processing interrupted by graceful shutdown "
@@ -940,23 +980,39 @@ class RoomMessageCenter:
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
             )
-            self.delivery.clear_cancellation(room_user_message_id)
+            self.cancellation_control.clear_cancellation(room_user_message_id)
+            raise
+        except Exception:
+            self._release_cancellation_token(room_user_message_id, owned_token)
             raise
         finally:
+            body_error = sys.exc_info()[1]
+            cleanup_error: BaseException | None = None
             claim_heartbeat.cancel()
             try:
                 await claim_heartbeat
             except asyncio.CancelledError:
                 pass
-            await self._release_room_lock(
-                room_id, lock_owner, acquired_at=lock_acquired_at
-            )
+            except BaseException as exc:
+                cleanup_error = exc
+            try:
+                await self._release_room_lock(
+                    room_id, lock_owner, acquired_at=lock_acquired_at
+                )
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            if cleanup_error is not None:
+                self._release_cancellation_token(room_user_message_id, owned_token)
+                if body_error is None:
+                    raise cleanup_error
 
     async def _process_room_user_message_locked(
         self,
         request: OrchestrationRequest,
         room_id: str,
         room_user_message_id: str,
+        *,
+        token,
     ) -> OrchestrationResponse:
         """Inner processing path — caller MUST hold the per-room lock."""
 
@@ -1011,21 +1067,13 @@ class RoomMessageCenter:
                     lifecycle_message_id=room_user_message_id,
                     details="Quoted context could not be loaded for this turn",
                 )
+                self._release_cancellation_token(room_user_message_id, token)
                 return OrchestrationResponse(
                     room_id=room_id,
                     success=False,
                     error=str(e),
                     status_code=400,
                 )
-
-        # Create a CancellationToken for this message pipeline (A-3).
-        # The token is pre-signalled if cancel_message() was called before
-        # processing started — no race window.
-        # If a token was already created (e.g. by send_message_to_room for
-        # the parsing phase), reuse it so the entire pipeline shares one token.
-        token = self.delivery.get_token(room_user_message_id)
-        if token is None:
-            token = self.delivery.create_token(room_user_message_id)
 
         # --- Supervisor branch ---
         is_supervisor = user_message and self._is_supervisor_envelope(
@@ -1053,6 +1101,7 @@ class RoomMessageCenter:
             )
         )
         if not query_response.success:
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -1089,6 +1138,7 @@ class RoomMessageCenter:
                     lifecycle_message_id=room_user_message_id,
                     details="Supervisor-enabled room missing supervisor preparation data",
                 )
+                self._release_cancellation_token(room_user_message_id, token)
                 return OrchestrationResponse(
                     room_id=room_id,
                     success=False,
@@ -1139,7 +1189,8 @@ class RoomMessageCenter:
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
             )
-            self.delivery.clear_cancellation(room_user_message_id)
+            self.cancellation_control.clear_cancellation(room_user_message_id)
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=True,
                 error="Processing cancelled by user",
@@ -1182,6 +1233,7 @@ class RoomMessageCenter:
                 lifecycle_message_id=room_user_message_id,
                 details="Failed to process agent messages",
             )
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
@@ -1194,6 +1246,7 @@ class RoomMessageCenter:
             )
 
         if queue_processing_result.result == QueueResult.CANCELED:
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=True,
                 error="Processing cancelled by user",
@@ -1241,6 +1294,7 @@ class RoomMessageCenter:
 
         # Log room memory stats (debug/monitoring)
         await self._log_room_memory_stats(room_id)
+        self._release_cancellation_token(room_user_message_id, token)
 
         return OrchestrationResponse(
             room_id=room_id, success=True, error=None, status_code=200
@@ -1493,6 +1547,7 @@ class RoomMessageCenter:
                 lifecycle_message_id=room_user_message_id,
                 details="supervisor data corrupted or incomplete",
             )
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -1553,7 +1608,7 @@ class RoomMessageCenter:
                     "RoomMessageCenter: Failed to emit planning error message: %s",
                     emit_err,
                 )
-            self.delivery.remove_token(room_user_message_id)
+            self._release_cancellation_token(room_user_message_id, token)
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
@@ -1576,7 +1631,7 @@ class RoomMessageCenter:
                 "for message %s",
                 room_user_message_id,
             )
-            self.delivery.remove_token(room_user_message_id)
+            self._release_cancellation_token(room_user_message_id, token)
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
@@ -1598,6 +1653,7 @@ class RoomMessageCenter:
             result=result,
             room_id=room_id,
             user_message_id=room_user_message_id,
+            token=token,
             user_message=user_message,
         )
         await self._log_room_memory_stats(room_id)
@@ -1619,6 +1675,7 @@ class RoomMessageCenter:
         result: SupervisorRunResult,
         room_id: str,
         user_message_id: str,
+        token=None,
         room=None,
         user_message=None,
     ) -> None:
@@ -1796,7 +1853,7 @@ class RoomMessageCenter:
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
                 )
-                self.delivery.clear_cancellation(user_message_id)
+                self.cancellation_control.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
                 terminal_summary = result.terminal_summary
@@ -1870,7 +1927,7 @@ class RoomMessageCenter:
         # PAUSED and AWAITING_INPUT runs keep their token alive — the
         # webhook/HITL resume path will create/reuse it.
         if result.status not in (RunStatus.PAUSED, RunStatus.AWAITING_INPUT):
-            self.delivery.remove_token(user_message_id)
+            self._release_cancellation_token(user_message_id, token)
 
     async def _run_supervisor_terminal_post_loop_integration(
         self,
