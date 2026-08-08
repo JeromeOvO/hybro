@@ -2946,6 +2946,7 @@ def create_internal_event_bus(
         transport=transport,
         config=EventingConfig(
             handler_queue_maxsize=app_settings.eventing_handler_queue_maxsize,
+            auxiliary_task_maxsize=app_settings.eventing_auxiliary_task_maxsize,
             enqueue_timeout_seconds=app_settings.eventing_enqueue_timeout_seconds,
             shutdown_timeout_seconds=app_settings.eventing_shutdown_timeout_seconds,
             dead_letter_memory_maxlen=(app_settings.eventing_dead_letter_memory_maxlen),

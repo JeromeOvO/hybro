@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from itertools import count
 
 import pytest
 
@@ -439,6 +440,43 @@ async def test_close_all_connections_clears_maps_unsubscribes_and_is_idempotent(
         0,
         {"worker_id": "worker-1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_admission_locks_are_reclaimed_after_many_room_disconnects():
+    ids = count()
+    transport = make_transport(id_factory=lambda: f"conn-{next(ids)}")
+
+    for index in range(100):
+        room_id = f"room-{index}"
+        connection = await transport.open_connection(room_id)
+        await transport.remove_connection(room_id, connection.connection_id)
+    await transport._drain_room_cleanup_tasks()
+
+    assert transport._admission_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admission_waiter_does_not_abandon_room_lock():
+    event_bus = FakeEventBus()
+    event_bus.subscribe_waiter = asyncio.Event()
+    transport = make_transport(event_bus=event_bus)
+    first = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+    waiter = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    event_bus.subscribe_waiter.set()
+    connection = await first
+    await transport.remove_connection("room-1", connection.connection_id)
+    await transport._drain_room_cleanup_tasks()
+
+    assert transport._admission_locks == {}
+    assert event_bus.subscribed == ["room-1"]
+    assert event_bus.unsubscribed == ["room-1"]
 
 
 @pytest.mark.asyncio

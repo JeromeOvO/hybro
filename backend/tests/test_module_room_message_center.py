@@ -20,6 +20,8 @@ from a2a.types import TaskState
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
+from execution.cancellation import CancellationConfig, CancellationRuntime
+from execution.orchestration.queue_executor import QueueResult, ResumeResult
 from execution.orchestration.room_message_center import RoomMessageCenter
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
@@ -891,7 +893,7 @@ async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs(
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
     rmc._emit_unified_summary = AsyncMock(return_value=("supervisor", None))
     rmc._persist_turn_completion_kind = AsyncMock()
-    rmc._emit_processing_status = AsyncMock()
+    rmc._emit_processing_status = AsyncMock(return_value={"accepted": True})
     rmc._turn_event_appender = None
     rmc.delivery = SimpleNamespace(remove_token=MagicMock())
 
@@ -921,6 +923,96 @@ async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs(
             "message": "Delivery is Friday.",
         },
     ]
+
+
+def _supervisor_completion_race_center(token, emit_summary):
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.cancellation_control = make_cancellation_control(token)
+    center.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=None)
+    )
+    center.message_writer = SimpleNamespace(
+        update_room_user_message_by_message_id=AsyncMock(),
+        cancel_descendants=AsyncMock(),
+        cancel_agent_messages_by_ids=AsyncMock(),
+    )
+    center._run_supervisor_terminal_post_loop_integration = AsyncMock()
+    center._emit_unified_summary = emit_summary
+    center._persist_turn_completion_kind = AsyncMock()
+    center._emit_processing_status = AsyncMock(return_value={"accepted": True})
+    center._turn_event_appender = SimpleNamespace(append=AsyncMock())
+    center._notify_all_non_terminal_tasks_failed = AsyncMock()
+    return center
+
+
+@pytest.mark.asyncio
+async def test_supervisor_canceled_token_preserves_durable_completed_winner():
+    token = CancellationToken(message_id="msg-1")
+    token.cancel()
+    summary = AsyncMock(return_value=("supervisor", None))
+    center = _supervisor_completion_race_center(token, summary)
+
+    await center._handle_supervisor_run_result(
+        SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            run_id="msg-1",
+            run_state=_completed_state_with_agent_outputs(),
+            synthesis_text="Final synthesis",
+        ),
+        room_id="room-1",
+        user_message_id="msg-1",
+        token=token,
+    )
+
+    summary.assert_awaited_once()
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [SSEProcessingStatus.COMPLETED]
+    turn_types = [
+        call.args[2] for call in center._turn_event_appender.append.await_args_list
+    ]
+    assert turn_types == ["turn_completed"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_cancel_during_summary_suppresses_completed_projection():
+    token = CancellationToken(message_id="msg-1")
+    entered = asyncio.Event()
+
+    async def emit_summary(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    center = _supervisor_completion_race_center(token, emit_summary)
+    handling = asyncio.create_task(
+        center._handle_supervisor_run_result(
+            SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                run_id="msg-1",
+                run_state=_completed_state_with_agent_outputs().model_copy(
+                    update={"status": OrchestrationStatus.RUNNING}
+                ),
+                synthesis_text="Final synthesis",
+            ),
+            room_id="room-1",
+            user_message_id="msg-1",
+            token=token,
+        )
+    )
+    await entered.wait()
+    token.cancel()
+    await handling
+
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [SSEProcessingStatus.CANCELED]
+    turn_types = [
+        call.args[2] for call in center._turn_event_appender.append.await_args_list
+    ]
+    assert "turn_completed" not in turn_types
+    center._persist_turn_completion_kind.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1208,6 +1300,107 @@ def test_queue_failure_appends_turn_failed_and_notifies_before_failed_processing
     )
 
 
+def _continuation_completion_race_center(token, emit_summary, appender):
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.cancellation_control = make_cancellation_control(token)
+    center.continuation_store = SimpleNamespace(
+        save_continuation_on_message=AsyncMock(return_value=True)
+    )
+    center.queue_executor = SimpleNamespace(
+        resume_from_continuation=AsyncMock(
+            return_value=ResumeResult(
+                success=True,
+                needs_completion=True,
+                room_id="room-1",
+                user_message_id="user-msg-1",
+                token=token,
+            )
+        )
+    )
+    center.room_reader = SimpleNamespace(
+        get_room_by_room_id=AsyncMock(return_value=None)
+    )
+    center._emit_unified_summary = emit_summary
+    center._turn_event_appender = appender
+    center._persist_turn_completion_kind = AsyncMock()
+    center._emit_processing_status = AsyncMock(return_value={"accepted": True})
+    center._log_room_memory_stats = AsyncMock()
+    center._notify_all_non_terminal_tasks_failed = AsyncMock()
+    return center
+
+
+@pytest.mark.asyncio
+async def test_final_continuation_cancel_during_summary_suppresses_completion():
+    token = CancellationToken(message_id="user-msg-1")
+    entered = asyncio.Event()
+
+    async def summary(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    appender = SimpleNamespace(append=AsyncMock())
+    center = _continuation_completion_race_center(token, summary, appender)
+    resuming = asyncio.create_task(
+        center._resume_continuation_locked({}, "agent-msg-1", None)
+    )
+    await entered.wait()
+    token.cancel()
+    assert await resuming is True
+
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [SSEProcessingStatus.CANCELED]
+    turn_types = [call.args[2] for call in appender.append.await_args_list]
+    assert turn_types == ["turn_canceled"]
+    center._persist_turn_completion_kind.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_final_continuation_cancel_after_last_check_before_cas_obeys_winner():
+    token = CancellationToken(message_id="user-msg-1")
+    appender = SimpleNamespace(append=AsyncMock())
+    center = _continuation_completion_race_center(
+        token,
+        AsyncMock(return_value=("deterministic", None)),
+        appender,
+    )
+    child_terminal = AsyncMock()
+    center.queue_executor._terminalize_system_task = child_terminal
+
+    durable_cancellation_won = False
+
+    async def emit_status(**kwargs):
+        nonlocal durable_cancellation_won
+        if kwargs["status"] == SSEProcessingStatus.COMPLETED:
+            durable_cancellation_won = True
+            return None
+        return {"accepted": True}
+
+    async def hydrate_cancel(_message_id):
+        if durable_cancellation_won:
+            token.cancel()
+            return True
+        return False
+
+    center._emit_processing_status.side_effect = emit_status
+    center.cancellation_control.check_cancelled.side_effect = hydrate_cancel
+
+    assert await center._resume_continuation_locked({}, "agent-msg-1", None) is True
+
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [
+        SSEProcessingStatus.COMPLETED,
+        SSEProcessingStatus.CANCELED,
+    ]
+    turn_types = [call.args[2] for call in appender.append.await_args_list]
+    assert turn_types == ["turn_canceled"]
+    center._persist_turn_completion_kind.assert_not_awaited()
+    child_terminal.assert_not_awaited()
+
+
 def test_v1_resume_failure_notifies_non_terminal_tasks_before_terminal_emit():
     resume_line = _call_line(
         "_resume_continuation_locked",
@@ -1217,13 +1410,215 @@ def test_v1_resume_failure_notifies_non_terminal_tasks_before_terminal_emit():
     assert resume_line > 0
 
 
-def test_root_queue_completion_appends_turn_completed_before_completed_processing_status():
-    _assert_before(
-        "_process_room_user_message_locked",
-        "append",
-        ("turn_completed",),
-        ("SSEProcessingStatus.COMPLETED",),
+def _queue_completion_race_center(token, process_queue, emit_summary):
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.cancellation_control = make_cancellation_control(token)
+    center.message_reader = SimpleNamespace(
+        get_room_user_message_by_message_id=AsyncMock(return_value=None)
     )
+    center.room_runtime = SimpleNamespace(
+        inquiry_agent_messages_by_related_message_id=AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                error=None,
+                message_list=[SimpleNamespace(message_id="agent-msg-1")],
+            )
+        )
+    )
+    center.queue_executor = SimpleNamespace(process_queue=process_queue)
+    center.room_reader = SimpleNamespace(
+        get_room_by_room_id=AsyncMock(return_value=None)
+    )
+    center._emit_unified_summary = emit_summary
+    center._turn_event_appender = SimpleNamespace(append=AsyncMock())
+    center._emit_processing_status = AsyncMock(return_value={"accepted": True})
+    center._persist_turn_completion_kind = AsyncMock()
+    center._log_room_memory_stats = AsyncMock()
+    return center
+
+
+@pytest.mark.asyncio
+async def test_many_paused_queues_do_not_retain_active_tokens():
+    runtime = CancellationRuntime(
+        collection=SimpleNamespace(),
+        redis_kv=None,
+        transport=None,
+        config=CancellationConfig(),
+        task_runner=lambda coro, *, name=None: asyncio.create_task(coro, name=name),
+    )
+
+    for index in range(100):
+        message_id = f"message-{index}"
+        token = runtime.create_token(message_id)
+        center = _queue_completion_race_center(
+            token,
+            AsyncMock(return_value=SimpleNamespace(result=QueueResult.PAUSED)),
+            AsyncMock(),
+        )
+        center.cancellation_control = runtime
+        response = await center._process_room_user_message_locked(
+            SimpleNamespace(user_id="user-1", client_request_id=f"cr-{index}"),
+            "room-1",
+            message_id,
+            token=token,
+        )
+        assert response.success is True
+
+    assert runtime.active_token_count == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_cancel_after_complete_before_summary_suppresses_completion():
+    token = CancellationToken(message_id="message-1")
+
+    async def process_queue(*_args, **_kwargs):
+        token.cancel()
+        return SimpleNamespace(result=QueueResult.COMPLETED)
+
+    summary = AsyncMock(return_value=("deterministic", None))
+    center = _queue_completion_race_center(token, process_queue, summary)
+
+    response = await center._process_room_user_message_locked(
+        SimpleNamespace(user_id="user-1", client_request_id="cr-1"),
+        "room-1",
+        "message-1",
+        token=token,
+    )
+
+    assert response.success is True
+    assert response.error == "Processing cancelled by user"
+    summary.assert_not_awaited()
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [SSEProcessingStatus.CANCELED]
+    turn_types = [
+        call.args[2] for call in center._turn_event_appender.append.await_args_list
+    ]
+    assert turn_types == ["turn_canceled"]
+    center._persist_turn_completion_kind.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queue_canceled_root_cas_never_starts_completed_child_task_update():
+    token = CancellationToken(message_id="message-1")
+
+    async def process_queue(*_args, **_kwargs):
+        return SimpleNamespace(result=QueueResult.COMPLETED)
+
+    center = _queue_completion_race_center(
+        token,
+        process_queue,
+        AsyncMock(return_value=("deterministic", None)),
+    )
+    child_terminal = AsyncMock()
+    center.queue_executor._terminalize_system_task = child_terminal
+
+    async def emit_status(**kwargs):
+        if kwargs["status"] == SSEProcessingStatus.COMPLETED:
+            token.cancel()
+            return None
+        return {"accepted": True}
+
+    center._emit_processing_status.side_effect = emit_status
+    response = await center._process_room_user_message_locked(
+        SimpleNamespace(user_id="user-1", client_request_id="cr-1"),
+        "room-1",
+        "message-1",
+        token=token,
+    )
+
+    assert response.error == "Processing cancelled by user"
+    child_terminal.assert_not_awaited()
+    turn_types = [
+        call.args[2] for call in center._turn_event_appender.append.await_args_list
+    ]
+    assert turn_types == ["turn_canceled"]
+
+
+@pytest.mark.asyncio
+async def test_queue_child_persistence_failure_propagates_after_root_completion():
+    token = CancellationToken(message_id="message-1")
+    center = _queue_completion_race_center(
+        token,
+        AsyncMock(return_value=SimpleNamespace(result=QueueResult.COMPLETED)),
+        AsyncMock(return_value=("deterministic", None)),
+    )
+    child_terminal = AsyncMock(side_effect=RuntimeError("child persistence failed"))
+    center.queue_executor._terminalize_system_task = child_terminal
+
+    with pytest.raises(RuntimeError, match="child persistence failed"):
+        await center._process_room_user_message_locked(
+            SimpleNamespace(user_id="user-1", client_request_id="cr-1"),
+            "room-1",
+            "message-1",
+            token=token,
+        )
+
+    assert center._emit_processing_status.await_args.kwargs["status"] == (
+        SSEProcessingStatus.COMPLETED
+    )
+    center._persist_turn_completion_kind.assert_not_awaited()
+    center._turn_event_appender.append.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_continuation_child_persistence_failure_propagates_after_root_completion():
+    token = CancellationToken(message_id="user-msg-1")
+    appender = SimpleNamespace(append=AsyncMock())
+    center = _continuation_completion_race_center(
+        token,
+        AsyncMock(return_value=("deterministic", None)),
+        appender,
+    )
+    child_terminal = AsyncMock(side_effect=RuntimeError("child persistence failed"))
+    center.queue_executor._terminalize_system_task = child_terminal
+
+    with pytest.raises(RuntimeError, match="child persistence failed"):
+        await center._resume_continuation_locked({}, "agent-msg-1", None)
+
+    assert center._emit_processing_status.await_args.kwargs["status"] == (
+        SSEProcessingStatus.COMPLETED
+    )
+    center._persist_turn_completion_kind.assert_not_awaited()
+    appender.append.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queue_cancel_during_summary_suppresses_turn_completed_and_completed():
+    token = CancellationToken(message_id="message-1")
+    summary_entered = asyncio.Event()
+
+    async def process_queue(*_args, **_kwargs):
+        return SimpleNamespace(result=QueueResult.COMPLETED)
+
+    async def emit_summary(*_args, **_kwargs):
+        summary_entered.set()
+        await asyncio.Event().wait()
+
+    center = _queue_completion_race_center(token, process_queue, emit_summary)
+    processing = asyncio.create_task(
+        center._process_room_user_message_locked(
+            SimpleNamespace(user_id="user-1", client_request_id="cr-1"),
+            "room-1",
+            "message-1",
+            token=token,
+        )
+    )
+    await summary_entered.wait()
+    token.cancel()
+    response = await processing
+
+    assert response.error == "Processing cancelled by user"
+    statuses = [
+        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
+    ]
+    assert statuses == [SSEProcessingStatus.CANCELED]
+    turn_types = [
+        call.args[2] for call in center._turn_event_appender.append.await_args_list
+    ]
+    assert turn_types == ["turn_canceled"]
+    center._persist_turn_completion_kind.assert_not_awaited()
 
 
 def test_supervisor_corrupted_data_notifies_before_failed_processing_status():
@@ -1253,13 +1648,18 @@ def test_supervisor_execution_failure_notifies_before_failed_processing_status()
     )
 
 
-def test_supervisor_completed_appends_turn_completed_before_completed_processing_status():
-    _assert_before(
+def test_supervisor_completed_lifecycle_is_accepted_before_turn_completed():
+    lifecycle_line = _call_line(
+        "_handle_supervisor_run_result",
+        "_emit_processing_status",
+        "SSEProcessingStatus.COMPLETED",
+    )
+    turn_line = _call_line(
         "_handle_supervisor_run_result",
         "append",
-        ("turn_completed",),
-        ("SSEProcessingStatus.COMPLETED",),
+        "turn_completed",
     )
+    assert lifecycle_line < turn_line
 
 
 def test_supervisor_canceled_appends_and_notifies_before_terminal_status():
@@ -1292,17 +1692,11 @@ def test_supervisor_failed_appends_and_notifies_before_terminal_status():
     )
 
 
-def test_v1_resume_completion_side_effects_complete_before_completed_processing_status():
+def test_v1_resume_summary_completes_before_completed_processing_status():
     _assert_before(
         "_resume_continuation_locked",
         "_emit_unified_summary",
         (),
-        ("SSEProcessingStatus.COMPLETED",),
-    )
-    _assert_before(
-        "_resume_continuation_locked",
-        "append",
-        ("turn_completed",),
         ("SSEProcessingStatus.COMPLETED",),
     )
 

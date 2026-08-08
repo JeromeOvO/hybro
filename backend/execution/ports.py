@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
 from common.types import AgentCard
 from common.utils.cancellation import CancellationToken
+from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.memory import RoomMemory
@@ -803,7 +804,7 @@ class CancellationControlPort(Protocol):
     ) -> bool: ...
     def clear_cancellation(self, message_id: str) -> None: ...
     async def check_cancelled(self, message_id: str) -> bool: ...
-    async def signal(self, message_id: str) -> None: ...
+    async def signal(self, message_id: str) -> Any: ...
 
 
 class RunReadPort(Protocol):
@@ -813,7 +814,7 @@ class RunReadPort(Protocol):
 
 
 class CancellationStatePort(Protocol):
-    async def cancel_message_and_broadcast(self, message_id: str) -> None: ...
+    async def cancel_message_and_broadcast(self, message_id: str) -> Any: ...
     def release_active_token(self, message_id: str) -> bool: ...
     def clear_cancellation(self, message_id: str) -> None: ...
 
@@ -840,6 +841,17 @@ class ClientRequestIdResolver(Protocol):
 
 
 class RunLifecyclePort(Protocol):
+    async def write_processing_status(
+        self,
+        room_id: str,
+        status: ProcessingStatusLike,
+        message_id: str | None,
+        *,
+        client_request_id: str | None = None,
+        details: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> RunLifecycleWriteOutcome: ...
+
     async def record_processing_status(
         self,
         room_id: str,

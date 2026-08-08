@@ -65,9 +65,17 @@ Internal eventing exposes health independently as
 `delivery_pubsub_connected`. The bounded event bus retains eventing-owned dead
 letters for `queue_full`, `handler`, `fanout`, and `deserialization` failures and
 best-effort publishes the same structured record on the independent
-`eventing:dead_letter` channel. Dead letters include origin, event type, trace ID, failure stage,
-exception class/message, timestamp, and bounded metadata. Payloads must still
-follow the privacy rules below.
+`eventing:dead_letter` channel. Dead letters include origin, event type, trace ID,
+failure stage, exception class plus a redacted message byte-size/SHA-256/
+fingerprint summary, timestamp, and bounded scalar metadata. Raw exception text
+is never retained or published. Event bodies are never retained or published:
+the payload field is a
+redacted projection containing only byte size, SHA-256, bounded top-level key
+names, and allow-listed identifiers (room/run/message/task/agent/hub/journal and
+idempotency/correlation IDs). Invalid raw Redis messages receive the same
+size/hash-only treatment. Each serialized dead letter is capped at 8 KiB.
+Shutdown handler timeouts use failure stage `shutdown_handler_timeout` so a
+handler that ignores task cancellation is observable without blocking shutdown.
 
 `agent_call_completed` is owned by Supervisor dispatch and represents the
 logical agent operation. `a2a_call_completed` is owned by the A2A client facade

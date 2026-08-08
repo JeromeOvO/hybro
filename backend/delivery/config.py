@@ -15,6 +15,8 @@ class DeliveryConfig:
     shutdown_drain_seconds: float = 5.0
     terminal_dedup_ttl_seconds: int = 300
     terminal_dedup_cache_maxsize: int = 10_000
+    delivery_started_ttl_seconds: int = 3600
+    delivery_started_cache_maxsize: int = 10_000
     redis_sse_channel_prefix: str = "sse:room:"
     redis_dead_letter_channel: str = "delivery:dead_letter"
     redis_terminal_key_prefix: str = "terminal:"
@@ -39,6 +41,12 @@ class DeliveryConfig:
         _require_positive(
             "terminal_dedup_cache_maxsize",
             self.terminal_dedup_cache_maxsize,
+        )
+        _require_positive(
+            "delivery_started_ttl_seconds", self.delivery_started_ttl_seconds
+        )
+        _require_positive(
+            "delivery_started_cache_maxsize", self.delivery_started_cache_maxsize
         )
         _require_positive("dead_letter_memory_maxlen", self.dead_letter_memory_maxlen)
         _require_positive("redis_reconnect_delay", self.redis_reconnect_delay)

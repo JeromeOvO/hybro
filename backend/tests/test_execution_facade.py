@@ -16,6 +16,7 @@ from common.dto import (
     RunInfo,
 )
 from common.utils.time import utcnow
+from execution.cancellation import CancellationPropagationResult
 from execution.facade import (
     ExecutionFacade,
     RoomCenterPort,
@@ -782,6 +783,7 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
 @pytest.mark.asyncio
 async def test_execute_emits_completed_for_completed_room_preflight():
     facade, deps = _make_facade()
+    deps["run_lifecycle"].record_processing_status.return_value = {"accepted": True}
     deps[
         "room_center"
     ].send_message_to_room.return_value = _room_response_with_preflight(
@@ -858,6 +860,7 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
 
     async def record_status(_room_id, status, _message_id, **_kwargs):
         order.append(("record", status))
+        return {"accepted": True}
 
     async def emit_event(event):
         order.append(("emit", event.status))
@@ -938,6 +941,7 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
 
     async def record_status(_room_id, status, _message_id, **_kwargs):
         order.append(("record", status))
+        return {"accepted": True}
 
     async def emit_event(event):
         order.append(("emit", event.status))
@@ -1316,6 +1320,48 @@ async def test_cancel_preserves_order_and_requested_by_user_id():
         "canceled",
     )
     deps["cancellation_state"].clear_cancellation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_cancellation_broadcast_stays_pending_then_retry_reconciles():
+    facade, deps = _make_facade()
+    deps["cancellation_state"].cancel_message_and_broadcast.side_effect = [
+        CancellationPropagationResult(
+            kv_configured=True,
+            kv_succeeded=False,
+            pubsub_configured=True,
+            pubsub_succeeded=False,
+        ),
+        CancellationPropagationResult(
+            kv_configured=True,
+            kv_succeeded=True,
+            pubsub_configured=True,
+            pubsub_succeeded=True,
+        ),
+    ]
+
+    first = await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    assert first is True
+    deps["cancellation_repository"].mark_reconciled.assert_not_awaited()
+    deps["hitl_message_cancellation"].cancel_requests_for_message.assert_awaited_once()
+    assert deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.await_count == 2
+
+    retried = await facade.finalize_pending_cancellation(
+        room_id="room-1",
+        message_id="msg-1",
+        settle_no_run=True,
+    )
+
+    assert retried.status == OrchestrationStatus.CANCELED
+    assert retried.cancellation_applied is True
+    assert retried.reconciled is True
+    deps["cancellation_repository"].mark_reconciled.assert_awaited_once_with("msg-1")
+    assert deps["cancellation_state"].cancel_message_and_broadcast.await_count == 2
 
 
 @pytest.mark.asyncio

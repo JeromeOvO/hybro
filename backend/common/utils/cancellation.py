@@ -40,8 +40,8 @@ class CancellationToken:
        owner after durable admission succeeds.
     2. Threaded through processing contexts so sub-handlers share one token.
     3. Signalled by the Execution runtime when a cancellation request arrives.
-    4. Released identity-safely by the owner on terminal completion; paused
-       work retains it until continuation, reconciliation, or shutdown.
+    4. Released identity-safely by the owner on terminal completion or pause;
+       continuation resume recreates it and hydrates durable Redis state.
     5. Consumed via ``check()`` or ``race()``.
     """
 

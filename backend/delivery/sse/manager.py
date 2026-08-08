@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -7,6 +9,12 @@ from common.observability import MetricsCollector, NoopMetricsCollector
 from delivery.config import DeliveryConfig
 from delivery.sse.connection import SSEConnection
 from delivery.types import TaskRunner
+
+
+@dataclass(slots=True)
+class _AdmissionLockState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
 
 
 class SSETransportImpl:
@@ -31,7 +39,7 @@ class SSETransportImpl:
         self.room_connections: dict[str, dict[str, SSEConnection]] = {}
         self.connection_rooms: dict[str, str] = {}
         self._lock = asyncio.Lock()
-        self._admission_locks: dict[str, asyncio.Lock] = {}
+        self._admission_locks: dict[str, _AdmissionLockState] = {}
         self._admission_locks_lock = asyncio.Lock()
         self._room_cleanup_tasks: dict[str, asyncio.Task] = {}
         self._draining = False
@@ -123,11 +131,10 @@ class SSETransportImpl:
                 "Server is draining - rejecting new SSE connections"
             )
 
-        admission_lock = await self._get_admission_lock(room_id)
         first_admission_started = False
         connection_admitted = False
         try:
-            async with admission_lock:
+            async with self._admission(room_id):
                 if self._draining:
                     raise ConnectionRefusedError(
                         "Server is draining - rejecting new SSE connections"
@@ -164,13 +171,30 @@ class SSETransportImpl:
                 self._schedule_room_cleanup(room_id)
             raise
 
-    async def _get_admission_lock(self, room_id: str) -> asyncio.Lock:
+    @asynccontextmanager
+    async def _admission(self, room_id: str):
         async with self._admission_locks_lock:
-            lock = self._admission_locks.get(room_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._admission_locks[room_id] = lock
-            return lock
+            state = self._admission_locks.get(room_id)
+            if state is None:
+                state = _AdmissionLockState()
+                self._admission_locks[room_id] = state
+            state.users += 1
+        try:
+            async with state.lock:
+                yield
+        finally:
+            async with self._admission_locks_lock:
+                state.users -= 1
+                cleanup = self._room_cleanup_tasks.get(room_id)
+                cleanup_active = cleanup is not None and not cleanup.done()
+                cleanup_is_current = cleanup is asyncio.current_task()
+                if (
+                    state.users == 0
+                    and not self.room_connections.get(room_id)
+                    and (not cleanup_active or cleanup_is_current)
+                    and self._admission_locks.get(room_id) is state
+                ):
+                    self._admission_locks.pop(room_id, None)
 
     async def _remove_connections_local(
         self,
@@ -236,8 +260,7 @@ class SSETransportImpl:
                     self._finish_room_cleanup(room_id, task)
 
     async def _unsubscribe_if_room_still_empty(self, room_id: str) -> None:
-        admission_lock = await self._get_admission_lock(room_id)
-        async with admission_lock:
+        async with self._admission(room_id):
             async with self._lock:
                 if self.room_connections.get(room_id):
                     return

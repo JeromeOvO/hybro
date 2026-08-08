@@ -1480,8 +1480,10 @@ class _InMemoryRoomMessageStore:
         message_content,
     ):
         message = self.agent_messages.get(message_id)
-        if message is not None:
-            message.message_content = message_content
+        if message is None:
+            return False
+        message.message_content = message_content
+        return True
 
     async def cancel_descendants(self, message_id: str):
         return None

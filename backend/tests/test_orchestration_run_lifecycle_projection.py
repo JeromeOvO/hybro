@@ -372,7 +372,7 @@ async def test_project_run_state_causation_replay_does_not_advance_seq(
 
 
 @pytest.mark.asyncio
-async def test_terminal_projection_repairs_missing_event_on_terminal_head():
+async def test_terminal_projection_does_not_append_on_terminal_head():
     from execution.run_command_handler import RunCommandHandler
 
     run_repo = InMemoryRunRepository(
@@ -401,12 +401,10 @@ async def test_terminal_projection_repairs_missing_event_on_terminal_head():
         causation_id="orchestration-terminal-repair:public-run-1:completed",
     )
 
-    assert repaired is not None
-    assert repaired["type"] == RunEventType.RUN_COMPLETED.value
-    assert repaired["seq"] == 5
+    assert repaired is None
     assert run_repo.docs["public-run-1"]["state"] == RunState.COMPLETED.value
-    assert run_repo.docs["public-run-1"]["seq"] == 5
-    assert len(event_repo.events) == 1
+    assert run_repo.docs["public-run-1"]["seq"] == 4
+    assert event_repo.events == []
 
 
 @pytest.mark.asyncio

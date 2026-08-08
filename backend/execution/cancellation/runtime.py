@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from cachetools import TTLCache
@@ -11,6 +12,20 @@ from common.utils.cancellation import CancellationToken
 from execution.cancellation.config import CancellationConfig
 from execution.cancellation.transport import RedisCancellationTransport
 from execution.cancellation.watcher import CancellationWatcher
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationPropagationResult:
+    kv_configured: bool
+    kv_succeeded: bool
+    pubsub_configured: bool
+    pubsub_succeeded: bool
+
+    @property
+    def succeeded(self) -> bool:
+        return (not self.kv_configured or self.kv_succeeded) and (
+            not self.pubsub_configured or self.pubsub_succeeded
+        )
 
 
 class CancellationRuntime:
@@ -187,25 +202,35 @@ class CancellationRuntime:
         if token is not None:
             token.cancel()
 
-    async def signal(self, message_id: str) -> None:
+    async def signal(self, message_id: str) -> CancellationPropagationResult:
         self.signal_local(message_id)
-        await self._write_l2(message_id)
+        kv_succeeded = await self._write_l2(message_id)
+        pubsub_succeeded = self._transport is None
         if self._transport is not None:
             try:
                 await self._transport.publish(message_id)
+                pubsub_succeeded = True
             except Exception:
-                pass
+                pubsub_succeeded = False
+        return CancellationPropagationResult(
+            kv_configured=self._redis_kv is not None,
+            kv_succeeded=kv_succeeded,
+            pubsub_configured=self._transport is not None,
+            pubsub_succeeded=pubsub_succeeded,
+        )
 
-    async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self.signal(message_id)
+    async def cancel_message_and_broadcast(
+        self, message_id: str
+    ) -> CancellationPropagationResult:
+        return await self.signal(message_id)
 
     async def handle_remote_cancellation(self, message_id: str) -> None:
         self.signal_local(message_id)
         await self._write_l2(message_id)
 
-    async def _write_l2(self, message_id: str) -> None:
+    async def _write_l2(self, message_id: str) -> bool:
         if self._redis_kv is None:
-            return
+            return True
         try:
             await asyncio.wait_for(
                 self._redis_kv.set(
@@ -215,11 +240,12 @@ class CancellationRuntime:
                 ),
                 timeout=self.config.redis_io_timeout_seconds,
             )
+            return True
         except Exception:
-            pass
+            return False
 
     def _cancel_key(self, message_id: str) -> str:
         return f"{self.config.redis_key_prefix}{message_id}"
 
 
-__all__ = ["CancellationRuntime"]
+__all__ = ["CancellationPropagationResult", "CancellationRuntime"]

@@ -352,7 +352,13 @@ projection accepts an explicit public `RunState` and is idempotent by causation
 id. Public projection is unconditional: `OrchestrationRunState` is the execution
 source of truth, while `runs` and `run_events` are public lifecycle projections.
 A projection with a new causation id records that binding even when the public
-head is already at the requested active state; repeated processing projections
+head is already at the requested active state. Processing-status lifecycle writes
+return a typed `accepted`/`conflict`/`error` outcome: terminal SSE is emitted only
+for `accepted`, a durable terminal conflict suppresses the losing frame, and a
+persistence error raises an observable fingerprinted failure for retry. If an
+event append succeeds but head projection fails, the writer repairs the head from
+that exact event before returning `accepted`; failed repair returns `error`.
+Repeated processing projections
 use `RUN_RESUMED` rather than emitting another start event. Mapping
 orchestration-specific statuses into public run states is performed by the
 single state-driven supervisor loop. Graceful process shutdown is treated as an
@@ -631,9 +637,18 @@ starting the bus; start freezes the registry. Public publication remains closed
 until transport startup and health finish, while already-received remote
 callbacks wait on that startup transition instead of being dropped. The Hub
 handler waits on an explicit relay-ready gate, so remote startup-window events
-remain in its bounded FIFO until the concrete relay router is bound. Shutdown
-stops ingress and drains eventing while that router is still usable, then stops
-Relay and Delivery.
+remain in its bounded FIFO until the concrete relay router is bound. Legacy
+remote envelopes without the envelope timestamp hydrate it from the internal
+event timestamp (or an explicit UTC-now fallback); newly serialized envelopes
+always include it. Dead letters never retain event bodies and instead use an
+8-KiB-capped size/hash/key/allow-listed-identifier projection. Shutdown stops
+ingress and drains eventing while that router is still usable, then stops Relay
+and Delivery. Worker cancellation/join uses the remaining shutdown deadline;
+a handler that suppresses `CancelledError` is abandoned observably without
+blocking publishers or queue/completion cleanup. Timeout/caller-canceled transport
+operations are canceled and joined; cancellation-resistant inner tasks remain in
+a bus-owned auxiliary registry with exception-consuming callbacks, are retried
+within the stop deadline, and emit `auxiliary_task_timeout` if still live.
 
 `dal.redis.internal_eventing.RedisInternalEventTransport` owns a separate
 `RedisPubSubImpl`, generic internal channel subscription/reconnect/health, and the
@@ -641,8 +656,10 @@ independent `eventing:dead_letter` channel. Ping, subscribe, publish, DLT publis
 iterator cleanup, and close I/O are timeout-bounded. Listener cancellation shields
 and then joins the one in-flight remote callback before transport close. Its client
 is never shared with or closed by the
-Delivery bus. With no Redis configuration, the bounded local handlers remain
-available and only cross-instance fan-out is disabled.
+Delivery bus. `EVENTING_REDIS_CHANNEL` is the canonical setting; legacy
+`REDIS_INTERNAL_CHANNEL` remains a lower-priority rolling-deployment alias. With
+no Redis configuration, the bounded local handlers remain available and only
+cross-instance fan-out is disabled.
 
 ### `delivery`
 
@@ -678,8 +695,12 @@ backpressure to other connections in the room. Per-room admission locks
 serialize first-subscribe and last-unsubscribe transitions; local removal still
 happens immediately, followed by a tracked background cleanup task that performs
 a locked empty-room recheck before Redis unsubscribe. Shutdown drains these
-cleanup tasks. This also keeps Redis listener callbacks from synchronously
-unsubscribing and orphaning their own listener task.
+cleanup tasks. Admission-lock states count holders and waiters and are reclaimed
+only after the room is empty and its cleanup owner has finished, preventing both
+room-churn growth and lock replacement races. Delivery-start latency timestamps
+are likewise held in a configurable TTL/max-size cache. This also keeps Redis
+listener callbacks from synchronously unsubscribing and orphaning their own
+listener task.
 
 When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
 operation has completed, while the subscription task owns the bounded readiness
@@ -720,10 +741,13 @@ KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
 stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
 state immediately after token creation and identity-releases that token for every
 outcome, including ready. Admitted orchestration independently creates and
-hydrates its own token after winning the processing claim. Execution and
-continuation owners release their exact token on terminal paths; paused work
-retains it until resume, durable recovery, or successful cancellation
-finalization. Cancellation finalization drops only the active token while
+hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
+paused/awaiting-input paths. Resume creates a fresh owner and hydrates Redis, so
+a cancellation tombstone pre-signals it without accumulating dormant active
+tokens. Cancellation signaling reports KV and Pub/Sub propagation separately;
+when configured propagation fails, finalization still performs local terminal,
+HITL, and task cleanup but leaves the durable marker pending for the service job
+to retry broadcast. Cancellation finalization drops only the active token while
 retaining the tombstone, and a concurrent completion winner does not release an
 active execution token. Shutdown clears the registry after in-flight execution
 is stopped. Terminal status claims store unique owner IDs in
@@ -736,7 +760,9 @@ through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
 provider. Routes call the delivery transport, while the runtime implementation
 lives in `delivery`. Delivery never calls back into Execution or removed-package
 business services; lifecycle recording happens before typed delivery events are
-emitted.
+emitted. Queue-owned `system:hybro` completed task publication is delayed until
+the root lifecycle writer wins durable `COMPLETED`, preventing cancellation during
+a child task-update await from leaving a conflicting completed child projection.
 
 ### `room_files`
 

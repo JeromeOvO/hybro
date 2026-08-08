@@ -12,8 +12,8 @@ class CancellationStateAdapter:
     def __init__(self, control) -> None:
         self._control = control
 
-    async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self._control.signal(message_id)
+    async def cancel_message_and_broadcast(self, message_id: str):
+        return await self._control.signal(message_id)
 
     def release_active_token(self, message_id: str) -> bool:
         return self._control.release_active_token(message_id)

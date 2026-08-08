@@ -87,6 +87,7 @@ class ResumeResult:
     needs_completion: bool = False
     room_id: str | None = None
     user_message_id: str | None = None
+    token: CancellationToken | None = None
 
 
 # ------------------------------------------------------------------
@@ -564,39 +565,27 @@ class QueueExecutor:
             else:
                 last_popped.clear()
 
-        # Phase 2: deferred SSE notification
-        # Phase 3: Emit terminal state for system:hybro
-        if queue_result != QueueResult.PAUSED:
-            try:
-                task_status = (
-                    "completed"
-                    if queue_result == QueueResult.COMPLETED
-                    else queue_result.value
-                )
-                await self.delivery.send_task_update(
-                    room_id=room_id,
-                    message_id=sys_message_id,
-                    status=task_status,
-                )
+        # Cancellation may arrive after the final agent completed but before
+        # summary/terminal projection. Convert that boundary to normal cancel
+        # semantics before exposing any completed task state.
+        if (
+            queue_result == QueueResult.COMPLETED
+            and token is not None
+            and token.is_cancelled
+        ):
+            queue_result = QueueResult.CANCELED
+            deferred_sse = (SSEProcessingStatus.CANCELED, True)
 
-                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    sys_message_id
-                )
-                if (
-                    db_msg
-                    and db_msg.message_content
-                    and db_msg.message_content.message_task
-                ):
-                    db_msg.message_content.message_task.status.state = (
-                        system_task_state_from_runtime_status(task_status)
-                    )
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id, db_msg.message_content
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to update terminal state for system:hybro", exc_info=True
-                )
+        # Phase 2: deferred SSE notification. A completed system task is
+        # intentionally delayed until RoomMessageCenter wins the durable root
+        # COMPLETED lifecycle write; failure/cancellation tasks can project now.
+        if queue_result not in {QueueResult.PAUSED, QueueResult.COMPLETED}:
+            await self._terminalize_system_task(
+                room_id=room_id,
+                sys_message_id=sys_message_id,
+                task_status=queue_result.value,
+                token=token,
+            )
 
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
@@ -625,6 +614,77 @@ class QueueExecutor:
             logger.info("QueueExecutor: Finished processing message queue")
 
         return QueueProcessingResult(result=queue_result)
+
+    async def _terminalize_system_task(
+        self,
+        *,
+        room_id: str,
+        sys_message_id: str,
+        task_status: str,
+        token: CancellationToken | None,
+    ) -> str:
+        cancellation_sensitive = task_status == "completed" and token is not None
+        effective_status = (
+            "canceled" if cancellation_sensitive and token.is_cancelled else task_status
+        )
+        db_msg = await self.message_reader.get_room_agent_message_by_message_id(
+            sys_message_id
+        )
+        if not (
+            db_msg and db_msg.message_content and db_msg.message_content.message_task
+        ):
+            raise RuntimeError(
+                f"system task message {sys_message_id!r} is missing task state"
+            )
+
+        async def persist(status: str) -> None:
+            db_msg.message_content.message_task.status.state = (
+                system_task_state_from_runtime_status(status)
+            )
+            last_error: BaseException | None = None
+            for _attempt in range(3):
+                try:
+                    persisted = await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                        db_msg.message_id, db_msg.message_content
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    continue
+                if persisted:
+                    return
+                last_error = RuntimeError(
+                    f"failed to persist system task {sys_message_id!r} as {status}"
+                )
+            assert last_error is not None
+            raise last_error
+
+        await persist(effective_status)
+        if (
+            cancellation_sensitive
+            and token.is_cancelled
+            and effective_status == "completed"
+        ):
+            effective_status = "canceled"
+            await persist(effective_status)
+
+        await self.delivery.send_task_update(
+            room_id=room_id,
+            message_id=sys_message_id,
+            status=effective_status,
+        )
+        if (
+            cancellation_sensitive
+            and token.is_cancelled
+            and effective_status == "completed"
+        ):
+            effective_status = "canceled"
+            await persist(effective_status)
+            await self.delivery.send_task_update(
+                room_id=room_id,
+                message_id=sys_message_id,
+                status=effective_status,
+            )
+        return effective_status
 
     # ------------------------------------------------------------------
     # Agent resolution / rate-limit helpers (delegated from queue loop)
@@ -1024,12 +1084,12 @@ class QueueExecutor:
                 )
 
             if not remaining_queue:
-                self._release_cancellation_token(user_message_id, token)
                 return ResumeResult(
                     success=True,
                     needs_completion=True,
                     room_id=room_id,
                     user_message_id=user_message_id,
+                    token=token,
                 )
 
             queue_processing_result = await self.process_queue(
@@ -1045,10 +1105,11 @@ class QueueExecutor:
             raise
 
         if queue_processing_result.result == QueueResult.PAUSED:
+            self._release_cancellation_token(user_message_id, token)
             return ResumeResult(success=True)
 
-        self._release_cancellation_token(user_message_id, token)
         if queue_processing_result.result == QueueResult.FAILED:
+            self._release_cancellation_token(user_message_id, token)
             if before_terminal_failure is not None:
                 await before_terminal_failure(room_id, user_message_id)
             await self._emit_processing_status(
@@ -1063,6 +1124,7 @@ class QueueExecutor:
                 user_message_id=user_message_id,
             )
         if queue_processing_result.result == QueueResult.CANCELED:
+            self._release_cancellation_token(user_message_id, token)
             return ResumeResult(success=True)
 
         return ResumeResult(
@@ -1070,6 +1132,7 @@ class QueueExecutor:
             needs_completion=True,
             room_id=room_id,
             user_message_id=user_message_id,
+            token=token,
         )
 
     # ------------------------------------------------------------------

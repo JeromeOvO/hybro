@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from delivery.config import DeliveryConfig
 from delivery.facade import DeliveryFacade
 from tests.fakes.delivery import (
     FakeDeliveryCompat,
@@ -254,6 +255,30 @@ async def test_successful_retry_after_failed_handoff_logs_success(caplog):
         "completed",
     ]
     assert ("room-1", "msg-retry") in facade._terminal_delivery_logged
+
+
+@pytest.mark.asyncio
+async def test_delivery_start_timers_are_ttl_and_size_bounded():
+    facade = make_delivery_facade(
+        config=DeliveryConfig(
+            delivery_started_ttl_seconds=0.01,
+            delivery_started_cache_maxsize=2,
+        )
+    )
+
+    for index in range(3):
+        await facade.send_task_submitted(
+            "room-1",
+            f"msg-{index}",
+            f"task-{index}",
+            "Agent",
+        )
+    assert len(facade._delivery_started_at) == 2
+
+    import asyncio
+
+    await asyncio.sleep(0.02)
+    assert len(facade._delivery_started_at) == 0
 
 
 @pytest.mark.asyncio

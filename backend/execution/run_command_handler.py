@@ -12,6 +12,7 @@ from common.observability.run_metrics import increment_counter
 from common.protocols import RunEventRepository, RunRepository
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from execution.run_reducer import RunTransitionError, ensure_transition_allowed
 from models.run import TERMINAL_RUN_STATES, Run, RunEvent, RunEventType, RunState
 
@@ -66,98 +67,134 @@ class RunCommandHandler:
         *,
         client_request_id: str | None = None,
         details: str | None = None,
-        _lease_held: bool = False,
     ) -> dict[str, Any] | None:
-        """Persist lifecycle from processing_status semantics. Returns last run_event payload for SSE."""
+        """Legacy payload-only API retained for non-terminal compatibility."""
+        outcome = await self.write_processing_status(
+            room_id,
+            status,
+            message_id,
+            client_request_id=client_request_id,
+            details=details,
+        )
+        return outcome.payload if outcome.status == "accepted" else None
+
+    async def write_processing_status(
+        self,
+        room_id: str,
+        status: Any,
+        message_id: str | None,
+        *,
+        client_request_id: str | None = None,
+        details: str | None = None,
+        _lease_held: bool = False,
+    ) -> RunLifecycleWriteOutcome:
+        """Persist status with an explicit accepted/conflict/error result."""
         if not room_id or not message_id:
-            return None
+            return RunLifecycleWriteOutcome.error(
+                ValueError("room_id and message_id are required")
+            )
         if self._room_files is not None and not _lease_held:
-            async with self._room_files.write_lease(room_id, "run-processing-status"):
-                return await self.record_processing_status(
-                    room_id,
-                    status,
-                    message_id,
-                    client_request_id=client_request_id,
-                    details=details,
-                    _lease_held=True,
-                )
+            try:
+                async with self._room_files.write_lease(
+                    room_id, "run-processing-status"
+                ):
+                    return await self.write_processing_status(
+                        room_id,
+                        status,
+                        message_id,
+                        client_request_id=client_request_id,
+                        details=details,
+                        _lease_held=True,
+                    )
+            except Exception as exc:
+                return RunLifecycleWriteOutcome.error(exc)
 
         status_value = self._normalize_status(status)
         run_id = self._run_id_for_message(message_id)
 
         try:
-            if status_value == SSEProcessingStatus.PROCESSING:
-                return await self._record_active(
-                    room_id=room_id,
-                    run_id=run_id,
-                    trigger_message_id=message_id,
-                    client_request_id=client_request_id,
-                    awaiting_input=False,
-                )
-            if status_value == SSEProcessingStatus.AWAITING_INPUT:
-                return await self._record_active(
-                    room_id=room_id,
-                    run_id=run_id,
-                    trigger_message_id=message_id,
-                    client_request_id=client_request_id,
-                    awaiting_input=True,
-                )
-            if status_value == SSEProcessingStatus.COMPLETED:
-                return await self._record_terminal(
-                    room_id=room_id,
-                    run_id=run_id,
-                    trigger_message_id=message_id,
-                    client_request_id=client_request_id,
-                    terminal_state=RunState.COMPLETED,
-                    error_code=None,
-                    error_message=None,
-                )
-            if status_value == SSEProcessingStatus.CANCELED:
-                return await self._record_terminal(
-                    room_id=room_id,
-                    run_id=run_id,
-                    trigger_message_id=message_id,
-                    client_request_id=client_request_id,
-                    terminal_state=RunState.CANCELED,
-                    error_code="CANCELED",
-                    error_message=details,
-                )
-            if status_value in {
-                SSEProcessingStatus.FAILED,
-                SSEProcessingStatus.REJECTED,
-                SSEProcessingStatus.RATE_LIMITED,
-                SSEProcessingStatus.ERROR,
-            }:
-                return await self._record_terminal(
-                    room_id=room_id,
-                    run_id=run_id,
-                    trigger_message_id=message_id,
-                    client_request_id=client_request_id,
-                    terminal_state=RunState.FAILED,
-                    error_code=status_value.upper(),
-                    error_message=details,
-                )
-        except RunTransitionError as e:
+            payload = await self._persist_processing_status(
+                room_id=room_id,
+                run_id=run_id,
+                message_id=message_id,
+                status_value=status_value,
+                client_request_id=client_request_id,
+                details=details,
+            )
+            if payload is None:
+                return RunLifecycleWriteOutcome.conflict()
+            return RunLifecycleWriteOutcome.accepted(payload)
+        except RunTransitionError:
             increment_counter(
                 "run_transition_errors_total",
                 source="processing_status",
                 status=status_value,
             )
             logger.debug(
-                "RunCommandHandler: skipped illegal transition (room=%s run=%s): %s",
+                "RunCommandHandler: skipped illegal transition (room=%s run=%s)",
                 room_id,
                 run_id,
-                e,
             )
-        except Exception as e:
+            return RunLifecycleWriteOutcome.conflict()
+        except Exception as exc:
+            outcome = RunLifecycleWriteOutcome.error(exc)
             logger.warning(
-                "RunCommandHandler: failed to persist run status (room=%s run=%s status=%s): %s",
+                "RunCommandHandler: failed to persist run status "
+                "(room=%s run=%s status=%s error_class=%s error_fingerprint=%s)",
                 room_id,
                 run_id,
                 status_value,
-                e,
+                outcome.error_class,
+                outcome.error_fingerprint,
             )
-        return None
+            return outcome
+
+    async def _persist_processing_status(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        message_id: str,
+        status_value: str,
+        client_request_id: str | None,
+        details: str | None,
+    ) -> dict[str, Any] | None:
+        if status_value == SSEProcessingStatus.PROCESSING:
+            return await self._record_active(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=message_id,
+                client_request_id=client_request_id,
+                awaiting_input=False,
+            )
+        if status_value == SSEProcessingStatus.AWAITING_INPUT:
+            return await self._record_active(
+                room_id=room_id,
+                run_id=run_id,
+                trigger_message_id=message_id,
+                client_request_id=client_request_id,
+                awaiting_input=True,
+            )
+        terminal = {
+            SSEProcessingStatus.COMPLETED: (RunState.COMPLETED, None),
+            SSEProcessingStatus.CANCELED: (RunState.CANCELED, "CANCELED"),
+            SSEProcessingStatus.FAILED: (RunState.FAILED, "FAILED"),
+            SSEProcessingStatus.REJECTED: (RunState.FAILED, "REJECTED"),
+            SSEProcessingStatus.RATE_LIMITED: (RunState.FAILED, "RATE_LIMITED"),
+            SSEProcessingStatus.ERROR: (RunState.FAILED, "ERROR"),
+        }.get(status_value)
+        if terminal is None:
+            return None
+        terminal_state, error_code = terminal
+        return await self._record_terminal(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=message_id,
+            client_request_id=client_request_id,
+            terminal_state=terminal_state,
+            error_code=error_code,
+            error_message=None if terminal_state == RunState.COMPLETED else details,
+        )
 
     async def project_run_state(
         self,
@@ -491,7 +528,7 @@ class RunCommandHandler:
         )
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
-        if current_state in TERMINAL_RUN_STATES and current_state != terminal_state:
+        if current_state in TERMINAL_RUN_STATES:
             return None
 
         terminal_event_map = {
@@ -587,9 +624,10 @@ class RunCommandHandler:
             updates["error_message"] = payload.get("error_message")
             updates["terminal_summary"] = payload.get("terminal_summary")
 
-        await self._runs.update_one(
-            {"run_id": run_id},
-            {"$set": updates},
+        await self._project_or_repair_appended_event(
+            run_id=run_id,
+            updates=updates,
+            event_doc=dumped,
         )
         increment_counter(
             "run_event_append_total",
@@ -606,6 +644,31 @@ class RunCommandHandler:
             "payload": payload,
             "ts": dumped.get("ts"),
         }
+
+    async def _project_or_repair_appended_event(
+        self,
+        *,
+        run_id: str,
+        updates: dict[str, Any],
+        event_doc: dict[str, Any],
+    ) -> None:
+        try:
+            projected = await self._runs.update_one(
+                {"run_id": run_id},
+                {"$set": updates},
+            )
+            if projected is not False:
+                return
+            projection_error = RuntimeError("run head projection was not acknowledged")
+        except Exception as exc:
+            projection_error = exc
+
+        # The append is durable. Repair from that exact event before reporting
+        # success; otherwise the checked API returns ERROR for retry/healing.
+        if not await self._repair_head_from_existing_event(event_doc):
+            raise RuntimeError(
+                "run head repair was not acknowledged"
+            ) from projection_error
 
     async def _find_existing_projection_event(
         self,
@@ -665,19 +728,19 @@ class RunCommandHandler:
             "ts": event_doc.get("ts"),
         }
 
-    async def _repair_head_from_existing_event(self, event_doc: dict[str, Any]) -> None:
+    async def _repair_head_from_existing_event(self, event_doc: dict[str, Any]) -> bool:
         run_id = str(event_doc.get("run_id") or "")
         if not run_id:
-            return
+            return False
 
         run_doc = await self._runs.find_one({"run_id": run_id})
         if not isinstance(run_doc, dict):
-            return
+            return False
 
         event_seq = int(event_doc.get("seq", 0))
         head_seq = int(run_doc.get("seq", 0))
         if event_seq <= head_seq:
-            return
+            return True
 
         event_type_str = str(event_doc.get("type", ""))
         payload = event_doc.get("payload") or {}
@@ -701,7 +764,7 @@ class RunCommandHandler:
                 event_type_str,
                 run_id,
             )
-            return
+            return False
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED.value))
         try:
@@ -729,7 +792,9 @@ class RunCommandHandler:
             updates["error_message"] = payload.get("error_message")
             updates["terminal_summary"] = payload.get("terminal_summary")
 
-        await self._runs.update_one({"run_id": run_id}, {"$set": updates})
+        return (
+            await self._runs.update_one({"run_id": run_id}, {"$set": updates})
+        ) is not False
 
 
 def run_event_sse_enabled() -> bool:

@@ -4,6 +4,7 @@ from typing import Any
 
 from common.utils.logger import get_logger
 from execution.ports import ProcessingStatusLike
+from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from models.run import RunState
 
 logger = get_logger(__name__)
@@ -32,6 +33,43 @@ class RunLifecycleAdapter:
             message_id=message_id,
             client_request_id=kwargs.get("client_request_id"),
             details=error_message,
+        )
+
+    async def write_processing_status(
+        self,
+        room_id: str,
+        status: ProcessingStatusLike,
+        message_id: str | None,
+        **kwargs: Any,
+    ) -> RunLifecycleWriteOutcome:
+        status_value = getattr(status, "value", status)
+        error_message = kwargs.get("error_message")
+        details = kwargs.get("details")
+        if error_message is None and isinstance(details, dict):
+            error_message = details.get("message") or details.get("error")
+        writer = getattr(self._command_handler, "write_processing_status", None)
+        try:
+            if callable(writer):
+                return await writer(
+                    room_id=room_id,
+                    status=status_value,
+                    message_id=message_id,
+                    client_request_id=kwargs.get("client_request_id"),
+                    details=error_message,
+                )
+            payload = await self._command_handler.record_processing_status(
+                room_id=room_id,
+                status=status_value,
+                message_id=message_id,
+                client_request_id=kwargs.get("client_request_id"),
+                details=error_message,
+            )
+        except Exception as exc:
+            return RunLifecycleWriteOutcome.error(exc)
+        return (
+            RunLifecycleWriteOutcome.accepted(payload)
+            if payload is not None
+            else RunLifecycleWriteOutcome.conflict()
         )
 
     async def project_run_state(

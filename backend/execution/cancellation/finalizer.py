@@ -42,7 +42,7 @@ class StatusProjectionPort(Protocol):
 
 
 class MessageCancellationPort(Protocol):
-    async def __call__(self, message_id: str) -> None: ...
+    async def __call__(self, message_id: str) -> object: ...
 
 
 class ActiveTokenReleasePort(Protocol):
@@ -124,6 +124,22 @@ class CancellationFinalizer:
     async def _mark_reconciled_or_raise(self, message_id: str) -> None:
         if not await self._mark_reconciled(message_id):
             raise RuntimeError("cancellation marker reconciliation failed")
+
+    @staticmethod
+    def _propagation_succeeded(result: object) -> bool:
+        if result is False:
+            return False
+        succeeded = getattr(result, "succeeded", True)
+        return succeeded if isinstance(succeeded, bool) else True
+
+    async def _broadcast_for_reconciliation(self, message_id: str) -> bool:
+        try:
+            result = await self._broadcast_cancellation(message_id)
+        except Exception:
+            # The durable marker remains pending so reconciliation retries both
+            # Redis KV and Pub/Sub. Local terminal/HITL/task cleanup still proceeds.
+            return False
+        return self._propagation_succeeded(result)
 
     async def _project_preserved_terminal(
         self,
@@ -258,7 +274,7 @@ class CancellationFinalizer:
                 reconciled=True,
             )
 
-        await self._broadcast_cancellation(message_id)
+        propagation_succeeded = await self._broadcast_for_reconciliation(message_id)
         await self._cancel_hitl(message_id)
         await self._cleanup_agent_tasks(
             room_id=room_id,
@@ -286,7 +302,7 @@ class CancellationFinalizer:
             message_id=message_id,
         )
 
-        reconciled = state is not None or settle_no_run
+        reconciled = (state is not None or settle_no_run) and propagation_succeeded
         if reconciled:
             await self._mark_reconciled_or_raise(message_id)
         final_status = (

@@ -100,7 +100,10 @@ class DeliveryFacade:
         self._delivery_pubsub_connected = False
         self._started = False
         self._kv_closed = False
-        self._delivery_started_at: dict[tuple[str, str], float] = {}
+        self._delivery_started_at: TTLCache[tuple[str, str], float] = TTLCache(
+            maxsize=config.delivery_started_cache_maxsize,
+            ttl=config.delivery_started_ttl_seconds,
+        )
         self._terminal_delivery_logged: TTLCache[tuple[str, str], bool] = TTLCache(
             maxsize=config.terminal_dedup_cache_maxsize,
             ttl=config.terminal_dedup_ttl_seconds,

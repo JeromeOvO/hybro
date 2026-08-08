@@ -224,7 +224,10 @@ async def test_signal_writes_l2_and_cross_instance_transport():
         transport=transport,
         config=CancellationConfig(ttl_seconds=11, redis_key_prefix="cx:"),
     )
-    await runtime.signal("msg-1")
+    result = await runtime.signal("msg-1")
+    assert result.succeeded is True
+    assert result.kv_configured is True
+    assert result.pubsub_configured is True
     assert redis.set_calls == [("cx:msg-1", "1", 11)]
     assert transport.published == ["msg-1"]
 
@@ -240,8 +243,22 @@ async def test_signal_keeps_local_state_when_external_services_fail():
 
     transport.publish = fail
     runtime = make_runtime(redis=redis, transport=transport)
-    await runtime.signal("msg-1")
+    result = await runtime.signal("msg-1")
+    assert result.succeeded is False
+    assert result.kv_succeeded is False
+    assert result.pubsub_succeeded is False
     assert runtime.is_cancelled("msg-1") is True
+
+
+@pytest.mark.asyncio
+async def test_signal_without_external_redis_is_successful_single_worker_propagation():
+    runtime = make_runtime()
+
+    result = await runtime.signal("msg-local")
+
+    assert result.succeeded is True
+    assert result.kv_configured is False
+    assert result.pubsub_configured is False
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,13 @@ import json
 from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from common.config import settings
 from common.dto import RunEventNotification
+from common.utils.cancellation import CancellationToken
 from delivery.facade import DeliveryFacade
 from execution.orchestration.room_message_center import RoomMessageCenter
 from models.supervisor import RunStatus, SupervisorRunResult, SupervisorTrajectory
@@ -74,7 +75,8 @@ def _bind_test_processing_emitter(
         client_request_id: str | None = None,
         details=None,
         **_kwargs,
-    ) -> None:
+    ) -> dict | None:
+        payload = None
         if record_lifecycle:
             payload = await record(
                 room_id=room_id,
@@ -102,6 +104,7 @@ def _bind_test_processing_emitter(
             details=details,
             client_request_id=client_request_id,
         )
+        return payload
 
     rmc._processing_status_emitter = emit_processing_status
 
@@ -177,6 +180,11 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
 
     rmc = object.__new__(RoomMessageCenter)
     rmc.delivery = delivery
+    token = CancellationToken(message_id="msg-1")
+    rmc.cancellation_control = SimpleNamespace(
+        check_cancelled=AsyncMock(return_value=False),
+        release_token=MagicMock(return_value=True),
+    )
     _bind_test_processing_emitter(rmc, delivery, record)
     rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
@@ -191,6 +199,7 @@ async def test_golden_hitl_resolve_resume_completion_order(monkeypatch):
                 needs_completion=True,
                 room_id="room-1",
                 user_message_id="msg-1",
+                token=token,
             )
         )
     )
@@ -224,12 +233,25 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(
 ):
     delivery = make_delivery_facade()
     conn = await delivery.add_connection("room-1")
-    record = AsyncMock(return_value=None)
+    record = AsyncMock(
+        return_value={
+            "event_id": "evt-deterministic",
+            "run_id": "msg-1",
+            "seq": 8,
+            "type": "RUN_COMPLETED",
+            "payload": {},
+        }
+    )
 
     monkeypatch.setattr(settings, "feature_run_event_sse", True)
 
     rmc = object.__new__(RoomMessageCenter)
     rmc.delivery = delivery
+    token = CancellationToken(message_id="msg-1")
+    rmc.cancellation_control = SimpleNamespace(
+        check_cancelled=AsyncMock(return_value=False),
+        release_token=MagicMock(return_value=True),
+    )
     _bind_test_processing_emitter(rmc, delivery, record)
     rmc.continuation_store = SimpleNamespace(
         save_continuation_on_message=AsyncMock(),
@@ -244,6 +266,7 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(
                 needs_completion=True,
                 room_id="room-1",
                 user_message_id="msg-1",
+                token=token,
             )
         )
     )
@@ -392,7 +415,15 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
     rmc = _make_rmc_for_supervisor_result(delivery)
     rmc._emit_deterministic_digest = AsyncMock()
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
-    record = AsyncMock(return_value=None)
+    record = AsyncMock(
+        return_value={
+            "event_id": "evt-supervisor-deterministic",
+            "run_id": "msg-1",
+            "seq": 8,
+            "type": "RUN_COMPLETED",
+            "payload": {},
+        }
+    )
     _bind_test_processing_emitter(rmc, delivery, record)
 
     result = SupervisorRunResult(
@@ -462,7 +493,15 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
     conn = await delivery.add_connection("room-1")
     rmc = _make_rmc_for_supervisor_result(delivery)
     rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
-    record = AsyncMock(return_value=None)
+    record = AsyncMock(
+        return_value={
+            "event_id": "evt-supervisor-synthesis",
+            "run_id": "msg-1",
+            "seq": 8,
+            "type": "RUN_COMPLETED",
+            "payload": {},
+        }
+    )
     _bind_test_processing_emitter(rmc, delivery, record)
 
     result = SupervisorRunResult(

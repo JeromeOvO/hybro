@@ -227,6 +227,7 @@ def make_delivery_facade(
     redis_service: Any | None = None,
     instance_id: str = "test-worker",
     event_publisher: FakeEventPublisher | None = None,
+    config: DeliveryConfig | None = None,
 ) -> DeliveryFacade:
     if compat is None:
         compat = FakeDeliveryCompat(redis_service=redis_service)
@@ -238,7 +239,7 @@ def make_delivery_facade(
         sse_transport=compat,
         event_bus=compat,
         redis_kv=None,
-        config=DeliveryConfig(),
+        config=config or DeliveryConfig(),
         instance_id=instance_id,
     )
     return facade

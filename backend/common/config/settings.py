@@ -143,14 +143,24 @@ class Settings(BaseSettings):
     sse_connection_queue_maxsize: int = 100
     terminal_dedup_ttl_seconds: int = 300
     terminal_dedup_cache_maxsize: int = 10_000
+    delivery_started_ttl_seconds: int = 3600
+    delivery_started_cache_maxsize: int = 10_000
     redis_dead_letter_channel: str = "delivery:dead_letter"
     dead_letter_memory_maxlen: int = 1000
 
-    # Internal eventing (separate Redis client and lifecycle)
-    eventing_redis_channel: str = "internal:global"
+    # Internal eventing (separate Redis client and lifecycle). The legacy
+    # REDIS_INTERNAL_CHANNEL name remains accepted; the new name wins if both exist.
+    eventing_redis_channel: str = Field(
+        default="internal:global",
+        validation_alias=AliasChoices(
+            "eventing_redis_channel",
+            "redis_internal_channel",
+        ),
+    )
     eventing_redis_dead_letter_channel: str = "eventing:dead_letter"
     eventing_redis_io_timeout_seconds: float = 5.0
     eventing_handler_queue_maxsize: int = 1000
+    eventing_auxiliary_task_maxsize: int = Field(default=128, gt=0)
     eventing_enqueue_timeout_seconds: float = 1.0
     eventing_shutdown_timeout_seconds: float = 5.0
     eventing_dead_letter_memory_maxlen: int = 1000

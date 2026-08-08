@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -11,8 +12,22 @@ from execution.ports import (
     ProcessingStatusLike,
     RunLifecyclePort,
 )
+from execution.run_lifecycle_outcome import (
+    RunLifecycleWriteError,
+    RunLifecycleWriteOutcome,
+    RunLifecycleWriteStatus,
+)
 
 logger = logging.getLogger(__name__)
+
+TERMINAL_PROCESSING_STATUSES = {
+    "completed",
+    "failed",
+    "canceled",
+    "rejected",
+    "rate_limited",
+    "error",
+}
 
 SUPPORTED_TYPED_PROCESSING_STATUSES = {
     "queued",
@@ -95,6 +110,49 @@ def run_event_notification_from_payload(
     )
 
 
+async def _write_terminal_lifecycle(
+    *,
+    run_lifecycle: RunLifecyclePort,
+    room_id: str,
+    status_value: str,
+    lifecycle_message_id: str | None,
+    client_request_id: str | None,
+    details: dict[str, Any] | None,
+    error_message: str | None,
+) -> RunLifecycleWriteOutcome:
+    checked = inspect.getattr_static(run_lifecycle, "write_processing_status", None)
+    if checked is not None:
+        outcome = await run_lifecycle.write_processing_status(
+            room_id,
+            status_value,
+            lifecycle_message_id,
+            client_request_id=client_request_id,
+            details=details,
+            error_message=error_message,
+        )
+        if not isinstance(outcome, RunLifecycleWriteOutcome):
+            return RunLifecycleWriteOutcome.error(
+                TypeError("invalid checked lifecycle write outcome")
+            )
+        return outcome
+
+    # Rolling/test compatibility for legacy lifecycle implementations. Exceptions
+    # remain observable; only a returned payload is accepted.
+    payload = await run_lifecycle.record_processing_status(
+        room_id,
+        status_value,
+        lifecycle_message_id,
+        client_request_id=client_request_id,
+        details=details,
+        error_message=error_message,
+    )
+    return (
+        RunLifecycleWriteOutcome.accepted(payload)
+        if payload is not None
+        else RunLifecycleWriteOutcome.conflict()
+    )
+
+
 async def emit_processing_status(
     *,
     room_id: str,
@@ -115,7 +173,31 @@ async def emit_processing_status(
     frontend_message_id = _require_frontend_message_id(message_id)
     typed_details = _typed_processing_status_details(details, error_message)
     payload = None
-    if record_lifecycle:
+    if record_lifecycle and status_value in TERMINAL_PROCESSING_STATUSES:
+        outcome = await _write_terminal_lifecycle(
+            run_lifecycle=run_lifecycle,
+            room_id=room_id,
+            status_value=status_value,
+            lifecycle_message_id=lifecycle_message_id or message_id,
+            client_request_id=client_request_id,
+            details=typed_details,
+            error_message=error_message,
+        )
+        if outcome.status == RunLifecycleWriteStatus.CONFLICT:
+            return None
+        if outcome.status == RunLifecycleWriteStatus.ERROR:
+            logger.error(
+                "terminal lifecycle write failed room_id=%s message_id=%s "
+                "status=%s error_class=%s error_fingerprint=%s",
+                room_id,
+                lifecycle_message_id or message_id,
+                status_value,
+                outcome.error_class,
+                outcome.error_fingerprint,
+            )
+            raise RunLifecycleWriteError(outcome)
+        payload = outcome.payload
+    elif record_lifecycle:
         payload = await run_lifecycle.record_processing_status(
             room_id,
             status_value,

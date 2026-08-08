@@ -7,6 +7,7 @@ Tests cover:
 - _managed_queue cleanup behavior (RAII)
 """
 
+import asyncio
 import inspect
 from collections import deque
 from types import SimpleNamespace
@@ -257,7 +258,7 @@ async def test_resume_quote_failure_releases_paused_token():
 
 
 @pytest.mark.asyncio
-async def test_empty_continuation_releases_paused_token():
+async def test_empty_continuation_transfers_paused_token_to_completion_owner():
     qe = _make_queue_executor()
     token = CancellationToken(message_id="user-1")
     qe.cancellation_control.create_token.side_effect = None
@@ -274,7 +275,164 @@ async def test_empty_continuation_releases_paused_token():
 
     assert result.success is True
     assert result.needs_completion is True
-    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+    assert result.token is token
+    qe.cancellation_control.release_token.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_system_task_completion_is_compensated_when_cancel_arrives_during_send():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    send_entered = asyncio.Event()
+    release_send = asyncio.Event()
+    statuses = []
+
+    async def send_task_update(*, status, **_kwargs):
+        statuses.append(status)
+        if status == "completed":
+            send_entered.set()
+            await release_send.wait()
+
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.delivery.send_task_update = send_task_update
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
+
+    terminalizing = asyncio.create_task(
+        qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=token,
+        )
+    )
+    await send_entered.wait()
+    token.cancel()
+    release_send.set()
+
+    assert await terminalizing == "canceled"
+    assert statuses == ["completed", "canceled"]
+    assert (
+        str(getattr(db_msg.message_content.message_task.status.state, "value", ""))
+        == "canceled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persists_before_sse():
+    qe = _make_queue_executor()
+    order: list[str] = []
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+
+    async def persist(*_args):
+        order.append("persist")
+        return True
+
+    async def emit(**_kwargs):
+        order.append("sse")
+
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        side_effect=persist
+    )
+    qe.delivery.send_task_update = AsyncMock(side_effect=emit)
+
+    assert (
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=None,
+        )
+        == "completed"
+    )
+    assert order == ["persist", "sse"]
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persistence_false_retries_without_sse():
+    qe = _make_queue_executor()
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        return_value=False
+    )
+    qe.delivery.send_task_update = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="failed to persist system task"):
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=None,
+        )
+
+    assert (
+        qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id.await_count
+        == 3
+    )
+    qe.delivery.send_task_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persistence_exception_retries_without_sse():
+    qe = _make_queue_executor()
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+    qe.delivery.send_task_update = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="failed",
+            token=None,
+        )
+
+    assert (
+        qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id.await_count
+        == 3
+    )
+    qe.delivery.send_task_update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -409,6 +567,7 @@ class TestProcessQueue:
         qe.tsm.fail_pre_dispatch_task = AsyncMock()
         qe.response_handler.notify_task_update = AsyncMock()
         qe.message_writer.cancel_descendants = AsyncMock()
+        qe._terminalize_system_task = AsyncMock(return_value="failed")
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
@@ -456,6 +615,7 @@ class TestProcessQueue:
         qe.tsm.fail_pre_dispatch_task = AsyncMock()
         qe.response_handler.notify_task_update = AsyncMock()
         qe.message_writer.cancel_descendants = AsyncMock()
+        qe._terminalize_system_task = AsyncMock(return_value="failed")
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
@@ -507,7 +667,7 @@ class TestProcessQueue:
         )
 
     @pytest.mark.asyncio
-    async def test_process_queue_updates_system_hybro_task_through_focused_ports(self):
+    async def test_process_queue_delays_completed_system_task_until_root_cas(self):
         qe = _make_queue_executor()
         system_content = SimpleNamespace(
             message_task=SimpleNamespace(status=SimpleNamespace(state=None))
@@ -544,23 +704,13 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.COMPLETED
-        qe.delivery.send_task_update.assert_awaited_once_with(
-            room_id="room-1",
-            message_id="sys-umsg-1",
-            status="completed",
-        )
+        qe.delivery.send_task_update.assert_not_awaited()
         assert (
             qe.message_reader.get_room_agent_message_by_message_id.await_args_list
-            == [
-                call("sys-umsg-1"),
-                call("sys-umsg-1"),
-            ]
+            == [call("sys-umsg-1")]
         )
         update_content = qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id
-        update_content.assert_awaited_once_with(
-            "sys-umsg-1",
-            system_content,
-        )
+        update_content.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_process_queue_cancels_on_cancellation_token(self):
@@ -583,6 +733,7 @@ class TestProcessQueue:
         qe.tsm.transition_task = AsyncMock()
         qe.cancellation_control.clear_cancellation = MagicMock()
         qe.message_writer.cancel_descendants = AsyncMock()
+        qe._terminalize_system_task = AsyncMock(return_value="canceled")
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
         qe.bind_execution_event_deps(emit)
 
@@ -675,6 +826,7 @@ class TestProcessQueue:
         qe.cancellation_control.clear_cancellation = MagicMock(
             side_effect=lambda *a, **k: order.append("clear-token")
         )
+        qe._terminalize_system_task = AsyncMock(return_value="canceled")
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
         qe.bind_execution_event_deps(emit)
 

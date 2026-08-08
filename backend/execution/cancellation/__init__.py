@@ -17,7 +17,10 @@ from execution.cancellation.ports import (
     CancellationMessageReaderPort,
     CancellationReconciliationPort,
 )
-from execution.cancellation.runtime import CancellationRuntime
+from execution.cancellation.runtime import (
+    CancellationPropagationResult,
+    CancellationRuntime,
+)
 from execution.cancellation.service import CancellationService
 from execution.cancellation.transport import RedisCancellationTransport
 from execution.cancellation.watcher import CancellationWatcher
@@ -29,6 +32,7 @@ __all__ = [
     "CancellationFinalizationResult",
     "CancellationFinalizer",
     "CancellationMarkerRepositoryPort",
+    "CancellationPropagationResult",
     "CancellationMessageReaderPort",
     "CancellationReconciliationPort",
     "CancellationRuntime",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +32,55 @@ class _HandlerState:
     handler: EventHandler
     queue: asyncio.Queue[_QueuedEvent]
     task: asyncio.Task[None] | None = None
+    current_item: _QueuedEvent | None = None
+
+
+_DEAD_LETTER_MAX_JSON_BYTES = 8192
+_METADATA_MAX_FIELDS = 24
+_METADATA_KEY_MAX_CHARS = 64
+_METADATA_VALUE_MAX_CHARS = 256
+_IDENTIFIER_MAX_FIELDS = 32
+_IDENTIFIER_VALUE_MAX_CHARS = 256
+_PAYLOAD_KEY_MAX_FIELDS = 64
+_PAYLOAD_KEY_MAX_CHARS = 64
+_SAFE_IDENTIFIER_KEYS = frozenset(
+    {
+        "id",
+        "room_id",
+        "run_id",
+        "message_id",
+        "user_message_id",
+        "related_message_id",
+        "task_id",
+        "agent_id",
+        "hub_id",
+        "journal_id",
+        "idempotency_key",
+        "client_request_id",
+        "correlation_id",
+        "trace_id",
+        "event_id",
+        "request_id",
+        "context_id",
+        "turn_id",
+        "slot_id",
+    }
+)
+_SAFE_PAYLOAD_KEYS = _SAFE_IDENTIFIER_KEYS | frozenset(
+    {
+        "event_type",
+        "timestamp",
+        "kind",
+        "origin",
+        "payload",
+        "metadata",
+        "is_terminal",
+        "status",
+        "operation",
+        "handler",
+        "value",
+    }
+)
 
 
 class BoundedInternalEventBus:
@@ -57,6 +108,7 @@ class BoundedInternalEventBus:
         self._started = False
         self._starting = False
         self._stopping = False
+        self._auxiliary_tasks: dict[asyncio.Task[Any], str] = {}
         self.dead_letters: deque[EventDeadLetter] = deque(
             maxlen=self.config.dead_letter_memory_maxlen
         )
@@ -92,6 +144,12 @@ class BoundedInternalEventBus:
         async with self._lifecycle_lock:
             if self._started and self._accepting:
                 return
+            self._prune_done_auxiliary_tasks()
+            if any(
+                operation.startswith("transport_")
+                for operation in self._auxiliary_tasks.values()
+            ):
+                raise RuntimeError("eventing transport cleanup is still pending")
             self._stopping = False
             self._starting = True
             self._started = True
@@ -101,9 +159,15 @@ class BoundedInternalEventBus:
                 for index, state in enumerate(states):
                     if state.task is not None and not state.task.done():
                         continue
-                    state.task = asyncio.create_task(
+                    task = asyncio.create_task(
                         self._worker(state),
                         name=f"eventing-handler-{state.event_type}-{index}",
+                    )
+                    state.task = task
+                    task.add_done_callback(
+                        lambda done, owned_state=state: self._worker_done(
+                            owned_state, done
+                        )
                     )
             try:
                 if self.transport is not None:
@@ -112,12 +176,22 @@ class BoundedInternalEventBus:
                 await self._complete_start(success=True)
             except BaseException:
                 await self._complete_start(success=False)
+                deadline = (
+                    asyncio.get_running_loop().time()
+                    + self.config.shutdown_timeout_seconds
+                )
                 if self.transport is not None:
                     try:
-                        await self.transport.stop()
+                        await self._await_bounded(
+                            self.transport.stop(),
+                            timeout=self._remaining(deadline),
+                            operation="transport_start_rollback",
+                            allow_over_capacity=True,
+                        )
                     except BaseException:
                         pass
-                await self._cancel_workers()
+                await self._cancel_workers(deadline)
+                await self._cancel_auxiliary_tasks(deadline)
                 raise
 
     async def stop(self) -> None:
@@ -172,9 +246,10 @@ class BoundedInternalEventBus:
                     timestamp=self._now(),
                 )
                 try:
-                    await asyncio.wait_for(
+                    await self._await_bounded(
                         self.transport.publish(envelope.model_dump_json()),
                         timeout=self._remaining(deadline),
+                        operation="fanout_publish",
                     )
                 except Exception as exc:
                     await self._safe_dead_letter(
@@ -253,6 +328,7 @@ class BoundedInternalEventBus:
         return completions
 
     async def _worker(self, state: _HandlerState) -> None:
+        worker_task = asyncio.current_task()
         while True:
             try:
                 item = await state.queue.get()
@@ -267,7 +343,23 @@ class BoundedInternalEventBus:
                 )
                 await asyncio.sleep(0)
                 continue
-            await self._process_item(state, item)
+            state.current_item = item
+            try:
+                await self._process_item(state, item)
+            finally:
+                if state.current_item is item:
+                    state.current_item = None
+            if state.task is not worker_task or self._stopping or not self._started:
+                return
+
+    def _worker_done(
+        self,
+        state: _HandlerState,
+        task: asyncio.Task[None],
+    ) -> None:
+        self._consume_task_result(task)
+        if state.task is task:
+            state.task = None
 
     async def _process_item(
         self,
@@ -325,6 +417,7 @@ class BoundedInternalEventBus:
         event_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float | None = None,
+        publish: bool = True,
     ) -> None:
         try:
             await self._dead_letter(
@@ -334,6 +427,7 @@ class BoundedInternalEventBus:
                 event_type=event_type,
                 metadata=metadata,
                 timeout=timeout,
+                publish=publish,
             )
         except BaseException as dead_letter_exc:
             if self._is_worker_cancellation(dead_letter_exc):
@@ -348,38 +442,73 @@ class BoundedInternalEventBus:
         event_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float | None = None,
+        publish: bool = True,
     ) -> None:
-        serialized = (
-            payload.model_dump(mode="json")
-            if isinstance(payload, BaseModel)
-            else payload
+        dead_letter = self._record_memory_dead_letter(
+            stage,
+            payload,
+            exc,
+            event_type=event_type,
+            metadata=metadata,
         )
-        dead_letter = EventDeadLetter(
-            origin=self.instance_id,
-            failure_stage=stage,
-            event_type=event_type or getattr(payload, "event_type", None),
-            trace_id=get_current_trace_id(),
-            payload=serialized,
-            exception_class=exc.__class__.__name__,
-            exception_message=str(exc),
-            timestamp=self._now(),
-            metadata=metadata or {},
-        )
-        self.dead_letters.append(dead_letter)
-        if self.transport is None:
+        if self.transport is None or not publish:
             return
         try:
-            await asyncio.wait_for(
+            await self._await_bounded(
                 self.transport.publish_dead_letter(dead_letter.model_dump_json()),
                 timeout=(
                     self.config.enqueue_timeout_seconds
                     if timeout is None
                     else max(timeout, 0.001)
                 ),
+                operation="dead_letter_publish",
             )
         except BaseException as publish_exc:
             if self._is_worker_cancellation(publish_exc):
                 raise
+
+    def _record_memory_dead_letter(
+        self,
+        stage: str,
+        payload: Any,
+        exc: BaseException,
+        *,
+        event_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> EventDeadLetter:
+        projection = self._redacted_payload_projection(payload)
+        resolved_event_type = event_type or getattr(payload, "event_type", None)
+        current_trace_id = get_current_trace_id()
+        dead_letter = EventDeadLetter(
+            origin=self.instance_id[:128],
+            failure_stage=stage[:64],
+            event_type=(
+                str(resolved_event_type)[:128]
+                if resolved_event_type is not None
+                else None
+            ),
+            trace_id=current_trace_id[:128] if current_trace_id else None,
+            payload=projection,
+            exception_class=exc.__class__.__name__[:128],
+            exception_message=self._exception_summary(exc),
+            timestamp=self._now(),
+            metadata=self._bounded_metadata(metadata),
+        )
+        if (
+            len(dead_letter.model_dump_json().encode("utf-8"))
+            > _DEAD_LETTER_MAX_JSON_BYTES
+        ):
+            dead_letter = dead_letter.model_copy(
+                update={
+                    "payload": {
+                        "payload_size_bytes": projection["payload_size_bytes"],
+                        "payload_sha256": projection["payload_sha256"],
+                    },
+                    "metadata": {"dead_letter_truncated": True},
+                }
+            )
+        self.dead_letters.append(dead_letter)
+        return dead_letter
 
     async def _set_accepting(self, accepting: bool) -> None:
         async with self._admission_condition:
@@ -439,7 +568,8 @@ class BoundedInternalEventBus:
             await self._stop_transport(self._remaining(deadline))
             await self._drain_handler_queues(self._remaining(deadline))
         finally:
-            await self._cancel_workers()
+            await self._cancel_workers(deadline)
+            await self._cancel_auxiliary_tasks(deadline)
             self._started = False
 
     async def _stop_transport_ingress(self, timeout: float) -> None:
@@ -449,7 +579,12 @@ class BoundedInternalEventBus:
         if not callable(stop_ingress):
             return
         try:
-            await asyncio.wait_for(stop_ingress(), timeout=timeout)
+            await self._await_bounded(
+                stop_ingress(),
+                timeout=timeout,
+                operation="transport_stop_ingress",
+                allow_over_capacity=True,
+            )
         except TimeoutError:
             pass
         except Exception:
@@ -459,9 +594,11 @@ class BoundedInternalEventBus:
         if self.transport is None:
             return
         try:
-            await asyncio.wait_for(
+            await self._await_bounded(
                 self.transport.stop(),
                 timeout=timeout,
+                operation="transport_stop",
+                allow_over_capacity=True,
             )
         except TimeoutError:
             pass
@@ -480,20 +617,220 @@ class BoundedInternalEventBus:
         except TimeoutError:
             pass
 
-    async def _cancel_workers(self) -> None:
-        tasks = list(self.worker_tasks)
+    async def _cancel_workers(self, deadline: float) -> None:
+        states = [state for group in self._handlers.values() for state in group]
+        owned_tasks = [
+            (state, state.task) for state in states if state.task is not None
+        ]
+        tasks = [task for _state, task in owned_tasks]
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        for states in self._handlers.values():
-            for state in states:
-                state.task = None
-                while not state.queue.empty():
-                    item = state.queue.get_nowait()
-                    if not item.completion.done():
-                        item.completion.set_result(None)
-                    state.queue.task_done()
+            done, pending = await asyncio.wait(
+                tasks,
+                timeout=self._remaining(deadline),
+            )
+        else:
+            done, pending = set(), set()
+        for task in done:
+            self._consume_task_result(task)
+        try:
+            self._settle_worker_shutdown(owned_tasks, pending)
+        finally:
+            self._settle_queued_completions(states)
+
+    def _settle_worker_shutdown(
+        self,
+        owned_tasks: list[tuple[_HandlerState, asyncio.Task[None]]],
+        pending: set[asyncio.Task[None]],
+    ) -> None:
+        for state, task in owned_tasks:
+            if task not in pending:
+                if state.task is task:
+                    state.task = None
+                continue
+            item = state.current_item
+            if item is not None and not item.completion.done():
+                item.completion.set_result(None)
+            self._record_memory_dead_letter(
+                "shutdown_handler_timeout",
+                {"event_type": state.event_type},
+                TimeoutError("event handler ignored shutdown cancellation"),
+                event_type=state.event_type,
+                metadata={
+                    "handler": self._handler_name(state.handler),
+                    "task_name": task.get_name(),
+                    "queue_size": state.queue.qsize(),
+                },
+            )
+
+    @staticmethod
+    def _settle_queued_completions(states: list[_HandlerState]) -> None:
+        for state in states:
+            while not state.queue.empty():
+                item = state.queue.get_nowait()
+                if not item.completion.done():
+                    item.completion.set_result(None)
+                state.queue.task_done()
+
+    async def _await_bounded(
+        self,
+        awaitable,
+        *,
+        timeout: float,
+        operation: str,
+        allow_over_capacity: bool = False,
+    ):
+        self._prune_done_auxiliary_tasks()
+        if allow_over_capacity and any(
+            existing_operation == operation
+            for existing_operation in self._auxiliary_tasks.values()
+        ):
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise RuntimeError(f"eventing {operation} is already pending")
+        if (
+            not allow_over_capacity
+            and len(self._auxiliary_tasks) >= self.config.auxiliary_task_maxsize
+        ):
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            error = RuntimeError("eventing auxiliary task capacity exhausted")
+            self._record_memory_dead_letter(
+                "auxiliary_task_capacity",
+                {"operation": operation},
+                error,
+                metadata={
+                    "operation": operation,
+                    "capacity": self.config.auxiliary_task_maxsize,
+                },
+            )
+            raise error
+
+        task = asyncio.ensure_future(awaitable)
+        self._auxiliary_tasks[task] = operation
+        task.add_done_callback(self._auxiliary_done)
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=max(timeout, 0.001))
+        except BaseException:
+            task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            raise TimeoutError
+        return task.result()
+
+    def _prune_done_auxiliary_tasks(self) -> None:
+        for task in tuple(self._auxiliary_tasks):
+            if task.done():
+                self._auxiliary_done(task)
+
+    def _auxiliary_done(self, task: asyncio.Task[Any]) -> None:
+        self._auxiliary_tasks.pop(task, None)
+        self._consume_task_result(task)
+
+    @staticmethod
+    def _consume_task_result(task: asyncio.Future[Any]) -> None:
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _cancel_auxiliary_tasks(self, deadline: float) -> None:
+        tasks = tuple(self._auxiliary_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            done, pending = await asyncio.wait(
+                tasks,
+                timeout=self._remaining(deadline),
+            )
+        else:
+            done, pending = set(), set()
+        for task in done:
+            self._consume_task_result(task)
+        for task in pending:
+            operation = self._auxiliary_tasks.get(task, "unknown")
+            self._record_memory_dead_letter(
+                "auxiliary_task_timeout",
+                {"operation": operation},
+                TimeoutError("bounded eventing operation ignored cancellation"),
+                metadata={"operation": operation, "task_name": task.get_name()},
+            )
+
+    @staticmethod
+    def _payload_json(payload: Any) -> bytes:
+        serialized = (
+            payload.model_dump(mode="json")
+            if isinstance(payload, BaseModel)
+            else payload
+        )
+        try:
+            return json.dumps(
+                serialized,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        except Exception:
+            return repr(type(serialized).__name__).encode("utf-8")
+
+    @classmethod
+    def _redacted_payload_projection(cls, payload: Any) -> dict[str, Any]:
+        trusted_model = isinstance(payload, BaseModel)
+        serialized = payload.model_dump(mode="json") if trusted_model else payload
+        raw = cls._payload_json(serialized)
+        projection: dict[str, Any] = {
+            "payload_size_bytes": len(raw),
+            "payload_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+        if isinstance(serialized, dict):
+            safe_keys = [
+                str(key)
+                for key in list(serialized)[:_PAYLOAD_KEY_MAX_FIELDS]
+                if str(key) in _SAFE_PAYLOAD_KEYS
+            ]
+            if safe_keys:
+                projection["payload_keys"] = [
+                    key[:_PAYLOAD_KEY_MAX_CHARS] for key in safe_keys
+                ]
+
+        if trusted_model and isinstance(serialized, dict):
+            identifiers = {
+                key: str(value)[:_IDENTIFIER_VALUE_MAX_CHARS]
+                for key, value in serialized.items()
+                if key in _SAFE_IDENTIFIER_KEYS
+                and isinstance(value, (str, int))
+                and not isinstance(value, bool)
+            }
+            if identifiers:
+                projection["identifiers"] = dict(
+                    list(identifiers.items())[:_IDENTIFIER_MAX_FIELDS]
+                )
+        return projection
+
+    @staticmethod
+    def _exception_summary(exc: BaseException) -> str:
+        raw = str(exc).encode("utf-8", errors="replace")
+        message_hash = hashlib.sha256(raw).hexdigest()
+        fingerprint = hashlib.sha256(
+            exc.__class__.__name__.encode("utf-8") + b":" + raw
+        ).hexdigest()
+        return (
+            f"redacted:size_bytes={len(raw)}:sha256={message_hash}:"
+            f"fingerprint={fingerprint}"
+        )
+
+    @staticmethod
+    def _bounded_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+        bounded: dict[str, Any] = {}
+        for key, value in list((metadata or {}).items())[:_METADATA_MAX_FIELDS]:
+            bounded_key = str(key)[:_METADATA_KEY_MAX_CHARS]
+            if value is None or isinstance(value, (bool, int, float)):
+                bounded[bounded_key] = value
+            else:
+                bounded[bounded_key] = str(value)[:_METADATA_VALUE_MAX_CHARS]
+        return bounded
 
     def _publication_deadline(self) -> float:
         timeout = min(
