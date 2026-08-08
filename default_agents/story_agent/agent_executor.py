@@ -1,4 +1,5 @@
 from typing import override
+import uuid
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -28,14 +29,18 @@ class StoryAgentExecutor(AgentExecutor):
         if not context.message:
             raise Exception('No message provided')
 
+        artifact_id = uuid.uuid4().hex
         async for event in self.agent.stream(query):
+            artifact = new_text_artifact(
+                name='current_result',
+                text=event['content'],
+            )
+            artifact.artifact_id = artifact_id
             message = TaskArtifactUpdateEvent(
                 contextId=context.context_id,  # type: ignore
                 taskId=context.task_id,  # type: ignore
-                artifact=new_text_artifact(
-                    name='current_result',
-                    text=event['content'],
-                ),
+                artifact=artifact,
+                append=True
             )
             await event_queue.enqueue_event(message)
             if event['done']:
