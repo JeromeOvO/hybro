@@ -1270,6 +1270,13 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
+        # Persist turn_completion_kind before the COMPLETED SSE so the
+        # truth-check / reconcile path can always find the value in the DB.
+        await self._persist_turn_completion_kind(
+            room_user_message_id,
+            turn_completion_kind,
+        )
+
         # Claim the durable root terminal before publishing the child completed
         # task, completion metadata, or turn_completed journal entry. A terminal
         # CAS winner suppresses all downstream completion projections.
@@ -1302,11 +1309,6 @@ class RoomMessageCenter:
                 error=("Processing cancelled by user" if token.is_cancelled else None),
                 status_code=200,
             )
-
-        await self._persist_turn_completion_kind(
-            room_user_message_id,
-            turn_completion_kind,
-        )
 
         # Log room memory stats (debug/monitoring)
         await self._log_room_memory_stats(room_id)
@@ -1901,6 +1903,12 @@ class RoomMessageCenter:
                     )
                     return
 
+                # Persist turn_completion_kind before the COMPLETED SSE.
+                await self._persist_turn_completion_kind(
+                    user_message_id,
+                    turn_completion_kind,
+                )
+
                 completion_payload = await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.COMPLETED,
@@ -1927,11 +1935,6 @@ class RoomMessageCenter:
                             room_id, user_message_id, token
                         )
                     return
-
-                await self._persist_turn_completion_kind(
-                    user_message_id,
-                    turn_completion_kind,
-                )
             case RunStatus.PAUSED:
                 pass
 
@@ -2312,6 +2315,12 @@ class RoomMessageCenter:
                     )
                     return True
 
+                # Persist turn_completion_kind before the COMPLETED SSE.
+                await self._persist_turn_completion_kind(
+                    result.user_message_id,
+                    turn_completion_kind or "deterministic",
+                )
+
                 completion_payload = await self._emit_processing_status(
                     room_id=result.room_id,
                     status=SSEProcessingStatus.COMPLETED,
@@ -2337,11 +2346,6 @@ class RoomMessageCenter:
                             completion_token,
                         )
                     return True
-
-                await self._persist_turn_completion_kind(
-                    result.user_message_id,
-                    turn_completion_kind or "deterministic",
-                )
 
                 await self._log_room_memory_stats(result.room_id)
             finally:

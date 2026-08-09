@@ -285,6 +285,51 @@ def test_rejected_ask_user_without_progress_returns_none():
     )
 
 
+def test_rejected_ask_user_with_partial_outcome_and_completed_text_returns_none():
+    """Partial/no_progress outcome with completed text must not trigger COMPLETE."""
+    state = _state(status="partial")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="Here is a partial answer.",
+        )
+    ]
+    state.blockers = []
+
+    assert (
+        action_for_rejected_ask_user(
+            state,
+            error_code="ask_user_blocker_keys_required",
+        )
+        is None
+    )
+
+
+def test_rejected_ask_user_with_no_progress_outcome_and_artifacts_returns_none():
+    """no_progress outcome with artifact keys must not trigger COMPLETE."""
+    state = _state(status="no_progress")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="",
+            artifact_keys=["artifact-1"],
+        )
+    ]
+    state.blockers = []
+
+    assert (
+        action_for_rejected_ask_user(
+            state,
+            error_code="ask_user_blocker_keys_required",
+        )
+        is None
+    )
+
+
 def test_does_not_set_repair_lineage_for_failed_operational_retry():
     state = _state(status="failed")
     action = PlannerAction(

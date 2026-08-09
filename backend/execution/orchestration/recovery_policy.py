@@ -110,15 +110,10 @@ def _ask_user_action_for_validated_blockers(
 
 
 def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:
-    if any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes):
-        return True
+    """True only when at least one delegation outcome is fulfilled."""
     return any(
-        output.status == "completed"
-        and (
-            (isinstance(output.text, str) and bool(output.text.strip()))
-            or bool(output.artifact_keys)
-        )
-        for output in state.agent_outputs
+        outcome.status == "fulfilled"
+        for outcome in state.delegation_outcomes
     )
 
 

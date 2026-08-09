@@ -43,10 +43,14 @@ export function SynthesisContentBody({
     return <SynthesisStreamingPlaceholder />
   }
 
-  const effectiveArtifacts = (artifacts && artifacts.length > 0) ? artifacts : turnArtifacts
-  const nonTextArtifacts = effectiveArtifacts?.filter(
-    a => !a.parts.every(p => p.kind === 'text'),
-  )
+  const nonTextFilter = (a: ArtifactData) => !a.parts.every(p => p.kind === 'text')
+  const ownNonText = artifacts?.filter(nonTextFilter) ?? []
+  const turnNonText = turnArtifacts?.filter(nonTextFilter) ?? []
+  const seen = new Set(ownNonText.map(a => a.artifactId))
+  const nonTextArtifacts = [
+    ...ownNonText,
+    ...turnNonText.filter(a => !seen.has(a.artifactId)),
+  ]
 
   return (
     <div data-quote-message-id={messageId} data-quote-agent-name={agentName} data-quote-source-kind="synthesis">
