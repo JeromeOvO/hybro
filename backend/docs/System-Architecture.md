@@ -470,8 +470,12 @@ and disclose that operational failure. An empty candidate scope is therefore a
 valid Supervisor input, not a pending synthetic A2A task.
 
 The planner action schema and pure action validator enforce candidate
-membership, step-budget, required-target, and prior-output rules. Every
-Supervisor room request creates a lightweight durable orchestration envelope;
+membership, step-budget, required-target, and prior-output rules. At the
+structured-provider boundary, text expected outputs are canonicalized to remove
+contradictory artifact names and structured-field obligations before stable
+output keys are derived; an actual artifact request for a text-only Agent remains
+a deterministic validation error. Every Supervisor room request creates a
+lightweight durable orchestration envelope;
 there is no rollout selector or alternate supervisor execution path. The client
 selects scope and mode but does not select an orchestration schema version.
 

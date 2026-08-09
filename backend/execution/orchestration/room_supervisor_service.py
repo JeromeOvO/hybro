@@ -915,20 +915,38 @@ class RoomSupervisorService:
             target_payload.setdefault("attachment_policy", "explicit_refs_only")
             raw_expected_outputs = target_payload.get("expected_outputs")
             if isinstance(raw_expected_outputs, list):
-                target_payload["expected_outputs"] = [
-                    {
-                        "output_key": output.get("output_key"),
-                        "kind": output.get("kind"),
-                        "required": output.get("required", True),
-                        "description": output.get("description"),
-                        "artifact_name": output.get("artifact_name"),
-                        "required_fields": output.get("required_fields", []),
-                        "allow_partial": output.get("allow_partial", True),
-                    }
-                    if isinstance(output, dict)
-                    else output
-                    for output in raw_expected_outputs
-                ]
+                normalized_outputs = []
+                textual_kinds = {"text", "text/plain", "markdown", "text/markdown"}
+                for output in raw_expected_outputs:
+                    if not isinstance(output, dict):
+                        normalized_outputs.append(output)
+                        continue
+                    kind = output.get("kind")
+                    is_text = (
+                        isinstance(kind, str) and kind.strip().lower() in textual_kinds
+                    )
+                    normalized_outputs.append(
+                        {
+                            "output_key": output.get("output_key"),
+                            "kind": kind,
+                            "required": output.get("required", True),
+                            "description": output.get("description"),
+                            # Structured-output providers require these schema
+                            # fields even for text contracts and may populate
+                            # them despite the prompt. Text output has no
+                            # artifact identity or structured field obligations,
+                            # so canonicalize that contradictory metadata at the
+                            # provider boundary before stable keys are derived.
+                            "artifact_name": (
+                                None if is_text else output.get("artifact_name")
+                            ),
+                            "required_fields": (
+                                [] if is_text else output.get("required_fields", [])
+                            ),
+                            "allow_partial": output.get("allow_partial", True),
+                        }
+                    )
+                target_payload["expected_outputs"] = normalized_outputs
             for field_name in (
                 "context_refs",
                 "artifact_refs",

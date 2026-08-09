@@ -1333,6 +1333,42 @@ def test_platform_answer_is_part_of_planner_response_schema():
     assert parsed.action == PlannerActionType.PLATFORM_ANSWER
 
 
+def test_planner_parser_canonicalizes_contradictory_text_output_metadata():
+    action = RoomSupervisorService.parse_planner_action(
+        {
+            "action": "delegate",
+            "decision_summary": "Check the weather.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "task": "Return the forecast as text.",
+                    "expected_outputs": [
+                        {
+                            "output_key": "forecast",
+                            "kind": "text",
+                            "required": True,
+                            "description": "Written forecast.",
+                            "artifact_name": "weather_report",
+                            "required_fields": ["temperature", "conditions"],
+                            "allow_partial": False,
+                        }
+                    ],
+                }
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        }
+    )
+
+    output = action.targets[0].expected_outputs[0]
+    assert output.kind == "text"
+    assert output.artifact_name is None
+    assert output.required_fields == []
+    assert output.output_key == "forecast"
+
+
 def test_planner_prompt_is_compact_and_execution_owned():
     from execution.orchestration.planner_prompt import PLANNER_SYSTEM_PROMPT
 
@@ -1366,9 +1402,9 @@ async def test_planner_schema_limits_agent_ids_to_candidate_scope():
         message_text="hi",
     )
 
-    await RoomSupervisorPlannerAdapter(
-        supervisor_service=supervisor_service
-    ).plan(context)
+    await RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service).plan(
+        context
+    )
 
     schema = supervisor_service.call_planner_json.await_args.kwargs["schema"]
     assert schema["properties"]["targets"]["items"]["properties"]["agent_id"][
