@@ -99,9 +99,11 @@ def run_event_notification_from_payload(
     payload: dict[str, Any],
     correlation_id: str | None = None,
 ) -> RunEventNotification:
+    event_id = str(_require_payload_field(payload, "event_id"))
     return RunEventNotification(
         room_id=room_id,
-        event_id=str(_require_payload_field(payload, "event_id")),
+        event_id=event_id,
+        delivery_id=f"terminal:{event_id}:run-event",
         run_id=str(_require_payload_field(payload, "run_id")),
         seq=int(_require_payload_field(payload, "seq")),
         run_event_type=str(_require_payload_field(payload, "type")),
@@ -119,25 +121,37 @@ async def _write_terminal_lifecycle(
     client_request_id: str | None,
     details: dict[str, Any] | None,
     error_message: str | None,
+    terminal_projection: dict[str, Any],
 ) -> RunLifecycleWriteOutcome:
     checked = inspect.getattr_static(run_lifecycle, "write_processing_status", None)
     if checked is not None:
-        outcome = await run_lifecycle.write_processing_status(
-            room_id,
-            status_value,
-            lifecycle_message_id,
-            client_request_id=client_request_id,
-            details=details,
-            error_message=error_message,
-        )
+        try:
+            outcome = await run_lifecycle.write_processing_status(
+                room_id,
+                status_value,
+                lifecycle_message_id,
+                client_request_id=client_request_id,
+                details=details,
+                error_message=error_message,
+                terminal_projection=terminal_projection,
+            )
+        except TypeError as exc:
+            if "terminal_projection" not in str(exc):
+                raise
+            outcome = await run_lifecycle.write_processing_status(
+                room_id,
+                status_value,
+                lifecycle_message_id,
+                client_request_id=client_request_id,
+                details=details,
+                error_message=error_message,
+            )
         if not isinstance(outcome, RunLifecycleWriteOutcome):
             return RunLifecycleWriteOutcome.error(
                 TypeError("invalid checked lifecycle write outcome")
             )
         return outcome
 
-    # Rolling/test compatibility for legacy lifecycle implementations. Exceptions
-    # remain observable; only a returned payload is accepted.
     payload = await run_lifecycle.record_processing_status(
         room_id,
         status_value,
@@ -151,6 +165,80 @@ async def _write_terminal_lifecycle(
         if payload is not None
         else RunLifecycleWriteOutcome.conflict()
     )
+
+
+def _build_terminal_projection(
+    *,
+    status_value: str,
+    frontend_message_id: str,
+    lifecycle_message_id: str,
+    client_request_id: str | None,
+    details: dict[str, Any] | None,
+    error_message: str | None,
+    agents: list[dict] | None,
+    system_message_id: str | None,
+    turn_event_enabled: bool,
+) -> dict[str, Any]:
+    projection_status = (
+        "completed"
+        if status_value == "completed"
+        else "canceled"
+        if status_value == "canceled"
+        else "failed"
+    )
+    completion_kind = (
+        details.get("turn_completion_kind")
+        if status_value == "completed" and details
+        else None
+    )
+    turn_status = (
+        status_value if status_value in {"completed", "canceled"} else "failed"
+    )
+    turn_event_type = f"turn_{turn_status}" if turn_event_enabled else None
+    if turn_status == "completed":
+        turn_payload: dict[str, Any] = {"duration_ms": 0}
+    elif turn_status == "canceled":
+        turn_payload = {}
+    else:
+        turn_payload = {
+            "reason": (details or {}).get("message") or error_message or "failed",
+            "code": (details or {}).get("code") or "error",
+        }
+        if details and "terminal_summary" in details:
+            turn_payload["terminal_summary"] = details["terminal_summary"]
+    steps = {
+        "run_event_sse": {"state": "pending"},
+        "processing_sse": {"state": "pending"},
+    }
+    descendant_cleanup_root_id = (
+        lifecycle_message_id if status_value != "completed" else None
+    )
+    if descendant_cleanup_root_id:
+        steps["descendant_cleanup"] = {"state": "pending"}
+    if system_message_id:
+        steps["system_task"] = {"state": "pending"}
+        steps["system_task_delivery"] = {"state": "pending"}
+    if completion_kind:
+        steps["completion_metadata"] = {"state": "pending"}
+    if turn_event_type:
+        steps["turn_event"] = {"state": "pending"}
+    return {
+        "version": 1,
+        "canonical_status": status_value,
+        "frontend_message_id": frontend_message_id,
+        "lifecycle_message_id": lifecycle_message_id,
+        "descendant_cleanup_root_id": descendant_cleanup_root_id,
+        "client_request_id": client_request_id,
+        "details": details,
+        "agents": agents,
+        "system_message_id": system_message_id,
+        "system_task_status": projection_status if system_message_id else None,
+        "completion_kind": completion_kind,
+        "turn_event_type": turn_event_type,
+        "turn_event_payload": turn_payload if turn_event_type else None,
+        "pending": True,
+        "steps": steps,
+    }
 
 
 async def emit_processing_status(
@@ -168,12 +256,28 @@ async def emit_processing_status(
     details: dict[str, Any] | None = None,
     error_message: str | None = None,
     agents: list[dict] | None = None,
+    system_message_id: str | None = None,
+    turn_event_enabled: bool = False,
 ) -> dict[str, Any] | None:
     status_value = _normalize_processing_status(status)
     frontend_message_id = _require_frontend_message_id(message_id)
     typed_details = _typed_processing_status_details(details, error_message)
+    resolved_client_request_id = await _resolve_processing_status_client_request_id(
+        client_request_id_resolver, message_id, client_request_id
+    )
     payload = None
     if record_lifecycle and status_value in TERMINAL_PROCESSING_STATUSES:
+        terminal_projection = _build_terminal_projection(
+            status_value=status_value,
+            frontend_message_id=frontend_message_id,
+            lifecycle_message_id=lifecycle_message_id or frontend_message_id,
+            client_request_id=resolved_client_request_id,
+            details=typed_details,
+            error_message=error_message,
+            agents=agents,
+            system_message_id=system_message_id,
+            turn_event_enabled=turn_event_enabled,
+        )
         outcome = await _write_terminal_lifecycle(
             run_lifecycle=run_lifecycle,
             room_id=room_id,
@@ -182,6 +286,7 @@ async def emit_processing_status(
             client_request_id=client_request_id,
             details=typed_details,
             error_message=error_message,
+            terminal_projection=terminal_projection,
         )
         if outcome.status == RunLifecycleWriteStatus.CONFLICT:
             return None
@@ -197,6 +302,23 @@ async def emit_processing_status(
             )
             raise RunLifecycleWriteError(outcome)
         payload = outcome.payload
+        finalizer = (
+            getattr(run_lifecycle, "finalize_terminal_projection", None)
+            if inspect.getattr_static(
+                run_lifecycle, "finalize_terminal_projection", None
+            )
+            is not None
+            else None
+        )
+        if callable(finalizer) and payload is not None:
+            try:
+                await finalizer(payload)
+            except Exception:
+                logger.warning(
+                    "terminal projection attempt failed; durable retry remains pending",
+                    exc_info=True,
+                )
+            return payload
     elif record_lifecycle:
         payload = await run_lifecycle.record_processing_status(
             room_id,
@@ -206,11 +328,6 @@ async def emit_processing_status(
             details=typed_details,
             error_message=error_message,
         )
-    resolved_client_request_id = await _resolve_processing_status_client_request_id(
-        client_request_id_resolver,
-        message_id,
-        client_request_id,
-    )
     if payload and run_event_enabled():
         await event_publisher.emit(
             run_event_notification_from_payload(
@@ -274,6 +391,8 @@ async def emit_room_processing_status(
     details: dict[str, Any] | str | None = None,
     error_message: str | None = None,
     agents: list[dict] | None = None,
+    system_message_id: str | None = None,
+    turn_event_enabled: bool = False,
 ) -> dict[str, Any] | None:
     normalized_error = _room_processing_status_error_message(
         status, details, error_message
@@ -292,4 +411,6 @@ async def emit_room_processing_status(
         details=_room_processing_status_details(details, normalized_error),
         error_message=normalized_error,
         agents=agents,
+        system_message_id=system_message_id,
+        turn_event_enabled=turn_event_enabled,
     )

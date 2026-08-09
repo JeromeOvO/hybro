@@ -291,7 +291,7 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(
     assert len(completed_frames) == 1
     assert completed_frames[0][1]["details"]["turn_completion_kind"] == "deterministic"
     assert completed_frames[0][1]["details"]["turn_phase"] == "terminal"
-    rmc._persist_turn_completion_kind.assert_awaited_once_with("msg-1", "deterministic")
+    rmc._persist_turn_completion_kind.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -459,13 +459,6 @@ async def test_supervisor_completed_emits_turn_completion_kind_in_details():
         user_message=SimpleNamespace(extend_info={}),
     )
 
-    writer = rmc.message_writer
-    writer.update_room_user_message_by_message_id.assert_called()
-    persisted_msg = writer.update_room_user_message_by_message_id.call_args_list[-1][0][
-        1
-    ]
-    assert persisted_msg.extend_info["turn_completion_kind"] == "deterministic"
-
     frames = await _drain_sse(conn)
     completed_frames = [
         (kind, data)
@@ -536,12 +529,6 @@ async def test_supervisor_synthesis_completed_emits_synthesis_kind():
         room=SimpleNamespace(room_id="room-1", extend_info={}),
         user_message=SimpleNamespace(extend_info={}),
     )
-
-    writer = rmc.message_writer
-    persisted_msg = writer.update_room_user_message_by_message_id.call_args_list[-1][0][
-        1
-    ]
-    assert persisted_msg.extend_info["turn_completion_kind"] == "synthesis"
 
     frames = await _drain_sse(conn)
     completed_frames = [

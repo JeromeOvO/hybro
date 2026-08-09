@@ -52,6 +52,30 @@ class TestRedisKVImpl:
         assert (key_count, key, owner) == (1, "test_key", "owner-1")
         client.incrby.assert_awaited_once_with("counter", 2)
 
+    async def test_compare_set_atomically_confirms_owned_reservation(self):
+        from dal.redis.kv import RedisKVImpl
+
+        client = _make_client()
+        kv = RedisKVImpl(client=client)
+
+        assert await kv.compare_set(
+            "test_key",
+            "owner-1",
+            "delivered:failed",
+            ttl=300,
+        )
+
+        script, key_count, key, owner, value, ttl = client.eval.await_args.args
+        assert "redis.call('GET', KEYS[1]) == ARGV[1]" in script
+        assert "redis.call('SET'" in script
+        assert (key_count, key, owner, value, ttl) == (
+            1,
+            "test_key",
+            "owner-1",
+            "delivered:failed",
+            300,
+        )
+
     async def test_compare_delete_reports_owner_mismatch_without_delete(self):
         from dal.redis.kv import RedisKVImpl
 
@@ -115,6 +139,9 @@ class TestRedisKVImpl:
         assert await kv.exists("test_key") is False
         assert await kv.delete("test_key") is False
         assert await kv.compare_delete("test_key", "owner") is False
+        assert not await kv.compare_set(
+            "test_key", "owner", "delivered:failed", ttl=300
+        )
         assert await kv.increment("counter") == 0
         assert await kv.ping() is False
 

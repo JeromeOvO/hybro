@@ -251,7 +251,7 @@ async def test_run_rejects_state_bound_to_another_request(
 
 
 @pytest.mark.asyncio
-async def test_unhandled_supervisor_failure_terminalizes_system_task():
+async def test_unhandled_supervisor_failure_defers_system_task_to_root_projection():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -293,16 +293,12 @@ async def test_unhandled_supervisor_failure_terminalizes_system_task():
         reason="planner failed",
     )
 
-    executor.delivery.send_task_update.assert_awaited_once_with(
-        room_id="room-1",
-        message_id="sys-message-1",
-        status="failed",
-    )
-    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
-        "sys-message-1",
-        system_message.message_content,
-    )
-    assert system_message.message_content.message_task.status.state.value == "failed"
+    durable = await store.get_run("message-1")
+    assert durable.status == OrchestrationStatus.FAILED
+    assert durable.system_agent_message_id == "sys-message-1"
+    executor.delivery.send_task_update.assert_not_awaited()
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_not_awaited()
+    assert system_message.message_content.message_task.status.state == "submitted"
 
 
 @pytest.mark.asyncio
@@ -11163,19 +11159,13 @@ async def test_completion_cas_loser_projects_only_durable_terminal_winner(
     assert durable is not None
     assert result.status == expected_run_status
     assert durable.status == winner_status
-    assert child_observations == [
-        ("db", expected_child_status),
-        ("sse", expected_child_status),
-    ]
-    assert system_message.message_content.message_task.status.state.value == (
-        expected_child_status
-    )
+    assert child_observations == []
+    assert system_message.message_content.message_task.status.state == "working"
     emitted_statuses = [
         call.kwargs["status"]
         for call in executor.delivery.send_task_update.await_args_list
     ]
-    assert emitted_statuses == [expected_child_status]
-    assert "completed" not in emitted_statuses
+    assert emitted_statuses == []
     assert all(
         call.kwargs["status"] != OrchestrationStatus.COMPLETED
         for call in project_public_terminal.await_args_list

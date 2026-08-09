@@ -93,9 +93,9 @@ class CrossInstanceEventBus:
         except Exception:
             self._redis_reachable = False
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> None:
+    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
         if self.redis_pubsub is None:
-            return
+            return False
         envelope = {
             "kind": "sse_event",
             "origin": self.instance_id,
@@ -109,6 +109,7 @@ class CrossInstanceEventBus:
             self._room_channel(room_id),
             json.dumps(envelope),
         )
+        return True
 
     async def publish_dead_letter(self, envelope: dict[str, Any]) -> None:
         if self.redis_pubsub is None:

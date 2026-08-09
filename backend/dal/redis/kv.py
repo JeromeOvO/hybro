@@ -14,6 +14,14 @@ end
 return 0
 """.strip()
 
+_COMPARE_SET_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+    return 1
+end
+return 0
+""".strip()
+
 
 class RedisKVImpl:
     """Redis key-value DAL backed directly by redis.asyncio."""
@@ -91,6 +99,31 @@ class RedisKVImpl:
             )
         except Exception as exc:
             raise self._transient("compare_delete", exc) from exc
+
+    async def compare_set(
+        self,
+        key: str,
+        expected_value: str,
+        value: str,
+        *,
+        ttl: int,
+    ) -> bool:
+        client = self._ensure_client()
+        if client is None:
+            return False
+        try:
+            return bool(
+                await client.eval(
+                    _COMPARE_SET_SCRIPT,
+                    1,
+                    key,
+                    expected_value,
+                    value,
+                    ttl,
+                )
+            )
+        except Exception as exc:
+            raise self._transient("compare_set", exc) from exc
 
     async def increment(self, key: str, amount: int = 1) -> int:
         client = self._ensure_client()

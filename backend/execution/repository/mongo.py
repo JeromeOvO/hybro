@@ -92,9 +92,25 @@ class RunEventMongoRepository:
         rows = await self._events.find({"run_id": run_id}, sort=[("seq", -1)], limit=1)
         return rows[0] if rows else None
 
+    async def find(
+        self, query: dict, *, sort: list[tuple[str, int]] | None = None, limit: int = 0
+    ) -> list[dict]:
+        kwargs: dict = {}
+        if sort is not None:
+            kwargs["sort"] = sort
+        if limit:
+            kwargs["limit"] = limit
+        return await self._events.find(query, **kwargs)
+
     async def find_one(self, query: dict, *, sort: list[tuple[str, int]] | None = None):
         kwargs: dict = {"limit": 1}
         if sort is not None:
             kwargs["sort"] = sort
         rows = await self._events.find(query, **kwargs)
         return rows[0] if rows else None
+
+    async def find_one_and_update(self, query: dict, update: dict, **kwargs):
+        return await self._events.find_one_and_update(query, update, **kwargs)
+
+    async def update_one(self, query: dict, update: dict) -> bool:
+        return await self._events.update_one(query, update)

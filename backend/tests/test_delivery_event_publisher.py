@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 import pytest
 
 from common.dto import (
+    DeliveryEmitStatus,
     HubAgentResponseInternal,
     MessageCommitted,
     ProcessingStatusEvent,
+    RunEventNotification,
     RunStateChanged,
 )
 from common.observability import get_current_trace_id, trace_id_context
@@ -35,11 +37,13 @@ class FakeTransport:
     def __init__(self):
         self.frames: list[tuple[str, dict]] = []
         self.error: Exception | None = None
+        self.delivered_count = 1
 
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> None:
+    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int:
         if self.error is not None:
             raise self.error
         self.frames.append((room_id, frame))
+        return self.delivered_count
 
 
 class FakeBus:
@@ -49,12 +53,14 @@ class FakeBus:
         self.sse_trace_ids: list[str | None] = []
         self.sse_error: Exception | None = None
         self.dead_letter_error: Exception | None = None
+        self.sse_accepted = True
 
-    async def publish_sse(self, room_id: str, frame: dict) -> None:
+    async def publish_sse(self, room_id: str, frame: dict) -> bool:
         if self.sse_error is not None:
             raise self.sse_error
         self.sse_trace_ids.append(get_current_trace_id())
         self.sse.append((room_id, frame))
+        return self.sse_accepted
 
     async def publish_dead_letter(self, envelope: dict) -> None:
         if self.dead_letter_error is not None:
@@ -140,6 +146,139 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
 
 
 @pytest.mark.asyncio
+async def test_long_fanout_renews_reservation_until_confirmed():
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class SlowTransport(FakeTransport):
+        async def broadcast_frame_to_room(self, room_id, frame):
+            await asyncio.sleep(1.1)
+            return await super().broadcast_frame_to_room(room_id, frame)
+
+    redis = FakeRedisKV()
+    config = DeliveryConfig(
+        terminal_reservation_ttl_seconds=1,
+        terminal_dedup_ttl_seconds=10,
+    )
+    publisher = make_publisher(
+        transport=SlowTransport(),
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    renewals = [
+        call for call in redis.compare_sets if call[1] == call[2] and call[3] == 1
+    ]
+    assert len(renewals) >= 2
+    assert redis.compare_sets[-1][2] == "delivered:failed"
+    assert redis.compare_sets[-1][3] == 10
+
+
+@pytest.mark.asyncio
+async def test_lost_reservation_during_fanout_fails_without_confirmation():
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class LostRedis(FakeRedisKV):
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            self.compare_sets.append((key, expected_value, value, ttl))
+            return False
+
+    class SlowTransport(FakeTransport):
+        async def broadcast_frame_to_room(self, room_id, frame):
+            await asyncio.sleep(0.4)
+            return await super().broadcast_frame_to_room(room_id, frame)
+
+    redis = LostRedis()
+    config = DeliveryConfig(
+        terminal_reservation_ttl_seconds=1,
+        terminal_dedup_ttl_seconds=10,
+    )
+    publisher = make_publisher(
+        transport=SlowTransport(),
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert not any(value.startswith("delivered:") for value in redis.values.values())
+
+
+@pytest.mark.asyncio
+async def test_checked_emit_locally_confirms_when_redis_reservation_fails():
+    from common.errors import TransientError
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    redis = FakeRedisKV(error=TransientError("redis unavailable"))
+    transport = FakeTransport()
+    publisher = make_publisher(
+        transport=transport,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert len(transport.frames) == 1
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    assert len(transport.frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_event_checked_emit_distinguishes_inflight_and_confirmed():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    crashed = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+    await crashed.reserve(
+        room_id="room-1",
+        message_id="evt-1",
+        status="delivered",
+        delivery_id="terminal:evt-1:run-event",
+    )
+    transport = FakeTransport()
+    publisher = make_publisher(
+        transport=transport,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-1",
+        delivery_id="terminal:evt-1:run-event",
+        run_id="run-1",
+        seq=2,
+        run_event_type="run_failed",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.IN_FLIGHT
+    assert transport.frames == []
+
+    redis.values.clear()  # crashed reservation lease expires
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert transport.frames[0][1]["data"]["delivery_id"] == ("terminal:evt-1:run-event")
+
+    replay = make_publisher(
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+    )
+    assert await replay.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+
+
+@pytest.mark.asyncio
 async def test_emit_suppresses_terminal_duplicate_and_counts_dedup():
     transport = FakeTransport()
     bus = FakeBus()
@@ -183,6 +322,64 @@ async def test_local_delivery_failure_does_not_prevent_fanout_or_dead_letter():
     assert len(bus.sse) == 1
     assert bus.dead_letters == []
     assert list(publisher.dead_letters) == []
+
+
+@pytest.mark.asyncio
+async def test_zero_local_subscribers_and_no_broker_stays_pending():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    transport = FakeTransport()
+    transport.delivered_count = 0
+    bus = FakeBus()
+    bus.sse_accepted = False
+    publisher = make_publisher(
+        transport=transport,
+        bus=bus,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert redis.values == {}
+
+
+@pytest.mark.asyncio
+async def test_zero_local_subscribers_and_failed_fanout_never_confirm_global_marker():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    transport = FakeTransport()
+    transport.delivered_count = 0
+    bus = FakeBus()
+    bus.sse_error = RuntimeError("redis pubsub down")
+    publisher = make_publisher(
+        transport=transport,
+        bus=bus,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert redis.values == {}
+
+    connected_transport = FakeTransport()
+    replay = make_publisher(
+        transport=connected_transport,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    assert await replay.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert len(connected_transport.frames) == 1
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 from pymongo.errors import DuplicateKeyError
 
@@ -14,7 +16,14 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from execution.run_reducer import RunTransitionError, ensure_transition_allowed
-from models.run import TERMINAL_RUN_STATES, Run, RunEvent, RunEventType, RunState
+from models.run import (
+    TERMINAL_RUN_STATES,
+    Run,
+    RunEvent,
+    RunEventType,
+    RunState,
+    TerminalProjection,
+)
 
 logger = get_logger(__name__)
 _UNBOUND_MESSAGE = "RunCommandHandler has not been bound"
@@ -33,6 +42,15 @@ class _UnboundRunRepository:
 
 class _UnboundRunEventRepository:
     async def find_one(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def find(self, *args, **kwargs):  # pragma: no cover - guardrail
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def find_one_and_update(self, *args, **kwargs):  # pragma: no cover
+        raise RuntimeError(_UNBOUND_MESSAGE)
+
+    async def update_one(self, *args, **kwargs):  # pragma: no cover - guardrail
         raise RuntimeError(_UNBOUND_MESSAGE)
 
     async def insert_one(self, *args, **kwargs):  # pragma: no cover - guardrail
@@ -67,6 +85,7 @@ class RunCommandHandler:
         *,
         client_request_id: str | None = None,
         details: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Legacy payload-only API retained for non-terminal compatibility."""
         outcome = await self.write_processing_status(
@@ -75,8 +94,9 @@ class RunCommandHandler:
             message_id,
             client_request_id=client_request_id,
             details=details,
+            terminal_projection=terminal_projection,
         )
-        return outcome.payload if outcome.status == "accepted" else None
+        return outcome.payload if outcome.status in {"accepted", "replayed"} else None
 
     async def write_processing_status(
         self,
@@ -86,6 +106,7 @@ class RunCommandHandler:
         *,
         client_request_id: str | None = None,
         details: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
         _lease_held: bool = False,
     ) -> RunLifecycleWriteOutcome:
         """Persist status with an explicit accepted/conflict/error result."""
@@ -104,6 +125,7 @@ class RunCommandHandler:
                         message_id,
                         client_request_id=client_request_id,
                         details=details,
+                        terminal_projection=terminal_projection,
                         _lease_held=True,
                     )
             except Exception as exc:
@@ -120,9 +142,12 @@ class RunCommandHandler:
                 status_value=status_value,
                 client_request_id=client_request_id,
                 details=details,
+                terminal_projection=terminal_projection,
             )
             if payload is None:
                 return RunLifecycleWriteOutcome.conflict()
+            if payload.pop("_terminal_replay", False):
+                return RunLifecycleWriteOutcome.replayed(payload)
             return RunLifecycleWriteOutcome.accepted(payload)
         except RunTransitionError:
             increment_counter(
@@ -158,6 +183,7 @@ class RunCommandHandler:
         status_value: str,
         client_request_id: str | None,
         details: str | None,
+        terminal_projection: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         if status_value == SSEProcessingStatus.PROCESSING:
             return await self._record_active(
@@ -194,6 +220,7 @@ class RunCommandHandler:
             terminal_state=terminal_state,
             error_code=error_code,
             error_message=None if terminal_state == RunState.COMPLETED else details,
+            terminal_projection=terminal_projection,
         )
 
     async def project_run_state(
@@ -363,6 +390,8 @@ class RunCommandHandler:
             updates["ended_at"] = latest_event.get("ts") or utcnow()
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
+            updates["terminal_summary"] = payload.get("terminal_summary")
+            updates["terminal_projection"] = latest_event.get("terminal_projection")
 
         await self._runs.update_one(
             {"run_id": run_id},
@@ -519,6 +548,7 @@ class RunCommandHandler:
         error_message: str | None,
         causation_id: str | None = None,
         terminal_summary: dict[str, Any] | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         run_doc = await self._ensure_run_exists(
             room_id=room_id,
@@ -528,18 +558,40 @@ class RunCommandHandler:
         )
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
-        if current_state in TERMINAL_RUN_STATES:
-            return None
-
         terminal_event_map = {
             RunState.COMPLETED: RunEventType.RUN_COMPLETED,
             RunState.FAILED: RunEventType.RUN_FAILED,
             RunState.CANCELED: RunEventType.RUN_CANCELED,
         }
+        if current_state in TERMINAL_RUN_STATES:
+            if current_state != terminal_state:
+                return None
+            existing = await self._run_events.find_one(
+                {
+                    "run_id": run_id,
+                    "type": terminal_event_map[terminal_state].value,
+                },
+                sort=[("seq", -1)],
+            )
+            if existing is None:
+                return None
+            await self._repair_head_from_existing_event(existing)
+            replay = self._event_payload_from_doc(existing)
+            replay["_terminal_replay"] = True
+            return replay
+
         payload = {
             "error_code": error_code,
             "error_message": error_message,
         }
+        if terminal_projection is None:
+            terminal_projection = self._default_terminal_projection(
+                terminal_state=terminal_state,
+                trigger_message_id=trigger_message_id,
+                client_request_id=client_request_id,
+                error_code=error_code,
+                error_message=error_message,
+            )
         if terminal_summary is not None:
             payload["terminal_summary"] = terminal_summary
         return await self._append_event_and_project(
@@ -548,7 +600,57 @@ class RunCommandHandler:
             next_state=terminal_state,
             payload=payload,
             causation_id=causation_id,
+            terminal_projection=terminal_projection,
         )
+
+    @staticmethod
+    def _default_terminal_projection(
+        *,
+        terminal_state: RunState,
+        trigger_message_id: str,
+        client_request_id: str | None,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> dict[str, Any]:
+        status = (
+            "completed"
+            if terminal_state == RunState.COMPLETED
+            else "canceled"
+            if terminal_state == RunState.CANCELED
+            else str(error_code or "failed").lower()
+        )
+        if (
+            status
+            not in {
+                "failed",
+                "rejected",
+                "rate_limited",
+                "error",
+            }
+            and terminal_state == RunState.FAILED
+        ):
+            status = "failed"
+        return {
+            "version": 1,
+            "canonical_status": status,
+            "frontend_message_id": trigger_message_id,
+            "lifecycle_message_id": trigger_message_id,
+            "descendant_cleanup_root_id": (
+                trigger_message_id if terminal_state != RunState.COMPLETED else None
+            ),
+            "client_request_id": client_request_id,
+            "details": {"message": error_message} if error_message else None,
+            "pending": True,
+            "steps": {
+                "run_event_sse": {"state": "pending"},
+                "processing_sse": {"state": "pending"},
+                **(
+                    {"descendant_cleanup": {"state": "pending"}}
+                    if terminal_state != RunState.COMPLETED
+                    else {}
+                ),
+            },
+        }
 
     async def _append_event_and_project(
         self,
@@ -558,6 +660,7 @@ class RunCommandHandler:
         next_state: RunState,
         payload: dict,
         causation_id: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         now = utcnow()
         current_seq = int(run_doc.get("seq", 0))
@@ -588,6 +691,7 @@ class RunCommandHandler:
             await self._repair_head_from_existing_event(existing)
             return self._event_payload_from_doc(existing)
 
+        projection_model = self._terminal_projection_model(terminal_projection)
         event = RunEvent(
             run_id=run_id,
             room_id=room_id,
@@ -595,21 +699,26 @@ class RunCommandHandler:
             type=event_type,
             payload=payload,
             causation_id=causation_id,
+            terminal_projection=projection_model,
             ts=now,
         )
+        if event.terminal_projection is not None:
+            event.terminal_projection.event_id = event.event_id
+            event.terminal_projection.delivery_id = (
+                event.terminal_projection.delivery_id
+                or f"terminal:{event.event_id}:processing"
+            )
         dumped = event.model_dump(mode="json")
         try:
             await self._run_events.insert_one(dumped)
         except DuplicateKeyError:
-            existing = await self._find_existing_event_by_causation_id(
+            return await self._resolve_duplicate_event(
                 run_id=run_id,
+                seq=next_seq,
                 event_type=event_type,
+                next_state=next_state,
                 causation_id=causation_id,
             )
-            if existing:
-                await self._repair_head_from_existing_event(existing)
-                return self._event_payload_from_doc(existing)
-            return None
 
         updates: dict[str, Any] = {
             "state": next_state.value,
@@ -623,6 +732,7 @@ class RunCommandHandler:
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
             updates["terminal_summary"] = payload.get("terminal_summary")
+            updates["terminal_projection"] = dumped.get("terminal_projection")
 
         await self._project_or_repair_appended_event(
             run_id=run_id,
@@ -635,7 +745,7 @@ class RunCommandHandler:
             to_state=next_state.value,
         )
 
-        return {
+        result = {
             "event_id": dumped.get("event_id"),
             "run_id": run_id,
             "room_id": room_id,
@@ -644,6 +754,46 @@ class RunCommandHandler:
             "payload": payload,
             "ts": dumped.get("ts"),
         }
+        if dumped.get("terminal_projection") is not None:
+            result["terminal_projection"] = dumped["terminal_projection"]
+        return result
+
+    @staticmethod
+    def _terminal_projection_model(
+        projection: dict[str, Any] | None,
+    ) -> TerminalProjection | None:
+        if projection is None:
+            return None
+        return TerminalProjection.model_validate(dict(projection))
+
+    async def _resolve_duplicate_event(
+        self,
+        *,
+        run_id: str,
+        seq: int,
+        event_type: RunEventType,
+        next_state: RunState,
+        causation_id: str | None,
+    ) -> dict[str, Any] | None:
+        existing = await self._find_existing_event_by_causation_id(
+            run_id=run_id,
+            event_type=event_type,
+            causation_id=causation_id,
+        )
+        if existing is None:
+            canonical = await self._run_events.find_one({"run_id": run_id, "seq": seq})
+            if canonical is not None:
+                if canonical.get("type") != event_type.value:
+                    await self._repair_head_from_existing_event(canonical)
+                    return None
+                existing = canonical
+        if existing is None:
+            return None
+        await self._repair_head_from_existing_event(existing)
+        replay = self._event_payload_from_doc(existing)
+        if next_state in TERMINAL_RUN_STATES:
+            replay["_terminal_replay"] = True
+        return replay
 
     async def _project_or_repair_appended_event(
         self,
@@ -718,7 +868,7 @@ class RunCommandHandler:
         )
 
     def _event_payload_from_doc(self, event_doc: dict[str, Any]) -> dict[str, Any]:
-        return {
+        result = {
             "event_id": event_doc.get("event_id"),
             "run_id": event_doc.get("run_id"),
             "room_id": event_doc.get("room_id"),
@@ -727,6 +877,9 @@ class RunCommandHandler:
             "payload": event_doc.get("payload") or {},
             "ts": event_doc.get("ts"),
         }
+        if event_doc.get("terminal_projection") is not None:
+            result["terminal_projection"] = event_doc["terminal_projection"]
+        return result
 
     async def _repair_head_from_existing_event(self, event_doc: dict[str, Any]) -> bool:
         run_id = str(event_doc.get("run_id") or "")
@@ -791,10 +944,187 @@ class RunCommandHandler:
             updates["error_code"] = payload.get("error_code")
             updates["error_message"] = payload.get("error_message")
             updates["terminal_summary"] = payload.get("terminal_summary")
+            updates["terminal_projection"] = event_doc.get("terminal_projection")
 
         return (
             await self._runs.update_one({"run_id": run_id}, {"$set": updates})
         ) is not False
+
+    async def list_incomplete_terminal_projections(
+        self, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        now = utcnow().isoformat()
+        return await self._run_events.find(
+            {
+                "terminal_projection.version": 1,
+                "terminal_projection.pending": True,
+                "terminal_projection.next_attempt_at": {"$lte": now},
+            },
+            sort=[("terminal_projection.next_attempt_at", 1), ("ts", 1)],
+            limit=limit,
+        )
+
+    async def claim_terminal_projection_step(
+        self,
+        event_id: str,
+        step: str,
+        *,
+        lease_seconds: int = 300,
+    ) -> tuple[str, dict[str, Any]] | None:
+        token = uuid4().hex
+        now_dt = utcnow()
+        now = now_dt.isoformat()
+        claim_expires_at = (now_dt + timedelta(seconds=lease_seconds)).isoformat()
+        path = f"terminal_projection.steps.{step}"
+        doc = await self._run_events.find_one_and_update(
+            {
+                "event_id": event_id,
+                "terminal_projection.version": 1,
+                "$or": [
+                    {
+                        f"{path}.state": "pending",
+                        "$or": [
+                            {f"{path}.next_attempt_at": {"$exists": False}},
+                            {f"{path}.next_attempt_at": {"$lte": now}},
+                        ],
+                    },
+                    {
+                        f"{path}.state": "running",
+                        f"{path}.claim_expires_at": {"$lte": now},
+                    },
+                ],
+            },
+            {
+                "$set": {
+                    f"{path}.state": "running",
+                    f"{path}.claim_token": token,
+                    f"{path}.claim_expires_at": claim_expires_at,
+                    f"{path}.last_attempt_at": now,
+                    "terminal_projection.updated_at": now,
+                },
+                "$inc": {f"{path}.attempts": 1},
+            },
+        )
+        return (token, doc) if doc is not None else None
+
+    async def complete_terminal_projection_step(
+        self, event_id: str, step: str, claim_token: str
+    ) -> bool:
+        now = utcnow().isoformat()
+        path = f"terminal_projection.steps.{step}"
+        return await self._run_events.update_one(
+            {
+                "event_id": event_id,
+                f"{path}.state": "running",
+                f"{path}.claim_token": claim_token,
+            },
+            {
+                "$set": {
+                    f"{path}.state": "completed",
+                    f"{path}.completed_at": now,
+                    f"{path}.claim_token": None,
+                    f"{path}.claim_expires_at": None,
+                    f"{path}.last_error": None,
+                    f"{path}.next_attempt_at": None,
+                    "terminal_projection.updated_at": now,
+                }
+            },
+        )
+
+    async def release_terminal_projection_step(
+        self,
+        event_id: str,
+        step: str,
+        claim_token: str,
+        error: BaseException,
+        *,
+        retryable: bool = True,
+        delay_seconds: int = 1,
+    ) -> bool:
+        now_dt = utcnow()
+        now = now_dt.isoformat()
+        path = f"terminal_projection.steps.{step}"
+        state = "pending" if retryable else "blocked"
+        retry_at = (
+            (now_dt + timedelta(seconds=delay_seconds)).isoformat()
+            if retryable
+            else None
+        )
+        return await self._run_events.update_one(
+            {
+                "event_id": event_id,
+                f"{path}.state": "running",
+                f"{path}.claim_token": claim_token,
+            },
+            {
+                "$set": {
+                    f"{path}.state": state,
+                    f"{path}.claim_token": None,
+                    f"{path}.claim_expires_at": None,
+                    f"{path}.next_attempt_at": retry_at,
+                    f"{path}.blocked_at": None if retryable else now,
+                    f"{path}.last_error": f"{type(error).__name__}: {error}"[:512],
+                    "terminal_projection.updated_at": now,
+                }
+            },
+        )
+
+    async def block_terminal_projection_step(
+        self,
+        event_id: str,
+        step: str,
+        error: BaseException,
+    ) -> bool:
+        now = utcnow().isoformat()
+        path = f"terminal_projection.steps.{step}"
+        return await self._run_events.update_one(
+            {"event_id": event_id, "terminal_projection.version": 1},
+            {
+                "$set": {
+                    path: {
+                        "state": "blocked",
+                        "claim_token": None,
+                        "claim_expires_at": None,
+                        "next_attempt_at": None,
+                        "blocked_at": now,
+                        "last_error": f"{type(error).__name__}: {error}"[:512],
+                    },
+                    "terminal_projection.updated_at": now,
+                }
+            },
+        )
+
+    async def refresh_terminal_projection_schedule(self, event_id: str) -> bool:
+        doc = await self._run_events.find_one({"event_id": event_id})
+        if not isinstance(doc, dict):
+            return False
+        projection = doc.get("terminal_projection") or {}
+        steps = projection.get("steps") or {}
+        if not isinstance(steps, dict):
+            steps = {}
+        due_times = []
+        now = utcnow().isoformat()
+        for step in steps.values():
+            if not isinstance(step, dict):
+                continue
+            state = step.get("state")
+            if state == "pending":
+                due_times.append(step.get("next_attempt_at") or now)
+            elif state == "running":
+                due_times.append(step.get("claim_expires_at") or now)
+        pending = bool(due_times)
+        return await self._run_events.update_one(
+            {"event_id": event_id, "terminal_projection.version": 1},
+            {
+                "$set": {
+                    "terminal_projection.pending": pending,
+                    "terminal_projection.next_attempt_at": (
+                        min(due_times) if due_times else None
+                    ),
+                    "terminal_projection.updated_at": now,
+                }
+            },
+        )
 
 
 def run_event_sse_enabled() -> bool:

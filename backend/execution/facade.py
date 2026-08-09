@@ -29,7 +29,7 @@ from execution.cancellation.ports import (
 )
 from execution.cancellation.service import CancellationService
 from execution.dispatch.agent_event import AgentEvent
-from execution.events import emit_processing_status, emit_room_processing_status
+from execution.events import emit_room_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
@@ -856,17 +856,6 @@ class ExecutionFacade:
             )
             if public_state != target_state.value:
                 raise RuntimeError("public terminal lifecycle projection failed")
-        await emit_processing_status(
-            room_id=room_id,
-            status=target_state.value,
-            message_id=message_id,
-            lifecycle_message_id=message_id,
-            record_lifecycle=False,
-            run_lifecycle=self._run_lifecycle,
-            event_publisher=self._event_publisher,
-            run_event_enabled=self._run_event_enabled,
-            client_request_id_resolver=self._client_request_id_resolver,
-        )
 
     async def finalize_pending_cancellation(
         self,

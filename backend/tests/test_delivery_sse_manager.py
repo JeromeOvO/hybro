@@ -264,9 +264,12 @@ async def test_broadcast_frame_to_room_preserves_order_and_empty_room_is_noop():
     transport = make_transport()
     connection = await transport.open_connection("room-1")
 
-    await transport.broadcast_frame_to_room("missing", {"type": "noop"})
-    await transport.broadcast_frame_to_room(
-        "room-1", {"type": "one", "room_id": "room-1"}
+    assert await transport.broadcast_frame_to_room("missing", {"type": "noop"}) == 0
+    assert (
+        await transport.broadcast_frame_to_room(
+            "room-1", {"type": "one", "room_id": "room-1"}
+        )
+        == 1
     )
     await transport.broadcast_frame_to_room(
         "room-1", {"type": "two", "room_id": "room-1"}

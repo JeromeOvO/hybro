@@ -524,6 +524,14 @@ class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
 
 
 class RoomMessageWriter(Protocol):
+    async def set_turn_completion_kind(
+        self, message_id: str, completion_kind: str
+    ) -> str: ...
+
+    async def set_system_task_terminal_state(
+        self, message_id: str, target_state: str
+    ) -> str: ...
+
     async def add_room_agent_message(
         self,
         room_agent_message: RoomAgentMessage,
@@ -566,6 +574,15 @@ class RoomMessageWriter(Protocol):
         self,
         message_id: str,
     ) -> int: ...
+
+    async def project_descendant_terminal_state(
+        self,
+        message_id: str,
+        *,
+        event_id: str,
+        target_state: str,
+        exclude_message_ids: list[str] | None = None,
+    ) -> list[str]: ...
 
     async def claim_user_message_for_processing(
         self,
@@ -747,7 +764,8 @@ class ExecutionDeliveryPort(Protocol):
         task_content: str | None = None,
         parts: list[dict[str, Any]] | None = None,
         client_request_id: str | None = None,
-    ) -> None: ...
+        delivery_id: str | None = None,
+    ) -> bool | None: ...
 
     async def send_rate_limit_error(
         self,
@@ -850,6 +868,7 @@ class RunLifecyclePort(Protocol):
         client_request_id: str | None = None,
         details: dict[str, Any] | None = None,
         error_message: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> RunLifecycleWriteOutcome: ...
 
     async def record_processing_status(
@@ -861,6 +880,7 @@ class RunLifecyclePort(Protocol):
         client_request_id: str | None = None,
         details: dict[str, Any] | None = None,
         error_message: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def project_run_state(

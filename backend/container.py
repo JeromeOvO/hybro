@@ -966,6 +966,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 refresh_processing_claim=message_store.refresh_processing_claim,
                 reset_last_notified_state=message_store.reset_last_notified_state,
+                set_system_task_terminal_state=(
+                    message_store.set_system_task_terminal_state
+                ),
+                set_turn_completion_kind=message_store.set_turn_completion_kind,
                 turn_exists=message_store.turn_exists,
                 unclaim_user_message=message_store.unclaim_user_message,
                 update_last_notified_state=message_store.update_last_notified_state,
@@ -1323,6 +1327,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             _execution_deps = create_execution_deps(execution_facade)
 
+            from execution.terminal_projection import TerminalProjectionFinalizer
+
+            terminal_projection_finalizer = TerminalProjectionFinalizer(
+                lifecycle=run_lifecycle,
+                event_publisher=_delivery_deps.event_publisher,
+                message_store=message_store,
+                delivery=execution_delivery,
+                run_event_enabled=run_event_sse_enabled,
+                # Turn journaling is retired; no synthetic recoverable step is wired.
+                head_healer=run_command_handler.heal_head_from_events,
+            )
+            run_lifecycle.bind_terminal_finalizer(terminal_projection_finalizer)
+
             async def emit_room_processing_status(**kwargs):
                 return await emit_execution_room_processing_status(
                     **kwargs,
@@ -1453,6 +1470,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 StaleOrchestrationRunRecoveryDeps,
                 StaleRecoveryDeps,
                 StaleRunWatchdogEventDeps,
+                StaleTerminalProjectionDeps,
             )
 
             async def emit_watchdog_run_event(
@@ -1518,6 +1536,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
                     emit_run_event=emit_watchdog_run_event,
                     emit_processing_status=emit_watchdog_processing_status,
+                )
+            )
+            stale_task_checker.set_terminal_projection_deps(
+                StaleTerminalProjectionDeps(
+                    recover_pending=run_lifecycle.recover_terminal_projections,
                 )
             )
         compaction_sweep.set_leader_election(_leader)
@@ -2217,6 +2240,17 @@ async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
         "run_events",
         [("room_id", 1), ("ts", -1)],
         name="room_ts",
+    )
+    await _create_index(
+        mongo,
+        "run_events",
+        [
+            ("terminal_projection.pending", 1),
+            ("terminal_projection.next_attempt_at", 1),
+            ("ts", 1),
+        ],
+        name="pending_terminal_projection",
+        partialFilterExpression={"terminal_projection.pending": True},
     )
 
 

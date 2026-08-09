@@ -53,7 +53,7 @@ from models.supervisor import (
 
 
 async def _noop_processing_status_emitter(**_kwargs):
-    return None
+    return {"accepted": True}
 
 
 class RecordingEventPublisher:

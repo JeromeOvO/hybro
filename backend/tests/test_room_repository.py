@@ -1681,6 +1681,12 @@ async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
                 "related_message_id": "u1",
                 "message_content": {"message_task": {"status": {"state": "completed"}}},
             },
+            {
+                "message_id": "after-done",
+                "room_id": "r1",
+                "related_message_id": "done",
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            },
         ]
     )
     mongo = FakeMongo(
@@ -1705,13 +1711,83 @@ async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
     assert agent_messages.docs[0]["pending_continuation"] == {"next": "step"}
     assert await store.turn_exists("r1", "missing") is False
 
-    assert await store.cancel_descendants("u1") == 2
+    assert await store.cancel_descendants("u1") == 3
     states = {
         doc["message_id"]: doc["message_content"]["message_task"]["status"]["state"]
         for doc in agent_messages.docs
     }
-    assert states == {"a1": "canceled", "a2": "canceled", "done": "completed"}
+    assert states == {
+        "a1": "canceled",
+        "a2": "canceled",
+        "done": "completed",
+        "after-done": "canceled",
+    }
     assert await store.cancel_agent_messages_by_ids(["done"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_descendant_terminal_projection_rebuilds_winner_tagged_child_ids():
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    agent_messages = FakeCollection(
+        [
+            {
+                "message_id": "a1",
+                "room_id": "r1",
+                "related_message_id": "u1",
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            },
+            {
+                "message_id": "a2",
+                "room_id": "r1",
+                "related_message_id": "a1",
+                "message_content": {"message_task": {"status": {"state": "submitted"}}},
+            },
+            {
+                "message_id": "sys-u1",
+                "room_id": "r1",
+                "related_message_id": "u1",
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            },
+        ]
+    )
+    mongo = FakeMongo(
+        {
+            "room_user_messages": FakeCollection([]),
+            "room_agent_messages": agent_messages,
+        }
+    )
+    store = RuntimeRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=MessageMongoRepository(mongo=mongo),
+        agent_repository=object(),
+    )
+
+    first = await store.project_descendant_terminal_state(
+        "u1",
+        event_id="evt-1",
+        target_state="failed",
+        exclude_message_ids=["sys-u1"],
+    )
+    replay = await store.project_descendant_terminal_state(
+        "u1",
+        event_id="evt-1",
+        target_state="failed",
+        exclude_message_ids=["sys-u1"],
+    )
+
+    assert first == replay == ["a1", "a2"]
+    assert {
+        doc["message_id"]: doc["message_content"]["message_task"]["status"]["state"]
+        for doc in agent_messages.docs
+    } == {"a1": "failed", "a2": "failed", "sys-u1": "working"}
+    assert {
+        doc["terminal_projection_event_id"]
+        for doc in agent_messages.docs
+        if doc["message_id"] != "sys-u1"
+    } == {"evt-1"}
+    assert "terminal_projection_event_id" not in agent_messages.docs[2]
 
 
 @pytest.mark.asyncio

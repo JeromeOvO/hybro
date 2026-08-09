@@ -13,13 +13,11 @@ Supervisor-enabled rooms use ``SupervisorExecutor`` exclusively.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import SSEProcessingStatus
 from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationToken
@@ -69,9 +67,14 @@ class QueueResult(str, Enum):
 
 @dataclass
 class QueueProcessingResult:
-    """Result of queue processing."""
+    """Result plus the exact terminal projection requested by the queue."""
 
     result: QueueResult
+    terminal_status: SSEProcessingStatus | None = None
+    system_message_id: str | None = None
+    clear_cancellation: bool = False
+    error_message: str | None = None
+    error_code: str | None = None
 
 
 @dataclass
@@ -191,11 +194,13 @@ class QueueExecutor:
         record_lifecycle: bool = True,
         client_request_id: str | None = None,
         details=None,
-    ) -> None:
+        system_message_id: str | None = None,
+        turn_event_enabled: bool = False,
+    ) -> dict | None:
         if self._processing_status_emitter is None:
             raise RuntimeError("QueueExecutor execution event dependencies not bound")
         status_value = status.value if hasattr(status, "value") else str(status)
-        await self._processing_status_emitter(
+        return await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
@@ -215,6 +220,8 @@ class QueueExecutor:
                 and status_value in {"failed", "canceled", "rejected", "error"}
                 else None
             ),
+            system_message_id=system_message_id,
+            turn_event_enabled=turn_event_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -223,43 +230,17 @@ class QueueExecutor:
 
     @asynccontextmanager
     async def _managed_queue(self, message_queue: deque, last_popped: list[str]):
-        """Context manager that cancels remaining items when the queue is
-        abandoned (failure, cancellation, or unhandled exception).
+        """Release only in-memory queue ownership on an early exit.
 
-        On normal completion (queue drained) the ``finally`` block is a no-op
-        because nothing remains.  On early exit (``break`` from the loop) the
-        ``finally`` block cancels every message still in the deque and clears
-        it, guaranteeing all DB writes happen *before* control returns to the
-        caller's post-``async with`` Phase 2 (deferred SSE notification).
-
-        **Important:** Messages that have already been ``popleft``-ed from the
-        deque are *not* visible to this cleanup.  The caller must transition
-        the *current* message itself before ``break``-ing.
-
-        **Descendant cleanup:** After cancelling in-memory siblings, this also
-        bulk-cancels any DB-only descendants (not yet loaded into the deque)
-        that are downstream in the ``related_message_id`` chain.  The
-        ``last_popped`` list must contain the ``message_id`` of the most
-        recently popped message so we know where the chain was interrupted.
-
-        **PAUSED caveat:** The PAUSED path must call ``message_queue.clear()``
-        *before* ``break`` (after ``_save_continuation`` captures the queue
-        state) to prevent this handler from canceling saved messages.
+        Child persistence is intentionally absent here. Failed/canceled roots
+        carry durable descendant-cleanup intent, so an opposing terminal loser
+        cannot mutate children before or after losing the root CAS.
         """
         try:
             yield message_queue
         finally:
-            if len(message_queue) > 0:
-                for msg in message_queue:
-                    await self.tsm.transition_task(
-                        msg, coerce_task_state("canceled"), persist=True
-                    )
-                canceled_ids = [msg.message_id for msg in message_queue]
-                message_queue.clear()
-                for mid in canceled_ids:
-                    await self.message_writer.cancel_descendants(mid)
-            if last_popped:
-                await self.message_writer.cancel_descendants(last_popped[0])
+            message_queue.clear()
+            last_popped.clear()
 
     # ------------------------------------------------------------------
     # Main queue loop
@@ -340,6 +321,8 @@ class QueueExecutor:
 
         queue_result = QueueResult.COMPLETED
         deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
+        failure_error: str | None = None
+        failure_code: str | None = None
 
         last_popped: list[str] = []
 
@@ -360,9 +343,6 @@ class QueueExecutor:
                     logger.info(
                         "QueueExecutor: Message processing cancelled for %s",
                         user_message_id,
-                    )
-                    await self.tsm.transition_task(
-                        current_message, coerce_task_state("canceled"), persist=True
                     )
                     queue_result = QueueResult.CANCELED
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
@@ -431,24 +411,13 @@ class QueueExecutor:
                         if isinstance(current_message.extend_info, dict)
                         else None
                     )
+                    failure_error = error_text
                     if preflight_failure is not None:
-                        error_code = (
+                        failure_code = (
                             str(preflight_failure.get("code"))
                             if isinstance(preflight_failure, dict)
                             and preflight_failure.get("code")
                             else result.status_message
-                        )
-                        await self.tsm.fail_pre_dispatch_task(
-                            current_message,
-                            error=error_text,
-                            error_code=error_code,
-                        )
-                        await self.response_handler.notify_task_update(
-                            message_id=current_message.message_id,
-                            state=coerce_task_state("failed"),
-                            room_id=room_id,
-                            user_id=current_message.user_id or "",
-                            error=error_text,
                         )
                     queue_result = QueueResult.FAILED
                     break
@@ -576,44 +545,32 @@ class QueueExecutor:
             queue_result = QueueResult.CANCELED
             deferred_sse = (SSEProcessingStatus.CANCELED, True)
 
-        # Phase 2: deferred SSE notification. A completed system task is
-        # intentionally delayed until RoomMessageCenter wins the durable root
-        # COMPLETED lifecycle write; failure/cancellation tasks can project now.
-        if queue_result not in {QueueResult.PAUSED, QueueResult.COMPLETED}:
-            await self._terminalize_system_task(
-                room_id=room_id,
-                sys_message_id=sys_message_id,
-                task_status=queue_result.value,
-                token=token,
-            )
-
+        # Root terminal persistence and its durable projection intent always
+        # precede child task/turn/SSE projections.
         if deferred_sse:
             sse_status, clear_cancel = deferred_sse
-            if sse_status == SSEProcessingStatus.CANCELED and getattr(
-                self, "_turn_event_appender", None
-            ):
-                try:
-                    await self._turn_event_appender.append(
-                        room_id,
-                        user_message_id,
-                        "turn_canceled",
-                        {},
-                    )
-                except Exception:
-                    pass
-            await self._emit_processing_status(
+            terminal_payload = await self._emit_processing_status(
                 room_id=room_id,
                 status=sse_status,
                 message_id=user_message_id,
                 lifecycle_message_id=user_message_id,
+                system_message_id=sys_message_id,
+                turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
             )
-            if clear_cancel:
+            if clear_cancel and terminal_payload is not None:
                 self.cancellation_control.clear_cancellation(user_message_id)
 
         if queue_result == QueueResult.COMPLETED:
             logger.info("QueueExecutor: Finished processing message queue")
 
-        return QueueProcessingResult(result=queue_result)
+        return QueueProcessingResult(
+            result=queue_result,
+            terminal_status=deferred_sse[0] if deferred_sse else None,
+            system_message_id=sys_message_id,
+            clear_cancellation=deferred_sse[1] if deferred_sse else False,
+            error_message=failure_error,
+            error_code=failure_code,
+        )
 
     async def _terminalize_system_task(
         self,
@@ -695,70 +652,14 @@ class QueueExecutor:
         current_message: RoomAgentMessage,
         room_id: str,
     ):
-        """Resolve or verify the agent for *current_message*.
-
-        If no ``agent_id`` is set, delegates to the ``AgentDispatcher``.
-        If one is set, fetches from DB and verifies it is still active,
-        re-assigning via the dispatcher if not.
-
-        Returns the ``Agent`` on success or ``None`` after persisting a
-        failure notification on the message.
-        """
+        """Resolve an agent without terminalizing a child before the root CAS."""
         from models.agent import AgentStatus
 
+        del room_id
         if current_message.agent_id is None:
-            agent, failure_reason = await self.agent_dispatcher.assign_agent_for_queue(
+            agent, _failure_reason = await self.agent_dispatcher.assign_agent_for_queue(
                 current_message
             )
-            if agent is None:
-                error_text = (
-                    failure_reason
-                    or "No available agent could be found for your request."
-                )
-                intended_agent_id = None
-                if isinstance(current_message.extend_info, dict):
-                    allowed = current_message.extend_info.get("allowed_agent_ids") or []
-                    if len(allowed) == 1:
-                        intended_agent_id = allowed[0]
-                if intended_agent_id:
-                    current_message.agent_id = intended_agent_id
-                await self.tsm.transition_task(
-                    current_message,
-                    coerce_task_state("failed"),
-                    error=error_text,
-                    persist=True,
-                )
-                await self.response_handler.notify_task_update(
-                    message_id=current_message.message_id,
-                    state=coerce_task_state("failed"),
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                    error=error_text,
-                )
-                # --- Emit failed slot (Phase 1b) ---
-                if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
-                    try:
-                        await self._slot_lifecycle.open_slot(
-                            room_id=room_id,
-                            turn_id=current_message.turn_id,
-                            slot_id=current_message.message_id,
-                            slot_type="agent",
-                            agent_id=current_message.agent_id,
-                        )
-                        await self._slot_lifecycle.terminate_slot(
-                            room_id=room_id,
-                            turn_id=current_message.turn_id,
-                            slot_id=current_message.message_id,
-                            status="failed",
-                            error="agent_unavailable",
-                        )
-                    except Exception:
-                        logger.warning(
-                            "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                            current_message.message_id,
-                            exc_info=True,
-                        )
-                return None
             return agent
 
         agent = await self.agent_lookup.get_agent_by_agent_id(current_message.agent_id)
@@ -768,103 +669,25 @@ class QueueExecutor:
                 current_message.agent_id,
                 current_message.message_id,
             )
-            await self.tsm.transition_task(
-                current_message,
-                coerce_task_state("failed"),
-                error="The assigned agent could not be found.",
-                persist=True,
-            )
-            await self.response_handler.notify_task_update(
-                message_id=current_message.message_id,
-                state=coerce_task_state("failed"),
-                room_id=room_id,
-                user_id=current_message.user_id or "",
-                error="The assigned agent could not be found.",
-            )
-            # --- Emit failed slot (Phase 1b) ---
-            if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
-                try:
-                    await self._slot_lifecycle.open_slot(
-                        room_id=room_id,
-                        turn_id=current_message.turn_id,
-                        slot_id=current_message.message_id,
-                        slot_type="agent",
-                        agent_id=current_message.agent_id,
-                    )
-                    await self._slot_lifecycle.terminate_slot(
-                        room_id=room_id,
-                        turn_id=current_message.turn_id,
-                        slot_id=current_message.message_id,
-                        status="failed",
-                        error="agent_unavailable",
-                    )
-                except Exception:
-                    logger.warning(
-                        "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                        current_message.message_id,
-                        exc_info=True,
-                    )
             return None
+        if agent.agent_status == AgentStatus.active:
+            return agent
 
-        if agent.agent_status != AgentStatus.active:
-            logger.warning(
-                "QueueExecutor: Agent %s inactive (status=%s), re-assigning for %s",
-                current_message.agent_id,
-                agent.agent_status,
-                current_message.message_id,
-            )
-            original_agent_id = current_message.agent_id
-            current_message.agent_id = None
-            (
-                reassigned,
-                failure_reason,
-            ) = await self.agent_dispatcher.assign_agent_for_queue(current_message)
-            if reassigned is None:
-                error_text = (
-                    failure_reason
-                    or "The assigned agent is no longer available and no alternative could be found."
-                )
-                current_message.agent_id = original_agent_id
-                await self.tsm.transition_task(
-                    current_message,
-                    coerce_task_state("failed"),
-                    error=error_text,
-                    persist=True,
-                )
-                await self.response_handler.notify_task_update(
-                    message_id=current_message.message_id,
-                    state=coerce_task_state("failed"),
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                    error=error_text,
-                )
-                # --- Emit failed slot (Phase 1b) ---
-                if getattr(self, "_slot_lifecycle", None) and current_message.turn_id:
-                    try:
-                        await self._slot_lifecycle.open_slot(
-                            room_id=room_id,
-                            turn_id=current_message.turn_id,
-                            slot_id=current_message.message_id,
-                            slot_type="agent",
-                            agent_id=current_message.agent_id,
-                        )
-                        await self._slot_lifecycle.terminate_slot(
-                            room_id=room_id,
-                            turn_id=current_message.turn_id,
-                            slot_id=current_message.message_id,
-                            status="failed",
-                            error="agent_unavailable",
-                        )
-                    except Exception:
-                        logger.warning(
-                            "QueueExecutor: Failed to emit agent_unavailable slot for %s",
-                            current_message.message_id,
-                            exc_info=True,
-                        )
-                return None
-            return reassigned
-
-        return agent
+        logger.warning(
+            "QueueExecutor: Agent %s inactive (status=%s), re-assigning for %s",
+            current_message.agent_id,
+            agent.agent_status,
+            current_message.message_id,
+        )
+        original_agent_id = current_message.agent_id
+        current_message.agent_id = None
+        (
+            reassigned,
+            _failure_reason,
+        ) = await self.agent_dispatcher.assign_agent_for_queue(current_message)
+        if reassigned is None:
+            current_message.agent_id = original_agent_id
+        return reassigned
 
     async def _check_rate_limit(
         self,
@@ -875,6 +698,7 @@ class QueueExecutor:
         request_user_id: str,
     ) -> bool:
         """Check rate limits. Returns ``True`` if rate-limited (caller should cancel)."""
+        del current_message, room_id, user_message_id
         rate_limit_result = await self.rate_limit_service.check_rate_limit(
             agent_id=agent.agent_id,
             user_id=request_user_id,
@@ -889,20 +713,8 @@ class QueueExecutor:
                 request_user_id,
                 rate_limit_result.reason,
             )
-            await self.delivery.send_rate_limit_error(
-                room_id=room_id,
-                message_id=user_message_id,
-                agent_id=agent.agent_id,
-                reason=rate_limit_result.reason or "Rate limit exceeded",
-                retry_after_seconds=rate_limit_result.retry_after_seconds,
-                user_requests_used=rate_limit_result.user_requests_used,
-                user_requests_limit=rate_limit_result.user_requests_limit,
-                system_requests_used=rate_limit_result.system_requests_used,
-                system_requests_limit=rate_limit_result.system_requests_limit,
-            )
-            await self.tsm.transition_task(
-                current_message, coerce_task_state("canceled"), persist=True
-            )
+            # Root terminal projection owns child DB/SSE convergence. A losing
+            # rate-limit writer must not mutate or publish the child task.
             return True
 
         return False
@@ -973,12 +785,64 @@ class QueueExecutor:
                 message_id,
             )
 
+    async def _restore_invalid_continuation(
+        self,
+        message_id: str,
+        continuation: object,
+        *,
+        reason: str,
+    ) -> None:
+        """Restore an invalid destructive claim, or durably fail its root."""
+        try:
+            restored = await self.continuation_store.save_continuation_on_message(
+                message_id, continuation
+            )
+        except Exception:
+            restored = False
+            logger.warning(
+                "QueueExecutor: continuation restore raised for message %s",
+                message_id,
+                exc_info=True,
+            )
+        if restored:
+            return
+
+        continuation_fields = continuation if isinstance(continuation, dict) else {}
+        root_id = continuation_fields.get("user_message_id")
+        room_id = continuation_fields.get("room_id")
+        agent_message = None
+        if not root_id or not room_id:
+            agent_message = (
+                await self.message_reader.get_room_agent_message_by_message_id(
+                    message_id
+                )
+            )
+            root_id = root_id or getattr(agent_message, "related_message_id", None)
+            room_id = room_id or getattr(agent_message, "room_id", None)
+        if (
+            isinstance(root_id, str)
+            and root_id
+            and isinstance(room_id, str)
+            and room_id
+        ):
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=root_id,
+                lifecycle_message_id=root_id,
+                system_message_id=f"sys-{root_id}",
+                details={"message": reason, "code": "invalid_continuation"},
+                turn_event_enabled=False,
+            )
+            return
+        raise RuntimeError(
+            f"unable to restore or terminalize continuation {message_id}: {reason}"
+        )
+
     async def resume_from_continuation(
         self,
         message_id: str,
         task_result_text: str | None = None,
-        *,
-        before_terminal_failure: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 
@@ -1000,15 +864,10 @@ class QueueExecutor:
             )
             return ResumeResult(success=False)
 
-        logger.info(
-            "QueueExecutor: Resuming queue for message %s with %d remaining messages",
-            message_id,
-            len(continuation.get("remaining_queue", [])),
-        )
-
-        room_id = continuation.get("room_id")
-        user_message_id = continuation.get("user_message_id")
-        request_user_id = continuation.get("request_user_id")
+        continuation_fields = continuation if isinstance(continuation, dict) else {}
+        room_id = continuation_fields.get("room_id")
+        user_message_id = continuation_fields.get("user_message_id")
+        request_user_id = continuation_fields.get("request_user_id")
 
         if not user_message_id:
             # The destructive continuation claim owns cleanup. Recover the
@@ -1027,58 +886,107 @@ class QueueExecutor:
                 "QueueExecutor: Invalid continuation data for message %s",
                 message_id,
             )
+            await self._restore_invalid_continuation(
+                message_id,
+                continuation,
+                reason="continuation is missing user_message_id",
+            )
             return ResumeResult(success=False)
+
+        token = self.cancellation_control.create_token(user_message_id)
+        if not room_id:
+            logger.error(
+                "QueueExecutor: Invalid continuation data for message %s",
+                message_id,
+            )
+            try:
+                await self._restore_invalid_continuation(
+                    message_id,
+                    continuation,
+                    reason="continuation is missing room_id",
+                )
+            finally:
+                self._release_cancellation_token(user_message_id, token)
+            return ResumeResult(success=False)
+
+        try:
+            raw_queue = continuation_fields.get("remaining_queue", [])
+            if not isinstance(raw_queue, list):
+                raise TypeError("continuation remaining_queue must be a list")
+            remaining_queue = deque(
+                RoomAgentMessage.model_validate(msg_data) for msg_data in raw_queue
+            )
+        except Exception as exc:
+            try:
+                await self._restore_invalid_continuation(
+                    message_id,
+                    continuation,
+                    reason=f"continuation queue is malformed: {exc.__class__.__name__}",
+                )
+            finally:
+                self._release_cancellation_token(user_message_id, token)
+                logger.warning(
+                    "QueueExecutor: restored malformed continuation for message %s",
+                    message_id,
+                    exc_info=True,
+                )
+            return ResumeResult(success=False)
+
+        logger.info(
+            "QueueExecutor: Resuming queue for message %s with %d remaining messages",
+            message_id,
+            len(remaining_queue),
+        )
 
         # Destructive continuation claim transfers ownership of the paused
         # token to this resume attempt. Hydrate Redis before sync checkpoints.
-        token = self.cancellation_control.create_token(user_message_id)
         try:
             await self.cancellation_control.check_cancelled(user_message_id)
             if token.is_cancelled:
                 self._release_cancellation_token(user_message_id, token)
                 return ResumeResult(success=True)
-            if not room_id:
-                logger.error(
-                    "QueueExecutor: Invalid continuation data for message %s",
-                    message_id,
-                )
-                self._release_cancellation_token(user_message_id, token)
-                return ResumeResult(success=False)
 
-            remaining_queue = deque(
-                RoomAgentMessage.model_validate(msg_data)
-                for msg_data in continuation.get("remaining_queue", [])
-            )
             quoted_text_resume: str | None = None
             um_resume = await self.message_reader.get_room_user_message_by_message_id(
                 user_message_id
             )
-            if um_resume:
-                from execution.orchestration.turn_context import (
-                    TurnQuoteMissingError,
-                    load_turn_context,
+            if um_resume is None:
+                await self._restore_invalid_continuation(
+                    message_id,
+                    continuation,
+                    reason=f"root user message is missing: {user_message_id}",
                 )
+                self._release_cancellation_token(user_message_id, token)
+                return ResumeResult(success=False)
 
-                try:
-                    tc = await load_turn_context(self.message_reader, um_resume)
-                    quoted_text_resume = tc.quoted_text
-                except TurnQuoteMissingError:
-                    logger.error(
-                        "QueueExecutor: missing quoted snippet for turn %s on resume",
-                        user_message_id,
-                    )
-                    self._release_cancellation_token(user_message_id, token)
-                    return ResumeResult(success=False)
-                if quoted_text_resume is None and isinstance(
-                    um_resume.extend_info, dict
-                ):
-                    quoted_text_resume = um_resume.extend_info.get("quoted_text")
+            from execution.orchestration.turn_context import (
+                TurnQuoteMissingError,
+                load_turn_context,
+            )
+
+            try:
+                tc = await load_turn_context(self.message_reader, um_resume)
+                quoted_text_resume = tc.quoted_text
+            except TurnQuoteMissingError:
+                logger.error(
+                    "QueueExecutor: missing quoted snippet for turn %s on resume",
+                    user_message_id,
+                )
+                await self._restore_invalid_continuation(
+                    message_id,
+                    continuation,
+                    reason=f"quoted snippet is missing: {user_message_id}",
+                )
+                self._release_cancellation_token(user_message_id, token)
+                return ResumeResult(success=False)
+            if quoted_text_resume is None and isinstance(um_resume.extend_info, dict):
+                quoted_text_resume = um_resume.extend_info.get("quoted_text")
 
             if task_result_text:
                 await self._publish_agent_message_committed(
                     room_id=room_id,
-                    agent_id=continuation.get("current_agent_id"),
-                    agent_name=continuation.get("current_agent_name", "Agent"),
+                    agent_id=continuation_fields.get("current_agent_id"),
+                    agent_name=continuation_fields.get("current_agent_name", "Agent"),
                     was_successful=True,
                     message_id=message_id,
                 )
@@ -1110,13 +1018,16 @@ class QueueExecutor:
 
         if queue_processing_result.result == QueueResult.FAILED:
             self._release_cancellation_token(user_message_id, token)
-            if before_terminal_failure is not None:
-                await before_terminal_failure(room_id, user_message_id)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
                 message_id=user_message_id,
                 lifecycle_message_id=user_message_id,
+                system_message_id=(
+                    getattr(queue_processing_result, "system_message_id", None)
+                    or f"sys-{user_message_id}"
+                ),
+                turn_event_enabled=False,
             )
             return ResumeResult(
                 success=False,

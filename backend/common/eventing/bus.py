@@ -144,16 +144,12 @@ class BoundedInternalEventBus:
         async with self._lifecycle_lock:
             if self._started and self._accepting:
                 return
+            await self._set_accepting(False)
             self._prune_done_auxiliary_tasks()
-            if any(
-                operation.startswith("transport_")
-                for operation in self._auxiliary_tasks.values()
-            ):
-                raise RuntimeError("eventing transport cleanup is still pending")
+            self._raise_if_lifecycle_tasks_pending()
             self._stopping = False
             self._starting = True
             self._started = True
-            await self._set_accepting(False)
             self.registry.freeze()
             for states in self._handlers.values():
                 for index, state in enumerate(states):
@@ -193,6 +189,20 @@ class BoundedInternalEventBus:
                 await self._cancel_workers(deadline)
                 await self._cancel_auxiliary_tasks(deadline)
                 raise
+
+    def _raise_if_lifecycle_tasks_pending(self) -> None:
+        live_worker = any(
+            state.task is not None and not state.task.done()
+            for states in self._handlers.values()
+            for state in states
+        )
+        if live_worker:
+            raise RuntimeError("eventing handler cleanup is still pending")
+        if self._auxiliary_tasks:
+            operations = ", ".join(sorted(set(self._auxiliary_tasks.values())))
+            raise RuntimeError(
+                f"eventing auxiliary cleanup is still pending: {operations}"
+            )
 
     async def stop(self) -> None:
         cancelled: asyncio.CancelledError | None = None

@@ -615,3 +615,70 @@ async def test_run_lifecycle_indexes_include_projection_causation_unique_index()
             "partialFilterExpression": {"causation_id": {"$type": "string"}},
         },
     ) in mongo.collections["run_events"].create_index_calls
+    assert (
+        [
+            ("terminal_projection.pending", 1),
+            ("terminal_projection.next_attempt_at", 1),
+            ("ts", 1),
+        ],
+        {
+            "name": "pending_terminal_projection",
+            "unique": False,
+            "partialFilterExpression": {"terminal_projection.pending": True},
+        },
+    ) in mongo.collections["run_events"].create_index_calls
+
+
+class RacingTerminalRunEventRepository(InMemoryRunEventRepository):
+    def __init__(self, *, opposing: bool = False) -> None:
+        super().__init__()
+        self.opposing = opposing
+        self.raced = False
+
+    async def insert_one(self, document: dict[str, Any]) -> str:
+        if document["type"] == RunEventType.RUN_FAILED.value and not self.raced:
+            self.raced = True
+            winner = deepcopy(document)
+            winner["event_id"] = "canonical-winner"
+            if self.opposing:
+                winner["type"] = RunEventType.RUN_CANCELED.value
+                winner["terminal_projection"]["canonical_status"] = "canceled"
+            self.events.append(winner)
+            raise DuplicateKeyError("duplicate run seq")
+        return await super().insert_one(document)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("opposing", "expect_replay"),
+    [(False, True), (True, False)],
+)
+async def test_causationless_run_seq_race_reads_canonical_terminal_winner(
+    opposing,
+    expect_replay,
+):
+    from execution.run_command_handler import RunCommandHandler
+
+    run_repo = InMemoryRunRepository()
+    event_repo = RacingTerminalRunEventRepository(opposing=opposing)
+    handler = RunCommandHandler(
+        run_repository=run_repo,
+        run_event_repository=event_repo,
+    )
+
+    outcome = await handler.write_processing_status(
+        room_id="room-1",
+        status="failed",
+        message_id="run-1",
+        details="failed",
+    )
+
+    if expect_replay:
+        assert outcome.status == "replayed"
+        assert outcome.payload is not None
+        assert outcome.payload["event_id"] == "canonical-winner"
+        assert outcome.payload["type"] == RunEventType.RUN_FAILED.value
+    else:
+        assert outcome.status == "conflict"
+        assert event_repo.events[-1]["type"] == RunEventType.RUN_CANCELED.value
+        assert run_repo.docs["run-1"]["state"] == RunState.CANCELED.value

@@ -850,15 +850,48 @@ async def test_cancellation_resistant_worker_ownership_prevents_duplicate_restar
     await publisher
     assert bus.worker_tasks == (worker,)
 
-    await bus.start()
-    assert bus.worker_tasks == (worker,)
-    await bus.stop()
+    with pytest.raises(RuntimeError, match="handler cleanup is still pending"):
+        await bus.start()
     assert bus.worker_tasks == (worker,)
 
     release.set()
     await asyncio.wait_for(worker, timeout=0.1)
     await asyncio.sleep(0)
     assert bus.worker_tasks == ()
+
+    await bus.start()
+    replacement = bus.worker_tasks[0]
+    assert replacement is not worker
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_rejects_lingering_auxiliary_task_until_it_finishes():
+    bus = make_bus()
+    await bus.start()
+    await bus.stop()
+
+    release = asyncio.Event()
+
+    async def linger():
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    task = asyncio.create_task(linger(), name="lingering-fanout")
+    bus._auxiliary_tasks[task] = "fanout_publish"
+    task.add_done_callback(bus._auxiliary_done)
+
+    with pytest.raises(RuntimeError, match="auxiliary cleanup is still pending"):
+        await bus.start()
+
+    release.set()
+    await asyncio.wait_for(task, timeout=0.1)
+    await asyncio.sleep(0)
+    await bus.start()
+    await bus.stop()
 
 
 @pytest.mark.asyncio

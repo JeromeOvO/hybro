@@ -148,8 +148,9 @@ class FakeDeliveryCompat:
                 connection.close()
         self.room_connections.clear()
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> None:
+    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
         self.frames.append((frame["type"], frame["data"]))
+        return True
 
     async def publish_dead_letter(self, envelope: dict[str, Any]) -> None:
         self.lifecycle_calls.append(("publish_dead_letter", envelope))

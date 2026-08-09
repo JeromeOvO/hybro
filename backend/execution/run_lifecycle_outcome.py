@@ -8,6 +8,7 @@ from typing import Any
 
 class RunLifecycleWriteStatus(StrEnum):
     ACCEPTED = "accepted"
+    REPLAYED = "replayed"
     CONFLICT = "conflict"
     ERROR = "error"
 
@@ -23,6 +24,10 @@ class RunLifecycleWriteOutcome:
     @classmethod
     def accepted(cls, payload: dict[str, Any]) -> RunLifecycleWriteOutcome:
         return cls(status=RunLifecycleWriteStatus.ACCEPTED, payload=payload)
+
+    @classmethod
+    def replayed(cls, payload: dict[str, Any]) -> RunLifecycleWriteOutcome:
+        return cls(status=RunLifecycleWriteStatus.REPLAYED, payload=payload)
 
     @classmethod
     def conflict(cls) -> RunLifecycleWriteOutcome:

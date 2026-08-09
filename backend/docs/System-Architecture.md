@@ -353,12 +353,49 @@ id. Public projection is unconditional: `OrchestrationRunState` is the execution
 source of truth, while `runs` and `run_events` are public lifecycle projections.
 A projection with a new causation id records that binding even when the public
 head is already at the requested active state. Processing-status lifecycle writes
-return a typed `accepted`/`conflict`/`error` outcome: terminal SSE is emitted only
-for `accepted`, a durable terminal conflict suppresses the losing frame, and a
-persistence error raises an observable fingerprinted failure for retry. If an
-event append succeeds but head projection fails, the writer repairs the head from
-that exact event before returning `accepted`; failed repair returns `error`.
-Repeated processing projections
+return a typed `accepted`/`replayed`/`conflict`/`error` outcome. Each new terminal
+`run_events` fact stores an optional, versioned `terminal_projection` intent before
+any SSE, system-task, or completion-metadata side effect runs. The retired turn
+journal has no production appender, so production intents omit a turn-event step
+rather than pretending to recover one; a future re-enable must bind a persistent
+appender with the terminal event id as its idempotency key. A same-terminal replay
+reuses the canonical fact to repair incomplete steps;
+an opposing terminal winner remains a conflict and emits nothing. Each projection
+step is independently leased and completed, so a child or delivery failure leaves
+only that step pending and never blocks or rewrites the root terminal state.
+Failed and canceled intents also include durable descendant cleanup rooted at the
+turn message; traversal crosses terminal intermediates and stale recovery closes
+crashes between root commit and cleanup. The cleanup tags the winner-owned child
+set durably and emits a stable-ID terminal `task_update` for every affected child;
+a retry reconstructs the same IDs after a DB-before-SSE crash. The dedicated
+system task is excluded from descendant cleanup and remains owned exclusively by
+its system-task DB/delivery steps. Queue and room
+orchestration never mutate children before the root CAS—including attachment
+preflight failures—and do not run imperative cleanup after an opposing
+winner; only the canonical fact's projection owns cleanup. Retryable failures receive bounded
+exponential backoff; irreparable missing or
+opposing child targets become durable `blocked` steps and no longer occupy the due
+queue. Recovery isolates each fact; malformed steps are skipped from scheduling
+and unknown forward-schema steps are durably blocked so one poison record cannot
+abort or starve the batch. The stale-task checker scans only due, pending markers and can rebuild work directly from
+the terminal event after a crash, including an event/head divergence window.
+Terminal processing, system-task, and run-event SSE use stable delivery IDs in
+both the frame and Redis/local dedup key. Dedup is two phase: an expiring
+reservation is `in_flight`, while only post-transport confirmation becomes
+`already_delivered`. Reservations use a short configurable lease; confirmed
+markers retain the longer dedup TTL. Active fanout heartbeats renew owned L1/L2
+reservations until confirmation and fail safely if ownership is lost. L1-only
+reservations created during Redis failure record that ownership mode explicitly
+and can confirm locally even if Redis later recovers without the key. Local SSE
+broadcast reports an actual delivery count; zero local subscribers plus failed
+Redis fanout stays pending and never confirms the global marker. Cross-instance
+publish returns explicit broker acceptance; disabled/no-op brokers return false.
+A projector completes only confirmed fresh
+delivery or an already-confirmed replay; an in-flight reservation remains pending
+and is retried after its lease expires. Old documents without the optional intent remain readable and are not
+replayed or migrated. If an event append succeeds but head projection fails, the
+writer repairs the head from that exact event before returning `accepted`; failed
+repair returns `error`. Repeated processing projections
 use `RUN_RESUMED` rather than emitting another start event. Mapping
 orchestration-specific statuses into public run states is performed by the
 single state-driven supervisor loop. Graceful process shutdown is treated as an

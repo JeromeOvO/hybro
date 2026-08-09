@@ -107,6 +107,11 @@ class StaleRunWatchdogEventDeps:
 
 
 @dataclass(frozen=True)
+class StaleTerminalProjectionDeps:
+    recover_pending: Callable[..., Awaitable[int]]
+
+
+@dataclass(frozen=True)
 class StaleHITLDeps:
     recover_stale_processing: Callable[[], Awaitable[Any]]
     cancel_requests_for_message: Callable[[str], Awaitable[Any]]
@@ -193,6 +198,7 @@ class StaleTaskChecker:
             StaleCancellationReconciliationDeps | None
         ) = None
         self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
+        self._terminal_projection_deps: StaleTerminalProjectionDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
         self._terminal_event_handler: Callable[[AgentEvent], Awaitable[None]] | None = (
@@ -272,6 +278,9 @@ class StaleTaskChecker:
 
     def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
         self._watchdog_event_deps = deps
+
+    def set_terminal_projection_deps(self, deps: StaleTerminalProjectionDeps) -> None:
+        self._terminal_projection_deps = deps
 
     def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
         self._hitl_deps = deps
@@ -421,8 +430,25 @@ class StaleTaskChecker:
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
-        # 8. Fail runs stuck without a terminal transition (run lifecycle watchdog).
+        # 8. Repair projections from durable terminal facts before the watchdog
+        # can attempt any competing terminal transition.
+        await self._recover_terminal_projections()
+
+        # 9. Fail runs stuck without a terminal transition (run lifecycle watchdog).
         await self._fail_stale_runs()
+
+    async def _recover_terminal_projections(self) -> None:
+        if self._terminal_projection_deps is None:
+            return
+        try:
+            recovered = await self._terminal_projection_deps.recover_pending(limit=100)
+            if recovered:
+                logger.info(
+                    "terminal_projection_recovery_completed",
+                    extra={"result_count": recovered},
+                )
+        except Exception:
+            logger.error("terminal projection recovery failed", exc_info=True)
 
     async def _fail_stale_runs(self) -> None:
         """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
@@ -452,26 +478,12 @@ class StaleTaskChecker:
             if not room_id or not run_id:
                 continue
             try:
-                tid = doc.get("trigger_message_id") or run_id
-                client_request_id = doc.get("client_request_id")
                 payload = await event_deps.append_run_timeout_failure(
                     room_id, run_id, stale_minutes=stale_mins
                 )
                 if payload is None:
                     continue
                 self._increment_counter("run_watchdog_forced_failure_total")
-                await event_deps.emit_run_event(
-                    room_id=room_id,
-                    payload=payload,
-                    client_request_id=client_request_id,
-                )
-                await event_deps.emit_processing_status(
-                    room_id=room_id,
-                    status="failed",
-                    message_id=str(tid),
-                    client_request_id=client_request_id,
-                    details="Run watchdog: stale non-terminal run timed out",
-                )
             except Exception as e:
                 logger.error(
                     "run watchdog: failed to timeout run_id=%s room=%s: %s",

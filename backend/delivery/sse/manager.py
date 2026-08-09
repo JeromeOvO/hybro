@@ -74,15 +74,16 @@ class SSETransportImpl:
         if room_became_empty:
             self._schedule_room_cleanup(room_id)
 
-    async def broadcast_frame_to_room(
-        self, room_id: str, frame: dict[str, Any]
-    ) -> None:
+    async def broadcast_frame_to_room(self, room_id: str, frame: dict[str, Any]) -> int:
         async with self._lock:
             snapshot = list(self.room_connections.get(room_id, {}).items())
 
         disconnected: list[str] = []
+        delivered = 0
         for connection_id, connection in snapshot:
-            if not await connection.send_frame(frame):
+            if await connection.send_frame(frame):
+                delivered += 1
+            else:
                 disconnected.append(connection_id)
 
         if disconnected:
@@ -91,6 +92,7 @@ class SSETransportImpl:
             )
             if room_became_empty:
                 self._schedule_room_cleanup(room_id)
+        return delivered
 
     async def close_all_connections(self) -> None:
         async with self._lock:

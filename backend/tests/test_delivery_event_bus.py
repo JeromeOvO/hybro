@@ -87,7 +87,7 @@ async def test_publish_sse_uses_json_envelope_and_configured_channel():
     config = DeliveryConfig(redis_sse_channel_prefix="custom:sse:")
     bus = make_bus(redis=redis, config=config)
 
-    await bus.publish_sse("room-1", {"type": "agent_response", "data": {"x": 1}})
+    assert await bus.publish_sse("room-1", {"type": "agent_response", "data": {"x": 1}})
 
     channel, envelope = decode_publish(redis)
     assert channel == "custom:sse:room-1"
@@ -191,7 +191,7 @@ async def test_no_redis_mode_is_noop():
     bus = make_bus(redis=None)
 
     await bus.start()
-    await bus.publish_sse("room-1", {"type": "update"})
+    assert not await bus.publish_sse("room-1", {"type": "update"})
     await bus.publish_dead_letter({"x": 1})
     await bus.subscribe_room("room-1")
     await bus.unsubscribe_room("room-1")

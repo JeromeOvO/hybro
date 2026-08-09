@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -183,6 +184,7 @@ def test_delivery_package_skeleton_and_config_exports():
     assert config.heartbeat_interval_seconds == 30.0
     assert config.sse_connection_queue_maxsize == 100
     assert config.shutdown_drain_seconds == 5.0
+    assert config.terminal_reservation_ttl_seconds == 30
     assert config.redis_sse_channel_prefix == "sse:room:"
     assert config.redis_dead_letter_channel == "delivery:dead_letter"
     assert config.redis_room_subscription_production_limit == 40
@@ -204,6 +206,7 @@ def test_delivery_package_skeleton_and_config_exports():
         ("sse_connection_queue_maxsize", 0),
         ("shutdown_drain_seconds", 0),
         ("terminal_dedup_ttl_seconds", 0),
+        ("terminal_reservation_ttl_seconds", 0),
         ("terminal_dedup_cache_maxsize", 0),
         ("dead_letter_memory_maxlen", 0),
         ("redis_reconnect_delay", 0),
@@ -300,6 +303,29 @@ def test_delivery_facade_exports_and_protocol_conformance():
     assert DeliveryFacade is delivery.DeliveryFacade
     assert isinstance(EventPublisherImpl.__new__(EventPublisherImpl), EventPublisher)
     assert isinstance(SSETransportImpl.__new__(SSETransportImpl), SSETransport)
+
+
+@pytest.mark.asyncio
+async def test_facade_treats_confirmed_stable_task_delivery_as_success():
+    from common.dto import DeliveryEmitStatus
+    from delivery.config import DeliveryConfig
+    from delivery.facade import DeliveryFacade
+
+    facade = DeliveryFacade.__new__(DeliveryFacade)
+    facade._event_publisher = SimpleNamespace(
+        emit_checked=AsyncMock(return_value=DeliveryEmitStatus.ALREADY_DELIVERED)
+    )
+    facade.config = DeliveryConfig()
+    facade._record_terminal_delivery = MagicMock()
+
+    assert await facade.send_task_update(
+        room_id="room-1",
+        message_id="sys-msg-1",
+        status="completed",
+        delivery_id="terminal:event-1:system-task",
+    )
+    event = facade._event_publisher.emit_checked.await_args.args[0]
+    assert event.delivery_id == "terminal:event-1:system-task"
 
 
 def test_tracing_helpers_preserve_explicit_trace_context():
@@ -591,6 +617,7 @@ def test_container_delivery_factories_and_config_mapping():
             "sse_connection_queue_maxsize": 23,
             "shutdown_drain_seconds": 1.25,
             "terminal_dedup_ttl_seconds": 43,
+            "terminal_reservation_ttl_seconds": 4,
             "terminal_dedup_cache_maxsize": 46,
             "redis_sse_channel_prefix": "custom:sse:",
             "redis_dead_letter_channel": "custom:dead",
@@ -609,6 +636,7 @@ def test_container_delivery_factories_and_config_mapping():
 
     assert config.heartbeat_interval_seconds == 2.5
     assert config.sse_connection_queue_maxsize == 23
+    assert config.terminal_reservation_ttl_seconds == 4
     assert config.redis_sse_channel_prefix == "custom:sse:"
     assert config.redis_dead_letter_channel == "custom:dead"
     assert config.redis_max_connections == 120

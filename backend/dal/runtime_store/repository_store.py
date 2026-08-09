@@ -350,6 +350,20 @@ class RuntimeRepositoryStore:
             runtime_to_room_user_message(room_user_message)
         )
 
+    async def set_turn_completion_kind(
+        self, message_id: str, completion_kind: str
+    ) -> str:
+        return await self._message_delegate().set_turn_completion_kind(
+            message_id, completion_kind
+        )
+
+    async def set_system_task_terminal_state(
+        self, message_id: str, target_state: str
+    ) -> str:
+        return await self._message_delegate().set_system_task_terminal_state(
+            message_id, target_state
+        )
+
     async def update_room_user_message_by_message_id(
         self, message_id: str, room_user_message: RuntimeRoomUserMessage
     ) -> bool:
@@ -906,6 +920,21 @@ class RuntimeRepositoryStore:
 
     async def cancel_descendants(self, message_id: str) -> int:
         return await self._message_delegate().cancel_descendants(message_id)
+
+    async def project_descendant_terminal_state(
+        self,
+        message_id: str,
+        *,
+        event_id: str,
+        target_state: str,
+        exclude_message_ids: list[str] | None = None,
+    ) -> list[str]:
+        return await self._message_delegate().project_descendant_terminal_state(
+            message_id,
+            event_id=event_id,
+            target_state=target_state,
+            exclude_message_ids=exclude_message_ids,
+        )
 
     async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
         return await self._message_delegate().cancel_agent_messages_by_ids(message_ids)

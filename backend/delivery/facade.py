@@ -7,6 +7,7 @@ from cachetools import TTLCache
 from common.dto import (
     AgentMessageFinal,
     ArtifactUpdateEvent,
+    DeliveryEmitStatus,
     DeliveryEvent,
     ErrorEvent,
     ProcessingStatusEvent,
@@ -383,28 +384,39 @@ class DeliveryFacade:
         task_content: str | None = None,
         parts: list[dict[str, Any]] | None = None,
         client_request_id: str | None = None,
-    ) -> None:
-        delivered = await self.emit(
-            TaskUpdateEvent(
-                room_id=room_id,
-                message_id=message_id,
-                status=_enum_value(status),
-                content=content,
-                error=error,
-                requires_input=requires_input,
-                requires_auth=requires_auth,
-                status_message=status_message,
-                agent_name=agent_name,
-                agent_id=agent_id,
-                related_message_id=related_message_id,
-                created_at=created_at,
-                step_number=step_number,
-                total_steps=total_steps,
-                task_content=task_content,
-                parts=parts,
-                client_request_id=client_request_id,
-            )
+        delivery_id: str | None = None,
+    ) -> bool:
+        event = TaskUpdateEvent(
+            room_id=room_id,
+            message_id=message_id,
+            status=_enum_value(status),
+            content=content,
+            error=error,
+            requires_input=requires_input,
+            requires_auth=requires_auth,
+            status_message=status_message,
+            agent_name=agent_name,
+            agent_id=agent_id,
+            related_message_id=related_message_id,
+            created_at=created_at,
+            step_number=step_number,
+            total_steps=total_steps,
+            task_content=task_content,
+            parts=parts,
+            client_request_id=client_request_id,
+            delivery_id=delivery_id,
         )
+        checked = getattr(self._event_publisher, "emit_checked", None)
+        if delivery_id and callable(checked):
+            outcome = await checked(event)
+            delivered = outcome in {
+                DeliveryEmitStatus.DELIVERED,
+                DeliveryEmitStatus.ALREADY_DELIVERED,
+                DeliveryEmitStatus.DELIVERED.value,
+                DeliveryEmitStatus.ALREADY_DELIVERED.value,
+            }
+        else:
+            delivered = await self.emit(event)
         normalized_status = str(_enum_value(status)).lower()
         if normalized_status in self.config.terminal_processing_statuses:
             self._record_terminal_delivery(
@@ -414,6 +426,7 @@ class DeliveryFacade:
                 terminal_kind="task_update",
                 agent_id=agent_id,
             )
+        return delivered
 
     def set_draining(self, draining: bool) -> None:
         self._sse_transport.set_draining(draining)

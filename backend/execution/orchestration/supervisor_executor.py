@@ -687,23 +687,8 @@ class SupervisorExecutor:
                 },
             )
 
-        system_message_id = state.system_agent_message_id or state.summary_message_id
-        if system_message_id and result.status != RunStatus.PAUSED:
-            try:
-                task_status = (
-                    "completed"
-                    if result.status == RunStatus.COMPLETED
-                    else result.status.value
-                )
-                await self._terminalize_system_task(
-                    room_id=room_id,
-                    system_message_id=system_message_id,
-                    task_status=task_status,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to update terminal state for system:hybro", exc_info=True
-                )
+        # The public durable root owns all terminal child projections. The
+        # RoomMessageCenter records this system message ID in that intent.
         return result
 
     async def _terminalize_system_task(
@@ -7797,23 +7782,6 @@ class SupervisorExecutor:
                 "debate_mode": debate_mode,
             },
         )
-
-        if trajectory.system_agent_message_id and result.status != RunStatus.PAUSED:
-            try:
-                task_status = (
-                    "completed"
-                    if result.status == RunStatus.COMPLETED
-                    else result.status.value
-                )
-                await self._terminalize_system_task(
-                    room_id=room_id,
-                    system_message_id=trajectory.system_agent_message_id,
-                    task_status=task_status,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to update terminal state for system:hybro", exc_info=True
-                )
 
         return result
 

@@ -14,6 +14,7 @@ class DeliveryConfig:
     sse_connection_queue_maxsize: int = 100
     shutdown_drain_seconds: float = 5.0
     terminal_dedup_ttl_seconds: int = 300
+    terminal_reservation_ttl_seconds: int = 30
     terminal_dedup_cache_maxsize: int = 10_000
     delivery_started_ttl_seconds: int = 3600
     delivery_started_cache_maxsize: int = 10_000
@@ -38,6 +39,10 @@ class DeliveryConfig:
         )
         _require_positive("shutdown_drain_seconds", self.shutdown_drain_seconds)
         _require_positive("terminal_dedup_ttl_seconds", self.terminal_dedup_ttl_seconds)
+        _require_positive(
+            "terminal_reservation_ttl_seconds",
+            self.terminal_reservation_ttl_seconds,
+        )
         _require_positive(
             "terminal_dedup_cache_maxsize",
             self.terminal_dedup_cache_maxsize,

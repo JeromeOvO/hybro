@@ -50,6 +50,19 @@ def test_processing_status_translation_uses_final_frame_without_nested_timestamp
     }
 
 
+def test_terminal_delivery_id_is_exposed_in_processing_frame():
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+        delivery_id="terminal:event-1:processing",
+    )
+
+    frame = to_sse_frame(event, timestamp=NOW)
+
+    assert frame["data"]["delivery_id"] == "terminal:event-1:processing"
+
+
 def test_processing_status_accepts_all_final_statuses():
     statuses = [
         "queued",
@@ -442,6 +455,21 @@ def test_task_update_translation():
     assert frame["data"]["created_at"] == "created"
     assert frame["data"]["parts"] == [{"kind": "text"}]
     assert "timestamp" not in frame["data"]
+
+
+def test_task_update_delivery_id_is_exposed_in_frame():
+    event = TaskUpdateEvent(
+        room_id="room-1",
+        message_id="agent-msg-1",
+        status="completed",
+        delivery_id="terminal:event-1:system-task",
+        client_request_id="request-1",
+    )
+
+    frame = to_sse_frame(event, timestamp=NOW)
+
+    assert frame["data"]["delivery_id"] == "terminal:event-1:system-task"
+    assert frame["data"]["client_request_id"] == "request-1"
 
 
 def test_artifact_update_translation():
