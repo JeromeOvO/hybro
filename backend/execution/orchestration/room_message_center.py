@@ -967,7 +967,6 @@ class RoomMessageCenter:
                 lifecycle_message_id=room_user_message_id,
                 system_message_id=f"sys-{room_user_message_id}",
             )
-            self.cancellation_control.clear_cancellation(room_user_message_id)
             raise
         except Exception:
             self._release_cancellation_token(room_user_message_id, owned_token)
@@ -1160,7 +1159,6 @@ class RoomMessageCenter:
             )
             # Durable winner-owned projection performs descendant cleanup.
             message_queue.clear()
-            self.cancellation_control.clear_cancellation(room_user_message_id)
             self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=True,
@@ -1327,7 +1325,6 @@ class RoomMessageCenter:
             system_message_id=f"sys-{user_message_id}",
             turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
         )
-        self.cancellation_control.clear_cancellation(user_message_id)
         self._release_cancellation_token(user_message_id, token)
 
     async def _notify_all_non_terminal_tasks_failed(
@@ -1944,7 +1941,6 @@ class RoomMessageCenter:
                         getattr(self, "_turn_event_appender", None)
                     ),
                 )
-                self.cancellation_control.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
                 terminal_summary = result.terminal_summary

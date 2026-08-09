@@ -179,11 +179,21 @@ def test_release_active_token_preserves_tombstone():
     token = runtime.create_token("msg-1")
     runtime.signal_local("msg-1")
 
-    assert runtime.release_active_token("msg-1") is True
+    assert runtime.release_active_token("msg-1", token) is True
     assert runtime.get_token("msg-1") is None
     assert runtime.is_cancelled("msg-1") is True
     assert token.is_cancelled is True
-    assert runtime.release_active_token("msg-1") is False
+    assert runtime.release_active_token("msg-1", token) is False
+
+
+def test_release_active_token_does_not_pop_concurrent_replacement():
+    runtime = make_runtime()
+    observed = runtime.create_token("msg-1")
+    assert runtime.release_token("msg-1", observed) is True
+    resumed = runtime.create_token("msg-1")
+
+    assert runtime.release_active_token("msg-1", observed) is False
+    assert runtime.get_token("msg-1") is resumed
 
 
 def test_cancel_before_create_pre_signals_token():

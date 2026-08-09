@@ -169,9 +169,13 @@ class CancellationRuntime:
         self._tokens.pop(message_id, None)
         return True
 
-    def release_active_token(self, message_id: str) -> bool:
-        """Release the active owner while retaining its cancellation tombstone."""
-        return self._tokens.pop(message_id, None) is not None
+    def release_active_token(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> bool:
+        """Release only the observed active owner, retaining its tombstone."""
+        return self.release_token(message_id, token)
 
     def clear_cancellation(self, message_id: str) -> None:
         """Clear only the expiring tombstone; active-token ownership is separate."""

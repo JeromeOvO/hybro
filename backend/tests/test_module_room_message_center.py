@@ -436,7 +436,7 @@ async def test_process_room_user_message_cancelled_error_emits_canceled_and_rera
         lifecycle_message_id="user-msg-1",
         system_message_id="sys-user-msg-1",
     )
-    rmc.cancellation_control.clear_cancellation.assert_called_once_with("user-msg-1")
+    rmc.cancellation_control.clear_cancellation.assert_not_called()
     assert order == ["root"]
     rmc._release_room_lock.assert_awaited_once_with(
         "room-1",
@@ -1415,9 +1415,7 @@ def test_queue_canceled_records_durable_projection_in_terminal_emit():
     source = inspect.getsource(QueueExecutor.process_queue)
     assert "system_message_id=sys_message_id" in source
     assert "turn_event_enabled=bool(" in source
-    assert source.index("await self._emit_processing_status(") < source.index(
-        "clear_cancellation(user_message_id)"
-    )
+    assert "clear_cancellation(user_message_id)" not in source
 
 
 def test_queue_failure_has_no_imperative_child_cleanup():

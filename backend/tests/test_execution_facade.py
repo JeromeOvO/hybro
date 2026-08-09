@@ -84,6 +84,7 @@ def _make_facade(**overrides):
     )
     cancellation_state = SimpleNamespace(
         cancel_message_and_broadcast=AsyncMock(),
+        get_active_token=MagicMock(return_value=None),
         release_active_token=MagicMock(return_value=True),
         clear_cancellation=MagicMock(),
     )
@@ -1348,6 +1349,7 @@ async def test_failed_cancellation_broadcast_stays_pending_then_retry_reconciles
 
     assert first is True
     deps["cancellation_repository"].mark_reconciled.assert_not_awaited()
+    deps["cancellation_state"].clear_cancellation.assert_not_called()
     deps["hitl_message_cancellation"].cancel_requests_for_message.assert_awaited_once()
     assert deps["agent_task_cleanup"].cleanup_cancelled_message_tasks.await_count == 2
 
@@ -1361,6 +1363,7 @@ async def test_failed_cancellation_broadcast_stays_pending_then_retry_reconciles
     assert retried.cancellation_applied is True
     assert retried.reconciled is True
     deps["cancellation_repository"].mark_reconciled.assert_awaited_once_with("msg-1")
+    deps["cancellation_state"].clear_cancellation.assert_called_once_with("msg-1")
     assert deps["cancellation_state"].cancel_message_and_broadcast.await_count == 2
 
 

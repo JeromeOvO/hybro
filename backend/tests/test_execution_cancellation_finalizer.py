@@ -1,8 +1,11 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.utils.cancellation import CancellationToken
 from execution.cancellation.finalizer import CancellationFinalizer
+from execution.cancellation.runtime import CancellationPropagationResult
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from models.orchestration import (
     OrchestrationEventType,
@@ -28,7 +31,9 @@ def _finalizer(store=None, **overrides):
     deps = {
         "project_status": AsyncMock(return_value=True),
         "broadcast_cancellation": AsyncMock(),
+        "get_active_token": MagicMock(return_value=None),
         "release_active_token": MagicMock(return_value=True),
+        "clear_cancellation": MagicMock(),
         "cancel_hitl": AsyncMock(),
         "project_public_terminal": AsyncMock(),
         "cleanup_agent_tasks": AsyncMock(),
@@ -71,7 +76,8 @@ async def test_finalizer_cancels_awaiting_run_and_all_surfaces():
         room_id="room-1", message_id="message-1"
     )
     deps["mark_reconciled"].assert_awaited_once_with("message-1")
-    deps["release_active_token"].assert_called_once_with("message-1")
+    deps["clear_cancellation"].assert_called_once_with("message-1")
+    deps["release_active_token"].assert_called_once_with("message-1", None)
 
 
 @pytest.mark.asyncio
@@ -98,6 +104,7 @@ async def test_finalizer_preserves_completion_winner_without_destructive_effects
     )
     deps["cleanup_agent_tasks"].assert_not_awaited()
     deps["mark_reconciled"].assert_awaited_once_with("message-1")
+    deps["clear_cancellation"].assert_called_once_with("message-1")
     deps["release_active_token"].assert_not_called()
 
 
@@ -117,6 +124,71 @@ async def test_failed_effect_leaves_marker_pending_and_retry_finishes():
     assert result.reconciled is True
     assert len(store._events_by_run["run-1"]) == 1
     deps["mark_reconciled"].assert_awaited_once_with("message-1")
+
+
+@pytest.mark.asyncio
+async def test_failed_propagation_preserves_tombstone_and_concurrent_resume_token():
+    store = InMemoryOrchestrationRunStore()
+    await store.create_run(_state(OrchestrationStatus.RUNNING))
+    old_token = CancellationToken(message_id="message-1")
+    tokens = {"message-1": old_token}
+    tombstones: set[str] = set()
+    broadcast_started = asyncio.Event()
+    allow_broadcast_return = asyncio.Event()
+
+    def get_active_token(message_id):
+        return tokens.get(message_id)
+
+    def release_active_token(message_id, expected):
+        if tokens.get(message_id) is not expected:
+            return False
+        tokens.pop(message_id)
+        return True
+
+    def clear_cancellation(message_id):
+        tombstones.discard(message_id)
+
+    async def failed_broadcast(message_id):
+        tombstones.add(message_id)
+        old_token.cancel()
+        broadcast_started.set()
+        await allow_broadcast_return.wait()
+        return CancellationPropagationResult(
+            kv_configured=True,
+            kv_succeeded=False,
+            pubsub_configured=True,
+            pubsub_succeeded=False,
+        )
+
+    finalizer, deps = _finalizer(
+        store,
+        get_active_token=MagicMock(side_effect=get_active_token),
+        release_active_token=MagicMock(side_effect=release_active_token),
+        clear_cancellation=MagicMock(side_effect=clear_cancellation),
+        broadcast_cancellation=AsyncMock(side_effect=failed_broadcast),
+    )
+    finalize_task = asyncio.create_task(
+        finalizer.finalize(room_id="room-1", message_id="message-1")
+    )
+    await broadcast_started.wait()
+
+    # The canceled owner exits while a resume concurrently installs a new token.
+    assert release_active_token("message-1", old_token) is True
+    resumed_token = CancellationToken(message_id="message-1")
+    if "message-1" in tombstones:
+        resumed_token.cancel()
+    tokens["message-1"] = resumed_token
+    allow_broadcast_return.set()
+
+    result = await finalize_task
+
+    assert result.reconciled is False
+    assert tokens["message-1"] is resumed_token
+    assert resumed_token.is_cancelled is True
+    assert "message-1" in tombstones
+    deps["mark_reconciled"].assert_not_awaited()
+    deps["clear_cancellation"].assert_not_called()
+    deps["release_active_token"].assert_called_once_with("message-1", old_token)
 
 
 @pytest.mark.asyncio

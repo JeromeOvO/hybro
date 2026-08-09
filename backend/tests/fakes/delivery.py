@@ -114,8 +114,12 @@ class FakeDeliveryCompat:
         self.tokens.pop(message_id, None)
         return True
 
-    def release_active_token(self, message_id: str) -> bool:
-        return self.tokens.pop(message_id, None) is not None
+    def release_active_token(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> bool:
+        return self.release_token(message_id, token)
 
     def remove_token(self, message_id: str) -> None:
         self.tokens.pop(message_id, None)

@@ -27,8 +27,15 @@ class FakeRedisKV:
         self.error = error
         self.calls: list[tuple[str, str, int]] = []
         self.values: dict[str, str] = {}
+        self.set_calls: list[tuple[str, str, int]] = []
         self.compare_deleted: list[tuple[str, str]] = []
         self.compare_sets: list[tuple[str, str, str, int]] = []
+
+    async def set(self, key: str, value: str, *, ttl: int) -> None:
+        self.set_calls.append((key, value, ttl))
+        if self.error is not None:
+            raise self.error
+        self.values[key] = value
 
     async def setnx(self, key: str, value: str, ttl: int) -> bool:
         self.calls.append((key, value, ttl))

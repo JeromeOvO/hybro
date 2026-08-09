@@ -233,7 +233,9 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
+            get_active_token=MagicMock(return_value=None),
             release_active_token=MagicMock(return_value=True),
+            clear_cancellation=MagicMock(),
         ),
         cancellation_repository=SimpleNamespace(
             request=AsyncMock(return_value=True),

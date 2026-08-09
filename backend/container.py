@@ -202,14 +202,57 @@ class ApplicationRuntime:
     _lifespan_context: Any | None = None
 
 
+_runtime_cleanup_tasks: dict[asyncio.Task[Any], str] = {}
+
+
+def _runtime_cleanup_done(task: asyncio.Task[Any]) -> None:
+    name = _runtime_cleanup_tasks.pop(task, None)
+    if name is None or task.cancelled():
+        return
+    try:
+        task.result()
+    except BaseException:
+        logger.warning(
+            "detached runtime cleanup task failed: %s",
+            name,
+            exc_info=True,
+        )
+
+
 async def _run_cleanup_steps(
     steps: list[tuple[str, Callable[[], Awaitable[Any]]]],
+    *,
+    timeout_seconds: float | None = None,
 ) -> BaseException | None:
-    """Run every shutdown stage and return the first failure after logging all."""
+    """Run cleanup in order without joining cancellation-resistant timeouts."""
     first_error: BaseException | None = None
     for name, cleanup in steps:
         try:
-            await cleanup()
+            if timeout_seconds is None:
+                await cleanup()
+                continue
+
+            task = asyncio.create_task(cleanup(), name=f"runtime-cleanup:{name}")
+            _runtime_cleanup_tasks[task] = name
+            try:
+                done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+            except BaseException:
+                task.cancel()
+                task.add_done_callback(_runtime_cleanup_done)
+                raise
+            if not done:
+                task.cancel()
+                task.add_done_callback(_runtime_cleanup_done)
+                error = TimeoutError(f"runtime cleanup step timed out: {name}")
+                if first_error is None:
+                    first_error = error
+                logger.warning(
+                    "runtime cleanup step timed out and remains owned: %s",
+                    name,
+                )
+                continue
+            _runtime_cleanup_tasks.pop(task, None)
+            task.result()
         except BaseException as exc:
             if first_error is None:
                 first_error = exc
@@ -1693,40 +1736,45 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # Startup cleanup never replaces the original failure. Every opened
         # stage is attempted even if an earlier close fails.
         startup_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
+        # Roll back in dependency-reverse order. Relay ingress must be quiesced
+        # before the internal bus it publishes into.
+        if _relay_svc:
+            startup_steps.append(("relay", _relay_svc.stop))
         if _bg_started:
             startup_steps.extend(
                 [
-                    ("stale-task-checker", stale_task_checker.stop),
-                    ("compaction-sweep", compaction_sweep.stop),
                     ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
+                    ("compaction-sweep", compaction_sweep.stop),
+                    ("stale-task-checker", stale_task_checker.stop),
                 ]
             )
-            if agent_health_service is not None:
-                startup_steps.append(("agent-health", agent_health_service.stop))
             if _local_agent_service is not None:
                 startup_steps.append(("local-agent", _local_agent_service.stop))
-        if _local_agent_card_resolver is not None:
-            startup_steps.append(
-                ("local-agent-card-resolver", _local_agent_card_resolver.aclose)
-            )
+            if agent_health_service is not None:
+                startup_steps.append(("agent-health", agent_health_service.stop))
         if _leader:
             startup_steps.append(
                 ("leader-locks", lambda: _leader.release_all(ALL_JOB_NAMES))
             )
+        startup_steps.append(
+            ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
+        )
         if _eventing_bus is not None:
             startup_steps.append(("eventing", _eventing_bus.stop))
-        if _relay_svc:
-            startup_steps.append(("relay", _relay_svc.stop))
+        if _local_agent_card_resolver is not None:
+            startup_steps.append(
+                ("local-agent-card-resolver", _local_agent_card_resolver.aclose)
+            )
         if _delivery_facade is not None:
             startup_steps.append(("delivery", _delivery_facade.stop))
         if _cancellation_runtime is not None:
             startup_steps.append(("cancellation", _cancellation_runtime.stop))
-        startup_steps.append(
-            ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
-        )
         if _mongo_dal is not None:
             startup_steps.append(("mongo", _mongo_dal.close))
-        await _run_cleanup_steps(startup_steps)
+        await _run_cleanup_steps(
+            startup_steps,
+            timeout_seconds=runtime.settings.eventing_shutdown_timeout_seconds,
+        )
         app.state.eventing_bus = None
         app.state.eventing_connected = False
         app.state.delivery_facade = None
@@ -1761,11 +1809,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 else runtime.settings.shutdown_drain_seconds
             )
 
-        shutdown_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = [
-            ("stale-task-checker", stale_task_checker.stop),
-            ("compaction-sweep", compaction_sweep.stop),
-            ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
-        ]
+        shutdown_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
+        if _relay_svc_shutdown:
+            shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
+        shutdown_steps.extend(
+            [
+                ("stale-task-checker", stale_task_checker.stop),
+                ("compaction-sweep", compaction_sweep.stop),
+                ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
+            ]
+        )
         if agent_health_service is not None:
             shutdown_steps.append(("agent-health", agent_health_service.stop))
         if _local_agent_service is not None:
@@ -1783,8 +1836,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
         if _eventing_bus is not None:
             shutdown_steps.append(("eventing", _eventing_bus.stop))
-        if _relay_svc_shutdown:
-            shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
         if _delivery_facade is not None:
             shutdown_steps.append(("delivery", _delivery_facade.stop))
         if _cancellation_runtime is not None:
@@ -2850,8 +2901,9 @@ def create_file_storage(
 
 
 def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
+    defaults = DeliveryConfig()
     values = {
-        field: getattr(app_settings, field)
+        field: getattr(app_settings, field, getattr(defaults, field))
         for field in DeliveryConfig.__dataclass_fields__
     }
     terminal_statuses = values["terminal_processing_statuses"]

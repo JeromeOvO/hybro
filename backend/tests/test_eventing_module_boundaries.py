@@ -77,20 +77,25 @@ def test_production_has_no_retired_internal_delivery_publisher_calls():
     assert offenders == []
 
 
-def test_container_stops_eventing_before_relay_and_delivery():
+def test_container_stops_relay_before_eventing_and_delivery():
     source = (BACKEND / "container.py").read_text()
     startup_failure = source.split("except BaseException:", 1)[1].split(
         "# ── Phase 3", 1
     )[0]
     normal_shutdown = source.split("# ── Phase 3", 1)[1]
 
-    assert startup_failure.index('("eventing", _eventing_bus.stop)') < (
+    assert (
         startup_failure.index('("relay", _relay_svc.stop)')
+        < startup_failure.index('("eventing", _eventing_bus.stop)')
+        < startup_failure.index('("delivery", _delivery_facade.stop)')
     )
     assert (
-        normal_shutdown.index('("eventing", _eventing_bus.stop)')
-        < normal_shutdown.index('("relay", _relay_svc_shutdown.stop)')
+        normal_shutdown.index('("relay", _relay_svc_shutdown.stop)')
+        < normal_shutdown.index('("eventing", _eventing_bus.stop)')
         < normal_shutdown.index('("delivery", _delivery_facade.stop)')
+    )
+    assert "timeout_seconds=runtime.settings.eventing_shutdown_timeout_seconds" in (
+        startup_failure
     )
 
 

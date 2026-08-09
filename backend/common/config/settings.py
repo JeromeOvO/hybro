@@ -143,6 +143,7 @@ class Settings(BaseSettings):
     sse_connection_queue_maxsize: int = 100
     terminal_dedup_ttl_seconds: int = 300
     terminal_reservation_ttl_seconds: int = 30
+    terminal_redis_io_timeout_seconds: float = 1.0
     terminal_dedup_cache_maxsize: int = 10_000
     delivery_started_ttl_seconds: int = 3600
     delivery_started_cache_maxsize: int = 10_000

@@ -2125,7 +2125,6 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
             )
-            self._cancellation.clear_cancellation(user_message_id)
             return ParseResult(success=False, canceled=True)
 
         # Direct chat: single agent + no debate = skip LLM parsing entirely

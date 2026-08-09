@@ -185,6 +185,7 @@ def test_delivery_package_skeleton_and_config_exports():
     assert config.sse_connection_queue_maxsize == 100
     assert config.shutdown_drain_seconds == 5.0
     assert config.terminal_reservation_ttl_seconds == 30
+    assert config.terminal_redis_io_timeout_seconds == 1.0
     assert config.redis_sse_channel_prefix == "sse:room:"
     assert config.redis_dead_letter_channel == "delivery:dead_letter"
     assert config.redis_room_subscription_production_limit == 40
@@ -207,6 +208,7 @@ def test_delivery_package_skeleton_and_config_exports():
         ("shutdown_drain_seconds", 0),
         ("terminal_dedup_ttl_seconds", 0),
         ("terminal_reservation_ttl_seconds", 0),
+        ("terminal_redis_io_timeout_seconds", 0),
         ("terminal_dedup_cache_maxsize", 0),
         ("dead_letter_memory_maxlen", 0),
         ("redis_reconnect_delay", 0),
@@ -618,6 +620,7 @@ def test_container_delivery_factories_and_config_mapping():
             "shutdown_drain_seconds": 1.25,
             "terminal_dedup_ttl_seconds": 43,
             "terminal_reservation_ttl_seconds": 4,
+            "terminal_redis_io_timeout_seconds": 0.2,
             "terminal_dedup_cache_maxsize": 46,
             "redis_sse_channel_prefix": "custom:sse:",
             "redis_dead_letter_channel": "custom:dead",
@@ -637,12 +640,18 @@ def test_container_delivery_factories_and_config_mapping():
     assert config.heartbeat_interval_seconds == 2.5
     assert config.sse_connection_queue_maxsize == 23
     assert config.terminal_reservation_ttl_seconds == 4
+    assert config.terminal_redis_io_timeout_seconds == 0.2
     assert config.redis_sse_channel_prefix == "custom:sse:"
     assert config.redis_dead_letter_channel == "custom:dead"
     assert config.redis_max_connections == 120
     assert config.redis_room_subscription_production_limit == 100
     assert config.redis_room_subscription_ready_timeout_seconds == 0.75
     assert config.terminal_processing_statuses == frozenset({"done", "failed"})
+
+    legacy_values = dict(values)
+    legacy_values.pop("terminal_redis_io_timeout_seconds")
+    legacy_config = create_delivery_config(SimpleNamespace(**legacy_values))
+    assert legacy_config.terminal_redis_io_timeout_seconds == 1.0
 
     redis_kv, redis_pubsub = create_delivery_redis_clients(
         redis_url="redis://localhost:6379/0",

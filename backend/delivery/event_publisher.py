@@ -106,13 +106,13 @@ class EventPublisherImpl:
         # send the already-accepted terminal frame again.
         if reservation is not None:
             confirmed = False
-            if lease_owned:
+            if lease_owned and reservation.l2_owned:
                 try:
                     confirmed = await self.deduplicator.confirm(reservation)
                 except Exception:
                     confirmed = False
             if not confirmed:
-                self.deduplicator.mark_delivered_locally(
+                await self.deduplicator.mark_delivered_after_acceptance(
                     reservation,
                     status=self._dedup_status(event),
                 )

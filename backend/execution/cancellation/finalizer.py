@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from common.dto import RunInfo
+from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
 from execution.orchestration.run_reducer import mark_terminal
 from execution.orchestration.run_store import (
@@ -45,8 +46,20 @@ class MessageCancellationPort(Protocol):
     async def __call__(self, message_id: str) -> object: ...
 
 
+class ActiveTokenReaderPort(Protocol):
+    def __call__(self, message_id: str) -> CancellationToken | None: ...
+
+
 class ActiveTokenReleasePort(Protocol):
-    def __call__(self, message_id: str) -> bool: ...
+    def __call__(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> bool: ...
+
+
+class CancellationClearPort(Protocol):
+    def __call__(self, message_id: str) -> None: ...
 
 
 class PublicTerminalProjectionPort(Protocol):
@@ -90,7 +103,9 @@ class CancellationFinalizer:
         run_store: OrchestrationRunStore | None,
         project_status: StatusProjectionPort,
         broadcast_cancellation: MessageCancellationPort,
+        get_active_token: ActiveTokenReaderPort,
         release_active_token: ActiveTokenReleasePort,
+        clear_cancellation: CancellationClearPort,
         cancel_hitl: MessageCancellationPort,
         project_public_terminal: PublicTerminalProjectionPort,
         cleanup_agent_tasks: AgentTaskCleanupPort,
@@ -100,7 +115,9 @@ class CancellationFinalizer:
         self._run_store = run_store
         self._project_status = project_status
         self._broadcast_cancellation = broadcast_cancellation
+        self._get_active_token = get_active_token
         self._release_active_token = release_active_token
+        self._clear_cancellation = clear_cancellation
         self._cancel_hitl = cancel_hitl
         self._project_public_terminal = project_public_terminal
         self._cleanup_agent_tasks = cleanup_agent_tasks
@@ -124,6 +141,10 @@ class CancellationFinalizer:
     async def _mark_reconciled_or_raise(self, message_id: str) -> None:
         if not await self._mark_reconciled(message_id):
             raise RuntimeError("cancellation marker reconciliation failed")
+        # Only the finalizer may clear L1, after the durable marker no longer
+        # needs retry. Canceled execution paths must retain it while Redis
+        # propagation is pending.
+        self._clear_cancellation(message_id)
 
     @staticmethod
     def _propagation_succeeded(result: object) -> bool:
@@ -217,6 +238,10 @@ class CancellationFinalizer:
         message_id: str,
         settle_no_run: bool = False,
     ) -> CancellationFinalizationResult:
+        # Capture the owner before any cancellation await. A completed owner may
+        # release itself and a resume may install a new token while finalization
+        # is propagating; the final release must never steal that newer token.
+        active_token = self._get_active_token(message_id)
         try:
             state = await self._terminalize_or_preserve(message_id)
         except CancellationFinalizationConflict:
@@ -311,7 +336,7 @@ class CancellationFinalizer:
             else OrchestrationStatus.CANCELED
         )
         if final_status == OrchestrationStatus.CANCELED:
-            self._release_active_token(message_id)
+            self._release_active_token(message_id, active_token)
         return CancellationFinalizationResult(
             status=final_status,
             cancellation_applied=final_status == OrchestrationStatus.CANCELED,

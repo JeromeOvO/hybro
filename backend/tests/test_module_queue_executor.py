@@ -916,7 +916,7 @@ class TestProcessQueue:
         emit.assert_awaited_once()
         qe.delivery.send_processing_status.assert_not_called()
         assert order == ["emit"]
-        qe.cancellation_control.clear_cancellation.assert_called_once_with("umsg-1")
+        qe.cancellation_control.clear_cancellation.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_process_queue_records_before_awaiting_input_send(self):
@@ -970,7 +970,7 @@ class TestProcessQueue:
         assert order == ["emit"]
 
     @pytest.mark.asyncio
-    async def test_queue_cancellation_commits_root_before_token_cleanup(self):
+    async def test_queue_cancellation_leaves_tombstone_for_finalizer(self):
         """No child mutation occurs before or after the durable root CAS."""
         qe = _make_queue_executor()
         order: list[str] = []
@@ -1006,7 +1006,8 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
         assert result.result == QueueResult.CANCELED
-        assert order == ["emit", "clear-token"]
+        assert order == ["emit"]
+        qe.cancellation_control.clear_cancellation.assert_not_called()
         qe.tsm.transition_task.assert_not_awaited()
         qe.message_writer.cancel_descendants.assert_not_awaited()
 

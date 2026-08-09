@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from common.utils.a2a_helpers import is_terminal_task_state_value
+from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,8 +16,15 @@ class CancellationStateAdapter:
     async def cancel_message_and_broadcast(self, message_id: str):
         return await self._control.signal(message_id)
 
-    def release_active_token(self, message_id: str) -> bool:
-        return self._control.release_active_token(message_id)
+    def get_active_token(self, message_id: str) -> CancellationToken | None:
+        return self._control.get_token(message_id)
+
+    def release_active_token(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> bool:
+        return self._control.release_active_token(message_id, token)
 
     def clear_cancellation(self, message_id: str) -> None:
         self._control.clear_cancellation(message_id)

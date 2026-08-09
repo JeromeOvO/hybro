@@ -586,8 +586,8 @@ class QueueExecutor:
         # Root terminal persistence and its durable projection intent always
         # precede child task/turn/SSE projections.
         if deferred_sse:
-            sse_status, clear_cancel = deferred_sse
-            terminal_payload = await self._emit_processing_status(
+            sse_status, _clear_cancel = deferred_sse
+            await self._emit_processing_status(
                 room_id=room_id,
                 status=sse_status,
                 message_id=user_message_id,
@@ -595,8 +595,8 @@ class QueueExecutor:
                 system_message_id=sys_message_id,
                 turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
             )
-            if clear_cancel and terminal_payload is not None:
-                self.cancellation_control.clear_cancellation(user_message_id)
+            # Cancellation tombstones are cleared only by CancellationFinalizer
+            # after propagation and durable marker reconciliation succeed.
 
         if queue_result == QueueResult.COMPLETED:
             logger.info("QueueExecutor: Finished processing message queue")

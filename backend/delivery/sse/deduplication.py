@@ -1,14 +1,19 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
 from cachetools import TTLCache
 
+from common.observability import traced_create_task
 from common.protocols import RedisKV
+from common.utils.logger import get_logger
 from delivery.config import DeliveryConfig
+
+logger = get_logger(__name__)
 
 
 class DeliveryReservationStatus(StrEnum):
@@ -73,6 +78,46 @@ class TerminalStatusDeduplicator:
         self._reservation_locks: WeakValueDictionary[str, asyncio.Lock] = (
             WeakValueDictionary()
         )
+        self._redis_tasks: dict[asyncio.Task[Any], str] = {}
+
+    def _redis_task_done(self, task: asyncio.Task[Any]) -> None:
+        if self._redis_tasks.pop(task, None) is None or task.cancelled():
+            return
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _await_terminal_redis(
+        self,
+        awaitable: Awaitable[Any],
+        *,
+        operation: str,
+    ) -> Any:
+        task = traced_create_task(
+            awaitable,
+            name=f"terminal-dedup-redis:{operation}",
+        )
+        self._redis_tasks[task] = operation
+        task.add_done_callback(self._redis_task_done)
+        try:
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=self.config.terminal_redis_io_timeout_seconds,
+            )
+        except BaseException:
+            task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            logger.warning(
+                "terminal delivery Redis operation timed out and remains owned: %s",
+                operation,
+            )
+            raise TimeoutError(
+                f"terminal delivery Redis operation timed out: {operation}"
+            )
+        return task.result()
 
     @staticmethod
     def _dedup_key(
@@ -176,11 +221,14 @@ class TerminalStatusDeduplicator:
                 f"{self.config.redis_terminal_key_prefix}{reservation.dedup_key}"
             )
             try:
-                renewed = await self.redis_kv.compare_set(
-                    redis_key,
-                    reservation.claim_id,
-                    reservation.claim_id,
-                    ttl=self.reservation_ttl_seconds,
+                renewed = await self._await_terminal_redis(
+                    self.redis_kv.compare_set(
+                        redis_key,
+                        reservation.claim_id,
+                        reservation.claim_id,
+                        ttl=self.reservation_ttl_seconds,
+                    ),
+                    operation="renew",
                 )
             except Exception:
                 return False
@@ -209,11 +257,14 @@ class TerminalStatusDeduplicator:
             )
             delivered_value = f"delivered:{cached.status}"
             try:
-                confirmed = await self.redis_kv.compare_set(
-                    redis_key,
-                    reservation.claim_id,
-                    delivered_value,
-                    ttl=self.config.terminal_dedup_ttl_seconds,
+                confirmed = await self._await_terminal_redis(
+                    self.redis_kv.compare_set(
+                        redis_key,
+                        reservation.claim_id,
+                        delivered_value,
+                        ttl=self.config.terminal_dedup_ttl_seconds,
+                    ),
+                    operation="confirm",
                 )
             except Exception:
                 return False
@@ -224,24 +275,39 @@ class TerminalStatusDeduplicator:
         self.cache[reservation.dedup_key] = _CacheEntry("delivered", cached.status)
         return True
 
-    def mark_delivered_locally(
+    async def mark_delivered_after_acceptance(
         self,
         reservation: DeliveryReservation,
         *,
         status: str,
     ) -> None:
-        """Record transport acceptance after distributed confirmation is uncertain.
+        """Best-effort persist the transport-accepted delivery boundary.
 
-        Once fanout has accepted the frame, a failed Redis confirmation must not
-        make durable reconciliation send it again. Only the caller's own local
-        reservation is removed; a newer distributed owner is never overwritten.
+        Fanout acceptance is irreversible, so a lost reservation or failed CAS
+        must not allow another worker to redeliver after the short lease expires.
+        L1 is updated before Redis I/O, and Redis failure never escapes to change
+        the already-accepted result.
         """
+        normalized_status = status.strip().lower()
         cached = self.reservations.get(reservation.dedup_key)
         if cached is not None and cached.claim_id == reservation.claim_id:
             self.reservations.pop(reservation.dedup_key, None)
-        self.cache[reservation.dedup_key] = _CacheEntry(
-            "delivered", status.strip().lower()
-        )
+        self.cache[reservation.dedup_key] = _CacheEntry("delivered", normalized_status)
+
+        if self.redis_kv is None:
+            return
+        redis_key = f"{self.config.redis_terminal_key_prefix}{reservation.dedup_key}"
+        try:
+            await self._await_terminal_redis(
+                self.redis_kv.set(
+                    redis_key,
+                    f"delivered:{normalized_status}",
+                    ttl=self.config.terminal_dedup_ttl_seconds,
+                ),
+                operation="mark-delivered",
+            )
+        except Exception:
+            return
 
     async def should_deliver(
         self,

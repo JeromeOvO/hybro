@@ -82,10 +82,13 @@ Startup has three practical phases:
 3. Serving and normal shutdown:
    - Verify all required bindings in `validate_runtime_bindings`.
    - Serve `/health` and `/api/v1/*`.
-   - On shutdown, stop relay, jobs, leader locks, in-flight execution tasks,
-     Delivery/SSE connections, the cancellation watcher, Redis, and MongoDB.
+   - On shutdown, stop Relay ingress before jobs and in-flight execution, then
+     stop internal eventing before Delivery/SSE, cancellation, Redis, and MongoDB.
      Cleanup stages are failure-isolated: the first error is preserved while
-     later resource owners still receive their close call.
+     later resource owners still receive their close call. Startup rollback uses
+     the reverse dependency order and bounds every cleanup stage with owned tasks
+     plus `asyncio.wait`; a cancellation-resistant close is detached observably
+     without blocking later Relay/Eventing/Delivery cleanup.
 
 The application router is mounted from `api_gateway.router` under the configured
 API prefix, defaulting to `/api/v1`.
@@ -401,9 +404,15 @@ reservation is `in_flight`, while only post-transport confirmation becomes
 `already_delivered`. Reservations use a short configurable lease; confirmed
 markers retain the longer dedup TTL. Active fanout heartbeats renew owned L1/L2
 reservations until confirmation and fail safely if ownership is lost. L1-only
-reservations created during Redis failure record that ownership mode explicitly
-and can confirm locally even if Redis later recovers without the key. Per-key
-local locks make Redis-error fallback reservation atomic, so concurrent coroutines
+reservations created during Redis failure record that ownership mode explicitly.
+After transport acceptance, a failed/lost confirmation writes L1 first and makes
+an unconditional best-effort long-TTL `delivered:` Redis write, preventing another
+instance from retrying after the reservation lease expires. Confirm, renewal,
+and accepted-marker Redis commands use the configurable
+`terminal_redis_io_timeout_seconds` bound and owned background tasks, so a hung
+connected Redis command cannot delay an accepted result. Redis write failure or
+timeout cannot change that result. Per-key local locks make Redis-error fallback
+reservation atomic, so concurrent coroutines
 produce one provisional owner. The compatibility `should_deliver` API retains its
 historical one-stage behavior by confirming immediately with the long TTL; checked
 publishers use explicit reserve/confirm. Local SSE
@@ -699,8 +708,8 @@ remote envelopes without the envelope timestamp hydrate it from the internal
 event timestamp (or an explicit UTC-now fallback); newly serialized envelopes
 always include it. Dead letters never retain event bodies and instead use an
 8-KiB-capped size/hash/key/allow-listed-identifier projection. Shutdown stops
-ingress and drains eventing while that router is still usable, then stops Relay
-and Delivery. Worker cancellation/join uses the remaining shutdown deadline;
+Relay ingress first, keeps eventing live while remaining publishers drain, and
+then stops eventing before Delivery. Worker cancellation/join uses the remaining shutdown deadline;
 a handler that suppresses `CancelledError` is abandoned observably without
 blocking publishers or queue/completion cleanup. Timeout/caller-canceled transport
 operations are canceled and joined; cancellation-resistant inner tasks remain in
@@ -804,9 +813,12 @@ a cancellation tombstone pre-signals it without accumulating dormant active
 tokens. Cancellation signaling reports KV and Pub/Sub propagation separately;
 when configured propagation fails, finalization still performs local terminal,
 HITL, and task cleanup but leaves the durable marker pending for the service job
-to retry broadcast. Cancellation finalization drops only the active token while
-retaining the tombstone, and a concurrent completion winner does not release an
-active execution token. Shutdown clears the registry after in-flight execution
+to retry broadcast. RMC and queue execution never clear the L1 tombstone;
+finalization clears it only after durable marker reconciliation. Finalization
+captures the active token before propagation and identity-releases only that
+owner, so a concurrent resume token is retained and pre-signaled while a marker
+is pending. A concurrent completion winner does not release an active execution
+token. Shutdown clears the registry after in-flight execution
 is stopped. Terminal status claims store unique owner IDs in
 Redis. Losing instances do not cache the loss locally, and failed-delivery release uses Redis Lua
 compare-and-delete so an expired and subsequently reclaimed reservation cannot
