@@ -1,5 +1,6 @@
 import ast
 import inspect
+import re
 import sys
 import tomllib
 from datetime import UTC
@@ -270,15 +271,20 @@ def test_retired_context_memory_residue_does_not_return():
     violations.extend(str(path) for path in retired_paths if path.exists())
 
     frontend_types = Path(__file__).resolve().parents[2] / "frontend/src/lib/types"
-    for path in (
-        frontend_types / "request.ts",
-        frontend_types / "response.ts",
-        frontend_types / "index.ts",
-    ):
+    retired_frontend_paths = {frontend_types / "memory.ts"}
+    violations.extend(str(path) for path in retired_frontend_paths if path.exists())
+
+    nested_history_type = re.compile(
+        r"interface\s+MemoryContent\s*\{[^}]*\bconversation_history\b",
+        re.DOTALL,
+    )
+    for path in frontend_types.glob("*.ts"):
         source = path.read_text()
         for residue in retired_text:
             if residue in source:
                 violations.append(f"{path}:{residue}")
+        if nested_history_type.search(source):
+            violations.append(f"{path}:MemoryContent.conversation_history")
 
     # extend_info is active generic room/message metadata, not ChatContext residue.
     assert "extend_info" not in retired_text
