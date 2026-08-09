@@ -358,10 +358,10 @@ class RuntimeRepositoryStore:
         )
 
     async def set_system_task_terminal_state(
-        self, message_id: str, target_state: str
+        self, message_id: str, target_state: str, *, event_id: str
     ) -> str:
         return await self._message_delegate().set_system_task_terminal_state(
-            message_id, target_state
+            message_id, target_state, event_id=event_id
         )
 
     async def update_room_user_message_by_message_id(

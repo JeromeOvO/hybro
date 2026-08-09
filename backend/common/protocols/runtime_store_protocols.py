@@ -85,7 +85,7 @@ class RuntimeMessageStore(Protocol):
         self, message_id: str, completion_kind: str
     ) -> str: ...
     async def set_system_task_terminal_state(
-        self, message_id: str, target_state: str
+        self, message_id: str, target_state: str, *, event_id: str
     ) -> str: ...
     async def update_room_user_message_by_message_id(
         self, message_id: str, room_user_message: RuntimeRoomUserMessage

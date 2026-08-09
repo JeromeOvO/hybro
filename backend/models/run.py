@@ -98,7 +98,6 @@ class Run(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     terminal_summary: dict[str, Any] | None = None
-    terminal_projection: TerminalProjection | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     ended_at: datetime | None = None

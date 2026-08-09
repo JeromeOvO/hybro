@@ -117,7 +117,7 @@ def _make_queue_executor():
         return_value=None
     )
     qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-    qe.message_writer.add_room_agent_message = AsyncMock()
+    qe.message_writer.add_room_agent_message = AsyncMock(return_value=True)
     qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
     qe.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
@@ -132,6 +132,28 @@ def _make_queue_executor():
     qe.response_handler.notify_task_update = AsyncMock(return_value=True)
     qe.hitl_coordinator = MagicMock()
     return qe
+
+
+@pytest.mark.asyncio
+async def test_system_message_unacknowledged_write_retries_then_refuses_dispatch():
+    qe = _make_queue_executor()
+    qe.message_writer.add_room_agent_message = AsyncMock(return_value=False)
+    qe.room_runtime.create_agent_message.return_value = MagicMock()
+    qe.agent_lookup.get_agent_by_agent_id = AsyncMock()
+    message = MagicMock(message_id="agent-msg-1")
+
+    result = await qe.process_queue(
+        deque([message]),
+        "room-1",
+        "root-1",
+    )
+
+    assert result.result == QueueResult.FAILED
+    assert result.system_message_id is None
+    assert result.error_code == "system_task_persistence_failed"
+    assert qe.message_writer.add_room_agent_message.await_count == 3
+    qe.agent_lookup.get_agent_by_agent_id.assert_not_awaited()
+    qe.delivery.send_task_submitted.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1055,7 +1077,7 @@ class TestProcessQueue:
 
         assert result.success is False
         assert order == ["emit"]
-        assert emit.await_args.kwargs["system_message_id"] == "sys-umsg-1"
+        assert emit.await_args.kwargs["system_message_id"] is None
         assert emit.await_args.kwargs["turn_event_enabled"] is False
 
     @pytest.mark.asyncio

@@ -594,6 +594,68 @@ async def test_message_updates_strip_immutable_timeline_identity():
 
 
 @pytest.mark.asyncio
+async def test_task_state_update_cannot_overwrite_durable_terminal_projection_winner():
+    terminal = {
+        "message_id": "a1",
+        "room_id": "r1",
+        "terminal_projection_event_id": "evt-cancel",
+        "message_content": {"message_task": {"status": {"state": "canceled"}}},
+    }
+    repo, _, _, agents = _message_repo(agent_docs=[terminal])
+
+    updated = await repo.update_agent_message(
+        "a1",
+        {"message_content": {"message_task": {"status": {"state": "completed"}}}},
+    )
+
+    assert updated is False
+    assert agents.docs[0] == terminal
+    query = agents.update_one_calls[-1][0]
+    assert "canceled" in query["message_content.message_task.status.state"]["$nin"]
+
+
+@pytest.mark.asyncio
+async def test_enable_task_tracking_whole_task_update_respects_terminal_cas():
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    terminal = {
+        "message_id": "a1",
+        "room_id": "r1",
+        "terminal_projection_event_id": "evt-cancel",
+        "has_task_tracking": False,
+        "message_content": {"message_task": {"status": {"state": "canceled"}}},
+    }
+    mongo = FakeMongo(
+        {
+            "room_user_messages": FakeCollection([]),
+            "room_agent_messages": FakeCollection([terminal]),
+        }
+    )
+    repository = MessageMongoRepository(mongo=mongo)
+    store = RuntimeRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=repository,
+        agent_repository=object(),
+    )
+
+    updated = await store.enable_task_tracking_on_message(
+        message_id="a1",
+        webhook_token_hash="hash",
+        agent_url="https://agent.invalid",
+        task_created_at="2026-01-01T00:00:00Z",
+        task_updated_at="2026-01-01T00:00:00Z",
+        task_data={"status": {"state": "submitted"}},
+    )
+
+    assert updated is False
+    durable = mongo.collections["room_agent_messages"].docs[0]
+    assert durable == terminal
+    query = mongo.collections["room_agent_messages"].update_one_calls[-1][0]
+    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
+
+
+@pytest.mark.asyncio
 async def test_message_repository_get_by_id_searches_user_first_then_agent():
     repo, _, user_messages, agent_messages = _message_repo(
         user_docs=[{"message_id": "u1", "message_type": "user"}],
@@ -1365,6 +1427,13 @@ async def test_runtime_store_upsert_room_agent_message_preserves_timeline_identi
         "message_id": "summary-1",
         "message_created_at": datetime(2026, 5, 10, tzinfo=UTC),
         "timeline_sort_us": 1778371200000000,
+        "message_content.message_task.status.state": {
+            "$nin": ["canceled", "completed", "expired", "failed", "rejected"]
+        },
+        "$or": [
+            {"terminal_projection_event_id": {"$exists": False}},
+            {"terminal_projection_event_id": None},
+        ],
     }
     assert kwargs == {"upsert": False}
     assert replacement["message_content"]["message_text"] == "new"
@@ -1639,7 +1708,7 @@ async def test_runtime_store_upsert_room_agent_message_propagates_false_cas():
         agent_repository=object(),
     )
 
-    with pytest.raises(RuntimeError, match="immutable-identity race"):
+    with pytest.raises(RuntimeError, match="replacement CAS"):
         await store.upsert_room_agent_message(
             RuntimeRoomAgentMessage(
                 room_id="r1",
@@ -1652,6 +1721,62 @@ async def test_runtime_store_upsert_room_agent_message_propagates_false_cas():
 
     assert agent_messages.docs[0]["message_content"]["message_text"] == "concurrent"
     assert agent_messages.docs[0]["timeline_sort_us"] == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_upsert_replace_toctou_obeys_durable_terminal_winner():
+    from common.dto import RuntimeMessageContent, RuntimeRoomAgentMessage
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    class TerminalWinnerBeforeReplace(FakeCollection):
+        async def replace_one(self, query: dict, replacement: dict, **kwargs) -> bool:
+            self.docs[0]["message_content"] = {
+                "message_task": {"status": {"state": "canceled"}}
+            }
+            self.docs[0]["terminal_projection_event_id"] = "evt-cancel"
+            return await super().replace_one(query, replacement, **kwargs)
+
+    agent_messages = TerminalWinnerBeforeReplace(
+        [
+            {
+                "message_id": "raced",
+                "room_id": "r1",
+                "message_type": "agent",
+                "agent_id": "agent-1",
+                "message_created_at": "1970-01-01T00:00:00Z",
+                "timeline_sort_us": 0,
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            }
+        ]
+    )
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo({"room_agent_messages": agent_messages}),
+        room_repository=object(),
+        message_repository=object(),
+        agent_repository=object(),
+    )
+
+    await store.upsert_room_agent_message(
+        RuntimeRoomAgentMessage(
+            room_id="r1",
+            message_id="raced",
+            agent_id="agent-1",
+            message_created_at=datetime(1970, 1, 2, tzinfo=UTC),
+            message_content=RuntimeMessageContent(message_text="stale incoming"),
+        )
+    )
+
+    query = agent_messages.replace_one_calls[0][0]
+    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
+    assert query["$or"] == [
+        {"terminal_projection_event_id": {"$exists": False}},
+        {"terminal_projection_event_id": None},
+    ]
+    assert agent_messages.docs[0]["terminal_projection_event_id"] == "evt-cancel"
+    assert (
+        agent_messages.docs[0]["message_content"]["message_task"]["status"]["state"]
+        == "canceled"
+    )
 
 
 @pytest.mark.asyncio
@@ -1788,6 +1913,87 @@ async def test_descendant_terminal_projection_rebuilds_winner_tagged_child_ids()
         if doc["message_id"] != "sys-u1"
     } == {"evt-1"}
     assert "terminal_projection_event_id" not in agent_messages.docs[2]
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_projection_tags_winner_and_rejects_opponent():
+    from dal.runtime_store import RuntimeRepositoryStore
+
+    agent_messages = FakeCollection(
+        [
+            {
+                "message_id": "sys-u1",
+                "room_id": "r1",
+                "message_content": {"message_task": {"status": {"state": "working"}}},
+            }
+        ]
+    )
+    mongo = FakeMongo(
+        {
+            "room_user_messages": FakeCollection([]),
+            "room_agent_messages": agent_messages,
+        }
+    )
+    store = RuntimeRepositoryStore(
+        mongo=mongo,
+        room_repository=object(),
+        message_repository=MessageMongoRepository(mongo=mongo),
+        agent_repository=object(),
+    )
+
+    assert (
+        await store.set_system_task_terminal_state(
+            "sys-u1", "canceled", event_id="evt-cancel"
+        )
+        == "updated"
+    )
+    assert (
+        await store.set_system_task_terminal_state(
+            "sys-u1", "completed", event_id="evt-completed"
+        )
+        == "conflict"
+    )
+    doc = agent_messages.docs[0]
+    assert doc["message_content"]["message_task"]["status"]["state"] == "canceled"
+    assert doc["terminal_projection_event_id"] == "evt-cancel"
+
+
+@pytest.mark.asyncio
+async def test_stale_terminal_finalizer_cannot_overwrite_projection_marker_winner():
+    from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
+
+    agent_messages = FakeCollection(
+        [
+            {
+                "message_id": "agent-1",
+                "terminal_projection_event_id": "evt-cancel",
+                "terminal_finalization": {
+                    "state": "finalizing",
+                    "token": "stale-completer",
+                    "target_state": "completed",
+                },
+                "message_content": {"message_task": {"status": {"state": "canceled"}}},
+            }
+        ]
+    )
+    mongo = FakeMongo(
+        {
+            "room_user_messages": FakeCollection([]),
+            "room_agent_messages": agent_messages,
+        }
+    )
+    store = MessageRuntimeStorePart(
+        room_agent_messages=agent_messages,
+        room_user_messages=mongo.collection("room_user_messages"),
+        message_repository=MessageMongoRepository(mongo=mongo),
+    )
+
+    assert not await store.complete_terminal_finalization(
+        "agent-1", "stale-completer", "completed"
+    )
+    doc = agent_messages.docs[0]
+    assert doc["message_content"]["message_task"]["status"]["state"] == "canceled"
+    assert doc["terminal_projection_event_id"] == "evt-cancel"
 
 
 @pytest.mark.asyncio
@@ -1995,7 +2201,18 @@ async def test_message_repository_update_status_sets_task_state_and_extra_fields
     assert agent_messages.docs[0]["timeline_sort_us"] == 1767225600000000
     assert agent_messages.update_one_calls == [
         (
-            {"message_id": "a1"},
+            {
+                "message_id": "a1",
+                "message_content.message_task.status.state": {
+                    "$nin": [
+                        "canceled",
+                        "completed",
+                        "expired",
+                        "failed",
+                        "rejected",
+                    ]
+                },
+            },
             {
                 "$set": {
                     "message_content.message_task.status.state": "completed",
@@ -2048,6 +2265,8 @@ def _matches(doc: dict, query: dict) -> bool:  # noqa: C901
             if "$nin" in expected and actual in expected["$nin"]:
                 return False
             if "$ne" in expected and actual == expected["$ne"]:
+                return False
+            if "$exists" in expected and (actual is not None) != expected["$exists"]:
                 return False
             if "$lt" in expected and not (
                 actual is not None and actual < expected["$lt"]

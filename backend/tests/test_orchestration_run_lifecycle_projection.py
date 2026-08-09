@@ -36,6 +36,8 @@ class InMemoryRunRepository:
             return False
         fields = update.get("$set", {})
         self.docs[run_id].update(deepcopy(fields))
+        for field in update.get("$unset", {}):
+            self.docs[run_id].pop(field, None)
         self.updates.append((deepcopy(query), deepcopy(update)))
         return True
 
@@ -56,6 +58,86 @@ class InMemoryRunEventRepository:
             for key, direction in reversed(sort):
                 matches.sort(key=lambda event: event.get(key), reverse=direction < 0)
         return deepcopy(matches[0]) if matches else None
+
+    async def find_one_and_update(  # noqa: C901
+        self,
+        query: dict[str, Any],
+        update: dict[str, Any] | list[dict[str, Any]],
+        **_kwargs,
+    ) -> dict[str, Any] | None:
+        event = next(
+            (
+                item
+                for item in self.events
+                if item.get("event_id") == query.get("event_id")
+            ),
+            None,
+        )
+        if event is None:
+            return None
+        expected_status = query.get("terminal_projection.canonical_status")
+        if (
+            expected_status is not None
+            and (event.get("terminal_projection") or {}).get("canonical_status")
+            != expected_status
+        ):
+            return None
+        if isinstance(update, list):
+            fields = update[0]["$set"]
+        else:
+            fields = update.get("$set", {})
+        pending_expression = fields.get("terminal_projection.pending")
+        if isinstance(pending_expression, dict) and "$let" in pending_expression:
+            projection = event["terminal_projection"]
+            due_times = []
+            steps = projection.get("steps")
+            if not isinstance(steps, dict):
+                steps = {}
+            for step in steps.values():
+                if not isinstance(step, dict):
+                    continue
+                if step.get("state") == "pending":
+                    due_times.append(
+                        step.get("next_attempt_at")
+                        or fields["terminal_projection.updated_at"]
+                    )
+                elif step.get("state") == "running":
+                    due_times.append(
+                        step.get("claim_expires_at")
+                        or fields["terminal_projection.updated_at"]
+                    )
+            projection["pending"] = bool(due_times)
+            projection["next_attempt_at"] = min(due_times) if due_times else None
+            projection["updated_at"] = fields["terminal_projection.updated_at"]
+            return deepcopy(event)
+        for path, expression in fields.items():
+            parts = path.split(".")
+            parent = event
+            for part in parts[:-1]:
+                parent = parent.setdefault(part, {})
+            current = parent.get(parts[-1])
+            if isinstance(expression, dict) and "$ifNull" in expression:
+                fallback = expression["$ifNull"][1]
+                value = (
+                    fallback.get("$literal")
+                    if current is None and isinstance(fallback, dict)
+                    else fallback
+                    if current is None
+                    else current
+                )
+            elif isinstance(expression, dict) and "$cond" in expression:
+                fallback = expression["$cond"][1]
+                value = (
+                    fallback.get("$literal")
+                    if parts[-1] not in parent and isinstance(fallback, dict)
+                    else fallback
+                    if parts[-1] not in parent
+                    else current
+                )
+            else:
+                value = expression
+            parent[parts[-1]] = deepcopy(value)
+        return deepcopy(event)
 
     async def insert_one(self, document: dict[str, Any]) -> str:
         for event in self.events:

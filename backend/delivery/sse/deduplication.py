@@ -1,7 +1,9 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from cachetools import TTLCache
 
@@ -68,6 +70,9 @@ class TerminalStatusDeduplicator:
             reservation_kwargs["timer"] = timer
         self.cache: TTLCache[str, _CacheEntry] = TTLCache(**confirmed_kwargs)
         self.reservations: TTLCache[str, _CacheEntry] = TTLCache(**reservation_kwargs)
+        self._reservation_locks: WeakValueDictionary[str, asyncio.Lock] = (
+            WeakValueDictionary()
+        )
 
     @staticmethod
     def _dedup_key(
@@ -86,6 +91,22 @@ class TerminalStatusDeduplicator:
         delivery_id: str | None = None,
     ) -> DeliveryReservation:
         dedup_key = self._dedup_key(room_id, message_id, delivery_id)
+        # Lock creation and acquisition happen without an intervening await.
+        # Keeping the Redis call inside the per-key critical section also makes
+        # the L1 fallback a real provisional owner when Redis raises.
+        lock = self._reservation_locks.setdefault(dedup_key, asyncio.Lock())
+        async with lock:
+            return await self._reserve_locked(
+                dedup_key=dedup_key,
+                status=status,
+            )
+
+    async def _reserve_locked(
+        self,
+        *,
+        dedup_key: str,
+        status: str,
+    ) -> DeliveryReservation:
         if self.cache.get(dedup_key) is not None:
             return DeliveryReservation(
                 DeliveryReservationStatus.ALREADY_DELIVERED, dedup_key
@@ -224,7 +245,12 @@ class TerminalStatusDeduplicator:
             status=status,
             delivery_id=delivery_id,
         )
-        return reservation.status == DeliveryReservationStatus.RESERVED
+        if reservation.status != DeliveryReservationStatus.RESERVED:
+            return False
+        # Historical callers use this as a one-stage "mark delivered" API and
+        # never call confirm. Preserve that long-TTL behavior while the checked
+        # publisher uses reserve/confirm directly.
+        return await self.confirm(reservation)
 
     async def release(
         self,

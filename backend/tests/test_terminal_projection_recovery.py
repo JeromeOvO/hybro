@@ -29,7 +29,7 @@ def test_legacy_run_documents_remain_compatible_without_projection():
         }
     )
 
-    assert run.terminal_projection is None
+    assert "terminal_projection" not in run.model_dump()
     assert event.terminal_projection is None
 
 
@@ -159,7 +159,7 @@ class FlakyMessageStore:
         self.system_attempts = 0
         self.completion_attempts = 0
 
-    async def set_system_task_terminal_state(self, message_id, target):
+    async def set_system_task_terminal_state(self, message_id, target, *, event_id):
         assert (message_id, target) == ("sys-msg-1", "completed")
         self.system_attempts += 1
         return "missing" if self.system_attempts == 1 else "updated"

@@ -281,14 +281,17 @@ class QueueExecutor:
             )
         )
 
+        system_message_ready = False
+        system_message_error: BaseException | None = None
         try:
-            # Phase 1/3: Emit system:hybro task on start if not already emitted
+            # No agent dispatch starts until its durable system task exists.
             existing_sys_msg = (
                 await self.message_reader.get_room_agent_message_by_message_id(
                     sys_message_id
                 )
             )
-            if not existing_sys_msg:
+            system_message_ready = existing_sys_msg is not None
+            if not system_message_ready:
                 from common.utils.time import utcnow
 
                 sys_msg = self.room_runtime.create_agent_message(
@@ -302,22 +305,57 @@ class QueueExecutor:
                     client_request_id=client_req_id,
                 )
                 sys_msg.message_id = sys_message_id
-                await self.message_writer.add_room_agent_message(sys_msg)
-
-                await self.delivery.send_task_submitted(
-                    room_id=room_id,
-                    message_id=sys_message_id,
-                    task_id=sys_message_id,
-                    agent_name="HYBRO AI",
-                    agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
-                    status="working",
-                    related_message_id=user_message_id,
-                    created_at=utcnow().isoformat(),
-                    task_content="Orchestrating workflow...",
-                    client_request_id=client_req_id,
-                )
-        except Exception:
+                for _attempt in range(3):
+                    try:
+                        system_message_ready = bool(
+                            await self.message_writer.add_room_agent_message(sys_msg)
+                        )
+                    except Exception as exc:
+                        system_message_error = exc
+                    if not system_message_ready:
+                        system_message_ready = (
+                            await self.message_reader.get_room_agent_message_by_message_id(
+                                sys_message_id
+                            )
+                            is not None
+                        )
+                    if system_message_ready:
+                        break
+                if system_message_ready:
+                    await self.delivery.send_task_submitted(
+                        room_id=room_id,
+                        message_id=sys_message_id,
+                        task_id=sys_message_id,
+                        agent_name="HYBRO AI",
+                        agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                        status="working",
+                        related_message_id=user_message_id,
+                        created_at=utcnow().isoformat(),
+                        task_content="Orchestrating workflow...",
+                        client_request_id=client_req_id,
+                    )
+        except Exception as exc:
+            system_message_error = exc
             logger.warning("Failed to emit system:hybro task", exc_info=True)
+
+        if not system_message_ready:
+            logger.error(
+                "QueueExecutor: system task persistence failed; refusing dispatch "
+                "for root %s (error_class=%s)",
+                user_message_id,
+                type(system_message_error).__name__
+                if system_message_error is not None
+                else "unacknowledged_write",
+            )
+            message_queue.clear()
+            return QueueProcessingResult(
+                result=QueueResult.FAILED,
+                terminal_status=None,
+                system_message_id=None,
+                clear_cancellation=False,
+                error_message="Failed to create durable system task",
+                error_code="system_task_persistence_failed",
+            )
 
         queue_result = QueueResult.COMPLETED
         deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
@@ -1023,9 +1061,8 @@ class QueueExecutor:
                 status=SSEProcessingStatus.FAILED,
                 message_id=user_message_id,
                 lifecycle_message_id=user_message_id,
-                system_message_id=(
-                    getattr(queue_processing_result, "system_message_id", None)
-                    or f"sys-{user_message_id}"
+                system_message_id=getattr(
+                    queue_processing_result, "system_message_id", None
                 ),
                 turn_event_enabled=False,
             )

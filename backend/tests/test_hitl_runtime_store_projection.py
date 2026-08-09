@@ -131,7 +131,11 @@ def _unset_dotted(document: dict[str, Any], path: str) -> None:
 
 def _matches_query(document: dict[str, Any], query: dict[str, Any]) -> bool:
     for path, expected in query.items():
-        if _get_dotted(document, path) != expected:
+        actual = _get_dotted(document, path)
+        if isinstance(expected, dict) and "$nin" in expected:
+            if actual in expected["$nin"]:
+                return False
+        elif actual != expected:
             return False
     return True
 
@@ -509,7 +513,8 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
     assert room_agent_messages.update_one_calls == []
     assert len(room_agent_messages.find_one_and_update_calls) == 1
     query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
-    assert query == {"message_id": "agent-msg-1"}
+    assert query["message_id"] == "agent-msg-1"
+    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
     assert kwargs == {"return_document": ReturnDocument.AFTER}
 
     sets = update["$set"]
@@ -533,7 +538,7 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         "message_id": "agent-msg-1",
         "message_content": {
             "message_task": {
-                "status": {"state": "completed"},
+                "status": {"state": "working"},
                 "metadata": {
                     "hitl_request_id": "remote-req",
                     "hitl_prompt": private_sentinel,
@@ -568,7 +573,8 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
     assert room_agent_messages.update_one_calls == []
     assert len(room_agent_messages.find_one_and_update_calls) == 1
     query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
-    assert query == {"message_id": "agent-msg-1"}
+    assert query["message_id"] == "agent-msg-1"
+    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
     assert kwargs == {"return_document": ReturnDocument.AFTER}
 
     expected_metadata = {
@@ -597,6 +603,38 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
     )
     assert projected["message_content"]["message_task"]["metadata"] == expected_metadata
     assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_hitl_cannot_reopen_terminal_projection_winner():
+    terminal = {
+        "message_id": "agent-msg-1",
+        "terminal_projection_event_id": "evt-completed",
+        "message_content": {
+            "message_task": {
+                "status": {"state": "completed"},
+                "metadata": {"durable": True},
+            }
+        },
+    }
+    room_agent_messages = _FakeCollection(documents=[terminal])
+    store = _store(room_agent_messages=room_agent_messages)
+
+    result = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-1",
+        prompt="late prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        group_id=None,
+        group_total=None,
+        group_index=None,
+    )
+
+    assert result is False
+    assert room_agent_messages.documents[0] == terminal
 
 
 @pytest.mark.asyncio

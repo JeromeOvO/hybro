@@ -529,7 +529,7 @@ class RoomMessageWriter(Protocol):
     ) -> str: ...
 
     async def set_system_task_terminal_state(
-        self, message_id: str, target_state: str
+        self, message_id: str, target_state: str, *, event_id: str
     ) -> str: ...
 
     async def add_room_agent_message(

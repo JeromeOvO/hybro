@@ -358,9 +358,16 @@ return a typed `accepted`/`replayed`/`conflict`/`error` outcome. Each new termin
 any SSE, system-task, or completion-metadata side effect runs. The retired turn
 journal has no production appender, so production intents omit a turn-event step
 rather than pretending to recover one; a future re-enable must bind a persistent
-appender with the terminal event id as its idempotency key. A same-terminal replay
-reuses the canonical fact to repair incomplete steps;
-an opposing terminal winner remains a conflict and emits nothing. Each projection
+appender with the terminal event id as its idempotency key. `run_events` is the
+only authority for this intent; `runs` heads no longer copy it, and head repair
+removes a legacy copied field while continuing to read old heads. A same-terminal
+replay atomically enriches the canonical Mongo fact with only absent intent fields
+and absent steps. It never changes canonical status or replaces an existing
+completed, blocked, or claimed step, and immediate finalization uses the enriched
+canonical document. Legacy terminal events with no stored intent are never
+backfilled from a replay request—even for failed subtypes such as `rejected`—as
+that request cannot prove the original side-effect targets. An opposing terminal
+winner remains a conflict and emits nothing. Each projection
 step is independently leased and completed, so a child or delivery failure leaves
 only that step pending and never blocks or rewrites the root terminal state.
 Failed and canceled intents also include durable descendant cleanup rooted at the
@@ -369,15 +376,24 @@ crashes between root commit and cleanup. The cleanup tags the winner-owned child
 set durably and emits a stable-ID terminal `task_update` for every affected child;
 a retry reconstructs the same IDs after a DB-before-SSE crash. The dedicated
 system task is excluded from descendant cleanup and remains owned exclusively by
-its system-task DB/delivery steps. Queue and room
+its system-task DB/delivery steps. Terminal task projections atomically write a
+winner event marker with task state. All full-content, status, HITL, finalization,
+and `TaskStateManager` persistence paths use a non-terminal Mongo CAS, so a late
+completion or opposing terminal writer cannot overwrite the durable marked
+winner. Queue execution retries creation of its system task and refuses all agent
+dispatch if the create remains unacknowledged; the resulting root failure omits
+system-task projection intent because no recoverable target exists. Queue and room
 orchestration never mutate children before the root CAS—including attachment
 preflight failures—and do not run imperative cleanup after an opposing
 winner; only the canonical fact's projection owns cleanup. Retryable failures receive bounded
 exponential backoff; irreparable missing or
 opposing child targets become durable `blocked` steps and no longer occupy the due
-queue. Recovery isolates each fact; malformed steps are skipped from scheduling
-and unknown forward-schema steps are durably blocked so one poison record cannot
-abort or starve the batch. The stale-task checker scans only due, pending markers and can rebuild work directly from
+queue. Schedule refresh is one MongoDB aggregation update pipeline that derives
+`pending` and `next_attempt_at` from the then-current persisted step object; it
+cannot clear a step concurrently added by richer replay. Recovery isolates each
+fact; malformed steps are skipped from scheduling and unknown forward-schema
+steps are durably blocked so one poison record cannot abort or starve the batch.
+The stale-task checker scans only due, pending markers and can rebuild work directly from
 the terminal event after a crash, including an event/head divergence window.
 Terminal processing, system-task, and run-event SSE use stable delivery IDs in
 both the frame and Redis/local dedup key. Dedup is two phase: an expiring
@@ -386,7 +402,11 @@ reservation is `in_flight`, while only post-transport confirmation becomes
 markers retain the longer dedup TTL. Active fanout heartbeats renew owned L1/L2
 reservations until confirmation and fail safely if ownership is lost. L1-only
 reservations created during Redis failure record that ownership mode explicitly
-and can confirm locally even if Redis later recovers without the key. Local SSE
+and can confirm locally even if Redis later recovers without the key. Per-key
+local locks make Redis-error fallback reservation atomic, so concurrent coroutines
+produce one provisional owner. The compatibility `should_deliver` API retains its
+historical one-stage behavior by confirming immediately with the long TTL; checked
+publishers use explicit reserve/confirm. Local SSE
 broadcast reports an actual delivery count; zero local subscribers plus failed
 Redis fanout stays pending and never confirms the global marker. Cross-instance
 publish returns explicit broker acceptance; disabled/no-op brokers return false.
@@ -1570,6 +1590,12 @@ Multi-worker production:
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
   streams, DAL Redis runtime, or cancellation change streams are missing.
+- MongoDB 4.2 or newer is required for atomic aggregation update pipelines
+  (`docker-compose.yml` currently pins MongoDB 7.0).
+- The terminal task writer-fencing release requires a coordinated drain: stop or
+  drain every old backend writer, deploy the new binary to all replicas, then
+  resume traffic. A rolling mixed-version writer fleet is unsupported because
+  old writers lack the terminal winner filters and can overwrite fenced state.
 
 This guard exists because without Redis:
 

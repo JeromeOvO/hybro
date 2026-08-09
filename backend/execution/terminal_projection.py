@@ -307,8 +307,9 @@ class TerminalProjectionFinalizer:
             return
         task_state = system_task_state_from_runtime_status(runtime_status)
         target = str(getattr(task_state, "value", task_state))
+        event_id = str(fact.get("event_id") or projection.get("event_id") or "")
         outcome = await self._message_store.set_system_task_terminal_state(
-            message_id, target
+            message_id, target, event_id=event_id
         )
         if outcome == "conflict":
             raise ProjectionBlockedError(

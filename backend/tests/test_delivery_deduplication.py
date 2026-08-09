@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from common.errors import TransientError
@@ -117,6 +119,9 @@ async def test_first_terminal_status_passes_and_second_l1_hit_suppresses():
     assert len(redis.calls) == 1
     assert redis.calls[0][0::2] == ("terminal:room-1:msg-1", 30)
     assert redis.calls[0][1] != "completed"
+    assert redis.compare_sets[0][3] == 300
+    assert "room-1:msg-1" in dedup.cache
+    assert "room-1:msg-1" not in dedup.reservations
 
 
 @pytest.mark.asyncio
@@ -139,7 +144,8 @@ async def test_stable_delivery_id_is_the_cross_instance_dedup_key():
     )
 
     assert redis.calls[0][0] == "terminal:delivery:terminal:event-1:processing"
-    assert "delivery:terminal:event-1:processing" in first.reservations
+    assert "delivery:terminal:event-1:processing" in first.cache
+    assert "delivery:terminal:event-1:processing" not in first.reservations
 
 
 @pytest.mark.asyncio
@@ -227,15 +233,17 @@ async def test_failed_delivery_release_clears_owned_l1_and_l2_reservations():
     redis = FakeRedisKV(setnx_result=True)
     dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
 
-    assert await dedup.should_deliver(
+    reservation = await dedup.reserve(
         room_id="room-1",
         message_id="msg-1",
         status="completed",
     )
+    assert reservation.status == DeliveryReservationStatus.RESERVED
     await dedup.release(
         room_id="room-1",
         message_id="msg-1",
         status="completed",
+        reservation=reservation,
     )
 
     assert "room-1:msg-1" not in dedup.reservations
@@ -256,12 +264,17 @@ async def test_release_does_not_delete_a_reclaimed_reservation():
         claim_id_factory=lambda: "owner-1",
     )
 
-    assert await dedup.should_deliver(
+    reservation = await dedup.reserve(
         room_id="room-1", message_id="msg-1", status="completed"
     )
     redis.values["terminal:room-1:msg-1"] = "owner-2"
 
-    await dedup.release(room_id="room-1", message_id="msg-1", status="completed")
+    await dedup.release(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+        reservation=reservation,
+    )
 
     assert redis.values["terminal:room-1:msg-1"] == "owner-2"
     assert redis.compare_deleted == [("terminal:room-1:msg-1", "owner-1")]
@@ -281,7 +294,7 @@ async def test_multi_instance_loser_does_not_poison_l1_after_owner_release():
         claim_id_factory=lambda: "loser",
     )
 
-    assert await owner.should_deliver(
+    reservation = await owner.reserve(
         room_id="room-1", message_id="msg-1", status="completed"
     )
     assert not await loser.should_deliver(
@@ -289,7 +302,12 @@ async def test_multi_instance_loser_does_not_poison_l1_after_owner_release():
     )
     assert "room-1:msg-1" not in loser.cache
 
-    await owner.release(room_id="room-1", message_id="msg-1", status="completed")
+    await owner.release(
+        room_id="room-1",
+        message_id="msg-1",
+        status="completed",
+        reservation=reservation,
+    )
     assert await loser.should_deliver(
         room_id="room-1", message_id="msg-1", status="completed"
     )
@@ -358,6 +376,42 @@ async def test_redis_failure_degrades_to_l1_only_without_escaping():
         message_id="msg-1",
         status="failed",
     )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_redis_failures_create_only_one_l1_reservation_owner():
+    class YieldingFailedRedis(FakeRedisKV):
+        async def setnx(self, key: str, value: str, ttl: int) -> bool:
+            await asyncio.sleep(0)
+            return await super().setnx(key, value, ttl)
+
+    redis = YieldingFailedRedis(error=TransientError("redis down"))
+    dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+
+    reservations = await asyncio.gather(
+        *(
+            dedup.reserve(
+                room_id="room-1",
+                message_id="msg-1",
+                status="failed",
+                delivery_id="terminal:event-1:processing",
+            )
+            for _ in range(8)
+        )
+    )
+
+    assert [item.status for item in reservations].count(
+        DeliveryReservationStatus.RESERVED
+    ) == 1
+    assert [item.status for item in reservations].count(
+        DeliveryReservationStatus.IN_FLIGHT
+    ) == 7
+    owner = next(
+        item
+        for item in reservations
+        if item.status == DeliveryReservationStatus.RESERVED
+    )
+    assert dedup.reservations[owner.dedup_key].claim_id == owner.claim_id
 
 
 @pytest.mark.asyncio
