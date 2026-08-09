@@ -738,6 +738,7 @@ def _executor(
             upsert_room_agent_message=AsyncMock(),
             delete_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_user_message_by_message_id=AsyncMock(return_value=True),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(),
         ),
         task_state_store=SimpleNamespace(
@@ -7596,6 +7597,8 @@ async def test_run_dispatch_failure_without_message_id_is_visible_to_planner():
 
 @pytest.mark.asyncio
 async def test_run_synthesis_persists_system_message_content():
+    from common.types import TaskState
+
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -7629,6 +7632,9 @@ async def test_run_synthesis_persists_system_message_content():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
     system_db_msg = _agent_message("sys-message-1")
+    system_db_msg.message_content.message_task = SimpleNamespace(
+        status=SimpleNamespace(state=TaskState.submitted)
+    )
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         return_value=system_db_msg
     )
@@ -7644,11 +7650,18 @@ async def test_run_synthesis_persists_system_message_content():
     )
 
     assert result.status == RunStatus.COMPLETED
-    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
-        "sys-message-1",
-        system_db_msg.message_content,
-    )
+    executor.message_writer.update_room_agent_message_by_message_id.assert_awaited()
     assert system_db_msg.message_content.message_text == "Final summary"
+    assert (
+        system_db_msg.message_content.message_task.status.state == TaskState.completed
+    )
+    assert system_db_msg.extend_info["summary_origin"] == "llm"
+    executor.delivery.send_task_update.assert_any_await(
+        room_id="room-1",
+        message_id="sys-message-1",
+        status="completed",
+    )
+    executor.delivery.send_agent_response.assert_awaited()
 
 
 @pytest.mark.core
@@ -11331,3 +11344,90 @@ async def test_interrupt_checkpoint_does_not_serialize_supervisor_continuation()
 
     assert checkpointed is True
     assert not hasattr(executor, "continuation_store")
+
+
+def test_extract_response_text_from_message_with_artifact_parts():
+    """Verifies that text artifacts are extracted when message_text is empty."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="current_result",
+                parts=[Part(root=TextPart(kind="text", text="Once upon a story."))],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    text = supervisor_executor_module._extract_response_text_from_message(msg)
+    assert text == "Once upon a story."
+    assert msg.message_content.message_text == "Once upon a story."
+
+
+def test_step_result_from_persisted_message_extracts_artifact_text():
+    """Verifies _step_result_from_persisted_message extracts artifact text for empty message_text."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="response",
+                parts=[
+                    Part(root=TextPart(kind="text", text="Once upon a robot story."))
+                ],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    from models.orchestration import (
+        DispatchExpectedOutput,
+        DispatchIntent,
+    )
+
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="msg-1",
+        agent_id="story_agent",
+        task="story",
+        task_hash="hash-1",
+        goal_family_fingerprint="fam-1",
+        goal_revision_fingerprint="rev-1",
+        expected_outputs=[
+            DispatchExpectedOutput(output_key="out", kind="text", required=True)
+        ],
+    )
+    result = SupervisorExecutor._orchestration_result_from_agent_message(
+        intent,
+        msg,
+        {"story_agent": "Story Agent"},
+        1,
+    )
+    assert result is not None
+    assert result.response_text == "Once upon a robot story."
+    assert result.success is True

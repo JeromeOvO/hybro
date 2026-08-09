@@ -145,10 +145,12 @@ function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
 function DeterministicDoneBlock({
   intro,
   summaryResult,
+  turnArtifacts,
   turnId,
 }: {
   intro: string
   summaryResult?: AgentResultViewModel
+  turnArtifacts?: TurnViewModel['agentResults'][number]['artifacts']
   turnId?: string
 }) {
   const theme = getAgentTheme('system:hybro', 'HYBRO AI')
@@ -163,7 +165,7 @@ function DeterministicDoneBlock({
     return (
       <>
         <ResultHeader result={summaryResult} isStreaming={false} />
-        <SynthesisContent summaryResult={summaryResult} />
+        <SynthesisContent summaryResult={summaryResult} turnArtifacts={turnArtifacts} />
       </>
     )
   }
@@ -228,11 +230,13 @@ function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: bool
 }
 
 function SynthesisBlock({
+  turn,
   summaryResult,
   supervisorStatus,
   processingStatusLogs,
   processingStatusRunning,
 }: {
+  turn: TurnViewModel
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
   processingStatusLogs?: TurnViewModel['processingStatusLogs']
@@ -241,6 +245,7 @@ function SynthesisBlock({
   const stream = useResultStreamDisplay(summaryResult)
   const logs = processingStatusLogs ?? []
   const showProcessingLog = logs.length > 0
+  const turnArtifacts = turn.agentResults.flatMap(r => r.artifacts ?? [])
 
   return (
     <>
@@ -262,6 +267,7 @@ function SynthesisBlock({
       )}
       <SynthesisContentFromStream
         stream={stream}
+        turnArtifacts={turnArtifacts}
         messageId={summaryResult.messageId}
         agentName={summaryResult.agentName}
       />
@@ -294,6 +300,7 @@ export function FinalAnswerSurface({
         processingLogRenderedInBody = true
         body = (
           <SynthesisBlock
+            turn={turn}
             summaryResult={summaryResult}
             supervisorStatus={supervisorStatus}
             processingStatusLogs={turn.processingStatusLogs ?? []}
@@ -324,6 +331,7 @@ export function FinalAnswerSurface({
           summaryResult={
             summaryResult?.summaryOrigin === 'deterministic' ? summaryResult : undefined
           }
+          turnArtifacts={turn.agentResults.flatMap(r => r.artifacts ?? [])}
           turnId={turn.id}
         />
       )

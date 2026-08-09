@@ -599,6 +599,35 @@ describe('deriveFinalAnswer', () => {
     expect(result.kind).toBe('failed')
     expect(result.failedIntro).toBe(FAILED_TURN_INTRO)
   })
+
+  it('returns Synthesized for contentful system:hybro when turn is already terminal', () => {
+    const turn = makeTurn({
+      status: 'active',
+      turnTerminalStatus: 'completed',
+      turnCompletionKind: 'synthesis',
+      agentResults: [
+        makeAgent({
+          messageId: 'a1',
+          agentId: 'agent-a',
+          status: 'completed',
+          content: 'Story',
+        }),
+        makeAgent({
+          messageId: 'sys-u1',
+          agentId: 'system:hybro',
+          agentName: 'HYBRO AI',
+          status: 'working',
+          content: 'Combined story and image answer.',
+        }),
+      ],
+    })
+
+    expect(deriveFinalAnswer(turn, ['a1', 'sys-u1'])).toMatchObject({
+      kind: 'llm_synthesis',
+      label: 'Synthesized',
+      primaryMessageId: 'sys-u1',
+    })
+  })
 })
 
 describe('derivePrimaryStreamFromFinalAnswer', () => {

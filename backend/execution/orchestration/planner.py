@@ -9,6 +9,10 @@ from typing import Any, Protocol
 
 from execution.orchestration.action_validator import PlannerActionValidator
 from execution.orchestration.context_builder import OrchestrationPlannerContext
+from execution.orchestration.recovery_policy import (
+    normalize_independent_parallel_group,
+    normalize_prose_expected_outputs,
+)
 from execution.orchestration.room_supervisor_service import RoomSupervisorService
 from models.orchestration import PlannerAction, PlannerActionType
 
@@ -304,7 +308,9 @@ class RoomSupervisorPlannerAdapter:
 
     async def plan(self, context: OrchestrationPlannerContext) -> PlannerAction:
         raw_action = await self._raw_action(context)
-        action = self._parse_action(raw_action)
+        action = normalize_prose_expected_outputs(
+            normalize_independent_parallel_group(self._parse_action(raw_action))
+        )
         has_agent_output = bool(context.state_context.agent_outputs)
         if action.action == PlannerActionType.COMPLETE:
             has_agent_output = self._has_completion_basis(context)
@@ -428,7 +434,11 @@ class RoomSupervisorPlannerAdapter:
             "If the goal is not yet complete, delegate the next useful task or use "
             "ask_user only when user-only information truly blocks progress and no "
             "safe, useful action can continue without it. Never use ask_user merely "
-            "to let the user choose work they have already requested. If the "
+            "to let the user choose work they have already requested. After Agents "
+            "have already returned useful results, prefer complete over clarifying "
+            "ask_user. Post-dispatch ask_user is only valid for Execution-validated "
+            "blocker keys; do not invent blocker keys or ask for nicer inputs when "
+            "the available Agent results already satisfy the goal. If the "
             "available results satisfy the goal, return complete. Execution will "
             "then synthesize the final user-facing response before ending the run; "
             "do not return a separate synthesize action. Completion evidence is "
@@ -457,7 +467,11 @@ class RoomSupervisorPlannerAdapter:
             "artifact_refs, attachment_refs, or required_resource_refs.\n\n"
             "For a delegate action, each target may include context_refs, "
             "artifact_refs, attachment_refs, expected_outputs, and "
-            "required_resource_refs. Select resources by business relevance. Select "
+            "required_resource_refs. Use expected_outputs: [] for free-text Agent "
+            "replies. Only declare kind: artifact when the Agent is known to return "
+            "a named structured DataPart artifact; never invent text, summary, or "
+            "structured contracts, artifact names, or required_fields for prose "
+            "agents. Select resources by business relevance. Select "
             "the smallest sufficient resource set. Prefer a structured artifact over "
             "copied prose and "
             "a text projection over a raw attachment when the raw file is unnecessary. "

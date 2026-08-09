@@ -109,6 +109,26 @@ class TestSanitizeArtifactParts:
             {"kind": "text", "text": "Hi, GPT-5-mini Agent here!"}
         ]
 
+    def test_file_part_with_metadata_file_id_reconstructed(self):
+        """Persisted file parts with metadata.file_id reconstruct file with uri."""
+        parts = [
+            {
+                "kind": "file",
+                "metadata": {
+                    "file_id": "abc12345",
+                    "file_name": "image.png",
+                    "mime_type": "image/png",
+                },
+            }
+        ]
+        result = sanitize_artifact_parts(parts)
+        assert len(result) == 1
+        assert result[0]["kind"] == "file"
+        assert result[0]["file"]["uri"] == "/api/v1/files/abc12345/content"
+        assert result[0]["file"]["name"] == "image.png"
+        assert result[0]["file"]["mimeType"] == "image/png"
+        assert result[0]["metadata"]["file_id"] == "abc12345"
+
 
 # ---------------------------------------------------------------------------
 # extract_parts

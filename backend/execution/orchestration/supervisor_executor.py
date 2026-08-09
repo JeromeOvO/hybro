@@ -79,8 +79,12 @@ from execution.orchestration.planner_recovery import (
     resolve_open_planner_validation_failures,
 )
 from execution.orchestration.recovery_policy import (
+    action_for_fulfilled_goal_recovery,
+    action_for_rejected_ask_user,
     action_for_rejected_delegate,
     normalize_delegate_repair_lineage,
+    normalize_independent_parallel_group,
+    normalize_prose_expected_outputs,
 )
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -187,6 +191,54 @@ _OPERATIONAL_FAILURE_STATUSES = frozenset(
 
 def _log_value(value: Any) -> Any:
     return getattr(value, "value", value)
+
+
+def _extract_response_text_from_message(msg: Any) -> str:
+    """Extract response text from message_text or task artifacts/status."""
+    if msg is None:
+        return ""
+    message_content = getattr(msg, "message_content", None)
+    if message_content:
+        text = getattr(message_content, "message_text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+        task = getattr(message_content, "message_task", None) or getattr(
+            msg, "task", None
+        )
+        if task is not None:
+            artifacts = getattr(task, "artifacts", None)
+            if artifacts:
+                try:
+                    from common.utils.a2a_helpers import (
+                        extract_parts_from_artifacts,
+                    )
+
+                    extracted = extract_parts_from_artifacts(artifacts).text
+                    if isinstance(extracted, str) and extracted.strip():
+                        extracted_clean = extracted.strip()
+                        if hasattr(message_content, "message_text"):
+                            message_content.message_text = extracted_clean
+                        return extracted_clean
+                except Exception:
+                    pass
+
+            status = getattr(task, "status", None)
+            status_msg = getattr(status, "message", None)
+            if status_msg:
+                try:
+                    from common.utils.a2a_helpers import get_text_from_message
+
+                    status_text = get_text_from_message(status_msg)
+                    if isinstance(status_text, str) and status_text.strip():
+                        status_clean = status_text.strip()
+                        if hasattr(message_content, "message_text"):
+                            message_content.message_text = status_clean
+                        return status_clean
+                except Exception:
+                    pass
+
+    return ""
 
 
 def _open_failure_count(state: OrchestrationRunState) -> int:
@@ -1186,31 +1238,101 @@ class SupervisorExecutor:
                     planner_action=None,
                     stage="adapter",
                 )
+                error_code = getattr(exc, "code", "planner_output_invalid")
                 if exhausted or state.steps_used >= state.step_budget:
-                    await self._emit_supervisor_stage(
-                        room_id=room_id,
-                        user_message_id=user_message_id,
-                        client_request_id=state.client_request_id,
-                        details="Unable to continue the workflow.",
-                        stage="unable_to_continue",
-                    )
-                    state = await self._mark_orchestration_terminal(
+                    recovery_action = action_for_fulfilled_goal_recovery(
                         state,
-                        OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        error_code=error_code,
+                        exhausted=True,
                     )
-                    return await self._log_state_and_return(
-                        room_id,
+                    if recovery_action is None:
+                        recovery_action = action_for_rejected_ask_user(
+                            state,
+                            error_code=error_code,
+                        )
+                    if recovery_action is not None:
+                        try:
+                            planner_action = PlannerActionValidator.validate(
+                                recovery_action,
+                                run_state=state,
+                                resource_fingerprints=resource_fingerprints,
+                                guardrails_enabled=self.guardrails_enabled,
+                            )
+                        except PlannerActionValidationError as recovery_exc:
+                            logger.warning(
+                                "orchestration_recovery_exhausted_fallback_rejected "
+                                "run_id=%s from_error=%s fallback_error=%s",
+                                state.run_id,
+                                error_code,
+                                str(recovery_exc),
+                            )
+                            recovery_action = None
+                        else:
+                            logger.info(
+                                "orchestration_recovery_exhausted_fallback_selected "
+                                "run_id=%s from_error=%s action=%s",
+                                state.run_id,
+                                error_code,
+                                planner_action.action.value,
+                            )
+                    if recovery_action is None:
+                        await self._emit_supervisor_stage(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            client_request_id=state.client_request_id,
+                            details="Unable to continue the workflow.",
+                            stage="unable_to_continue",
+                        )
+                        state = await self._mark_orchestration_terminal(
+                            state,
+                            OrchestrationStatus.FAILED,
+                            reason=str(exc),
+                        )
+                        return await self._log_state_and_return(
+                            room_id,
+                            state,
+                            self._state_run_result(
+                                status=RunStatus.FAILED, state=state
+                            ),
+                        )
+                else:
+                    recovery_action = action_for_fulfilled_goal_recovery(
                         state,
-                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                        error_code=error_code,
+                        exhausted=False,
                     )
-
-                continue
+                    if recovery_action is None:
+                        continue
+                    try:
+                        planner_action = PlannerActionValidator.validate(
+                            recovery_action,
+                            run_state=state,
+                            resource_fingerprints=resource_fingerprints,
+                            guardrails_enabled=self.guardrails_enabled,
+                        )
+                    except PlannerActionValidationError as recovery_exc:
+                        logger.warning(
+                            "orchestration_recovery_fallback_rejected run_id=%s "
+                            "from_error=%s fallback_error=%s",
+                            state.run_id,
+                            error_code,
+                            str(recovery_exc),
+                        )
+                        continue
+                    logger.info(
+                        "orchestration_recovery_fallback_selected run_id=%s "
+                        "from_error=%s action=%s",
+                        state.run_id,
+                        error_code,
+                        planner_action.action.value,
+                    )
 
             planner_action = self._apply_participant_turn_policy(
                 state,
                 planner_action,
             )
+            planner_action = normalize_independent_parallel_group(planner_action)
+            planner_action = normalize_prose_expected_outputs(planner_action)
             planner_action = normalize_delegate_repair_lineage(
                 planner_action,
                 state,
@@ -1292,48 +1414,104 @@ class SupervisorExecutor:
                     stage="state_validation",
                 )
                 if exhausted or state.steps_used >= state.step_budget:
-                    state = await self._mark_orchestration_terminal(
+                    recovery_action = action_for_rejected_ask_user(
                         state,
-                        OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        error_code=exc.code,
                     )
-                    return await self._log_state_and_return(
-                        room_id,
+                    if recovery_action is None:
+                        recovery_action = action_for_fulfilled_goal_recovery(
+                            state,
+                            error_code=exc.code,
+                            exhausted=True,
+                        )
+                    if recovery_action is not None:
+                        try:
+                            planner_action = PlannerActionValidator.validate(
+                                recovery_action,
+                                run_state=state,
+                                resource_fingerprints=resource_fingerprints,
+                                guardrails_enabled=self.guardrails_enabled,
+                            )
+                        except PlannerActionValidationError as recovery_exc:
+                            logger.warning(
+                                "orchestration_recovery_exhausted_fallback_rejected "
+                                "run_id=%s from_error=%s fallback_error=%s",
+                                state.run_id,
+                                exc.code,
+                                str(recovery_exc),
+                            )
+                            recovery_action = None
+                        else:
+                            logger.info(
+                                "orchestration_recovery_exhausted_fallback_selected "
+                                "run_id=%s from_error=%s action=%s",
+                                state.run_id,
+                                exc.code,
+                                planner_action.action.value,
+                            )
+                    if recovery_action is None:
+                        await self._emit_supervisor_stage(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            client_request_id=state.client_request_id,
+                            details="Unable to continue the workflow.",
+                            stage="unable_to_continue",
+                        )
+                        state = await self._mark_orchestration_terminal(
+                            state,
+                            OrchestrationStatus.FAILED,
+                            reason=str(exc),
+                        )
+                        return await self._log_state_and_return(
+                            room_id,
+                            state,
+                            self._state_run_result(
+                                status=RunStatus.FAILED, state=state
+                            ),
+                        )
+                else:
+                    fallback_action = action_for_rejected_delegate(
                         state,
-                        self._state_run_result(status=RunStatus.FAILED, state=state),
+                        error_code=exc.code,
                     )
+                    if fallback_action is None:
+                        fallback_action = action_for_rejected_ask_user(
+                            state,
+                            error_code=exc.code,
+                        )
+                    if fallback_action is None:
+                        fallback_action = action_for_fulfilled_goal_recovery(
+                            state,
+                            error_code=exc.code,
+                            exhausted=False,
+                        )
+                    if fallback_action is None:
+                        continue
 
-                fallback_action = action_for_rejected_delegate(
-                    state,
-                    error_code=exc.code,
-                )
-                if fallback_action is None:
-                    continue
+                    try:
+                        planner_action = PlannerActionValidator.validate(
+                            fallback_action,
+                            run_state=state,
+                            resource_fingerprints=resource_fingerprints,
+                            guardrails_enabled=self.guardrails_enabled,
+                        )
+                    except PlannerActionValidationError as fallback_exc:
+                        logger.warning(
+                            "orchestration_recovery_fallback_rejected run_id=%s "
+                            "from_error=%s fallback_error=%s",
+                            state.run_id,
+                            exc.code,
+                            str(fallback_exc),
+                        )
+                        continue
 
-                try:
-                    planner_action = PlannerActionValidator.validate(
-                        fallback_action,
-                        run_state=state,
-                        resource_fingerprints=resource_fingerprints,
-                        guardrails_enabled=self.guardrails_enabled,
-                    )
-                except PlannerActionValidationError as fallback_exc:
-                    logger.warning(
-                        "orchestration_recovery_fallback_rejected run_id=%s "
-                        "from_error=%s fallback_error=%s",
+                    logger.info(
+                        "orchestration_recovery_fallback_selected run_id=%s "
+                        "from_error=%s action=%s",
                         state.run_id,
                         exc.code,
-                        str(fallback_exc),
+                        planner_action.action.value,
                     )
-                    continue
-
-                logger.info(
-                    "orchestration_recovery_fallback_selected run_id=%s "
-                    "from_error=%s action=%s",
-                    state.run_id,
-                    exc.code,
-                    planner_action.action.value,
-                )
             if (
                 self.guardrails_enabled
                 and planner_action.action == PlannerActionType.ASK_USER
@@ -2738,10 +2916,7 @@ class SupervisorExecutor:
         last_state = normalized_state
         is_input_required = last_state in interactive_states
         is_success = last_state == "completed"
-        response_text = ""
-        message_content = getattr(msg, "message_content", None)
-        if message_content and getattr(message_content, "message_text", None):
-            response_text = message_content.message_text
+        response_text = _extract_response_text_from_message(msg)
 
         task_metadata = _field_from_task(task, "metadata") if task is not None else None
         task_metadata_dict = task_metadata if isinstance(task_metadata, Mapping) else {}
@@ -4975,19 +5150,46 @@ class SupervisorExecutor:
         if trajectory.system_agent_message_id:
 
             async def persist_and_emit_synthesis() -> None:
+                sys_message_id = trajectory.system_agent_message_id
+                assert sys_message_id is not None
                 db_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    trajectory.system_agent_message_id
+                    sys_message_id
                 )
                 if db_msg and db_msg.message_content:
                     db_msg.message_content.message_text = synthesis
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id,
-                        db_msg.message_content,
+                    task = db_msg.message_content.message_task
+                    if task is not None and task.status is not None:
+                        task.status.state = system_task_state_from_runtime_status(
+                            "completed"
+                        )
+                    extend_info = (
+                        dict(db_msg.extend_info)
+                        if isinstance(db_msg.extend_info, dict)
+                        else {}
                     )
+                    extend_info["summary_origin"] = "llm"
+                    db_msg.extend_info = extend_info
+                    await self.message_writer.update_room_agent_message_by_message_id(
+                        db_msg.message_id,
+                        db_msg,
+                    )
+                    try:
+                        await self.delivery.send_task_update(
+                            room_id=room_id,
+                            message_id=sys_message_id,
+                            status="completed",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to emit completed task_update for system:hybro "
+                            "message_id=%s",
+                            sys_message_id,
+                            exc_info=True,
+                        )
 
                 await self.delivery.send_agent_response(
                     room_id=room_id,
-                    message_id=trajectory.system_agent_message_id,
+                    message_id=sys_message_id,
                     agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                     content=synthesis,
                     related_message_id=user_message_id,
@@ -6659,11 +6861,8 @@ class SupervisorExecutor:
         if last_state not in terminal_states:
             return None
 
+        response_text = _extract_response_text_from_message(message)
         is_success = last_state == "completed"
-        response_text = ""
-        message_content = getattr(message, "message_content", None)
-        if message_content and getattr(message_content, "message_text", None):
-            response_text = message_content.message_text
 
         return StepResult(
             step_number=step_number,
@@ -7848,9 +8047,7 @@ class SupervisorExecutor:
                 continue
 
             is_success = msg.last_notified_state == "completed"
-            response_text = ""
-            if msg.message_content and msg.message_content.message_text:
-                response_text = msg.message_content.message_text
+            response_text = _extract_response_text_from_message(msg)
 
             for entry in trajectory.entries:
                 for idx, result in enumerate(entry.results):

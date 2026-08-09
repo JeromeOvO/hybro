@@ -1528,7 +1528,10 @@ async def test_final_continuation_cancel_after_last_check_before_cas_obeys_winne
     assert (
         center._emit_processing_status.await_args.kwargs["turn_event_enabled"] is True
     )
-    center._persist_turn_completion_kind.assert_not_awaited()
+    center._persist_turn_completion_kind.assert_awaited_once_with(
+        "user-msg-1",
+        "deterministic",
+    )
     child_terminal.assert_not_awaited()
 
 
@@ -1685,7 +1688,10 @@ async def test_queue_child_persistence_failure_does_not_block_root_completion():
     assert center._emit_processing_status.await_args.kwargs["status"] == (
         SSEProcessingStatus.COMPLETED
     )
-    center._persist_turn_completion_kind.assert_not_awaited()
+    center._persist_turn_completion_kind.assert_awaited_once_with(
+        "message-1",
+        "deterministic",
+    )
     center._turn_event_appender.append.assert_not_awaited()
 
 
@@ -1707,7 +1713,10 @@ async def test_continuation_child_persistence_failure_does_not_block_root_comple
     assert center._emit_processing_status.await_args.kwargs["status"] == (
         SSEProcessingStatus.COMPLETED
     )
-    center._persist_turn_completion_kind.assert_not_awaited()
+    center._persist_turn_completion_kind.assert_awaited_once_with(
+        "user-msg-1",
+        "deterministic",
+    )
     appender.append.assert_not_awaited()
 
 

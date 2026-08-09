@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from execution.orchestration.blocker_matching import (
     agent_blocker_field_key,
     match_tokens,
@@ -10,12 +12,15 @@ from execution.orchestration.outcome_policy import OutcomeHistoryView
 from models.orchestration import (
     BlockerRecord,
     DelegationOutcomeRecord,
+    DispatchExpectedOutput,
     OrchestrationRunState,
     PlannedDelegateTarget,
     PlannerAction,
     PlannerActionType,
     PlannerQuestion,
 )
+
+_ENFORCEABLE_EXPECTED_OUTPUT_KIND = "artifact"
 
 
 def recovery_directives(state: OrchestrationRunState) -> list[dict[str, object]]:
@@ -56,24 +61,24 @@ def recovery_directives(state: OrchestrationRunState) -> list[dict[str, object]]
     return []
 
 
-def action_for_rejected_delegate(
+def _open_validated_user_blockers(
     state: OrchestrationRunState,
-    *,
-    error_code: str,
-) -> PlannerAction | None:
-    if error_code not in {
-        "delegate_blocked_pending_user",
-        "delegate_no_progress_repeat",
-        "delegate_repair_lineage_required",
-    }:
-        return None
-    validated_blockers = [
+) -> list[BlockerRecord]:
+    return [
         blocker
         for blocker in state.blockers
         if blocker.status == "open"
         and blocker.validation_status == "validated"
         and blocker.validated_user_only
     ]
+
+
+def _ask_user_action_for_validated_blockers(
+    state: OrchestrationRunState,
+    *,
+    reasoning: str,
+) -> PlannerAction | None:
+    validated_blockers = _open_validated_user_blockers(state)
     if not validated_blockers:
         return None
     sorted_blockers = sorted(validated_blockers, key=lambda item: item.key)
@@ -91,7 +96,7 @@ def action_for_rejected_delegate(
     )
     return PlannerAction(
         action=PlannerActionType.ASK_USER,
-        reasoning="Backend recovery selected HITL because validated user-only blockers are open.",
+        reasoning=reasoning,
         questions=[
             PlannerQuestion(
                 prompt="\n".join(blocker.description for blocker in sorted_blockers),
@@ -101,6 +106,139 @@ def action_for_rejected_delegate(
                 blocker_obligations=blocker_obligations,
             )
         ],
+    )
+
+
+def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:
+    """True only when at least one delegation outcome is fulfilled."""
+    return any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes)
+
+
+def action_for_rejected_delegate(
+    state: OrchestrationRunState,
+    *,
+    error_code: str,
+) -> PlannerAction | None:
+    if error_code not in {
+        "delegate_blocked_pending_user",
+        "delegate_no_progress_repeat",
+        "delegate_repair_lineage_required",
+    }:
+        return None
+    return _ask_user_action_for_validated_blockers(
+        state,
+        reasoning=(
+            "Backend recovery selected HITL because validated user-only blockers "
+            "are open."
+        ),
+    )
+
+
+def action_for_rejected_ask_user(
+    state: OrchestrationRunState,
+    *,
+    error_code: str,
+) -> PlannerAction | None:
+    """Recover from illegal post-dispatch ask_user planner actions.
+
+    After Agents have already run, ask_user is only legal for validated
+    blockers. When the planner invents clarifying questions instead, prefer a
+    corrected HITL action when validated blockers exist; otherwise complete when
+    Agent results already satisfy the goal so the run does not exhaust retries
+    while stuck on ``checking_goal``.
+    """
+
+    if not error_code.startswith("ask_user_blocker"):
+        return None
+    ask_user = _ask_user_action_for_validated_blockers(
+        state,
+        reasoning=(
+            "Backend recovery selected HITL because validated user-only blockers "
+            "are open."
+        ),
+    )
+    if ask_user is not None:
+        return ask_user
+    return _complete_when_agent_results_fulfilled(
+        state,
+        reasoning=(
+            "Backend recovery selected complete because Agent results already "
+            "satisfy the goal and ask_user had no validated blocker."
+        ),
+    )
+
+
+_TERMINAL_INTENT_RECOVERY_CODES = frozenset(
+    {
+        # Planner already tried to end the turn; empty-evidence complete is safe.
+        "completion_evidence_invalid",
+        "platform_answer_instruction_missing",
+    }
+)
+_EXHAUSTED_ONLY_RECOVERY_CODES = frozenset(
+    {
+        # Planner wanted more work; completing early can skip remaining agents.
+        "delegate_goal_already_fulfilled",
+    }
+)
+_FULFILLED_GOAL_RECOVERY_CODES = (
+    _TERMINAL_INTENT_RECOVERY_CODES | _EXHAUSTED_ONLY_RECOVERY_CODES
+)
+
+
+def action_for_fulfilled_goal_recovery(
+    state: OrchestrationRunState,
+    *,
+    error_code: str,
+    exhausted: bool = False,
+) -> PlannerAction | None:
+    """Recover when Agents already fulfilled but the planner cannot terminate.
+
+    After successful Agent work, the planner may invent invalid completion
+    evidence (e.g. ``:text`` facts for artifact-only Agents), re-delegate an
+    already fulfilled goal, or emit ``platform_answer`` without a synthesis
+    instruction. Prefer ``complete`` with empty evidence so Execution can
+    synthesize instead of exhausting retries into ``unable_to_continue``.
+
+    ``delegate_goal_already_fulfilled`` only recovers when ``exhausted`` is true,
+    so a premature re-delegate cannot finalize the run before other Agents run.
+    Termination-intent codes may recover earlier because the planner was already
+    trying to end the turn.
+    """
+
+    if error_code in _EXHAUSTED_ONLY_RECOVERY_CODES and not exhausted:
+        return None
+    if error_code not in _FULFILLED_GOAL_RECOVERY_CODES:
+        return None
+    ask_user = _ask_user_action_for_validated_blockers(
+        state,
+        reasoning=(
+            "Backend recovery selected HITL because validated user-only blockers "
+            "are open."
+        ),
+    )
+    if ask_user is not None:
+        return ask_user
+    return _complete_when_agent_results_fulfilled(
+        state,
+        reasoning=(
+            "Backend recovery selected complete because Agent results already "
+            "satisfy the goal and the planner could not terminate cleanly."
+        ),
+    )
+
+
+def _complete_when_agent_results_fulfilled(
+    state: OrchestrationRunState,
+    *,
+    reasoning: str,
+) -> PlannerAction | None:
+    if not _has_completable_agent_progress(state):
+        return None
+    return PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning=reasoning,
+        completion_evidence=None,
     )
 
 
@@ -146,6 +284,81 @@ def _obligation_matches_blocker_field(
         )
     field_tokens = match_tokens(field_key)
     return bool(field_tokens) and field_tokens <= match_tokens(blocker_field_key)
+
+
+def normalize_independent_parallel_group(action: PlannerAction) -> PlannerAction:
+    """Fill a shared parallel_group for independent multi-target delegates.
+
+    When the planner returns multiple independent targets without a usable shared
+    parallel_group (all omitted/blank, or only one non-blank group among nulls),
+    Execution owns the fanout grouping so the run does not fail on a recoverable
+    schema omission. Conflicting non-empty groups are left for the validator.
+    """
+
+    if action.action != PlannerActionType.DELEGATE or len(action.targets) <= 1:
+        return action
+    if any(target.depends_on for target in action.targets):
+        return action
+
+    groups = {
+        (target.parallel_group or "").strip() or None for target in action.targets
+    }
+    non_null_groups = {group for group in groups if group is not None}
+    if len(non_null_groups) > 1:
+        return action
+    if len(non_null_groups) == 1 and None not in groups:
+        return action
+
+    group_id = next(iter(non_null_groups), f"fanout-{uuid4().hex[:8]}")
+    targets = [
+        target.model_copy(update={"parallel_group": group_id}, deep=True)
+        for target in action.targets
+    ]
+    return action.model_copy(update={"targets": targets}, deep=True)
+
+
+def _is_unenforceable_expected_output(output: DispatchExpectedOutput) -> bool:
+    """Return True when Execution cannot score the contract via artifacts.
+
+    Outcome evaluation only matches owned artifacts for ``kind: artifact``.
+    Other kinds (``text``, ``summary``, ``structured``, custom labels) require
+    semantic facts keyed by ``output_key``, and free-text Agent replies are
+    intentionally excluded from that fact map. Planner-invented non-artifact
+    contracts therefore create permanent ``no_progress`` / blocked completion.
+    """
+
+    kind = (output.kind or "").strip().lower()
+    return kind != _ENFORCEABLE_EXPECTED_OUTPUT_KIND
+
+
+def normalize_prose_expected_outputs(action: PlannerAction) -> PlannerAction:
+    """Drop unenforceable expected_outputs so legacy text scoring applies.
+
+    Keep only ``kind: artifact`` contracts. Clear every other kind so completed
+    non-empty Agent text can fulfill the legacy empty-contract path instead of
+    looping as ``no_progress`` when the planner invents prose or pseudo-
+    structured contracts that Execution cannot score.
+    """
+
+    if action.action != PlannerActionType.DELEGATE:
+        return action
+
+    targets: list[PlannedDelegateTarget] = []
+    changed = False
+    for target in action.targets:
+        kept = [
+            output
+            for output in target.expected_outputs
+            if not _is_unenforceable_expected_output(output)
+        ]
+        if len(kept) == len(target.expected_outputs):
+            targets.append(target)
+            continue
+        changed = True
+        targets.append(target.model_copy(update={"expected_outputs": kept}, deep=True))
+    if not changed:
+        return action
+    return action.model_copy(update={"targets": targets}, deep=True)
 
 
 def normalize_delegate_repair_lineage(
