@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.utils.context_utils import estimate_tokens
+from context_memory.translators import turn_from_dict
 from scripts.migrate_conversation_history import (
     MigrationBlocker,
     audit_collection,
@@ -132,6 +134,7 @@ def compact_turn(
             "collection": "conversation_content",
             "document_id": document_id,
         },
+        "estimated_tokens_compact": 20,
     }
     if brief_summary is not None:
         value["brief_summary"] = brief_summary
@@ -326,6 +329,10 @@ async def test_migration_backfills_reconciled_legacy_direct_and_divergent_compac
         "direct fallback by room and turn",
         "direct winner compact content",
     }
+    migrated_turn = migrated["conversation_history"][0]
+    assert migrated_turn["estimated_tokens_compact"] == estimate_tokens(
+        turn_from_dict(migrated_turn).to_context_string()
+    )
 
     repeated = await run_migration(database, apply=True, batch_size=1)
 
@@ -357,6 +364,11 @@ async def test_migration_uses_bounded_existing_one_liner_when_content_is_missing
     assert len(summary) == 200
     assert summary.startswith("reliable note detail")
     assert summary.endswith("...")
+    migrated_turn = database.collection.documents[0]["conversation_history"][0]
+    assert migrated_turn["estimated_tokens_compact"] == estimate_tokens(
+        turn_from_dict(migrated_turn).to_context_string()
+    )
+    assert migrated_turn["estimated_tokens_compact"] > 20
 
 
 @pytest.mark.asyncio

@@ -2685,8 +2685,8 @@ class RoomMessageCenter:
     async def _log_room_memory_stats(self, room_id: str) -> None:
         """Log room memory stats after processing (debug/monitoring only)."""
         room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
-        if room_memory and room_memory.memory_content:
-            stats = get_context_stats(room_memory.memory_content)
+        if room_memory:
+            stats = get_context_stats(room_memory)
             logger.info(
                 "RoomMessageCenter: Room %s memory - %d turns, summary=%s, chars=%d",
                 room_id,

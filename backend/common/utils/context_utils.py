@@ -20,6 +20,11 @@ class MemoryContentLike(Protocol):
     conversation_history: list[Any]
 
 
+class RoomMemoryLike(Protocol):
+    memory_content: MemoryContentLike | None
+    conversation_history: list[Any]
+
+
 class TurnNotesLLMProvider(Protocol):
     async def generate_structured(
         self,
@@ -462,23 +467,19 @@ def build_minimal_context(
     return "\n".join(parts)
 
 
-def get_context_stats(memory_content: MemoryContentLike) -> dict:
-    """
-    Get statistics about the current context state.
-    Useful for debugging and monitoring.
-
-    Returns:
-        Dict with context statistics
-    """
+def get_context_stats(room_memory: RoomMemoryLike) -> dict:
+    """Get monitoring statistics from canonical room-memory fields."""
     total_chars = 0
     total_tokens = 0
     full_turns = 0
     compact_turns = 0
+    memory_content = room_memory.memory_content
+    summary = memory_content.summary if memory_content else None
 
-    if memory_content.summary:
-        total_chars += len(memory_content.summary)
+    if summary:
+        total_chars += len(summary)
 
-    for turn in memory_content.conversation_history:
+    for turn in room_memory.conversation_history:
         # Check representation if available (new ConversationTurn)
         if hasattr(turn, "representation"):
             if _representation_value(turn.representation) == "full":
@@ -498,11 +499,11 @@ def get_context_stats(memory_content: MemoryContentLike) -> dict:
             total_tokens += turn.estimated_tokens_full
 
     return {
-        "history_turns": len(memory_content.conversation_history),
+        "history_turns": len(room_memory.conversation_history),
         "full_turns": full_turns,
         "compact_turns": compact_turns,
-        "has_summary": bool(memory_content.summary),
-        "summary_length": len(memory_content.summary) if memory_content.summary else 0,
+        "has_summary": bool(summary),
+        "summary_length": len(summary) if summary else 0,
         "total_chars": total_chars,
         "total_tokens": total_tokens,
     }

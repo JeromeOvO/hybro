@@ -18,7 +18,7 @@ import pytest
 
 from common.dto import CompactionResult, MemorySearchResult
 from common.types import MessageRole
-from common.utils.context_utils import estimate_tokens
+from common.utils.context_utils import estimate_tokens, get_context_stats
 from context_memory import search
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import SearchRankingRecord
@@ -65,6 +65,38 @@ def _make_turn(content="Test", role=TurnRole.USER, **kwargs) -> ConversationTurn
     )
     defaults.update(kwargs)
     return ConversationTurn(**defaults)
+
+
+def test_context_stats_use_canonical_history_and_nested_summary_only():
+    summary = "Canonical room summary"
+    canonical_full = _make_turn(content="canonical full", estimated_tokens_full=3)
+    canonical_compact = _make_turn(
+        content=None,
+        representation=TurnRepresentation.COMPACT,
+        brief_summary="canonical compact",
+        estimated_tokens_full=50,
+        estimated_tokens_compact=12,
+    )
+    room_memory = RoomMemory(
+        room_id="room-1",
+        memory_content=MemoryContent(
+            summary=summary,
+            conversation_history=[_make_turn(content="nested history is ignored")],
+        ),
+        conversation_history=[canonical_full, canonical_compact],
+    )
+
+    stats = get_context_stats(room_memory)
+
+    assert stats == {
+        "history_turns": 2,
+        "full_turns": 1,
+        "compact_turns": 1,
+        "has_summary": True,
+        "summary_length": len(summary),
+        "total_chars": len(summary) + len("canonical full"),
+        "total_tokens": 53,
+    }
 
 
 def _pending_compaction_workers() -> list[asyncio.Task]:

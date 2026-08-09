@@ -16,7 +16,10 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from common.config import settings
-from context_memory.compaction import brief_summary_from_content
+from context_memory.compaction import (
+    brief_summary_from_content,
+    estimate_compact_turn_tokens,
+)
 from context_memory.content_storage import is_content_expired
 
 COLLECTION_NAME = "room_memories"
@@ -226,6 +229,7 @@ async def plan_document_with_backfill(
             )
 
         turn["brief_summary"] = brief_summary_from_content(source)
+        turn["estimated_tokens_compact"] = estimate_compact_turn_tokens(turn)
         plan.backfill_count += 1
 
     if plan.backfill_count:

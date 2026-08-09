@@ -248,7 +248,10 @@ async def test_compact_room_memory_preserves_recent_and_stores_content_hash() ->
     )
 
     assert result.compacted_count == 2
-    assert result.tokens_saved == 130
+    assert result.tokens_saved == sum(
+        max(0, full_tokens - entry["estimated_tokens_compact"])
+        for full_tokens, entry in zip((80, 90), repo.compacted_entries, strict=True)
+    )
     assert [entry["turn_id"] for entry in repo.compacted_entries] == ["t1", "t2"]
     assert repo.doc["conversation_history"][2]["representation"] == "full"
     stored = content_repo.docs[make_document_id("r1", "t1")]

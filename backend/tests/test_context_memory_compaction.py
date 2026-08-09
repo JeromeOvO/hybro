@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from common.utils.context_utils import estimate_tokens
 from context_memory import compaction
 from context_memory.config import CompactionConfig
 from context_memory.content_storage import ContentExpiredError, make_document_id
+from context_memory.translators import normalize_room_memory
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -199,7 +201,7 @@ async def test_compact_room_memory_stores_content_and_bounded_brief_summary():
     )
     content_repo = StateContentRepository()
 
-    await compaction.compact_room_memory(
+    result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=content_repo,
         room_id="r1",
@@ -217,6 +219,14 @@ async def test_compact_room_memory_stores_content_and_bounded_brief_summary():
     assert "  " not in summary
     assert len(summary) == compaction.BRIEF_SUMMARY_MAX_CHARS
     assert summary.endswith("...")
+    compacted_turns = normalize_room_memory(repo.doc).conversation_history
+    compact_estimate = compacted_turns[0].estimated_tokens_compact
+    assert compact_estimate == estimate_tokens(compacted_turns[0].to_context_string())
+    assert compact_estimate > 20
+    assert result.tokens_saved == sum(
+        max(0, turn.estimated_tokens_full - turn.estimated_tokens_compact)
+        for turn in compacted_turns
+    )
 
 
 @pytest.mark.asyncio
