@@ -5,12 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.dto import (
-    AssembledContext,
-    CompactionResult,
-    MemorySearchResult,
-    RoomMemoryInfo,
-)
+from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from common.observability import NoopTracingProvider, traced_create_task
 from common.protocols import (
     ContentStorageRepository,
@@ -26,7 +21,7 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
-from context_memory.translators import normalize_room_memory, room_memory_info_from_doc
+from context_memory.translators import normalize_room_memory
 
 logger = get_logger(__name__)
 
@@ -116,10 +111,6 @@ class ContextMemoryFacade:
         metadata = dict(result.metadata)
         metadata.update({"message_id": message_id, "agent_id": agent_id})
         return result.model_copy(update={"metadata": metadata})
-
-    async def get_room_memory(self, room_id: str) -> RoomMemoryInfo | None:
-        doc = await self.memory_repository.get_room_memory(room_id)
-        return room_memory_info_from_doc(doc) if doc else None
 
     async def search_memory(
         self, room_id: str, query: str, limit: int = 10
@@ -230,90 +221,6 @@ class ContextMemoryFacade:
 
     def get_budget_summary(self) -> dict[str, int]:
         return self.token_budget.get_budget_summary()
-
-    async def legacy_create_room_memory(self, memory_doc: dict) -> dict | None:
-        doc = dict(memory_doc)
-        doc.setdefault("memory_id", self.id_factory())
-        await self.memory_repository.create_room_memory(doc)
-        return doc
-
-    async def legacy_get_room_memory_by_room_id(self, room_id: str) -> dict | None:
-        return await self.memory_repository.get_room_memory(room_id)
-
-    async def legacy_get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
-
-    async def legacy_update_room_memory_by_room_id(
-        self, room_id: str, memory_doc: dict
-    ) -> bool:
-        return await self.memory_repository.update_room_memory_by_room_id(
-            room_id, memory_doc
-        )
-
-    async def legacy_update_room_memory_by_memory_id(
-        self, memory_id: str, memory_doc: dict
-    ) -> bool:
-        return await self.memory_repository.update_room_memory_by_memory_id(
-            memory_id, memory_doc
-        )
-
-    async def legacy_delete_room_memory_by_room_id(self, room_id: str) -> bool:
-        return await self.delete_room_memory(room_id)
-
-    async def legacy_delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        doc = await self.memory_repository.get_room_memory_by_memory_id(memory_id)
-        if not doc:
-            return False
-        room_id = doc.get("room_id")
-        if not room_id:
-            return False
-        return await self.delete_room_memory(room_id)
-
-    async def initialize_or_update_room_memory(
-        self,
-        room_id: str,
-        *,
-        memory_content: str | None,
-        room_agent_set: dict | None,
-        user_id: str | None,
-        attachments: list | None = None,
-        message_id: str | None = None,
-    ) -> dict | None:
-        return await projection.initialize_or_update_room_memory(
-            repository=self.memory_repository,
-            room_id=room_id,
-            memory_content=memory_content,
-            room_agent_set=room_agent_set,
-            user_id=user_id,
-            attachments=attachments,
-            id_factory=self.id_factory,
-            now=self.now,
-            message_id=message_id,
-        )
-
-    async def add_agent_response_to_memory(
-        self,
-        room_id: str,
-        agent_id: str,
-        agent_name: str,
-        response_text: str,
-        was_successful: bool = True,
-        message_id: str | None = None,
-    ) -> tuple[bool, bool]:
-        return await projection.add_agent_response_to_memory(
-            repository=self.memory_repository,
-            room_id=room_id,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            response_text=response_text,
-            was_successful=was_successful,
-            id_factory=self.id_factory,
-            now=self.now,
-            llm_provider=self.llm_provider,
-            llm_config=self.llm_config,
-            background_task_runner=self.background_task_runner,
-            message_id=message_id,
-        )
 
     async def add_synthesis_to_history(
         self, room_id: str, synthesis_text: str, trajectory: Any | None = None

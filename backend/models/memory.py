@@ -12,7 +12,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
-from common.utils.context_utils import bind_context_turn_factory
 from common.utils.time import utcnow
 from models.compaction import ContentReference
 
@@ -175,9 +174,6 @@ class ConversationTurn(BaseModel):
         elif self.role == TurnRole.SUPERVISOR:
             return "Supervisor"
         return "Unknown"
-
-
-bind_context_turn_factory(ConversationTurn)
 
 
 class RoomSummary(BaseModel):

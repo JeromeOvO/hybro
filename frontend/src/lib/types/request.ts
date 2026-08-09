@@ -263,49 +263,6 @@ export interface RoomCenterAgentMessageRequest {
   } | null;
   message?: RoomAgentMessage | null;
 }
-export interface RoomCenterMemoryRequest {
-  room_id?: string | null;
-  memory_id?: string | null;
-  memory_content?: string | null;
-  memory_created_at?: string | null;
-  extend_info?: {
-    [k: string]: unknown;
-  } | null;
-  memory?: RoomMemory | null;
-  room_agent_set?: {
-    [k: string]: string;
-  } | null;
-  user_id?: string | null;
-}
-export interface RoomMemory {
-  room_id: string;
-  memory_id: string;
-  memory_content?: MemoryContent;
-  memory_created_at?: string;
-  extend_info?: unknown;
-}
-/**
- * Room conversation memory with structured history.
- * Similar to ChatGPT/Claude conversation context management.
- */
-export interface MemoryContent {
-  summary?: string | null;
-  conversation_history?: ConversationTurn[];
-  [k: string]: unknown;
-}
-/**
- * A single turn in the conversation (ChatGPT/Claude style).
- * Represents either a user message or an agent response.
- */
-export interface ConversationTurn {
-  role: "user" | "agent";
-  content: string;
-  agent_id?: string | null;
-  agent_name?: string | null;
-  user_id?: string | null;
-  timestamp?: string;
-  [k: string]: unknown;
-}
 export interface RoomCenterRoomMessageRequest {
   room_id?: string | null;
   limit?: number | null;

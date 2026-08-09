@@ -276,24 +276,6 @@ export interface RoomCenterAgentMessageResponse {
   error?: string | null;
   status_code?: number;
 }
-export interface RoomCenterMemoryResponse {
-  room_id?: string | null;
-  memory_id?: string | null;
-  memory?: RoomMemory | null;
-  success: boolean;
-  error?: string | null;
-  status_code?: number;
-}
-export interface RoomMemory {
-  room_id: string;
-  memory_id: string;
-  memory_content: MemoryContent;
-  memory_created_at?: string;
-  extend_info?: unknown;
-}
-export interface MemoryContent {
-  [k: string]: unknown;
-}
 export interface RoomCenterRoomMessageResponse {
   room_id?: string | null;
   message_list?: RoomMessage[] | null;

@@ -13,7 +13,6 @@ from common.dto.context_memory import (
     CompactionResult,
     ContextBlock,
     MemorySearchResult,
-    RoomMemoryInfo,
 )
 from common.dto.dal import (
     PaginationParams,
@@ -213,7 +212,6 @@ __all__ = [
     "RoomInfo",
     "RoomMemoryGenerationInput",
     "RoomMembership",
-    "RoomMemoryInfo",
     "RoomMessageSummary",
     "RoomMessageInfo",
     "RoomSummary",

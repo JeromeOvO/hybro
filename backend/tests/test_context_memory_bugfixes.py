@@ -5,7 +5,6 @@ Covers:
 - CompactionSweep: fail-closed safety gate and worker lifecycle
 - extract_turn_notes_llm: LLM path and heuristic fallback
 - Memory search result hydration: _hydrate_results_from_storage
-- was_successful propagation through add_turn_to_history
 
 See docs/System-Architecture.md for the current design.
 """
@@ -19,10 +18,7 @@ import pytest
 
 from common.dto import CompactionResult, MemorySearchResult
 from common.types import MessageRole
-from common.utils.context_utils import (
-    add_turn_to_history,
-    estimate_tokens,
-)
+from common.utils.context_utils import estimate_tokens
 from context_memory import search
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import SearchRankingRecord
@@ -498,51 +494,6 @@ class TestMemorySearchHydration:
         )
 
         assert ranked[0].content == "Already has content"
-
-
-# =============================================================================
-# was_successful Propagation Tests
-# =============================================================================
-
-
-class TestWasSuccessfulPropagation:
-    """Tests that was_successful is correctly stored on ConversationTurn."""
-
-    def test_add_turn_to_history_preserves_was_successful_true(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.AGENT,
-            content="Agent completed the task successfully.",
-            agent_id="agent_1",
-            agent_name="TestAgent",
-            was_successful=True,
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is True
-
-    def test_add_turn_to_history_preserves_was_successful_false(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.AGENT,
-            content="Agent failed to complete the task.",
-            agent_id="agent_1",
-            agent_name="TestAgent",
-            was_successful=False,
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is False
-
-    def test_add_turn_to_history_defaults_was_successful_to_none(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.USER,
-            content="User message",
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is None
 
 
 # =============================================================================

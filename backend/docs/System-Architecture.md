@@ -751,8 +751,22 @@ The following ContextMemory-era surfaces are retired and must not be rewired:
   access to `chat_contexts`;
 - the ContextMemory compatibility runtime, compatibility/legacy assembly service,
   and ContextMemory-specific room-memory adapter;
+- the facade room-memory CRUD aliases, memory-id repository lookups/mutations,
+  direct initialize/agent-response write shims, and the orphaned room-memory
+  request/response DTOs and generated frontend types;
+- the unused `common.utils.context_utils` history mutation and legacy agent-context
+  assembly helpers;
 - usage tracking formerly attached to that compatibility runtime as a pseudo-
   memory dependency.
+
+This is a repository-internal cleanup, not a compatibility promise for external
+Python consumers. Code importing the removed facade methods, DTOs, model classes,
+or utility functions will fail and must migrate to the narrow public ports and
+canonical event projection/assembly flow. No active in-repository REST or frontend
+call depended on those Python surfaces. The narrow `build_minimal_context` helper
+remains because `room.compat.runtime` still calls it in the production fast-routing
+path; canonical ContextMemory assembly, projection, compaction, cleanup,
+`create_room_memory`, and `ensure_room_memory` remain supported.
 
 The generic `extend_info` fields on active Room and message models remain supported
 metadata containers. They are unrelated to ChatContext compatibility and are not

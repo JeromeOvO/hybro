@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, field_validator
 from common.a2a_constants import CommonTaskState
 from common.types import AgentCard
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
-from models.memory import RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 
 T = TypeVar("T")
@@ -229,15 +228,6 @@ class RoomCenterAgentMessageResponse(BaseModel):
     a2a_response: Any | None = None
     a2a_message: Any | None = None
     message_list: list[RoomAgentMessage] | None = None
-    success: bool
-    error: str | None = None
-    status_code: int = 200
-
-
-class RoomCenterMemoryResponse(BaseModel):
-    room_id: str | None = None
-    memory_id: str | None = None
-    memory: RoomMemory | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

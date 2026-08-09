@@ -13,7 +13,6 @@ from context_memory.config import (
 )
 from context_memory.facade import ContextMemoryFacade
 from context_memory.projection import new_room_memory_doc
-from context_memory.translators import room_memory_info_from_doc
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -28,7 +27,6 @@ class StateMemoryRepository:
         self.fail_delete = fail_delete
         self.deleted = []
         self.created = []
-        self.updated = []
         self.compacted = []
 
     async def get_room_memory(self, room_id: str) -> dict | None:
@@ -54,30 +52,6 @@ class StateMemoryRepository:
         if self.doc is None:
             self.doc = defaults
         return self.doc
-
-    async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return self.doc if self.doc and self.doc.get("memory_id") == memory_id else None
-
-    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
-        self.updated.append((room_id, updates))
-        if self.doc and self.doc["room_id"] == room_id:
-            self.doc.update(updates)
-            return True
-        return False
-
-    async def update_room_memory_by_memory_id(
-        self, memory_id: str, updates: dict
-    ) -> bool:
-        if self.doc and self.doc["memory_id"] == memory_id:
-            self.doc.update(updates)
-            return True
-        return False
-
-    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        if self.doc and self.doc["memory_id"] == memory_id:
-            self.doc = None
-            return True
-        return False
 
     async def push_and_trim_conversation_turn(self, room_id: str, turn: dict, **kwargs):
         if not self.doc:
@@ -404,37 +378,6 @@ async def test_facade_assemble_context_rejects_budget_below_fixed_reserve():
 
 
 @pytest.mark.asyncio
-async def test_facade_get_room_memory():
-    info = await facade(
-        memory_repo=StateMemoryRepository(existing_doc())
-    ).get_room_memory("r1")
-
-    assert info.room_id == "r1"
-    assert info.memory_id == "m1"
-    assert "Summary: Finish tests" in info.content
-
-
-def test_room_memory_info_estimates_legacy_full_turn_tokens():
-    info = room_memory_info_from_doc(
-        {
-            "room_id": "r1",
-            "memory_id": "m1",
-            "conversation_history": [
-                {
-                    "turn_id": "t1",
-                    "role": "user",
-                    "representation": "full",
-                    "content": "legacy content with missing token estimate",
-                    "estimated_tokens_full": 0,
-                }
-            ],
-        }
-    )
-
-    assert info.token_count > 0
-
-
-@pytest.mark.asyncio
 async def test_facade_search_memory():
     results = await facade(content_repo=StateContentRepository()).search_memory(
         "r1", "matched"
@@ -533,56 +476,6 @@ async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fa
 
 
 @pytest.mark.asyncio
-async def test_facade_legacy_delete_memory_id_uses_canonical_room_cleanup():
-    repo = StateMemoryRepository(existing_doc())
-    content_repo = StateContentRepository()
-    await content_repo.upsert_full_content(
-        room_id="r1",
-        turn_id="t1",
-        document_id="doc1",
-        content="full content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-        turn_notes={},
-    )
-
-    ok = await facade(
-        memory_repo=repo,
-        content_repo=content_repo,
-    ).legacy_delete_room_memory_by_memory_id("m1")
-
-    assert ok is True
-    assert repo.deleted == ["r1"]
-    assert content_repo.docs == {}
-
-
-@pytest.mark.asyncio
-async def test_facade_legacy_delete_room_id_uses_canonical_room_cleanup():
-    repo = StateMemoryRepository(existing_doc())
-    content_repo = StateContentRepository()
-    await content_repo.upsert_full_content(
-        room_id="r1",
-        turn_id="t1",
-        document_id="doc1",
-        content="full content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-        turn_notes={},
-    )
-
-    ok = await facade(
-        memory_repo=repo,
-        content_repo=content_repo,
-    ).legacy_delete_room_memory_by_room_id("r1")
-
-    assert ok is True
-    assert repo.deleted == ["r1"]
-    assert content_repo.docs == {}
-
-
-@pytest.mark.asyncio
 async def test_facade_project_message():
     repo = StateMemoryRepository(existing_doc())
     service = facade(
@@ -668,25 +561,3 @@ async def test_facade_update_room_summary_logs_persistence_failure(caplog):
 
     assert result is False
     assert "Failed to persist room summary" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_facade_legacy_crud_helpers():
-    repo = StateMemoryRepository()
-    service = facade(memory_repo=repo)
-
-    created = await service.legacy_create_room_memory({"room_id": "r1"})
-    fetched = await service.legacy_get_room_memory_by_room_id("r1")
-    updated = await service.legacy_update_room_memory_by_room_id(
-        "r1", {"extra": "value"}
-    )
-    updated_by_memory_id = await service.legacy_update_room_memory_by_memory_id(
-        created["memory_id"],
-        {"extra": "by-memory-id"},
-    )
-
-    assert created["memory_id"] == "id-1"
-    assert fetched["room_id"] == "r1"
-    assert updated is True
-    assert updated_by_memory_id is True
-    assert repo.doc["extra"] == "by-memory-id"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from common.dto import (
@@ -8,9 +7,7 @@ from common.dto import (
     CompactionResult,
     ContextBlock,
     MemorySearchResult,
-    RoomMemoryInfo,
 )
-from common.utils.context_utils import estimate_tokens
 from context_memory.models import (
     AssemblyResult,
     ContentReferenceData,
@@ -164,48 +161,6 @@ def assemble_context_dto(
     )
 
 
-def room_memory_info_from_doc(doc: dict[str, Any]) -> RoomMemoryInfo:
-    state = normalize_room_memory(doc)
-    return RoomMemoryInfo(
-        room_id=state.room_id,
-        memory_id=state.memory_id,
-        content=render_room_memory_content(state),
-        created_at=_maybe_datetime(state.memory_created_at),
-        updated_at=_maybe_datetime(state.last_activity_at),
-        token_count=sum(_turn_token_count(turn) for turn in state.conversation_history),
-    )
-
-
-def _turn_token_count(turn: ConversationTurnData) -> int:
-    if turn.representation != "full":
-        return turn.estimated_tokens_compact
-    if turn.estimated_tokens_full:
-        return turn.estimated_tokens_full
-    return estimate_tokens(turn.content or "")
-
-
-def render_room_memory_content(state: RoomMemoryState) -> str:
-    parts: list[str] = []
-    summary = state.room_summary.current_goal or state.summary
-    if summary:
-        parts.append(f"Summary: {summary}")
-    one_liners = [
-        str(turn.turn_notes.get("one_liner"))
-        for turn in state.conversation_history[-3:]
-        if isinstance(turn.turn_notes, dict) and turn.turn_notes.get("one_liner")
-    ]
-    if one_liners:
-        parts.append(f"Recent Turns: {'; '.join(one_liners)}")
-    facts = sorted(
-        str(fact.get("content"))
-        for fact in state.room_facts
-        if isinstance(fact, dict) and fact.get("content")
-    )
-    if facts:
-        parts.append(f"Facts: {'; '.join(facts)}")
-    return "\n".join(parts)
-
-
 def search_result_from_record(
     *,
     room_id: str,
@@ -242,14 +197,3 @@ def compaction_result_dto(
         memory_id=memory_id,
         metadata=metadata or {},
     )
-
-
-def _maybe_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    return None

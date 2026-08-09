@@ -215,40 +215,6 @@ async def test_upsert_room_memory_insert_has_no_mongo_path_conflicts(memory_repo
 
 
 @pytest.mark.asyncio
-async def test_update_room_memory_by_room_id_returns_true_for_idempotent_match(
-    memory_repo,
-):
-    await memory_repo.create_room_memory(
-        {"room_id": "r1", "memory_id": "m1", "status": "same"}
-    )
-
-    ok = await memory_repo.update_room_memory_by_room_id("r1", {"status": "same"})
-
-    assert ok is True
-
-
-@pytest.mark.asyncio
-async def test_update_room_memory_by_room_id_does_not_mutate_identity_fields(
-    memory_repo,
-):
-    await memory_repo.create_room_memory(
-        {"room_id": "r1", "memory_id": "m1", "status": "old"}
-    )
-
-    ok = await memory_repo.update_room_memory_by_room_id(
-        "r1",
-        {"room_id": "r2", "memory_id": "m2", "_id": "changed", "status": "new"},
-    )
-
-    doc = await memory_repo.get_room_memory("r1")
-    assert ok is True
-    assert doc["room_id"] == "r1"
-    assert doc["memory_id"] == "m1"
-    assert doc["status"] == "new"
-    assert await memory_repo.get_room_memory("r2") is None
-
-
-@pytest.mark.asyncio
 async def test_push_and_trim_conversation_turn_appends_only_top_level(memory_repo):
     await memory_repo.create_room_memory(
         {

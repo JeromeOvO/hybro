@@ -7,11 +7,10 @@ See docs/System-Architecture.md for design details.
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 
 from common.dto import LLMStructuredResponse
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 
@@ -19,9 +18,6 @@ logger = get_logger(__name__)
 class MemoryContentLike(Protocol):
     summary: str | None
     conversation_history: list[Any]
-
-
-TMemoryContent = TypeVar("TMemoryContent", bound=MemoryContentLike)
 
 
 class TurnNotesLLMProvider(Protocol):
@@ -37,44 +33,12 @@ class TurnNotesLLMProvider(Protocol):
     ) -> LLMStructuredResponse | dict[str, Any]: ...
 
 
-class ContextTurn(Protocol):
-    def to_context_string(self) -> str: ...
-
-
-class ContextTurnFactory(Protocol):
-    def __call__(
-        self,
-        *,
-        role: str,
-        content: str,
-        agent_id: str | None = None,
-        agent_name: str | None = None,
-        user_id: str | None = None,
-        timestamp: Any,
-        content_type: str,
-        turn_type: str,
-        estimated_tokens_full: int,
-        turn_notes: dict | None,
-        was_successful: bool | None = None,
-    ) -> ContextTurn: ...
-
-
-context_turn_factory: ContextTurnFactory | None = None
-
-
-def bind_context_turn_factory(factory: ContextTurnFactory) -> None:
-    global context_turn_factory
-
-    context_turn_factory = factory
-
-
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
 MAX_CONTEXT_CHARS = (
     500_000  # Safety net for char-level truncation; token budget is the real limiter
 )
 MAX_SUMMARY_CHARS = 4000  # Cap for MemoryContent.summary to prevent unbounded growth
-SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
 
 # Token estimation constants
 CHARS_PER_TOKEN_ESTIMATE = 4  # Approximate chars per token for English text
@@ -445,106 +409,6 @@ def extract_mentioned_agent_ids(text: str) -> list[str]:
     return re.findall(pattern, text)
 
 
-def add_turn_to_history(
-    memory_content: TMemoryContent,
-    role: str | Any,
-    content: str,
-    agent_id: str | None = None,
-    agent_name: str | None = None,
-    user_id: str | None = None,
-    content_type: str | Any = "text",
-    turn_type: str | Any = "message",
-    was_successful: bool | None = None,
-) -> TMemoryContent:
-    """
-    Add a conversation turn to history and manage window size.
-
-    This implements a sliding window approach:
-    - Keeps the most recent MAX_HISTORY_TURNS turns in full
-    - Older turns are summarized and moved to the summary field
-
-    IMPORTANT: This function now populates estimated_tokens_full and turn_notes
-    at turn creation time, as documented in docs/System-Architecture.md.
-
-    Args:
-        memory_content: The MemoryContent to update
-        role: TurnRole enum or string ("user", "agent", "supervisor")
-        content: The message content (should be pre-cleaned)
-        agent_id: Agent ID (for agent/supervisor messages)
-        agent_name: Agent name (for agent/supervisor messages)
-        user_id: User ID (for user messages)
-        content_type: ContentType enum or string ("text", "tool_result", "agent_response")
-        turn_type: TurnType enum or string ("message", "hitl_question", "hitl_reply")
-        was_successful: Success flag for learning from failures (§2.1 Principle 4)
-
-    Returns:
-        Updated MemoryContent
-    """
-    # Estimate tokens for the content (REQUIRED - never leave at 0)
-    tokens_full = estimate_tokens(content)
-
-    # Extract turn notes for richer retrieval (heuristic for now)
-    notes = extract_turn_notes(content)
-
-    turn_cls = _require_context_turn_factory()
-    turn = turn_cls(
-        role=_value(role),
-        content=content,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        user_id=user_id,
-        timestamp=utcnow(),
-        content_type=_value(content_type),
-        turn_type=_value(turn_type),
-        estimated_tokens_full=tokens_full,
-        turn_notes=notes,
-        was_successful=was_successful,
-    )
-
-    memory_content.conversation_history.append(turn)
-
-    # Check if we need to trim the window
-    if len(memory_content.conversation_history) > MAX_HISTORY_TURNS:
-        # Calculate how many turns to move to summary
-        excess_count = len(memory_content.conversation_history) - MAX_HISTORY_TURNS
-        excess_turns = memory_content.conversation_history[:excess_count]
-
-        # Keep only the recent turns
-        memory_content.conversation_history = memory_content.conversation_history[
-            excess_count:
-        ]
-
-        # Add excess turns to summary
-        summary_addition = _format_turns_for_summary(excess_turns)
-        if memory_content.summary:
-            memory_content.summary = f"{memory_content.summary}\n{summary_addition}"
-        else:
-            memory_content.summary = summary_addition
-
-        # Cap summary to prevent unbounded growth; oldest content is trimmed
-        # first because compacted turns remain searchable in MongoDB.
-        if len(memory_content.summary) > MAX_SUMMARY_CHARS:
-            memory_content.summary = (
-                "..."
-                + memory_content.summary[
-                    len(memory_content.summary) - MAX_SUMMARY_CHARS + 3 :
-                ]
-            )
-
-        logger.debug(
-            f"Moved {excess_count} turns to summary, history now has "
-            f"{len(memory_content.conversation_history)} turns"
-        )
-
-    return memory_content
-
-
-def _require_context_turn_factory() -> ContextTurnFactory:
-    if context_turn_factory is None:
-        raise RuntimeError("Context turn factory has not been bound")
-    return context_turn_factory
-
-
 def _value(value: Any) -> Any:
     return getattr(value, "value", value)
 
@@ -566,197 +430,6 @@ def _render_turn_for_context(turn: Any) -> str:
     speaker = getattr(turn, "agent_name", None) or "Agent"
     content = getattr(turn, "content", None) or "[content unavailable]"
     return f"{speaker}: {content}"
-
-
-def _format_turns_for_summary(turns: list[Any]) -> str:
-    """Format conversation turns for summary storage.
-
-    Uses to_context_string() so that compact turns render their
-    brief_summary + pointer instead of "[content unavailable]".
-    """
-    parts = []
-    for turn in turns:
-        rendered = _render_turn_for_context(turn)
-        preview = (
-            rendered[:SUMMARY_PREVIEW_LENGTH] + "..."
-            if len(rendered) > SUMMARY_PREVIEW_LENGTH
-            else rendered
-        )
-        parts.append(preview)
-    return "\n".join(parts)
-
-
-def build_context_for_agent(
-    memory_content: MemoryContentLike,
-    current_task: str,
-    agent_name: str | None = None,
-    include_system_instruction: bool = True,
-    quoted_text: str | None = None,
-    room_awareness: str | None = None,
-    agent_task: str | None = None,
-    max_tokens: int | None = None,
-) -> str:
-    """
-    DEPRECATED: Use context_memory.assembly for budget-aware assembly instead.
-    This function is kept only as a fallback and will be removed in a future release.
-
-    Build context string for an agent request (ChatGPT/Claude style).
-
-    This creates a clean conversation context that:
-    1. Shows summarized older context if available
-    2. Lists recent conversation turns clearly (using to_context_string for compact support)
-    3. Presents quoted context (if the user quoted a specific message)
-    4. Presents the current task/request
-    5. Optionally adds room awareness (other agents in the team)
-    6. Optionally adds agent-specific instructions
-
-    IMPORTANT: This function enforces MAX_CONTEXT_CHARS.
-
-    For budget-aware context assembly with KV-cache optimization, use the
-    core context-memory assembly implementation instead.
-
-    Args:
-        memory_content: The room's MemoryContent with conversation history
-        current_task: The current user request/task
-        agent_name: Name of the agent receiving context (for personalization)
-        include_system_instruction: Whether to add agent instructions at the end
-        quoted_text: Text the user highlighted and quoted from a previous message
-        room_awareness: Optional room context describing other agents and this agent's role
-        max_tokens: Optional token limit (defaults to MAX_CONTEXT_CHARS / 4)
-
-    Returns:
-        Formatted context string ready to send to agent
-    """
-    parts = []
-    total_tokens = 0
-
-    # Calculate effective token limit
-    effective_max_tokens = max_tokens or (MAX_CONTEXT_CHARS // CHARS_PER_TOKEN_ESTIMATE)
-
-    # 1. Include summary of older context if exists
-    if memory_content.summary and memory_content.summary.strip():
-        summary_tokens = estimate_tokens(memory_content.summary)
-        if total_tokens + summary_tokens < effective_max_tokens:
-            parts.append("[Earlier conversation summary]")
-            parts.append(memory_content.summary.strip())
-            parts.append("")  # Empty line for separation
-            total_tokens += summary_tokens
-
-    # 2. Include recent conversation history (with truncation if needed)
-    if memory_content.conversation_history:
-        history_parts = ["[Recent conversation]"]
-        history_tokens = estimate_tokens("[Recent conversation]\n")
-
-        # Process turns from oldest to newest, but we'll reverse selection
-        turns_to_include = []
-        for turn in reversed(memory_content.conversation_history):
-            turn_str = _render_turn_for_context(turn)
-
-            turn_tokens = estimate_tokens(turn_str)
-
-            # Check if adding this turn would exceed history budget (60% per §5.2)
-            # Use 0.6 to match conversation_history_pct in TokenBudget
-            if total_tokens + history_tokens + turn_tokens < effective_max_tokens * 0.6:
-                turns_to_include.insert(0, turn_str)
-                history_tokens += turn_tokens
-            else:
-                # Budget exceeded, stop adding older turns
-                break
-
-        if turns_to_include:
-            history_parts.extend(turns_to_include)
-            history_parts.append("")  # Empty line before current task
-            parts.extend(history_parts)
-            total_tokens += history_tokens
-
-    # 3. Quoted context (user highlighted specific text from a previous message)
-    if quoted_text:
-        qt = quoted_text.strip()
-        if "\n---\n" in qt:
-            quoted_section = f"[Quoted context]\n{qt}"
-        else:
-            quoted_section = (
-                "[Quoted context]\n"
-                "The user is referencing the following specific content:\n"
-                f'"{qt}"'
-            )
-        quoted_tokens = estimate_tokens(quoted_section)
-        if total_tokens + quoted_tokens < effective_max_tokens:
-            parts.append("[Quoted context]")
-            if "\n---\n" in qt:
-                parts.append(qt)
-            else:
-                parts.append("The user is referencing the following specific content:")
-                parts.append(f'"{qt}"')
-            parts.append("")
-            total_tokens += quoted_tokens
-
-    # 4. Room awareness (other agents in the team and this agent's role)
-    if room_awareness:
-        awareness_tokens = estimate_tokens(room_awareness)
-        if total_tokens + awareness_tokens < effective_max_tokens:
-            parts.append(room_awareness)
-            parts.append("")
-            total_tokens += awareness_tokens
-
-    # 5. Current task/request (always included)
-    task_section = f"[Current request]\nUser: {current_task}"
-    task_tokens = estimate_tokens(task_section)
-    parts.append("[Current request]")
-    parts.append(f"User: {current_task}")
-    total_tokens += task_tokens
-
-    if agent_task and agent_task.strip():
-        ts = f"\n[Task]\n{agent_task.strip()}"
-        tt = estimate_tokens(ts)
-        if total_tokens + tt < effective_max_tokens:
-            parts.append("")
-            parts.append("[Task]")
-            parts.append(agent_task.strip())
-            total_tokens += tt
-
-    # 6. Agent instruction (optional)
-    if include_system_instruction and agent_name:
-        instruction = (
-            f"You are {agent_name}. Execute the current request above and provide concrete results. "
-            "Do NOT just describe or plan what should be done - actually complete the task and deliver the output. "
-            "Use the conversation context if relevant."
-        )
-        if quoted_text:
-            instruction += (
-                " Pay special attention to the quoted context — "
-                "the user is asking about or responding to that specific content."
-            )
-        instruction_tokens = estimate_tokens(instruction)
-        if total_tokens + instruction_tokens < effective_max_tokens:
-            parts.append("")
-            parts.append(instruction)
-            total_tokens += instruction_tokens
-
-    # Log context occupancy (§15 requirement)
-    occupancy_pct = (total_tokens / effective_max_tokens) * 100
-    if occupancy_pct > 85:
-        logger.warning(
-            f"Context occupancy HIGH: {occupancy_pct:.1f}% "
-            f"({total_tokens}/{effective_max_tokens} tokens)"
-        )
-    else:
-        logger.debug(
-            f"Context occupancy: {occupancy_pct:.1f}% "
-            f"({total_tokens}/{effective_max_tokens} tokens)"
-        )
-
-    result = "\n".join(parts)
-
-    # Hard cap: enforce MAX_CONTEXT_CHARS as safety net (§17.2)
-    if len(result) > MAX_CONTEXT_CHARS:
-        result = result[:MAX_CONTEXT_CHARS] + "\n... [context truncated]"
-        logger.warning(
-            f"Context char-limit truncation [legacy build_context_for_agent]: "
-            f"exceeded MAX_CONTEXT_CHARS={MAX_CONTEXT_CHARS}"
-        )
-
-    return result
 
 
 def build_minimal_context(

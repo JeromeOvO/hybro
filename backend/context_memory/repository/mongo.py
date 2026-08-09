@@ -62,30 +62,6 @@ class MemoryMongoRepository:
             doc = await self.get_room_memory(room_id)
         return doc or defaults
 
-    async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return await self._memories.find_one({"memory_id": memory_id})
-
-    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
-        doc = await self._memories.find_one_and_update(
-            {"room_id": room_id},
-            {"$set": _sanitize_update(updates)},
-            return_document=True,
-        )
-        return doc is not None
-
-    async def update_room_memory_by_memory_id(
-        self, memory_id: str, updates: dict
-    ) -> bool:
-        doc = await self._memories.find_one_and_update(
-            {"memory_id": memory_id},
-            {"$set": _sanitize_update(updates)},
-            return_document=True,
-        )
-        return doc is not None
-
-    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        return await self._memories.delete_one({"memory_id": memory_id})
-
     async def push_and_trim_conversation_turn(
         self,
         room_id: str,

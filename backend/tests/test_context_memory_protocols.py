@@ -41,20 +41,6 @@ class FakeMemoryRepository:
     async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
         return {"room_id": room_id, **defaults}
 
-    async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return None
-
-    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
-        return True
-
-    async def update_room_memory_by_memory_id(
-        self, memory_id: str, updates: dict
-    ) -> bool:
-        return True
-
-    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        return True
-
     async def push_and_trim_conversation_turn(
         self,
         room_id: str,
@@ -241,6 +227,20 @@ def test_retired_context_memory_residue_does_not_return():
         "/memoryCenter/updateChatContextBySessionId",
         "/memoryCenter/deleteChatContextBySessionId",
         "legacy_search",
+        "legacy_create_room_memory",
+        "legacy_get_room_memory_by_room_id",
+        "legacy_get_room_memory_by_memory_id",
+        "legacy_update_room_memory_by_room_id",
+        "legacy_update_room_memory_by_memory_id",
+        "legacy_delete_room_memory_by_room_id",
+        "legacy_delete_room_memory_by_memory_id",
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+        "RoomCenterMemoryRequest",
+        "RoomCenterMemoryResponse",
+        "RoomMemoryInfo",
+        "add_turn_to_history",
+        "build_context_for_agent",
         "context_memory.compat",
         "context_memory.legacy_assembly",
         "context_memory_legacy_json_model",
@@ -264,9 +264,21 @@ def test_retired_context_memory_residue_does_not_return():
     retired_paths = {
         Path("context_memory/compat"),
         Path("context_memory/legacy_assembly.py"),
+        Path("context_memory/protocols.py"),
         Path("api_gateway/routes/memory_routes.py"),
     }
     violations.extend(str(path) for path in retired_paths if path.exists())
+
+    frontend_types = Path(__file__).resolve().parents[2] / "frontend/src/lib/types"
+    for path in (
+        frontend_types / "request.ts",
+        frontend_types / "response.ts",
+        frontend_types / "index.ts",
+    ):
+        source = path.read_text()
+        for residue in retired_text:
+            if residue in source:
+                violations.append(f"{path}:{residue}")
 
     # extend_info is active generic room/message metadata, not ChatContext residue.
     assert "extend_info" not in retired_text
@@ -548,15 +560,6 @@ def test_context_memory_import_boundary():
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
         f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
-            "legacy_create_room_memory",
-            "legacy_get_room_memory_by_room_id",
-            "legacy_get_room_memory_by_memory_id",
-            "legacy_update_room_memory_by_room_id",
-            "legacy_update_room_memory_by_memory_id",
-            "legacy_delete_room_memory_by_room_id",
-            "legacy_delete_room_memory_by_memory_id",
-            "initialize_or_update_room_memory",
-            "add_agent_response_to_memory",
             "add_synthesis_to_history",
             "update_room_summary",
         },

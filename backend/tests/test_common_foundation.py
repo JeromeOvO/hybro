@@ -101,9 +101,6 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
         Path("common/utils/a2a_helpers.py"): {
             "a2a_artifact_storage": "A2AArtifactFiles | None"
         },
-        Path("common/utils/context_utils.py"): {
-            "context_turn_factory": "ContextTurnFactory | None"
-        },
     }
     violations: list[str] = []
 
@@ -1130,10 +1127,6 @@ def test_protocol_methods_match_design_doc():
             "delete_room_memory",
             "create_room_memory",
             "ensure_room_memory",
-            "get_room_memory_by_memory_id",
-            "update_room_memory_by_room_id",
-            "update_room_memory_by_memory_id",
-            "delete_room_memory_by_memory_id",
             "push_and_trim_conversation_turn",
             "push_and_trim_conversation_turn_if_absent",
             "update_turn_notes",

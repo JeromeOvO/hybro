@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 
 from pydantic import Field
@@ -41,19 +40,9 @@ class MemorySearchResult(FrozenDTO):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class RoomMemoryInfo(FrozenDTO):
-    room_id: str
-    memory_id: str
-    content: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    token_count: int | None = None
-
-
 __all__ = [
     "AssembledContext",
     "CompactionResult",
     "ContextBlock",
     "MemorySearchResult",
-    "RoomMemoryInfo",
 ]

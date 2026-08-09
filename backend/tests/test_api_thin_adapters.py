@@ -1513,7 +1513,6 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
 def test_route_protocols_do_not_expose_broad_annotations():
     import agent.protocols as agent_protocols
-    import context_memory.protocols as memory_protocols
     import room.protocols as room_protocols
     from agent.protocols import AgentGroupStoreCompatibility
     from common.protocols import (
@@ -1525,7 +1524,7 @@ def test_route_protocols_do_not_expose_broad_annotations():
 
     protocols = [
         getattr(module, name)
-        for module in (agent_protocols, memory_protocols, room_protocols)
+        for module in (agent_protocols, room_protocols)
         for name in module.__all__
         if isinstance(getattr(module, name, None), type)
     ]
@@ -1608,7 +1607,6 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
 def test_route_protocols_have_single_runtime_marker():
     for path in (
         Path("agent/protocols.py"),
-        Path("context_memory/protocols.py"),
         Path("room/protocols.py"),
     ):
         source = path.read_text()
