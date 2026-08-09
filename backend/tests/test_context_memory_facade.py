@@ -423,16 +423,8 @@ async def test_facade_search_memory():
     assert results[0].metadata["turn_id"] == "t1"
 
 
-@pytest.mark.asyncio
-async def test_facade_legacy_search_limit_zero_returns_no_results():
-    response = await facade(content_repo=StateContentRepository()).legacy_search(
-        "matched",
-        "r1",
-        limit=0,
-    )
-
-    assert response["results"] == []
-    assert response["total_matches"] == 0
+def test_facade_does_not_expose_legacy_search():
+    assert not hasattr(facade(content_repo=StateContentRepository()), "legacy_search")
 
 
 @pytest.mark.asyncio

@@ -1666,7 +1666,8 @@ class _FakePhase5App:
         self.room_center.remote_task_reader = AsyncMock()
         self.room_center.debate_prompt_injector = None
         self.room_center.rate_limit_service = None
-        self.room_center.context_memory_runtime = None
+        self.room_center.context_assembly = None
+        self.room_center.memory_search = None
         self.room_center.context_compaction = None
         self.room_center.build_turn_content = None
         self.room_center.agent_response_handler = None

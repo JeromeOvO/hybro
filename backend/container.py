@@ -43,8 +43,6 @@ from common.protocols import (
     AgentRepository,
     AttachmentMetadataReader,
     ContentStorageRepository,
-    ContextAssembler,
-    ContextMemoryRuntime,
     EventPublisher,
     ExecutionEngine,
     FileStorage,
@@ -56,8 +54,6 @@ from common.protocols import (
     HubManagement,
     LeaderElector,
     LLMGateway,
-    MemoryManager,
-    MemoryProjector,
     MemoryRepository,
     MongoCollection,
     MongoDAL,
@@ -1220,7 +1216,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
-            _context_memory_deps = create_context_memory_deps(context_memory_facade)
             context_memory_room_memory = ContextMemoryRoomMemoryAdapter(
                 facade=context_memory_facade,
                 usage_store=memory_store,
@@ -1284,7 +1279,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_health_service=agent_health_service,
                 room_files=file_storage,
                 capability_issue_service=agent_capability_issue_service,
-                context_memory_runtime=_context_memory_deps.context_memory_runtime,
+                context_assembly=context_memory_facade,
+                memory_search=context_memory_facade,
                 context_compaction=context_memory_facade,
                 build_turn_content_func=build_turn_content,
                 supervisor_planning_error_cls=SupervisorPlanningError,
@@ -1401,8 +1397,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
             room_runtime.bind_context_memory(
-                _context_memory_deps.memory_manager,
-                _context_memory_deps.context_memory_runtime,
+                context_assembly=context_memory_facade,
+                memory_search=context_memory_facade,
+                room_memory_cleanup=context_memory_facade,
             )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
@@ -1873,14 +1870,6 @@ class RoomDeps:
     room_repository: Any
     message_repository: Any
     room_quote_repository: Any | None = None
-
-
-@dataclass(frozen=True)
-class ContextMemoryDeps:
-    context_assembler: ContextAssembler
-    memory_manager: MemoryManager
-    memory_projector: MemoryProjector
-    context_memory_runtime: ContextMemoryRuntime
 
 
 @dataclass(frozen=True)
@@ -3271,15 +3260,6 @@ def create_context_memory_facade(
     )
 
 
-def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps:
-    return ContextMemoryDeps(
-        context_assembler=facade,
-        memory_manager=facade,
-        memory_projector=facade,
-        context_memory_runtime=facade,
-    )
-
-
 def register_context_memory_event_handlers(
     *,
     event_bus: InternalEventBus,
@@ -3287,10 +3267,7 @@ def register_context_memory_event_handlers(
 ):
     from context_memory.events import ContextMemoryEventHandler
 
-    handler = ContextMemoryEventHandler(
-        projector=context_memory_facade,
-        project_for_event=context_memory_facade.project_message_for_event,
-    )
+    handler = ContextMemoryEventHandler(projection=context_memory_facade)
     event_bus.register_handler(
         "message_committed",
         handler.handle_message_committed,

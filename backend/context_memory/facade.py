@@ -134,7 +134,7 @@ class ContextMemoryFacade:
     async def search_memory(
         self, room_id: str, query: str, limit: int = 10
     ) -> list[MemorySearchResult]:
-        results, _response = await search.search_memory(
+        results = await search.search_memory(
             room_id=room_id,
             query=query,
             limit=limit,
@@ -365,23 +365,6 @@ class ContextMemoryFacade:
             id_factory=self.id_factory,
             now=self.now,
         )
-
-    async def legacy_search(
-        self,
-        query: str,
-        room_id: str,
-        user_id: str | None = None,
-        limit: int | None = None,
-    ) -> dict:
-        _results, response = await search.search_memory(
-            room_id=room_id,
-            query=query,
-            limit=limit if limit is not None else self.search_config.max_results,
-            content_repository=self.content_repository,
-            config=self.search_config,
-        )
-        response["user_id"] = user_id
-        return response
 
     async def should_compact(self, room_id: str) -> bool:
         return await compaction.should_compact(

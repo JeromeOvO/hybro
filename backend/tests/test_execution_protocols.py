@@ -306,7 +306,8 @@ def _make_room_message_center_port_deps():
         "debate_prompt_injector": MagicMock(),
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
-        "context_memory_runtime": MagicMock(),
+        "context_assembly": MagicMock(),
+        "memory_search": MagicMock(),
         "context_compaction": MagicMock(),
         "hitl_coordinator": MagicMock(),
         "task_notifications": MagicMock(),
@@ -408,7 +409,8 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_response_handler.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.task_notifications is deps["task_notifications"]
-    assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_assembly is deps["context_assembly"]
+    assert runtime.memory_search is deps["memory_search"]
     assert runtime.context_compaction is deps["context_compaction"]
 
 
@@ -447,7 +449,8 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert runtime.delivery is deps["delivery"]
     assert runtime.room_runtime is deps["room_runtime"]
     assert runtime.debate_rounds == 6
-    assert runtime.context_memory_runtime is deps["context_memory_runtime"]
+    assert runtime.context_assembly is deps["context_assembly"]
+    assert runtime.memory_search is deps["memory_search"]
     assert runtime.context_compaction is deps["context_compaction"]
 
 

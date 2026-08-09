@@ -10,9 +10,18 @@ from context_memory.events import ContextMemoryEventHandler
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
 
-class FakeProjector:
-    def __init__(self):
+class FakeProjection:
+    def __init__(self, status: dict | None = None, failure: Exception | None = None):
+        self.status = status or {"projected": True, "reason": "projected"}
+        self.failure = failure
+        self.calls = []
         self.compacted_rooms = []
+
+    async def project_message_for_event(self, room_id: str, message_id: str, **kwargs):
+        if self.failure is not None:
+            raise self.failure
+        self.calls.append((room_id, message_id, kwargs))
+        return self.status
 
     async def run_compaction(self, room_id: str):
         self.compacted_rooms.append(room_id)
@@ -42,53 +51,38 @@ def event(
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_projects_and_compacts():
-    projector = FakeProjector()
-    handler = ContextMemoryEventHandler(
-        projector,
-        lambda room_id, message_id, **kwargs: _status(
-            {"projected": True, "reason": "projected"}
-        ),
-    )
+    projection = FakeProjection()
+    handler = ContextMemoryEventHandler(projection)
 
     await handler.handle_message_committed(event())
 
-    assert projector.compacted_rooms == ["r1"]
+    assert projection.compacted_rooms == ["r1"]
 
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_duplicate_skips_compaction():
-    projector = FakeProjector()
-    handler = ContextMemoryEventHandler(
-        projector,
-        lambda room_id, message_id, **kwargs: _status(
-            {"projected": False, "reason": "duplicate"}
-        ),
-    )
+    projection = FakeProjection({"projected": False, "reason": "duplicate"})
+    handler = ContextMemoryEventHandler(projection)
 
     await handler.handle_message_committed(event())
 
-    assert projector.compacted_rooms == []
+    assert projection.compacted_rooms == []
 
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_missing_skips_compaction():
-    projector = FakeProjector()
-    handler = ContextMemoryEventHandler(
-        projector,
-        lambda room_id, message_id, **kwargs: _status(
-            {"projected": False, "reason": "missing_message"}
-        ),
-    )
+    projection = FakeProjection({"projected": False, "reason": "missing_message"})
+    handler = ContextMemoryEventHandler(projection)
 
     await handler.handle_message_committed(event())
 
-    assert projector.compacted_rooms == []
+    assert projection.compacted_rooms == []
 
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_exception_propagates():
-    projector = FakeProjector()
-    handler = ContextMemoryEventHandler(projector, _raise)
+    projection = FakeProjection(failure=RuntimeError("boom"))
+    handler = ContextMemoryEventHandler(projection)
 
     with pytest.raises(RuntimeError, match="boom"):
         await handler.handle_message_committed(event())
@@ -96,14 +90,8 @@ async def test_handle_message_committed_exception_propagates():
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_passes_agent_metadata_to_projection():
-    projector = FakeProjector()
-    calls = []
-
-    async def project(room_id: str, message_id: str, **kwargs) -> dict:
-        calls.append((room_id, message_id, kwargs))
-        return {"projected": True, "reason": "projected"}
-
-    handler = ContextMemoryEventHandler(projector, project)
+    projection = FakeProjection()
+    handler = ContextMemoryEventHandler(projection)
 
     await handler.handle_message_committed(
         event(
@@ -115,7 +103,7 @@ async def test_handle_message_committed_passes_agent_metadata_to_projection():
         )
     )
 
-    assert calls == [
+    assert projection.calls == [
         (
             "r1",
             "agent-msg-1",
@@ -130,20 +118,14 @@ async def test_handle_message_committed_passes_agent_metadata_to_projection():
 
 @pytest.mark.asyncio
 async def test_handle_message_committed_passes_room_agent_set_to_projection():
-    projector = FakeProjector()
-    calls = []
-
-    async def project(room_id: str, message_id: str, **kwargs) -> dict:
-        calls.append((room_id, message_id, kwargs))
-        return {"projected": True, "reason": "projected"}
-
-    handler = ContextMemoryEventHandler(projector, project)
+    projection = FakeProjection()
+    handler = ContextMemoryEventHandler(projection)
 
     await handler.handle_message_committed(
         event("user-msg-1", room_agent_set={"a1": "Canonical Agent"})
     )
 
-    assert calls == [
+    assert projection.calls == [
         (
             "r1",
             "user-msg-1",
@@ -154,11 +136,3 @@ async def test_handle_message_committed_passes_room_agent_set_to_projection():
             },
         )
     ]
-
-
-async def _status(value: dict) -> dict:
-    return value
-
-
-async def _raise(room_id: str, message_id: str, **kwargs) -> dict:
-    raise RuntimeError("boom")

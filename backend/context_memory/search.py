@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import time
 from datetime import datetime
 
 from common.dto import MemorySearchResult
@@ -23,25 +22,13 @@ async def search_memory(  # noqa: C901
     limit: int,
     content_repository: ContentStorageRepository,
     config: MemorySearchConfig,
-) -> tuple[list[MemorySearchResult], dict]:
-    start = time.monotonic()
-    empty_response = {
-        "query": query,
-        "room_id": room_id,
-        "results": [],
-        "total_matches": 0,
-        "search_time_ms": 0.0,
-        "searched_at": utcnow(),
-        "keyword_search_used": False,
-        "temporal_decay_applied": False,
-    }
+) -> list[MemorySearchResult]:
     effective_limit = _effective_limit(limit, config.max_results)
     if not config.enabled or not query.strip() or effective_limit == 0:
-        return [], empty_response
+        return []
 
     hydration_batch_size = max(1, min(50, effective_limit * 3))
     attempted_hydration_ids: set[str] = set()
-    keyword_used = False
 
     try:
         docs = await content_repository.scan_text_search(
@@ -49,7 +36,6 @@ async def search_memory(  # noqa: C901
             query,
             max(1, config.max_candidates),
         )
-        keyword_used = True
     except Exception:
         logger.warning(
             "Keyword memory search failed for room %s",
@@ -125,17 +111,7 @@ async def search_memory(  # noqa: C901
         )
         for record in final
     ]
-    response = {
-        "query": query,
-        "room_id": room_id,
-        "results": dto_results,
-        "total_matches": len(raw_records),
-        "search_time_ms": round((time.monotonic() - start) * 1000, 2),
-        "searched_at": utcnow(),
-        "keyword_search_used": keyword_used,
-        "temporal_decay_applied": bool(config.temporal_decay_enabled and raw_records),
-    }
-    return dto_results, response
+    return dto_results
 
 
 def rank_keyword_results(

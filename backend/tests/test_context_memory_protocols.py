@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from common.protocols import (
-    ContextAssembler,
-    MemoryManager,
-    MemoryProjector,
+    CompactionPort,
+    ContextAssemblyPort,
     MemoryRepository,
+    MemorySearchPort,
+    ProjectionPort,
+    RoomMemoryCleanupPort,
 )
 
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
@@ -184,19 +186,33 @@ def _facade():
     )
 
 
-def test_context_memory_runtime_protocol_conformance():
+def test_context_memory_port_conformance():
     from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
 
     facade = _facade()
 
-    assert isinstance(facade, ContextAssembler)
-    assert isinstance(facade, MemoryManager)
-    assert isinstance(facade, MemoryProjector)
+    assert isinstance(facade, ContextAssemblyPort)
+    assert isinstance(facade, MemorySearchPort)
+    assert isinstance(facade, ProjectionPort)
+    assert isinstance(facade, CompactionPort)
+    assert isinstance(facade, RoomMemoryCleanupPort)
     assert isinstance(MemoryMongoRepository(mongo=FakeMongo()), MemoryRepository)
     assert isinstance(
         ContentStorageMongoRepository(mongo=FakeMongo()), ContentStorageRepository
     )
+
+
+def test_production_python_has_no_legacy_search():
+    violations = [
+        str(path)
+        for path in Path(".").rglob("*.py")
+        if "tests" not in path.parts
+        and ".venv" not in path.parts
+        and "legacy_search" in path.read_text()
+    ]
+
+    assert violations == []
 
 
 def test_context_memory_exports_are_stable():
@@ -345,7 +361,7 @@ def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
     source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
 
     assert "Context & Memory cleanup skipped" in source
-    assert "_context_memory_manager is None" in source
+    assert "_room_memory_cleanup is None" in source
 
 
 def test_message_write_flows_do_not_call_context_memory_write_shims():

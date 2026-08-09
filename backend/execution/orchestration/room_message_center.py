@@ -11,17 +11,21 @@ from uuid import uuid4
 
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
-from common.dto import RoomMessageSummary
+from common.dto import MemorySearchResult, RoomMessageSummary
 from common.eventing import InternalEventPublisher
 from common.message_commit_events import publish_message_committed
 from common.observability import traced_create_task
-from common.protocols import ContextMemoryRuntime, RoomDistributedLock
+from common.protocols import (
+    CompactionPort,
+    ContextAssemblyPort,
+    MemorySearchPort,
+    RoomDistributedLock,
+)
 from common.utils.cancellation import CancellationError
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
-from context_memory.protocols import ContextMemoryCompactionPort
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
@@ -100,7 +104,8 @@ orchestration_planner = None
 delivery = None
 internal_event_publisher = None
 remote_task_reader = None
-context_memory_runtime = None
+context_assembly = None
+memory_search = None
 context_compaction = None
 build_turn_content = None
 SupervisorPlanningError = RuntimeError
@@ -177,8 +182,9 @@ class RoomMessageCenter:
         agent_health_service=None,
         room_files=None,
         capability_issue_service=None,
-        context_memory_runtime: ContextMemoryRuntime | None = None,
-        context_compaction: ContextMemoryCompactionPort | None = None,
+        context_assembly: ContextAssemblyPort | None = None,
+        memory_search: MemorySearchPort | None = None,
+        context_compaction: CompactionPort | None = None,
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
@@ -217,7 +223,8 @@ class RoomMessageCenter:
         self.task_notification_store = task_notification_store
         self.room_memory = room_memory
         self.hitl_coordinator = hitl_coordinator
-        self.context_memory_runtime = context_memory_runtime
+        self.context_assembly = context_assembly
+        self.memory_search = memory_search
         self.context_compaction = context_compaction
         self.build_turn_content = build_turn_content_func
         self.supervisor_planning_error_cls = supervisor_planning_error_cls
@@ -509,11 +516,14 @@ class RoomMessageCenter:
         self._room_facade = facade
         self._room_bound = True
 
-    def bind_context_memory_runtime(
+    def bind_context_memory(
         self,
-        context_memory: ContextMemoryRuntime,
+        *,
+        context_assembly: ContextAssemblyPort,
+        memory_search: MemorySearchPort,
     ) -> None:
-        self.context_memory_runtime = context_memory
+        self.context_assembly = context_assembly
+        self.memory_search = memory_search
 
     def _require_room_facade(self):
         if (
@@ -568,27 +578,27 @@ class RoomMessageCenter:
         room_agent_set: dict,
         message_text: str,
     ) -> tuple[str | None, float | None]:
-        runtime = self.context_memory_runtime
-        if room_memory is None or runtime is None:
+        context_assembly = self.context_assembly
+        if room_memory is None or context_assembly is None:
             return None, None
 
         agent_dicts = [
             {"agent_id": aid, "agent_name": aname}
             for aid, aname in (room_agent_set or {}).items()
         ]
-        memory_search_results = None
+        memory_search_results: list[MemorySearchResult] | None = None
         try:
-            payload = await runtime.legacy_search(query=message_text, room_id=room_id)
-            if isinstance(payload, dict):
-                results = list(payload.get("results") or [])
-            else:
-                results = list(getattr(payload, "results", []) or [])
-            if results:
-                memory_search_results = results
+            if self.memory_search is not None:
+                results = await self.memory_search.search_memory(
+                    room_id=room_id,
+                    query=message_text,
+                )
+                if results:
+                    memory_search_results = results
         except Exception as search_err:
             logger.debug("supervisor_resume: memory search skipped: %s", search_err)
 
-        assembled = runtime.assemble_supervisor_context_from_memory(
+        assembled = context_assembly.assemble_supervisor_context_from_memory(
             room_memory,
             message_text,
             agent_registry=agent_dicts,
@@ -1511,7 +1521,7 @@ class RoomMessageCenter:
         conversation_context = None
         try:
             room_memory = await self.memory_reader.get_room_memory_by_room_id(room_id)
-            if room_memory and self.context_memory_runtime is not None:
+            if room_memory and self.context_assembly is not None:
                 (
                     conversation_context,
                     _occupancy,

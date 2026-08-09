@@ -704,20 +704,21 @@ def test_protocol_methods_match_design_doc():
             "verify_room_agent_membership",
             "verify_room_hub_ownership",
         },
-        protocols.ContextAssembler: {"assemble_context"},
-        protocols.MemoryManager: {
-            "get_room_memory",
-            "search_memory",
-            "get_user_memories",
-            "delete_room_memory",
-        },
-        protocols.MemoryProjector: {"project_message", "run_compaction"},
-        protocols.ContextMemoryRuntime: {
+        protocols.ContextAssemblyPort: {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
-            "legacy_search",
-            "get_budget_summary",
         },
+        protocols.MemorySearchPort: {"search_memory"},
+        protocols.ProjectionPort: {
+            "project_message_for_event",
+            "run_compaction",
+        },
+        protocols.CompactionPort: {
+            "should_compact",
+            "compact_if_needed",
+            "compact_room_memory",
+        },
+        protocols.RoomMemoryCleanupPort: {"delete_room_memory"},
         protocols.ExecutionEngine: {
             "execute",
             "start_orchestration",

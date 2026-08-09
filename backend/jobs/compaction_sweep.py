@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from common.observability import traced_create_task
+from common.protocols import CompactionPort
 from common.utils.logger import get_logger
-from context_memory.protocols import ContextMemoryCompactionPort
 from jobs.constants import COMPACTION_SWEEP
 from models.context_config import compaction_config
 
@@ -40,7 +40,7 @@ class LeaderGate(Protocol):
 class CompactionSweepDeps:
     list_room_ids_with_memory: Callable[[], Awaitable[list[str]]]
     get_room_ids_with_non_terminal_runs: Callable[[], Awaitable[list[str]]]
-    context_compaction: ContextMemoryCompactionPort
+    context_compaction: CompactionPort
 
 
 class CompactionSweep:

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from common.dto import AssembledContext, CompactionResult, MemorySearchResult
+from common.dto import AssembledContext, CompactionResult
 from context_memory import ContextMemoryFacade
 from context_memory.compat.context_assembly import ContextAssemblyService
 from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
@@ -43,32 +43,6 @@ class FakeFacade:
     async def compact_if_needed(self, room_id: str):
         self.calls.append(("compact_if_needed", room_id))
         return CompactionResult(room_id=room_id, compacted_count=1, tokens_saved=10)
-
-    async def legacy_search(
-        self,
-        query: str,
-        room_id: str,
-        user_id: str | None = None,
-        limit: int | None = None,
-    ):
-        self.calls.append(("legacy_search", query, room_id, user_id, limit))
-        return {
-            "query": query,
-            "room_id": room_id,
-            "results": [
-                MemorySearchResult(
-                    room_id=room_id,
-                    content="result",
-                    keyword_score=0.9,
-                    relevance_score=0.9,
-                    temporal_decay_factor=1.0,
-                    metadata={"turn_id": "t1", "source_type": "turn"},
-                )
-            ],
-            "total_matches": 1,
-            "search_time_ms": 1.0,
-            "searched_at": NOW,
-        }
 
     async def legacy_create_room_memory(self, memory_doc: dict) -> dict:
         self.calls.append(("legacy_create_room_memory", memory_doc["room_id"]))

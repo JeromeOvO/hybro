@@ -17,12 +17,17 @@ from common.dto import (
     CreateRoomRequest,
     ExplicitAgentMention,
     MembershipSeed,
+    MemorySearchResult,
     ParsedUserMessageRequest,
     RoomInfo,
     UserMessageInsertResult,
 )
 from common.message_commit_events import publish_message_committed
-from common.protocols.context_memory_protocols import ContextMemoryRuntime
+from common.protocols.context_memory_protocols import (
+    ContextAssemblyPort,
+    MemorySearchPort,
+    RoomMemoryCleanupPort,
+)
 from common.types import (
     Artifact,
     DataPart,
@@ -239,8 +244,9 @@ class RoomServices:
         self._room_files = None
         self._facade = None
         self._bound = False
-        self._context_memory_manager = None
-        self._context_memory_runtime: ContextMemoryRuntime | None = None
+        self._context_assembly: ContextAssemblyPort | None = None
+        self._memory_search: MemorySearchPort | None = None
+        self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
         self._internal_event_publisher = None
         self._attachment_metadata_reader = None
         self._attachment_content_reader = None
@@ -303,11 +309,14 @@ class RoomServices:
 
     def bind_context_memory(
         self,
-        memory_manager,
-        context_memory_runtime: ContextMemoryRuntime | None = None,
+        *,
+        context_assembly: ContextAssemblyPort | None = None,
+        memory_search: MemorySearchPort | None = None,
+        room_memory_cleanup: RoomMemoryCleanupPort | None = None,
     ) -> None:
-        self._context_memory_manager = memory_manager
-        self._context_memory_runtime = context_memory_runtime or memory_manager
+        self._context_assembly = context_assembly
+        self._memory_search = memory_search
+        self._room_memory_cleanup = room_memory_cleanup
 
     def bind_internal_event_publisher(self, internal_event_publisher) -> None:
         self._internal_event_publisher = internal_event_publisher
@@ -370,12 +379,15 @@ class RoomServices:
             )
         return self._facade
 
-    def _require_context_memory_runtime(self) -> ContextMemoryRuntime:
-        if self._context_memory_runtime is None:
-            raise RuntimeError(
-                "RoomServices.bind_context_memory() not called - startup incomplete"
-            )
-        return self._context_memory_runtime
+    def _require_context_assembly(self) -> ContextAssemblyPort:
+        if self._context_assembly is None:
+            raise RuntimeError("RoomServices context assembly port has not been bound")
+        return self._context_assembly
+
+    def _require_memory_search(self) -> MemorySearchPort:
+        if self._memory_search is None:
+            raise RuntimeError("RoomServices memory search port has not been bound")
+        return self._memory_search
 
     @staticmethod
     def _assembled_context_text(assembled) -> str:
@@ -387,12 +399,11 @@ class RoomServices:
         *,
         query: str,
         room_id: str,
-    ) -> list:
-        runtime = self._require_context_memory_runtime()
-        payload = await runtime.legacy_search(query=query, room_id=room_id)
-        if isinstance(payload, dict):
-            return list(payload.get("results") or [])
-        return list(getattr(payload, "results", []) or [])
+    ) -> list[MemorySearchResult]:
+        return await self._require_memory_search().search_memory(
+            room_id=room_id,
+            query=query,
+        )
 
     async def _build_supervisor_conversation_context(
         self,
@@ -416,7 +427,7 @@ class RoomServices:
         except Exception as e:
             logger.debug("RoomServices: MemorySearch skipped%s: %s", log_context, e)
         try:
-            assembled = self._require_context_memory_runtime().assemble_supervisor_context_from_memory(
+            assembled = self._require_context_assembly().assemble_supervisor_context_from_memory(
                 room_memory,
                 message_text,
                 agent_registry=agent_registry,
@@ -426,7 +437,7 @@ class RoomServices:
             return self._assembled_context_text(assembled)
         except Exception as e:
             logger.warning(
-                "RoomServices: ContextMemoryRuntime failed%s: %s",
+                "RoomServices: context assembly failed%s: %s",
                 log_context,
                 e,
             )
@@ -442,7 +453,7 @@ class RoomServices:
         quoted_text: str | None,
         agent_task: str | None,
     ) -> str:
-        assembled = self._require_context_memory_runtime().assemble_agent_execution_context_from_memory(
+        assembled = self._require_context_assembly().assemble_agent_execution_context_from_memory(
             room_memory,
             current_task,
             agent_name=agent_name,
@@ -1147,14 +1158,14 @@ class RoomServices:
         # Accepted room-deletion cleanup; startup binds the ContextMemory
         # protocol surface and this compatibility owner never imports the
         # concrete facade.
-        if self._context_memory_manager is None:
+        if self._room_memory_cleanup is None:
             logger.warning(
                 "Context & Memory cleanup skipped for room %s; manager not bound",
                 room_id,
             )
             return False
         try:
-            ok = await self._context_memory_manager.delete_room_memory(room_id)
+            ok = await self._room_memory_cleanup.delete_room_memory(room_id)
             if not ok:
                 logger.warning(
                     "Context & Memory cleanup reported failure for room %s",
@@ -3920,7 +3931,7 @@ class RoomServices:
                 )
 
                 if isinstance(room_memory_content, MemoryContent):
-                    # Budget-aware context via ContextMemoryRuntime (§11.2)
+                    # Budget-aware context via ContextAssemblyPort (§11.2)
                     try:
                         context = self._build_agent_execution_context_from_memory(
                             room_memory=room_memory,
@@ -3932,7 +3943,7 @@ class RoomServices:
                         )
                     except Exception as e:
                         logger.warning(
-                            "ContextMemoryRuntime failed for agent, falling back to "
+                            "Context assembly failed for agent, falling back to "
                             "DEPRECATED build_context_for_agent (to be removed): %s",
                             e,
                         )

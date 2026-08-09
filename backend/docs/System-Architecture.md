@@ -100,7 +100,6 @@ groups around protocol interfaces from `common.protocols`:
 
 - `AgentDeps`
 - `RoomDeps`
-- `ContextMemoryDeps`
 - `DeliveryDeps`
 - `ExecutionDeps`
 - `HubDeps`
@@ -658,8 +657,10 @@ The facade uses:
 
 `container.py` creates the facade before execution orchestration and registers
 `ContextMemoryEventHandler` on the independent internal event bus before that bus
-starts. The facade is exposed through `ContextMemoryDeps.context_memory_runtime`
-for supervisor and agent context assembly. Frontdoor user-message persistence and
+starts. The facade structurally conforms to the caller-specific
+`ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`,
+and `RoomMemoryCleanupPort`; the composition root injects only the ports each
+Room, Execution, event, or background-job consumer uses. Frontdoor user-message persistence and
 execution response paths publish local-only `MessageCommitted` events only after
 the message write succeeds; user-message commits wait for local handler
 completion before preflight continues. Eventing records handler failures in its
@@ -1579,9 +1580,10 @@ memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
 
 Memory search is provided by `ContextMemoryFacade` through the injected
-context-memory runtime protocol. Legacy search response consumers call
-`ContextMemoryFacade.legacy_search` directly. Keyword search and two-stage
-content hydration go through the context-memory content repository.
+`MemorySearchPort`. Its typed boundary returns
+`list[common.dto.MemorySearchResult]`; Room and Execution pass those DTOs to
+context assembly without parsing response dictionaries. Keyword search and
+two-stage content hydration go through the context-memory content repository.
 
 An optional provider-neutral `extensions.vector_store.VectorStore` protocol is
 available for future features. It has no factory, default implementation,
