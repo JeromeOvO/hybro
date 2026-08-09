@@ -23,7 +23,19 @@ are blockers; they are reported and never silently replaced with a placeholder.
 ## Rollout preconditions (operations must execute)
 
 This repository change does **not** apply or observe the migration in production.
-Before enabling the cutover runtime, operations must:
+Before enabling the cutover runtime, operations must complete the following
+steps.
+
+Before running either migration command, set `MONGODB_URL` and
+`MONGODB_DB_NAME` in the environment consumed by backend settings (for example,
+the approved deployment secret/configuration source) and verify the effective
+target without echoing credentials. The script reads the URI and database name
+from settings by default. Never pass the URI with `--mongo-url`, because process
+arguments may be visible to other users or captured by process tooling. A
+non-sensitive database-name override may be supplied as
+`--database <database-name>` when required. Archived script summaries must not
+contain the URI, credentials, or other secrets; the summary is limited to the
+collection name, migration phase, and counts.
 
 1. Take and verify a restorable backup/snapshot of `room_memories`. Record the
    `conversation_content` TTL policy and confirm the migration identity can read
@@ -32,8 +44,7 @@ Before enabling the cutover runtime, operations must:
 
    ```bash
    cd backend
-   uv run --frozen python scripts/migrate_conversation_history.py \
-     --mongo-url "$MONGODB_URL" --database "$MONGODB_DB_NAME"
+   uv run --frozen python scripts/migrate_conversation_history.py
    ```
 
 3. Resolve every reported blocker. An apply is prohibited while blockers remain.
@@ -54,8 +65,7 @@ Before enabling the cutover runtime, operations must:
 6. Apply only with the explicit flag:
 
    ```bash
-   uv run --frozen python scripts/migrate_conversation_history.py \
-     --mongo-url "$MONGODB_URL" --database "$MONGODB_DB_NAME" --apply
+   uv run --frozen python scripts/migrate_conversation_history.py --apply
    ```
 
    The command performs a final audit. It must finish with `blockers=0` and

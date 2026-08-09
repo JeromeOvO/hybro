@@ -51,7 +51,9 @@ def _preflight_context(agent_count: int) -> RoomMessagePreflightContext:
     )
 
 
-def _service(room_memory: RoomMemory | None) -> tuple[RoomServices, AsyncMock, MagicMock]:
+def _service(
+    room_memory: RoomMemory | None,
+) -> tuple[RoomServices, AsyncMock, MagicMock]:
     memory_reader = AsyncMock(return_value=room_memory)
     service = RoomServices(
         room_store=SimpleNamespace(get_room_memory_by_room_id=memory_reader)
@@ -82,9 +84,7 @@ async def test_fast_multi_agent_routing_uses_recent_canonical_history():
 
     assert response.success is True
     memory_reader.assert_awaited_once_with("room-1")
-    parse_request = service.parse_user_message.await_args.kwargs[
-        "conversation_context"
-    ]
+    parse_request = service.parse_user_message.await_args.kwargs["conversation_context"]
     assert "canonical turn 1" not in parse_request
     for index in range(2, 7):
         assert f"canonical turn {index}" in parse_request
@@ -115,7 +115,5 @@ async def test_fast_routing_single_agent_or_no_memory_keeps_empty_context(
 
     assert response.success is True
     assert memory_reader.await_count == expected_memory_reads
-    assert (
-        service.parse_user_message.await_args.kwargs["conversation_context"] is None
-    )
+    assert service.parse_user_message.await_args.kwargs["conversation_context"] is None
     context_assembly.assemble_supervisor_context_from_memory.assert_not_called()

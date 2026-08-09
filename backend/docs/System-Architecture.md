@@ -786,10 +786,13 @@ verify a restorable `room_memories` backup, stop every room-memory writer, run a
 archive the default dry-run, resolve all blockers, rerun the dry-run while
 quiesced, apply only with `--apply`, deploy the canonical-only runtime, and verify
 representative reads/appends/deduplication/summary boundaries/compaction/assembly
-before resuming traffic. Rollback also requires stopped writers: retain migrated
-documents only if the rollback runtime reads the top-level field; otherwise
-restore the verified snapshot after accounting for post-snapshot writes. There is
-no automatic reverse migration.
+before resuming traffic. The migration URI and default database come from backend
+settings/environment; never put the URI in process arguments, and never include
+credentials in archived summaries. Only the non-sensitive database name may be
+overridden with `--database`. Rollback also requires stopped writers: retain
+migrated documents only if the rollback runtime reads the top-level field;
+otherwise restore the verified snapshot after accounting for post-snapshot
+writes. There is no automatic reverse migration.
 
 Cross-worker/sweep/event-handler single-flight compaction and compare-and-set or
 field-level conflict handling for concurrent room-summary refreshes are explicitly
