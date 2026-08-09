@@ -542,8 +542,10 @@ and multi-part A2A consumers receive equivalent input. Each assembly uses nonce-
 start and end markers so task or resource text cannot collide with the selected-resource
 boundary. If context assembly truncates any selected-text section, the incomplete marked
 block is removed and every selected text resource is delivered as its own complete
-`TextPart`; a fully assembled block has its markers removed and is kept without duplicate
-parts. The action validator also
+`TextPart`. This also strips an exact non-empty suffix of that assembly's nonce-scoped
+start marker when truncation occurs inside the marker; marker-like user text with another
+nonce is not matched. A fully assembled block has its start and end markers removed and
+is kept without duplicate parts. The action validator also
 rejects a delegate task that mentions an available resource ID without selecting
 that exact ID through dispatch refs, allowing the next planner attempt to repair
 the omission before any external Agent is called. The resource provider and

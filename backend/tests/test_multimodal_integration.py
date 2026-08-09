@@ -4,6 +4,7 @@ import json
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -29,7 +30,15 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.compat.runtime import RoomServices
+from room.compat.runtime import RoomServices, _strip_partial_marker_suffix
+
+_RESOURCE_MARKER_NONCE = "0123456789abcdef0123456789abcdef"
+_RESOURCE_START_MARKER = f"[[HYBRO_SELECTED_RESOURCES_START:{_RESOURCE_MARKER_NONCE}]]"
+_RESOURCE_END_MARKER = f"[[HYBRO_SELECTED_RESOURCES_END:{_RESOURCE_MARKER_NONCE}]]"
+_RESOURCE_MARKER_TRUNCATIONS = [
+    *(("start", cut) for cut in range(1, len(_RESOURCE_START_MARKER))),
+    *(("end", cut) for cut in range(1, len(_RESOURCE_END_MARKER))),
+]
 
 
 @pytest.fixture
@@ -64,6 +73,26 @@ def _file_meta(file_id="f1", room_id="room1"):
         "file_name": "photo.png",
         "size_bytes": 2048,
     }
+
+
+@pytest.mark.parametrize("cut", range(1, len(_RESOURCE_START_MARKER)))
+def test_strip_partial_resource_start_marker_suffix(cut):
+    task = "[Current request]\nUser: keep this dispatch task"
+
+    cleaned = _strip_partial_marker_suffix(
+        f"{task}\n\n{_RESOURCE_START_MARKER[:cut]}",
+        _RESOURCE_START_MARKER,
+    )
+
+    assert cleaned == task
+
+
+def test_partial_resource_marker_strip_uses_the_known_nonce():
+    user_text = (
+        "task ending in a marker-like value [[HYBRO_SELECTED_RESOURCES_START:ffffffff"
+    )
+
+    assert _strip_partial_marker_suffix(user_text, _RESOURCE_START_MARKER) == user_text
 
 
 class TestUploadToSendFlow:
@@ -421,7 +450,8 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert texts[0].count("TASK_SUFFIX_SENTINEL") == 1
         assert texts[0].count("RESOURCE_SUFFIX_SENTINEL") == 1
         assert texts[0].endswith("AGENT_SUFFIX_SENTINEL")
-        assert "HYBRO_SELECTED_RESOURCES" not in texts[0]
+        assert "[[HYBRO_SELECTED_RESOURCES_START:" not in texts[0]
+        assert "[[HYBRO_SELECTED_RESOURCES_END:" not in texts[0]
         assert texts[0].index("dispatch task text sentinel") < texts[0].index(
             "request resource text"
         )
@@ -442,6 +472,100 @@ class TestProcessAgentMessageAttachmentPreflight:
             "f2",
             max_bytes=1024,
         )
+
+    @pytest.mark.parametrize(
+        ("marker_kind", "cut"),
+        _RESOURCE_MARKER_TRUNCATIONS,
+        ids=[
+            f"{marker_kind}-cut-{cut}"
+            for marker_kind, cut in _RESOURCE_MARKER_TRUNCATIONS
+        ],
+    )
+    async def test_truncated_resource_markers_fall_back_without_leaking(
+        self,
+        monkeypatch,
+        marker_kind,
+        cut,
+    ):
+        monkeypatch.setattr(
+            "room.compat.runtime.uuid4",
+            lambda: UUID(hex=_RESOURCE_MARKER_NONCE),
+        )
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="unused",
+            s3_key="uploads/r/unused/file.txt",
+            mime_type="text/plain",
+            file_name="file.txt",
+            size_bytes=1,
+        )
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+        )
+        svc._facade.get_message = AsyncMock(return_value=None)
+        svc._build_room_awareness = AsyncMock(return_value=None)
+        dispatch_task = "keep this dispatch task"
+        resource_text = "selected resource body"
+        task_context = f"[Current request]\nUser: {dispatch_task}"
+        if marker_kind == "start":
+            assembled_context = f"{task_context}\n\n{_RESOURCE_START_MARKER[:cut]}"
+        else:
+            assembled_context = (
+                f"{task_context}\n\n{_RESOURCE_START_MARKER}\n"
+                "Selected source material follows.\n"
+                f"Resource ctx:selected:\n{resource_text}\n"
+                f"{_RESOURCE_END_MARKER[:cut]}"
+            )
+        svc._build_agent_execution_context_from_memory = MagicMock(
+            return_value=assembled_context
+        )
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id=f"agent-msg-{marker_kind}-{cut}",
+            agent_id="agent-1",
+            related_message_id="missing-user-message",
+            message_content=MessageContent(message_text="public label"),
+            task_content="public label",
+            extend_info={},
+        )
+
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                room_id=message.room_id,
+                message_id=message.message_id,
+                agent_id=message.agent_id,
+                related_message_id=message.related_message_id,
+                message=message,
+                dispatch_task=dispatch_task,
+                resolved_resource_payloads=[
+                    {
+                        "ref_id": "ctx:selected",
+                        "mime_type": "text/plain",
+                        "text": resource_text,
+                    }
+                ],
+            ),
+            room_memory=SimpleNamespace(room_id="room-1"),
+        )
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        texts = [
+            part.root.text
+            for part in result.a2a_message.parts
+            if hasattr(part.root, "text")
+        ]
+        assert texts == [
+            task_context,
+            f"[Selected resource: ctx:selected]\n{resource_text}",
+        ]
+        combined_text = "\n".join(texts)
+        assert combined_text.count(dispatch_task) == 1
+        assert combined_text.count(resource_text) == 1
+        assert "HYBRO_SELECTED_RESOURCES" not in combined_text
+        assert _RESOURCE_MARKER_NONCE not in combined_text
 
     async def test_real_assembly_appends_complete_resource_after_truncation(self):
         svc = RoomServices()

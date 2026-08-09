@@ -167,6 +167,15 @@ def _public_attachment_preflight_failure(
     }
 
 
+def _strip_partial_marker_suffix(text: str, marker: str) -> str:
+    """Remove an exact, non-empty partial marker left at the end of text."""
+    max_prefix_length = min(len(text), len(marker) - 1)
+    for prefix_length in range(max_prefix_length, 0, -1):
+        if text.endswith(marker[:prefix_length]):
+            return text[:-prefix_length].rstrip()
+    return text
+
+
 def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | None:
     if not isinstance(extend_info, dict):
         return None
@@ -4027,7 +4036,10 @@ class RoomServices:
                                 :start_index
                             ].rstrip()
                     else:
-                        agent_message.parts[0].root.text = final_text.replace(
+                        agent_message.parts[0].root.text = _strip_partial_marker_suffix(
+                            final_text,
+                            selected_resources_start,
+                        ).replace(
                             selected_resources_end,
                             "",
                         )
