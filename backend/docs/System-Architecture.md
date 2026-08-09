@@ -538,10 +538,12 @@ file rather than failing against the attachment-less approval message. For
 orchestrated dispatch, the target Agent's current request is the private,
 capability-scoped dispatch task—not the user's short approval message—and
 selected text resources are compiled into that same request body so single-text
-and multi-part A2A consumers receive equivalent input. If context assembly truncates
-any selected-text section, the incomplete marked block is removed and every selected
-text resource is delivered as its own complete `TextPart`; a fully assembled block is
-kept without duplicate parts. The action validator also
+and multi-part A2A consumers receive equivalent input. Each assembly uses nonce-scoped
+start and end markers so task or resource text cannot collide with the selected-resource
+boundary. If context assembly truncates any selected-text section, the incomplete marked
+block is removed and every selected text resource is delivered as its own complete
+`TextPart`; a fully assembled block has its markers removed and is kept without duplicate
+parts. The action validator also
 rejects a delegate task that mentions an available resource ID without selecting
 that exact ID through dispatch refs, allowing the next planner attempt to repair
 the omission before any external Agent is called. The resource provider and

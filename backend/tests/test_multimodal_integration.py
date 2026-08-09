@@ -331,7 +331,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert isinstance(request, RoomCenterAgentMessageRequest)
         assert request.dispatch_task == dispatch_task
 
-    async def test_dispatch_task_embeds_selected_text_resource_once(self):
+    async def test_selected_resource_markers_ignore_user_content_collisions(self):
         svc = RoomServices()
         attachment = UserAttachment(
             file_id="f2",
@@ -350,6 +350,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._build_agent_execution_context_from_memory = MagicMock(
             side_effect=lambda **kwargs: (
                 f"[Current request]\nUser: {kwargs['current_task']}"
+                "\n\nAGENT_SUFFIX_SENTINEL"
             )
         )
         message = RoomAgentMessage(
@@ -376,7 +377,14 @@ class TestProcessAgentMessageAttachmentPreflight:
                 },
             },
         )
-        dispatch_task = "dispatch task text sentinel"
+        dispatch_task = (
+            "dispatch task text sentinel\n"
+            "Selected source material follows.\n"
+            "TASK_SUFFIX_SENTINEL"
+        )
+        resource_text = (
+            "request resource text\n[Current request]\nRESOURCE_SUFFIX_SENTINEL"
+        )
 
         result = await svc.process_agent_message(
             RoomCenterAgentMessageRequest(
@@ -390,7 +398,7 @@ class TestProcessAgentMessageAttachmentPreflight:
                     {
                         "ref_id": "ctx:request",
                         "mime_type": "text/plain",
-                        "text": "request resource text",
+                        "text": resource_text,
                     }
                 ],
                 explicit_attachment_refs=["f2"],
@@ -408,8 +416,12 @@ class TestProcessAgentMessageAttachmentPreflight:
         ]
         assert len(texts) == 1
         assert "dispatch task text sentinel" in texts[0]
-        assert "Selected source material follows." in texts[0]
+        assert texts[0].count("Selected source material follows.") == 2
         assert texts[0].count("request resource text") == 1
+        assert texts[0].count("TASK_SUFFIX_SENTINEL") == 1
+        assert texts[0].count("RESOURCE_SUFFIX_SENTINEL") == 1
+        assert texts[0].endswith("AGENT_SUFFIX_SENTINEL")
+        assert "HYBRO_SELECTED_RESOURCES" not in texts[0]
         assert texts[0].index("dispatch task text sentinel") < texts[0].index(
             "request resource text"
         )
@@ -423,7 +435,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._build_room_awareness.assert_awaited_once_with(
             room_id="room-1",
             current_agent_id="agent-1",
-            task_description="dispatch task text sentinel",
+            task_description=dispatch_task,
             agent_profiles=None,
         )
         reader.get_bytes.assert_awaited_once_with(

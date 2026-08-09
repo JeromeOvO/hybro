@@ -3899,7 +3899,13 @@ class RoomServices:
 
         embedded_text_resource_indexes: set[int] = set()
         selected_text_resources: list[tuple[int, str]] = []
-        selected_source_marker = "Selected source material follows."
+        selected_resources_nonce = uuid4().hex
+        selected_resources_start = (
+            f"[[HYBRO_SELECTED_RESOURCES_START:{selected_resources_nonce}]]"
+        )
+        selected_resources_end = (
+            f"[[HYBRO_SELECTED_RESOURCES_END:{selected_resources_nonce}]]"
+        )
         if dispatch_task_text and isinstance(resolved_resource_payloads, list):
             for index, payload in enumerate(resolved_resource_payloads):
                 if not isinstance(payload, dict):
@@ -3919,8 +3925,10 @@ class RoomServices:
                 )
         if selected_text_resources:
             current_task_for_cas = (
-                f"{current_task_for_cas}\n\n{selected_source_marker}\n"
+                f"{current_task_for_cas}\n\n{selected_resources_start}\n"
+                "Selected source material follows.\n"
                 + "\n\n".join(section for _, section in selected_text_resources)
+                + f"\n{selected_resources_end}"
             )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
@@ -3990,25 +3998,39 @@ class RoomServices:
                 agent_message.parts[0].root.text = context
                 final_text = agent_message.parts[0].root.text
                 if isinstance(final_text, str) and selected_text_resources:
-                    current_request_index = final_text.rfind("[Current request]")
-                    marker_index = final_text.find(
-                        selected_source_marker,
-                        max(0, current_request_index),
-                    )
-                    resource_block = (
-                        final_text[marker_index:] if marker_index >= 0 else ""
-                    )
-                    if all(
-                        section in resource_block
-                        for _, section in selected_text_resources
-                    ):
-                        embedded_text_resource_indexes.update(
-                            index for index, _ in selected_text_resources
+                    start_index = final_text.find(selected_resources_start)
+                    if start_index >= 0:
+                        content_start = start_index + len(selected_resources_start)
+                        end_index = final_text.find(
+                            selected_resources_end,
+                            content_start,
                         )
-                    elif marker_index >= 0:
-                        agent_message.parts[0].root.text = final_text[
-                            :marker_index
-                        ].rstrip()
+                        resource_block = (
+                            final_text[content_start:end_index]
+                            if end_index >= 0
+                            else ""
+                        )
+                        if end_index >= 0 and all(
+                            section in resource_block
+                            for _, section in selected_text_resources
+                        ):
+                            agent_message.parts[0].root.text = (
+                                final_text[:start_index]
+                                + resource_block
+                                + final_text[end_index + len(selected_resources_end) :]
+                            )
+                            embedded_text_resource_indexes.update(
+                                index for index, _ in selected_text_resources
+                            )
+                        else:
+                            agent_message.parts[0].root.text = final_text[
+                                :start_index
+                            ].rstrip()
+                    else:
+                        agent_message.parts[0].root.text = final_text.replace(
+                            selected_resources_end,
+                            "",
+                        )
         except Exception as exc:
             # Log but continue with original message if context building fails
             logger.warning(
