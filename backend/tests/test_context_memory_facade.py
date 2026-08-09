@@ -235,6 +235,15 @@ class NonDictLLM(FakeLLM):
         return SimpleNamespace(data="not a dict")
 
 
+class RecordingLLM(FakeLLM):
+    def __init__(self):
+        self.generate_calls = 0
+
+    async def generate_structured(self, messages, schema, model=None):
+        self.generate_calls += 1
+        return await super().generate_structured(messages, schema, model=model)
+
+
 class MissingSummaryProjectionRepository(StateMemoryRepository):
     async def get_room_summary_projection(self, room_id: str) -> dict | None:
         return None
@@ -635,12 +644,15 @@ async def test_facade_update_room_summary_logs_invalid_llm_payload(caplog):
 @pytest.mark.asyncio
 async def test_facade_update_room_summary_logs_missing_projection(caplog):
     caplog.set_level("WARNING")
+    llm = RecordingLLM()
 
     result = await facade(
         memory_repo=MissingSummaryProjectionRepository(existing_doc()),
+        llm_provider=llm,
     ).update_room_summary("r1", "synthesis", "s1")
 
     assert result is False
+    assert llm.generate_calls == 0
     assert "Room summary projection missing" in caplog.text
 
 

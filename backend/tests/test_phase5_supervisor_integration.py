@@ -139,7 +139,18 @@ class BoundRoomMemoryFacade:
         synthesis_text: str,
         synthesis_turn_id: str | None = None,
     ) -> bool:
-        prompt = f"Synthesis:\n{synthesis_text}"
+        doc = await self.service._store.get_room_summary_projection(room_id)
+        if not doc:
+            return False
+
+        existing = RoomSummary(**(doc.get("room_summary") or {}))
+        prompt = (
+            "Extract an incremental room summary. Empty lists preserve existing "
+            "values; durable lists merge case-insensitively; non-empty recent "
+            "lists replace existing values.\n"
+            f"Existing projection:\n{existing.model_dump(mode='json')!r}\n"
+            f"Synthesis:\n{synthesis_text}"
+        )
         try:
             extracted = await self.service.supervisor_llm_service.call_json(
                 system_prompt="You extract structured information from text. Respond with valid JSON only.",
@@ -149,36 +160,45 @@ class BoundRoomMemoryFacade:
         except Exception:
             return False
 
-        doc = await self.service._store.get_room_summary_projection(room_id)
-        if not doc:
-            return False
+        def non_empty_strings(value):
+            return [
+                item.strip()
+                for item in (value or [])
+                if isinstance(item, str) and item.strip()
+            ]
 
-        existing = RoomSummary(**(doc.get("room_summary") or {}))
+        def merge(existing_values, new_values):
+            values = []
+            seen = set()
+            for item in [
+                *non_empty_strings(existing_values),
+                *non_empty_strings(new_values),
+            ]:
+                key = item.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    values.append(item)
+            return values
+
+        extracted_goal = extracted.get("current_goal")
         new_summary = RoomSummary(
             current_goal=(
-                extracted.get("current_goal")
-                if extracted.get("current_goal") is not None
+                extracted_goal.strip()
+                if isinstance(extracted_goal, str) and extracted_goal.strip()
                 else existing.current_goal
             ),
-            key_decisions=(
-                extracted.get("key_decisions")
-                if extracted.get("key_decisions") is not None
-                else existing.key_decisions
-            ),
+            key_decisions=merge(existing.key_decisions, extracted.get("key_decisions")),
             open_questions=(
-                extracted.get("open_questions")
-                if extracted.get("open_questions") is not None
-                else existing.open_questions
+                non_empty_strings(extracted.get("open_questions"))
+                or existing.open_questions
             ),
             recent_agent_contributions=(
-                extracted.get("recent_agent_contributions")
-                if extracted.get("recent_agent_contributions") is not None
-                else existing.recent_agent_contributions
+                non_empty_strings(extracted.get("recent_agent_contributions"))
+                or existing.recent_agent_contributions
             ),
-            important_constraints=(
-                extracted.get("important_constraints")
-                if extracted.get("important_constraints") is not None
-                else existing.important_constraints
+            important_constraints=merge(
+                existing.important_constraints,
+                extracted.get("important_constraints"),
             ),
             last_updated_at=utcnow(),
             updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
@@ -469,6 +489,10 @@ class TestUpdateRoomSummary:
         self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """On LLM failure, existing summary should be preserved (graceful degradation)."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {"current_goal": "Write tests"},
+            "room_facts": [],
+        }
         mock_supervisor_llm_service.call_json.side_effect = Exception("LLM timeout")
 
         service, _holder = room_memory_adapter(
@@ -507,6 +531,7 @@ class TestUpdateRoomSummary:
         )
 
         assert success is False
+        mock_supervisor_llm_service.call_json.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_keeps_existing_fields_when_extraction_returns_empty(
@@ -541,9 +566,7 @@ class TestUpdateRoomSummary:
         assert success is True
         saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
         assert saved_summary["current_goal"] == "Original goal"
-        assert (
-            saved_summary["key_decisions"] == []
-        )  # LLM explicitly returned empty list
+        assert saved_summary["key_decisions"] == ["Original decision"]
         assert saved_summary["open_questions"] == ["New question"]
 
     @pytest.mark.asyncio

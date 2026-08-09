@@ -1565,6 +1565,15 @@ Room memory is updated and used across turns.
    skipped before a fixed worker pool starts. The pool is fully reaped on normal
    completion, failure, or cancellation.
 
+Room-summary extraction reads the existing projection before calling the LLM and
+includes it with the incremental merge rules in the prompt. A non-empty goal
+replaces the prior goal; durable decisions and constraints merge existing-first
+with case-insensitive deduplication; non-empty question and recent-contribution
+lists replace their prior lists; empty lists preserve prior values. Room facts
+continue to append with case-insensitive deduplication. Summary persistence still
+writes a whole-summary snapshot, so compare-and-set or field-level atomic handling
+for concurrent summary refreshes is explicitly deferred.
+
 The design keeps current task context, recent conversation context, room summary,
 memory search results, and quoted reply context separate so each can be bounded
 and tested independently.
