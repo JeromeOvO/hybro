@@ -3899,6 +3899,7 @@ class RoomServices:
 
         embedded_text_resource_indexes: set[int] = set()
         selected_text_resources: list[tuple[int, str]] = []
+        selected_source_marker = "Selected source material follows."
         if dispatch_task_text and isinstance(resolved_resource_payloads, list):
             for index, payload in enumerate(resolved_resource_payloads):
                 if not isinstance(payload, dict):
@@ -3918,8 +3919,7 @@ class RoomServices:
                 )
         if selected_text_resources:
             current_task_for_cas = (
-                f"{current_task_for_cas}\n\n"
-                "Selected source material follows.\n"
+                f"{current_task_for_cas}\n\n{selected_source_marker}\n"
                 + "\n\n".join(section for _, section in selected_text_resources)
             )
         room_awareness_task_description = (
@@ -3989,12 +3989,26 @@ class RoomServices:
 
                 agent_message.parts[0].root.text = context
                 final_text = agent_message.parts[0].root.text
-                if isinstance(final_text, str):
-                    embedded_text_resource_indexes.update(
-                        index
-                        for index, section in selected_text_resources
-                        if section in final_text
+                if isinstance(final_text, str) and selected_text_resources:
+                    current_request_index = final_text.rfind("[Current request]")
+                    marker_index = final_text.find(
+                        selected_source_marker,
+                        max(0, current_request_index),
                     )
+                    resource_block = (
+                        final_text[marker_index:] if marker_index >= 0 else ""
+                    )
+                    if all(
+                        section in resource_block
+                        for _, section in selected_text_resources
+                    ):
+                        embedded_text_resource_indexes.update(
+                            index for index, _ in selected_text_resources
+                        )
+                    elif marker_index >= 0:
+                        agent_message.parts[0].root.text = final_text[
+                            :marker_index
+                        ].rstrip()
         except Exception as exc:
             # Log but continue with original message if context building fails
             logger.warning(

@@ -1,6 +1,7 @@
 """Integration tests for multimodal flows (upload -> sendMessage -> verify)."""
 
 import json
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,9 @@ from common.types import (
     TextPart,
 )
 from common.utils.cancellation import CancellationToken
+from context_memory import assembly
+from context_memory.config import TokenBudgetConfig
+from models.memory import RoomMemory
 from models.request import RoomCenterAgentMessageRequest
 from models.room import (
     MessageContent,
@@ -426,6 +430,200 @@ class TestProcessAgentMessageAttachmentPreflight:
             "f2",
             max_bytes=1024,
         )
+
+    async def test_real_assembly_appends_complete_resource_after_truncation(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="unused",
+            s3_key="uploads/r/unused/file.txt",
+            mime_type="text/plain",
+            file_name="file.txt",
+            size_bytes=1,
+        )
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+        )
+        svc._facade.get_message = AsyncMock(return_value=None)
+        svc._build_room_awareness = AsyncMock(return_value=None)
+        budget = TokenBudgetConfig(
+            model_context_window=240,
+            system_prompt=0,
+            tool_schemas=0,
+            response_reserve=0,
+        )
+        svc.bind_context_memory(
+            context_assembly=SimpleNamespace(
+                assemble_agent_execution_context_from_memory=partial(
+                    assembly.assemble_agent_execution_context_from_memory,
+                    token_budget=budget,
+                )
+            )
+        )
+        room_memory = RoomMemory(room_id="room-1")
+        dispatch_task = "dispatch task text sentinel"
+        resource_sentinel = "LONG_RESOURCE_SENTINEL"
+        resource_text = resource_sentinel + " " + "long source material " * 300
+        section = f"Resource ctx:long:\n{resource_text}"
+        marker = "Selected source material follows."
+
+        raw_assembly = assembly.assemble_agent_execution_context_from_memory(
+            room_memory,
+            f"{dispatch_task}\n\n{marker}\n{section}",
+            token_budget=budget,
+            agent_name="PDF Agent",
+            include_system_instruction=True,
+        ).metadata["context"]
+        assert marker in raw_assembly
+        assert resource_sentinel in raw_assembly
+        assert section not in raw_assembly
+
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-msg-real-assembly-truncation",
+            agent_id="agent-1",
+            related_message_id="missing-user-message",
+            message_content=MessageContent(message_text="public label"),
+            task_content="public label",
+            extend_info={},
+        )
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                room_id=message.room_id,
+                message_id=message.message_id,
+                agent_id=message.agent_id,
+                related_message_id=message.related_message_id,
+                message=message,
+                dispatch_task=dispatch_task,
+                resolved_resource_payloads=[
+                    {
+                        "ref_id": "ctx:long",
+                        "mime_type": "text/plain",
+                        "text": resource_text,
+                    }
+                ],
+            ),
+            room_memory=room_memory,
+        )
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        texts = [
+            part.root.text
+            for part in result.a2a_message.parts
+            if hasattr(part.root, "text")
+        ]
+        assert texts == [
+            f"[Current request]\nUser: {dispatch_task}",
+            f"[Selected resource: ctx:long]\n{resource_text}",
+        ]
+        assert "\n".join(texts).count(resource_sentinel) == 1
+        assert resource_text in texts[1]
+
+    async def test_real_assembly_reappends_all_resources_after_partial_truncation(
+        self,
+    ):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="unused",
+            s3_key="uploads/r/unused/file.txt",
+            mime_type="text/plain",
+            file_name="file.txt",
+            size_bytes=1,
+        )
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+        )
+        svc._facade.get_message = AsyncMock(return_value=None)
+        svc._build_room_awareness = AsyncMock(return_value=None)
+        budget = TokenBudgetConfig(
+            model_context_window=240,
+            system_prompt=0,
+            tool_schemas=0,
+            response_reserve=0,
+        )
+        svc.bind_context_memory(
+            context_assembly=SimpleNamespace(
+                assemble_agent_execution_context_from_memory=partial(
+                    assembly.assemble_agent_execution_context_from_memory,
+                    token_budget=budget,
+                )
+            )
+        )
+        room_memory = RoomMemory(room_id="room-1")
+        dispatch_task = "multi-resource dispatch sentinel"
+        first_sentinel = "FIRST_RESOURCE_SENTINEL"
+        second_sentinel = "SECOND_RESOURCE_SENTINEL"
+        first_text = first_sentinel + " " + "first resource material " * 8
+        second_text = second_sentinel + " " + "second resource material " * 300
+        first_section = f"Resource ctx:first:\n{first_text}"
+        second_section = f"Resource ctx:second:\n{second_text}"
+        marker = "Selected source material follows."
+
+        raw_assembly = assembly.assemble_agent_execution_context_from_memory(
+            room_memory,
+            (f"{dispatch_task}\n\n{marker}\n{first_section}\n\n{second_section}"),
+            token_budget=budget,
+            agent_name="PDF Agent",
+            include_system_instruction=True,
+        ).metadata["context"]
+        assert first_section in raw_assembly
+        assert second_sentinel in raw_assembly
+        assert second_section not in raw_assembly
+
+        message = RoomAgentMessage(
+            room_id="room-1",
+            message_id="agent-msg-real-assembly-multi-truncation",
+            agent_id="agent-1",
+            related_message_id="missing-user-message",
+            message_content=MessageContent(message_text="public label"),
+            task_content="public label",
+            extend_info={},
+        )
+        result = await svc.process_agent_message(
+            RoomCenterAgentMessageRequest(
+                room_id=message.room_id,
+                message_id=message.message_id,
+                agent_id=message.agent_id,
+                related_message_id=message.related_message_id,
+                message=message,
+                dispatch_task=dispatch_task,
+                resolved_resource_payloads=[
+                    {
+                        "ref_id": "ctx:first",
+                        "mime_type": "text/plain",
+                        "text": first_text,
+                    },
+                    {
+                        "ref_id": "ctx:second",
+                        "mime_type": "text/plain",
+                        "text": second_text,
+                    },
+                ],
+            ),
+            room_memory=room_memory,
+        )
+
+        assert result.success is True
+        assert result.a2a_message is not None
+        texts = [
+            part.root.text
+            for part in result.a2a_message.parts
+            if hasattr(part.root, "text")
+        ]
+        assert texts == [
+            f"[Current request]\nUser: {dispatch_task}",
+            f"[Selected resource: ctx:first]\n{first_text}",
+            f"[Selected resource: ctx:second]\n{second_text}",
+        ]
+        combined_text = "\n".join(texts)
+        assert combined_text.count(first_sentinel) == 1
+        assert combined_text.count(second_sentinel) == 1
+        assert first_text in texts[1]
+        assert second_text in texts[2]
 
     async def test_text_resource_is_appended_when_context_assembly_fails(self):
         svc = RoomServices()
