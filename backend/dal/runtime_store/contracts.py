@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from common.dto import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeChatContext,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
@@ -17,7 +16,7 @@ from common.dto import (
 )
 from models.agent import Agent
 from models.agent_group import AgentGroup
-from models.memory import ChatContext, RoomMemory
+from models.memory import RoomMemory
 from models.orchestration import OrchestrationRunEvent, OrchestrationRunState
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
@@ -98,14 +97,6 @@ def runtime_to_room_memory(room_memory: RuntimeRoomMemory) -> RoomMemory:
     return RoomMemory.model_validate(_dump_runtime(room_memory))
 
 
-def chat_context_to_runtime(chat_context: ChatContext) -> RuntimeChatContext:
-    return RuntimeChatContext.model_validate(_dump_model(chat_context))
-
-
-def runtime_to_chat_context(chat_context: RuntimeChatContext) -> ChatContext:
-    return ChatContext.model_validate(_dump_runtime(chat_context))
-
-
 def orchestration_run_state_to_document(
     state: OrchestrationRunState,
 ) -> dict[str, Any]:
@@ -167,7 +158,6 @@ __all__ = [
     "_dump_runtime",
     "agent_group_to_runtime",
     "agent_to_runtime",
-    "chat_context_to_runtime",
     "message_content_to_runtime",
     "orchestration_run_event_from_document",
     "orchestration_run_event_to_document",
@@ -183,7 +173,6 @@ __all__ = [
     "runtime_rooms",
     "runtime_to_agent",
     "runtime_to_agent_group",
-    "runtime_to_chat_context",
     "runtime_to_message_content",
     "runtime_to_room",
     "runtime_to_room_agent_message",

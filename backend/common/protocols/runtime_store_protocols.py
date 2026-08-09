@@ -6,7 +6,6 @@ from typing import Any, Protocol, runtime_checkable
 from common.dto import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeChatContext,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
@@ -371,14 +370,6 @@ class RuntimeMemoryStore(Protocol):
     async def get_room_memory_by_room_id(
         self, room_id: str
     ) -> RuntimeRoomMemory | None: ...
-    async def add_chat_context(self, chat_context: RuntimeChatContext) -> bool: ...
-    async def get_chat_context_by_session_id(
-        self, session_id: str
-    ) -> RuntimeChatContext | None: ...
-    async def update_chat_context_by_session_id(
-        self, session_id: str, chat_context: RuntimeChatContext
-    ) -> bool: ...
-    async def delete_chat_context_by_session_id(self, session_id: str) -> bool: ...
     async def increment_user_interactions(self, user_id: str) -> bool: ...
     async def record_agent_call(
         self,

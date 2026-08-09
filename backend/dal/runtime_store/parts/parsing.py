@@ -6,7 +6,7 @@ from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
 from models.agent import Agent
 from models.agent_group import AgentGroup
-from models.memory import ChatContext, RoomMemory
+from models.memory import RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
@@ -150,13 +150,3 @@ def _strip_file_urls(doc: dict) -> None:
         return
     for attachment in content.get("attachments") or []:
         attachment.pop("file_url", None)
-
-
-def _safe_parse_chat_context(doc: dict | None) -> ChatContext | None:
-    if doc is None:
-        return None
-    try:
-        return ChatContext.model_validate(doc)
-    except Exception:
-        logger.warning("Invalid chat context document", exc_info=True)
-        return None

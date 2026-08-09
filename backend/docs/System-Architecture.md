@@ -645,8 +645,8 @@ The facade uses:
 
 - MongoDB for room memory and stored content documents.
 - MongoDB text search for relevant compacted turns.
-- `LLMGatewayImpl` and focused gateway services for summary,
-  chat-context generation, and turn-note extraction.
+- `LLMGatewayImpl` and focused gateway services for summary and turn-note
+  extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
 `container.py` creates the facade before execution orchestration and registers
@@ -668,25 +668,28 @@ projects it idempotently, and runs compaction only after a successful new
 projection.
 ### ContextMemory Runtime Ownership
 
-`context_memory/` owns room memory projection, legacy chat-context route
-compatibility, memory search, turn indexing, compaction, content expansion,
-context assembly, and route/runtime adapters that expose memory-facing behavior.
-`ContextMemoryFacade` is the canonical runtime object for Room, Execution,
-background compaction, and event-driven projection. API Gateway memory routes use
-`context_memory.compat.runtime.ContextMemoryRouteCenter`, which adapts legacy
-chat-context request/response models without importing removed-package modules.
+`context_memory/` owns room memory projection, memory search, turn indexing,
+compaction, content expansion, context assembly, and the room-memory runtime
+adapter. `ContextMemoryFacade` is the canonical runtime object for Room,
+Execution, background compaction, and event-driven projection.
 
 The former application-shell ContextMemory service files have been removed.
 Startup wiring in `container.py` constructs ContextMemory repositories, facade,
-and compatibility adapters directly. The preserved event path remains:
+and the room-memory compatibility adapter directly. The preserved event path
+remains:
 `MessageCommitted -> ContextMemoryEventHandler -> ContextMemoryFacade.project_message_for_event`,
 with compaction triggered through ContextMemory-owned facade methods.
 Legacy turn-selection and context metric logging helpers live in
-`context_memory.legacy_assembly`. Route compatibility uses
-`ContextMemoryRouteCenter` with a store-backed `ContextMemoryChatAdapter`, while
-execution room-memory compatibility uses the facade-backed
-`ContextMemoryRoomMemoryAdapter` instead of removed-package memory service
-objects.
+`context_memory.legacy_assembly`. Execution room-memory compatibility uses the
+facade-backed `ContextMemoryRoomMemoryAdapter` instead of removed-package memory
+service objects.
+
+The legacy `/api/v1/memoryCenter/*ChatContext*` API and its `chat_contexts`
+runtime persistence wiring are retired. Deployments must confirm that no
+external consumers still call those endpoints. Operations must also review any
+production `chat_contexts` documents and indexes and decide their retention or
+archival policy separately; application startup does not drop that collection
+or its indexes.
 
 ### `common.eventing`
 

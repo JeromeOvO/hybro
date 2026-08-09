@@ -10,7 +10,6 @@ from api_gateway.routes import (
     hitl_routes,
     hub_routes,
     inspection_routes,
-    memory_routes,
     relay_routes,
     room_routes,
     sse_routes,
@@ -26,11 +25,6 @@ def build_api_gateway_router() -> APIRouter:
     gateway_router.include_router(
         inspection_routes.router,
         tags=["inspection"],
-        dependencies=[Depends(get_current_user)],
-    )
-    gateway_router.include_router(
-        memory_routes.router,
-        tags=["memory"],
         dependencies=[Depends(get_current_user)],
     )
     gateway_router.include_router(room_routes.router, tags=["room"])

@@ -2,7 +2,6 @@ import pytest
 
 from common.dto import (
     AgentRoutingCandidate,
-    ChatContextGenerationInput,
     ParsedUserMessageRequest,
     RoomMemoryGenerationInput,
     RoomMessageSummary,
@@ -158,16 +157,12 @@ async def test_room_memory_service_uses_dto_inputs():
     gateway = FakeWorkflowGateway()
     service = RoomMemoryLLMService(gateway)
 
-    context = await service.generate_chat_context(
-        ChatContextGenerationInput(user_input="hi", agent_response="hello")
-    )
     memory = await service.generate_room_memory_content(
         RoomMemoryGenerationInput(
             messages=[RoomMessageSummary(agent_name="Agent", message="done")]
         )
     )
 
-    assert context == "generated"
     assert memory == "generated"
     assert all(call[1]["model"] == "lead_ai_model" for call in gateway.generate_calls)
 

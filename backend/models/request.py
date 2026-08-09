@@ -12,7 +12,7 @@ from pydantic import (
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
-from models.memory import ChatContext, RoomMemory
+from models.memory import RoomMemory
 from models.room import (
     Room,
     RoomAgentMessage,
@@ -237,14 +237,6 @@ class ChatRequest(BaseModel):
     user_name: str
     user_input: str
     session_id: str | None = None
-
-
-class ChatMemoryRequest(BaseModel):
-    user_name: str | None = None
-    session_id: str | None = None
-    user_input: str | None = None
-    agent_response: str | None = None
-    chat_context: ChatContext | None = None
 
 
 class RoomCenterRoomSettingRequest(BaseModel):

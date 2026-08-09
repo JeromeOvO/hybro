@@ -64,8 +64,6 @@ def route_group_for_path(path: str) -> str:
         return "hub"
     if matches("/inspectionCenter"):
         return "inspection"
-    if matches("/memoryCenter"):
-        return "memory"
     if matches("/relay"):
         return "relay"
     if matches("/roomCenter"):

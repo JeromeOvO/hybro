@@ -27,7 +27,6 @@ def _deps(**overrides):
         "hitl_manager": MagicMock(),
         "hub_relay_service": MagicMock(),
         "inspection_center": MagicMock(),
-        "memory_center": MagicMock(),
         "gateway_service": MagicMock(),
         "gateway_rate_limiter": MagicMock(),
         "relay_service": MagicMock(),
@@ -71,7 +70,6 @@ PROVIDER_FIELD_NAMES = [
     ("get_hitl_manager", "hitl_manager"),
     ("get_hub_relay_service", "hub_relay_service"),
     ("get_inspection_center", "inspection_center"),
-    ("get_memory_center", "memory_center"),
     ("get_gateway_service", "gateway_service"),
     ("get_gateway_rate_limiter", "gateway_rate_limiter"),
     ("get_relay_service", "relay_service"),
@@ -120,15 +118,6 @@ def test_bind_api_gateway_deps_stores_deps_on_app_state():
     bind_api_gateway_deps(app, deps)
 
     assert app.state.api_gateway_deps is deps
-
-
-def test_api_gateway_memory_center_accepts_context_memory_route_center():
-    from context_memory.compat.runtime import ContextMemoryRouteCenter
-
-    route_center = object.__new__(ContextMemoryRouteCenter)
-    deps = _deps(memory_center=route_center)
-
-    assert deps.memory_center is route_center
 
 
 def test_get_api_gateway_deps_reads_request_app_state():

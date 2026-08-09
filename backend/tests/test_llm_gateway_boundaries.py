@@ -140,7 +140,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "summary_llm_service = SummaryLLMService(llm_provider=llm_provider)",
         "agent_selection_llm_service = AgentSelectionLLMService(",
         "message_parser_llm_service = MessageParserLLMService(",
-        "room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)",
         "agent_selection_service=agent_selection_llm_service,",
         "room_supervisor_service.bind_supervisor_service(supervisor_llm_service)",
         "room_runtime.bind_message_parser_service(message_parser_llm_service)",
@@ -148,8 +147,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "synthesis_coordinator.bind_summary_service(summary_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
-        "ContextMemoryChatAdapter(",
-        "chat_context_llm=room_memory_llm_service,",
         "ContextMemoryRoomMemoryAdapter(",
         "facade=context_memory_facade,",
         "usage_store=memory_store,",
@@ -183,10 +180,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from context_memory.compat.runtime import (
-        ContextMemoryChatAdapter,
-        ContextMemoryRoomMemoryAdapter,
-    )
+    from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
     from execution.orchestration.room_supervisor_service import room_supervisor_service
     from execution.orchestration.synthesis_coordinator import SynthesisCoordinator
     from room.compat.runtime import room_runtime
@@ -205,7 +199,6 @@ def test_focused_llm_binding_targets_expose_startup_methods():
         if not callable(getattr(target, method, None))
     ]
     assert missing == [], f"startup binding targets missing methods: {missing}"
-    assert ContextMemoryChatAdapter.__name__ == "ContextMemoryChatAdapter"
     assert ContextMemoryRoomMemoryAdapter.__name__ == "ContextMemoryRoomMemoryAdapter"
 
 

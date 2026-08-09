@@ -25,12 +25,6 @@ class RoomMessageSummary(FrozenDTO):
     message: str
 
 
-class ChatContextGenerationInput(FrozenDTO):
-    user_input: str
-    agent_response: str
-    existing_context: str | None = None
-
-
 class RoomMemoryGenerationInput(FrozenDTO):
     messages: list[RoomMessageSummary]
     existing_memory: str | None = None
@@ -49,7 +43,6 @@ class ParsedUserMessageRequest(FrozenDTO):
 
 __all__ = [
     "AgentRoutingCandidate",
-    "ChatContextGenerationInput",
     "ExplicitAgentMention",
     "ParsedUserMessageRequest",
     "RoomMemoryGenerationInput",

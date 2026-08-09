@@ -66,12 +66,6 @@ class ParentTaskIdRequiredError(Exception):
         super().__init__(self.message)
 
 
-class SessionIdRequiredError(Exception):
-    def __init__(self, message: str = "Session ID is required"):
-        self.message = message
-        super().__init__(self.message)
-
-
 class IllgalParameterError(Exception):
     def __init__(self, message: str = "Illegal parameter"):
         self.message = message

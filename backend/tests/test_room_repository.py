@@ -1043,37 +1043,6 @@ async def test_runtime_store_task_tracking_noop_successes_by_readback():
 
 
 @pytest.mark.asyncio
-async def test_runtime_store_chat_context_mutations_succeed_on_no_exception():
-    from common.dto import RuntimeChatContext
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    class NoopCollection(FakeCollection):
-        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
-            self.update_one_calls.append(
-                (deepcopy(query), deepcopy(update), deepcopy(kwargs))
-            )
-            return False
-
-        async def delete_one(self, query: dict) -> bool:
-            self.delete_one_calls.append(deepcopy(query))
-            return False
-
-    chat_contexts = NoopCollection()
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo({"chat_contexts": chat_contexts}),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-    context = RuntimeChatContext(memory_id="m1", user_name="User", session_id="s1")
-
-    assert await store.update_chat_context_by_session_id("s1", context) is True
-    assert await store.delete_chat_context_by_session_id("s1") is True
-    assert chat_contexts.update_one_calls
-    assert chat_contexts.delete_one_calls == [{"session_id": "s1"}]
-
-
-@pytest.mark.asyncio
 async def test_runtime_store_memory_write_methods_use_expected_dependencies():
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -1176,25 +1145,6 @@ async def test_runtime_store_memory_write_methods_use_expected_dependencies():
         agent_repository=object(),
     )
     assert await failing_store.update_turn_notes("room-1", "turn-1", {}) is False
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_generates_chat_context_memory_id_when_empty():
-    from common.dto import RuntimeChatContext
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    chat_contexts = FakeCollection()
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo({"chat_contexts": chat_contexts}),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-    context = RuntimeChatContext(memory_id="", user_name="User", session_id="s1")
-
-    assert await store.add_chat_context(context) is True
-    assert context.memory_id == ""
-    assert chat_contexts.insert_one_calls[0]["memory_id"]
 
 
 @pytest.mark.asyncio

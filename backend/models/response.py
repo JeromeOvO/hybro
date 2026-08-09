@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from common.a2a_constants import CommonTaskState
 from common.types import AgentCard
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
-from models.memory import ChatContext, RoomMemory
+from models.memory import RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 
 T = TypeVar("T")
@@ -151,14 +151,6 @@ class ChatResponse(BaseModel):
     user_input: str
     session_id: str | None = None
     task_id: str | None = None
-    success: bool
-    error: str | None = None
-    status_code: int = 200
-
-
-class ChatMemoryResponse(BaseModel):
-    user_name: str
-    chat_context: ChatContext | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

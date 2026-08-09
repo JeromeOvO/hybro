@@ -171,31 +171,6 @@ export interface BaseTask {
   task: Task;
   extend_info?: unknown;
 }
-/**
- * A ChatContext represents a chat context between a user and the multi-agent system.
- * It tracks session metadata like creation time, user info, and context content.
- * Multiple ChatContext objects can belong to one TaskSession during a conversation.
- */
-export interface ChatContext {
-  memory_id: string;
-  user_name: string;
-  session_id: string;
-  context_data?: ContextData | null;
-  created_at?: string;
-  updated_at?: string;
-  extend_info?: unknown;
-}
-export interface ContextData {
-  context_content?: string | null;
-  [k: string]: unknown;
-}
-export interface ChatMemoryRequest {
-  user_name?: string | null;
-  session_id?: string | null;
-  user_input?: string | null;
-  agent_response?: string | null;
-  chat_context?: ChatContext | null;
-}
 export interface ChatRequest {
   user_name: string;
   user_input: string;

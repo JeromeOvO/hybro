@@ -1,220 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
-from common.dto import ChatContextGenerationInput, RuntimeChatContext
 from common.types import MessageRole
 from common.utils.context_utils import add_turn_to_history
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from llm_gateway.errors import LLMServiceNotBoundError
-from models.error import SessionIdRequiredError
-from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
-from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
-from models.response import ChatMemoryResponse, RoomCenterMemoryResponse
+from models.memory import MemoryContent, RoomMemory
+from models.request import RoomCenterMemoryRequest
+from models.response import RoomCenterMemoryResponse
 
 logger = get_logger(__name__)
-
-
-class ChatContextLLM(Protocol):
-    async def generate_chat_context(
-        self,
-        request: ChatContextGenerationInput,
-    ) -> str: ...
-
-
-class ContextMemoryChatAdapter:
-    def __init__(
-        self,
-        *,
-        chat_store: Any | None,
-        chat_context_llm: ChatContextLLM | None = None,
-    ) -> None:
-        if chat_store is None:
-            raise RuntimeError("ContextMemoryChatAdapter requires chat_store")
-        self._store = chat_store
-        self._chat_context_llm = chat_context_llm
-
-    def bind_store(self, chat_store: Any) -> None:
-        self._store = chat_store
-
-    def bind_room_memory_llm_service(self, service: ChatContextLLM) -> None:
-        self._chat_context_llm = service
-
-    async def create_chat_context(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        session_id = _require_session_id(request.session_id)
-        try:
-            chat_context = ChatContext(
-                memory_id=str(uuid4()),
-                user_name=_response_user_name(request),
-                session_id=session_id,
-                context_data=ContextData(context_content=request.user_input or ""),
-                created_at=utcnow(),
-                updated_at=utcnow(),
-                extend_info=[],
-            )
-            success = await self._store.add_chat_context(
-                _runtime_chat_context(chat_context)
-            )
-            if success:
-                return ChatMemoryResponse(
-                    user_name=_response_user_name(request),
-                    chat_context=chat_context,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            return ChatMemoryResponse(
-                user_name=_response_user_name(request),
-                success=False,
-                error="Failed to add chat context",
-                status_code=500,
-            )
-        except Exception as exc:
-            return _chat_memory_error_response(request, exc)
-
-    async def get_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        session_id = _require_session_id(request.session_id)
-        try:
-            chat_context = _chat_context_model(
-                await self._store.get_chat_context_by_session_id(session_id)
-            )
-            if chat_context is not None:
-                return ChatMemoryResponse(
-                    user_name=_response_user_name(request),
-                    chat_context=chat_context,
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            return ChatMemoryResponse(
-                user_name=_response_user_name(request),
-                success=False,
-                error="Chat context not found",
-                status_code=404,
-            )
-        except Exception as exc:
-            return _chat_memory_error_response(request, exc)
-
-    async def update_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        session_id = _require_session_id(request.session_id)
-
-        try:
-            chat_context = _chat_context_model(
-                await self._store.get_chat_context_by_session_id(session_id)
-            )
-        except Exception as exc:
-            return _chat_memory_error_response(request, exc)
-
-        if chat_context is None:
-            return ChatMemoryResponse(
-                user_name=_response_user_name(request),
-                success=False,
-                error="Chat context not found",
-                status_code=404,
-            )
-        if self._chat_context_llm is None:
-            raise LLMServiceNotBoundError("RoomMemoryLLMService is not bound")
-
-        new_context_data = await self._chat_context_llm.generate_chat_context(
-            ChatContextGenerationInput(
-                user_input=request.user_input or "",
-                agent_response=request.agent_response or "",
-                existing_context=_chat_context_content(chat_context),
-            )
-        )
-
-        try:
-            updated_context = ChatContext(
-                memory_id=chat_context.memory_id,
-                user_name=_response_user_name(request),
-                session_id=session_id,
-                context_data=ContextData(context_content=new_context_data),
-                created_at=chat_context.created_at,
-                updated_at=utcnow(),
-                extend_info=chat_context.extend_info,
-            )
-            success = await self._store.update_chat_context_by_session_id(
-                session_id,
-                _runtime_chat_context(updated_context),
-            )
-            if success:
-                return ChatMemoryResponse(
-                    user_name=_response_user_name(request),
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            return ChatMemoryResponse(
-                user_name=_response_user_name(request),
-                success=False,
-                error="Failed to update chat context",
-                status_code=500,
-            )
-        except Exception as exc:
-            return _chat_memory_error_response(request, exc)
-
-    async def delete_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        session_id = _require_session_id(request.session_id)
-        try:
-            success = await self._store.delete_chat_context_by_session_id(session_id)
-            if success:
-                return ChatMemoryResponse(
-                    user_name=_response_user_name(request),
-                    success=True,
-                    error=None,
-                    status_code=200,
-                )
-            return ChatMemoryResponse(
-                user_name=_response_user_name(request),
-                success=False,
-                error="Failed to delete chat context",
-                status_code=500,
-            )
-        except Exception as exc:
-            return _chat_memory_error_response(request, exc)
-
-
-class ContextMemoryRouteCenter:
-    def __init__(self, *, chat_adapter: ContextMemoryChatAdapter) -> None:
-        self._chat_adapter = chat_adapter
-
-    async def add_chat_context(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        return await self._chat_adapter.create_chat_context(request)
-
-    async def get_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        return await self._chat_adapter.get_chat_context_by_session_id(request)
-
-    async def update_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        return await self._chat_adapter.update_chat_context_by_session_id(request)
-
-    async def delete_chat_context_by_session_id(
-        self,
-        request: ChatMemoryRequest,
-    ) -> ChatMemoryResponse:
-        return await self._chat_adapter.delete_chat_context_by_session_id(request)
 
 
 class ContextMemoryRoomMemoryAdapter:
@@ -555,50 +352,6 @@ class ContextMemoryRoomMemoryAdapter:
             logger.debug("AgentMemory tracking skipped: %s", exc)
 
 
-def _response_user_name(request: ChatMemoryRequest) -> str:
-    return request.user_name or ""
-
-
-def _require_session_id(session_id: str | None) -> str:
-    if session_id is None or not session_id.strip():
-        raise SessionIdRequiredError()
-    return session_id
-
-
-def _chat_context_content(chat_context: ChatContext) -> str | None:
-    if chat_context.context_data is None:
-        return None
-    return chat_context.context_data.context_content
-
-
-def _runtime_chat_context(chat_context: ChatContext) -> RuntimeChatContext:
-    return RuntimeChatContext.model_validate(chat_context.model_dump(mode="json"))
-
-
-def _chat_context_model(chat_context: Any | None) -> ChatContext | None:
-    if chat_context is None:
-        return None
-    if isinstance(chat_context, ChatContext):
-        return chat_context
-    if isinstance(chat_context, RuntimeChatContext):
-        return ChatContext.model_validate(chat_context.model_dump(mode="json"))
-    if isinstance(chat_context, dict):
-        return ChatContext.model_validate(chat_context)
-    return ChatContext.model_validate(chat_context.model_dump(mode="json"))
-
-
-def _chat_memory_error_response(
-    request: ChatMemoryRequest,
-    error: Exception,
-) -> ChatMemoryResponse:
-    return ChatMemoryResponse(
-        user_name=_response_user_name(request),
-        success=False,
-        error=str(error),
-        status_code=500,
-    )
-
-
 def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:
     if doc is None:
         return None
@@ -646,8 +399,5 @@ def _room_memory_error_response(
 
 
 __all__ = [
-    "ChatContextLLM",
-    "ContextMemoryChatAdapter",
     "ContextMemoryRoomMemoryAdapter",
-    "ContextMemoryRouteCenter",
 ]

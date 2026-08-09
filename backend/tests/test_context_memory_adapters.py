@@ -8,15 +8,10 @@ import pytest
 from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from context_memory import ContextMemoryFacade
 from context_memory.compat.context_assembly import ContextAssemblyService
-from context_memory.compat.runtime import (
-    ContextMemoryChatAdapter,
-    ContextMemoryRoomMemoryAdapter,
-    ContextMemoryRouteCenter,
-)
+from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
 from context_memory.config import CompactionConfig, MemorySearchConfig
 from models.memory import ConversationTurn, RoomMemory, TurnRole
-from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
-from models.response import ChatMemoryResponse
+from models.request import RoomCenterMemoryRequest
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -386,28 +381,6 @@ def truncated_assembled(context: str, *, mode: str):
         }
     )
     return result.model_copy(update={"metadata": metadata})
-
-
-def test_context_memory_chat_adapter_requires_store():
-    with pytest.raises(
-        RuntimeError,
-        match=r"ContextMemoryChatAdapter requires chat_store",
-    ):
-        ContextMemoryChatAdapter(chat_store=None)
-
-
-@pytest.mark.asyncio
-async def test_context_memory_route_center_delegates_chat_context_create():
-    chat_adapter = AsyncMock()
-    expected = ChatMemoryResponse(user_name="u", success=True, status_code=200)
-    chat_adapter.create_chat_context.return_value = expected
-    center = ContextMemoryRouteCenter(chat_adapter=chat_adapter)
-    request = ChatMemoryRequest(user_name="u", session_id="s1", user_input="hello")
-
-    result = await center.add_chat_context(request)
-
-    assert result is expected
-    chat_adapter.create_chat_context.assert_awaited_once_with(request)
 
 
 def room_memory():

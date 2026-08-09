@@ -1,4 +1,4 @@
-from common.dto import ChatContextGenerationInput, RoomMemoryGenerationInput
+from common.dto import RoomMemoryGenerationInput
 from common.protocols import LLMTextGateway
 
 
@@ -10,36 +10,6 @@ class RoomMemoryLLMService:
     ) -> None:
         self._llm_provider = llm_provider
         self._default_model = default_model
-
-    async def generate_chat_context(self, request: ChatContextGenerationInput) -> str:
-        system_prompt = (
-            "You are an expert context summarizer for multi-agent conversations. "
-            "Maintain a comprehensive evolving context summary that preserves "
-            "essential information across turns."
-        )
-        prompt_parts = [
-            "**NEW INTERACTION:**",
-            f"User Input: {request.user_input}",
-            f"Agent Response: {request.agent_response}",
-        ]
-        if request.existing_context and request.existing_context.strip():
-            prompt_parts.extend(
-                [
-                    "",
-                    "**EXISTING CONTEXT:**",
-                    request.existing_context,
-                    "",
-                    "**TASK:** Update and refine the existing context.",
-                ]
-            )
-        else:
-            prompt_parts.extend(
-                [
-                    "",
-                    "**TASK:** Create a comprehensive initial context summary.",
-                ]
-            )
-        return await self._generate_text(system_prompt, "\n".join(prompt_parts))
 
     async def generate_room_memory_content(
         self, request: RoomMemoryGenerationInput

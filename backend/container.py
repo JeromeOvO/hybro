@@ -394,9 +394,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.compat.runtime import (
-                ContextMemoryChatAdapter,
                 ContextMemoryRoomMemoryAdapter,
-                ContextMemoryRouteCenter,
             )
             from context_memory.config import ContextMemoryLLMConfig
             from execution.orchestration.debate_prompt_injector import (
@@ -414,7 +412,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from llm_gateway.services import (
                 AgentSelectionLLMService,
                 MessageParserLLMService,
-                RoomMemoryLLMService,
                 SummaryLLMService,
                 SupervisorLLMService,
             )
@@ -623,7 +620,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             message_parser_llm_service = MessageParserLLMService(
                 llm_provider=llm_provider
             )
-            room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
@@ -1225,13 +1221,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             _context_memory_deps = create_context_memory_deps(context_memory_facade)
-            context_memory_chat_adapter = ContextMemoryChatAdapter(
-                chat_store=memory_store,
-                chat_context_llm=room_memory_llm_service,
-            )
-            route_memory_center = ContextMemoryRouteCenter(
-                chat_adapter=context_memory_chat_adapter,
-            )
             context_memory_room_memory = ContextMemoryRoomMemoryAdapter(
                 facade=context_memory_facade,
                 usage_store=memory_store,
@@ -1716,7 +1705,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_manager=_execution_deps.hitl_manager,
                 hub_relay_service=_relay_svc,
                 inspection_center=route_inspection_center,
-                memory_center=route_memory_center,
                 gateway_service=None,
                 gateway_rate_limiter=None,
                 relay_service=_relay_svc,

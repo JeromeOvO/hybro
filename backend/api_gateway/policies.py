@@ -29,7 +29,6 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     "hitl": RoutePolicy(auth="clerk-route-level", tags=("hitl",)),
     "hub": RoutePolicy(auth="clerk-route-level", tags=("hub",)),
     "inspection": RoutePolicy(auth="clerk-global", tags=("inspection",)),
-    "memory": RoutePolicy(auth="clerk-global", tags=("memory",)),
     "platform_gateway": RoutePolicy(
         auth="api-key-route-level",
         tags=("gateway",),

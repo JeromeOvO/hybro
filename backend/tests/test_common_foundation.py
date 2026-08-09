@@ -855,13 +855,9 @@ def test_protocol_methods_match_design_doc():
             "update_hitl_request",
         },
         protocols.RuntimeMemoryStore: {
-            "add_chat_context",
-            "delete_chat_context_by_session_id",
-            "get_chat_context_by_session_id",
             "get_room_memory_by_room_id",
             "increment_user_interactions",
             "record_agent_call",
-            "update_chat_context_by_session_id",
             "update_turn_notes",
         },
         protocols.RuntimeMessageStore: {

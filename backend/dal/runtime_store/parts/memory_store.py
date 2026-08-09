@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import uuid
-
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from dal.runtime_store.parts.parsing import (
-    _safe_parse_chat_context,
-    _safe_parse_room_memory,
-)
-from models.memory import ChatContext, RoomMemory
+from dal.runtime_store.parts.parsing import _safe_parse_room_memory
+from models.memory import RoomMemory
 
 logger = get_logger(__name__)
 
@@ -17,13 +12,11 @@ class MemoryRuntimeStorePart:
     def __init__(
         self,
         *,
-        chat_contexts,
         user_memories,
         agent_memories,
         room_memories,
         room_repository,
     ) -> None:
-        self._chat_contexts = chat_contexts
         self._user_memories = user_memories
         self._agent_memories = agent_memories
         self._room_memories = room_memories
@@ -37,48 +30,6 @@ class MemoryRuntimeStorePart:
         except Exception:
             logger.error("Failed to get room memory", exc_info=True)
             return None
-
-    async def add_chat_context(self, chat_context: ChatContext) -> bool:
-        try:
-            if chat_context.memory_id == "":
-                chat_context.memory_id = str(uuid.uuid4())
-            await self._chat_contexts.insert_one(chat_context.model_dump(mode="json"))
-            return True
-        except Exception:
-            logger.error("Failed to add chat context", exc_info=True)
-            return False
-
-    async def get_chat_context_by_session_id(
-        self, session_id: str
-    ) -> ChatContext | None:
-        try:
-            return _safe_parse_chat_context(
-                await self._chat_contexts.find_one({"session_id": session_id})
-            )
-        except Exception:
-            logger.error("Failed to get chat context", exc_info=True)
-            return None
-
-    async def update_chat_context_by_session_id(
-        self, session_id: str, chat_context: ChatContext
-    ) -> bool:
-        try:
-            await self._chat_contexts.update_one(
-                {"session_id": session_id},
-                {"$set": chat_context.model_dump(exclude_unset=True, mode="json")},
-            )
-            return True
-        except Exception:
-            logger.error("Failed to update chat context", exc_info=True)
-            return False
-
-    async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
-        try:
-            await self._chat_contexts.delete_one({"session_id": session_id})
-            return True
-        except Exception:
-            logger.error("Failed to delete chat context", exc_info=True)
-            return False
 
     async def increment_user_interactions(self, user_id: str) -> bool:
         now = utcnow()
