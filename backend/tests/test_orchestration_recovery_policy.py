@@ -1,8 +1,11 @@
+import pytest
+
 from execution.orchestration.action_validator import PlannerActionValidator
 from execution.orchestration.blocker_resolver import validate_hitl_answered_blockers
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.recovery_policy import (
+    action_for_fulfilled_goal_recovery,
     action_for_rejected_ask_user,
     action_for_rejected_delegate,
     normalize_delegate_repair_lineage,
@@ -323,6 +326,121 @@ def test_rejected_ask_user_with_no_progress_outcome_and_artifacts_returns_none()
 
     assert (
         action_for_rejected_ask_user(
+            state,
+            error_code="ask_user_blocker_keys_required",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "completion_evidence_invalid",
+        "platform_answer_instruction_missing",
+    ],
+)
+def test_fulfilled_goal_recovery_completes_when_agents_fulfilled(error_code: str):
+    state = _state(status="fulfilled")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-story",
+            agent_id="agent-story",
+            status="completed",
+            text="Once upon a time...",
+        ),
+        AgentOutputRecord(
+            agent_message_id="msg-image",
+            agent_id="agent-image",
+            status="completed",
+            text="",
+            artifact_keys=["artifact-image-1"],
+        ),
+    ]
+    state.blockers = []
+
+    action = action_for_fulfilled_goal_recovery(state, error_code=error_code)
+
+    assert action is not None
+    assert action.action == PlannerActionType.COMPLETE
+    assert action.completion_evidence is None
+
+
+def test_delegate_goal_already_fulfilled_waits_until_exhausted():
+    state = _state(status="fulfilled")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-story",
+            agent_id="agent-story",
+            status="completed",
+            text="Once upon a time...",
+        ),
+    ]
+    state.blockers = []
+
+    assert (
+        action_for_fulfilled_goal_recovery(
+            state,
+            error_code="delegate_goal_already_fulfilled",
+            exhausted=False,
+        )
+        is None
+    )
+
+    action = action_for_fulfilled_goal_recovery(
+        state,
+        error_code="delegate_goal_already_fulfilled",
+        exhausted=True,
+    )
+    assert action is not None
+    assert action.action == PlannerActionType.COMPLETE
+    assert action.completion_evidence is None
+
+
+def test_fulfilled_goal_recovery_prefers_validated_blocker_hitl():
+    state = _state(status="fulfilled")
+    state.blockers = [
+        BlockerRecord(
+            key="blocker-1",
+            description="Need travel dates.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+
+    action = action_for_fulfilled_goal_recovery(
+        state,
+        error_code="completion_evidence_invalid",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.ASK_USER
+    assert action.questions[0].blocker_keys == ["blocker-1"]
+
+
+def test_fulfilled_goal_recovery_without_progress_returns_none():
+    state = _state(status="no_progress")
+    state.delegation_outcomes = []
+    state.agent_outputs = []
+    state.blockers = []
+
+    assert (
+        action_for_fulfilled_goal_recovery(
+            state,
+            error_code="platform_answer_instruction_missing",
+        )
+        is None
+    )
+
+
+def test_fulfilled_goal_recovery_ignores_unrelated_codes():
+    state = _state(status="fulfilled")
+
+    assert (
+        action_for_fulfilled_goal_recovery(
             state,
             error_code="ask_user_blocker_keys_required",
         )

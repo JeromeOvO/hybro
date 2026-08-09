@@ -494,8 +494,15 @@ artifact contracts remain unchanged. When the planner later invents a
 post-dispatch `ask_user` without validated blocker keys, Execution recovers by
 preferring a corrected HITL action for open validated blockers, or `complete`
 when Agent results already satisfy the goal—so the run does not exhaust retries
-while the UI stays on “checking whether the goal is complete.” Exhausted
-planner-validator retries emit an explicit `unable_to_continue` stage. Backend control state remains private, but the latest
+while the UI stays on “checking whether the goal is complete.” The same
+fulfilled-goal recovery applies when the planner invents invalid completion
+evidence (for example text facts for artifact-only Agents) or emits
+`platform_answer` without `synthesis_instruction`—those termination-intent
+codes may recover before retries are exhausted. Re-delegating an already
+fulfilled goal (`delegate_goal_already_fulfilled`) only recovers once retries
+are exhausted, so a premature re-delegate cannot finalize the run before other
+Agents finish. Exhausted planner-validator retries emit an explicit
+`unable_to_continue` stage. Backend control state remains private, but the latest
 open planner-validator failure is projected separately as bounded,
 planner-facing retry feedback containing only its error, retry count, and
 recovery hints. The next planning attempt must correct that error instead of

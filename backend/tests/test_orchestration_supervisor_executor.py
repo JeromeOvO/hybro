@@ -11344,3 +11344,90 @@ async def test_interrupt_checkpoint_does_not_serialize_supervisor_continuation()
 
     assert checkpointed is True
     assert not hasattr(executor, "continuation_store")
+
+
+def test_extract_response_text_from_message_with_artifact_parts():
+    """Verifies that text artifacts are extracted when message_text is empty."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="current_result",
+                parts=[Part(root=TextPart(kind="text", text="Once upon a story."))],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    text = supervisor_executor_module._extract_response_text_from_message(msg)
+    assert text == "Once upon a story."
+    assert msg.message_content.message_text == "Once upon a story."
+
+
+def test_step_result_from_persisted_message_extracts_artifact_text():
+    """Verifies _step_result_from_persisted_message extracts artifact text for empty message_text."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="response",
+                parts=[
+                    Part(root=TextPart(kind="text", text="Once upon a robot story."))
+                ],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    from models.orchestration import (
+        DispatchExpectedOutput,
+        DispatchIntent,
+    )
+
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="msg-1",
+        agent_id="story_agent",
+        task="story",
+        task_hash="hash-1",
+        goal_family_fingerprint="fam-1",
+        goal_revision_fingerprint="rev-1",
+        expected_outputs=[
+            DispatchExpectedOutput(output_key="out", kind="text", required=True)
+        ],
+    )
+    result = SupervisorExecutor._orchestration_result_from_agent_message(
+        intent,
+        msg,
+        {"story_agent": "Story Agent"},
+        1,
+    )
+    assert result is not None
+    assert result.response_text == "Once upon a robot story."
+    assert result.success is True

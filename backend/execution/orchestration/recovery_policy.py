@@ -159,14 +159,85 @@ def action_for_rejected_ask_user(
     )
     if ask_user is not None:
         return ask_user
-    if not _has_completable_agent_progress(state):
-        return None
-    return PlannerAction(
-        action=PlannerActionType.COMPLETE,
+    return _complete_when_agent_results_fulfilled(
+        state,
         reasoning=(
             "Backend recovery selected complete because Agent results already "
             "satisfy the goal and ask_user had no validated blocker."
         ),
+    )
+
+
+_TERMINAL_INTENT_RECOVERY_CODES = frozenset(
+    {
+        # Planner already tried to end the turn; empty-evidence complete is safe.
+        "completion_evidence_invalid",
+        "platform_answer_instruction_missing",
+    }
+)
+_EXHAUSTED_ONLY_RECOVERY_CODES = frozenset(
+    {
+        # Planner wanted more work; completing early can skip remaining agents.
+        "delegate_goal_already_fulfilled",
+    }
+)
+_FULFILLED_GOAL_RECOVERY_CODES = (
+    _TERMINAL_INTENT_RECOVERY_CODES | _EXHAUSTED_ONLY_RECOVERY_CODES
+)
+
+
+def action_for_fulfilled_goal_recovery(
+    state: OrchestrationRunState,
+    *,
+    error_code: str,
+    exhausted: bool = False,
+) -> PlannerAction | None:
+    """Recover when Agents already fulfilled but the planner cannot terminate.
+
+    After successful Agent work, the planner may invent invalid completion
+    evidence (e.g. ``:text`` facts for artifact-only Agents), re-delegate an
+    already fulfilled goal, or emit ``platform_answer`` without a synthesis
+    instruction. Prefer ``complete`` with empty evidence so Execution can
+    synthesize instead of exhausting retries into ``unable_to_continue``.
+
+    ``delegate_goal_already_fulfilled`` only recovers when ``exhausted`` is true,
+    so a premature re-delegate cannot finalize the run before other Agents run.
+    Termination-intent codes may recover earlier because the planner was already
+    trying to end the turn.
+    """
+
+    if error_code in _EXHAUSTED_ONLY_RECOVERY_CODES and not exhausted:
+        return None
+    if error_code not in _FULFILLED_GOAL_RECOVERY_CODES:
+        return None
+    ask_user = _ask_user_action_for_validated_blockers(
+        state,
+        reasoning=(
+            "Backend recovery selected HITL because validated user-only blockers "
+            "are open."
+        ),
+    )
+    if ask_user is not None:
+        return ask_user
+    return _complete_when_agent_results_fulfilled(
+        state,
+        reasoning=(
+            "Backend recovery selected complete because Agent results already "
+            "satisfy the goal and the planner could not terminate cleanly."
+        ),
+    )
+
+
+def _complete_when_agent_results_fulfilled(
+    state: OrchestrationRunState,
+    *,
+    reasoning: str,
+) -> PlannerAction | None:
+    if not _has_completable_agent_progress(state):
+        return None
+    return PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning=reasoning,
         completion_evidence=None,
     )
 
