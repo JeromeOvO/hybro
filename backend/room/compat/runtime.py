@@ -460,6 +460,36 @@ class RoomServices:
         )
         return self._assembled_context_text(assembled)
 
+    def _build_routing_context_from_memory(
+        self,
+        room_memory: RoomMemory,
+        current_task: str,
+    ) -> str:
+        """Build small pre-routing context from canonical room history."""
+        context_assembly = getattr(self, "_context_assembly", None)
+        if context_assembly is not None:
+            try:
+                assembled = context_assembly.assemble_supervisor_context_from_memory(
+                    room_memory,
+                    current_task,
+                    agent_registry=[],
+                    max_turns=5,
+                )
+                return self._assembled_context_text(assembled)
+            except Exception as exc:
+                logger.warning(
+                    "RoomServices: routing context assembly failed: %s",
+                    exc,
+                )
+
+        # Compatibility helper remains canonical: RoomMemory exposes the top-level
+        # conversation_history expected by build_minimal_context's structural input.
+        return build_minimal_context(
+            room_memory,
+            current_task=current_task,
+            max_turns=5,
+        )
+
     @staticmethod
     def _legacy_room_from_info(info: RoomInfo) -> Room:
         return Room(
@@ -2865,11 +2895,10 @@ class RoomServices:
 
         # Build conversation context only for queue/debate message preparation.
         conversation_context = None
-        if room_memory and room_memory.memory_content:
-            conversation_context = build_minimal_context(
-                room_memory.memory_content,
-                current_task=message_text,
-                max_turns=5,
+        if room_memory:
+            conversation_context = self._build_routing_context_from_memory(
+                room_memory,
+                message_text,
             )
         ext_q = (
             user_message.extend_info.get("quoted_text")
