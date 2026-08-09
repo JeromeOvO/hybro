@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections import deque
 from datetime import timedelta
@@ -11,9 +12,11 @@ from uuid import uuid4
 from a2a_adapter.task_status import build_completed_text_task
 from common.a2a_constants import CommonTaskState, SSEProcessingStatus, is_terminal_state
 from common.dto import RoomMessageSummary
+from common.eventing import InternalEventPublisher
 from common.message_commit_events import publish_message_committed
 from common.observability import traced_create_task
-from common.protocols import ContextMemoryRuntime, EventPublisher, RoomDistributedLock
+from common.protocols import ContextMemoryRuntime, RoomDistributedLock
+from common.utils.cancellation import CancellationError
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
@@ -29,6 +32,7 @@ from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.orchestration.supervisor_executor import SupervisorExecutor
 from execution.ports import (
     A2ATransportPort,
+    CancellationControlPort,
     CoordinatorSynthesisPort,
     ExecutionDeliveryPort,
     HITLCoordinator,
@@ -50,7 +54,10 @@ from execution.ports import (
 from execution.shutdown import is_graceful_shutdown_cancellation
 from execution.state.task_state_manager import TaskStateManager
 from llm_gateway.errors import LLMServiceNotBoundError
-from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
+from models.orchestration import (
+    TERMINAL_ORCHESTRATION_STATUSES,
+    OrchestrationStatus,
+)
 from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId, RoomAgentMessage
@@ -91,7 +98,7 @@ room_supervisor_service = None
 orchestration_run_store = InMemoryOrchestrationRunStore()
 orchestration_planner = None
 delivery = None
-event_publisher = None
+internal_event_publisher = None
 remote_task_reader = None
 context_memory_runtime = None
 context_compaction = None
@@ -152,6 +159,7 @@ class RoomMessageCenter:
         memory_writer,
         hitl_reader: HITLReaderPort,
         delivery: ExecutionDeliveryPort,
+        cancellation_control: CancellationControlPort,
         coordinator: CoordinatorSynthesisPort,
         task_notifier: NotificationServicePort,
         task_notification_store: TaskNotificationStorePort,
@@ -180,11 +188,11 @@ class RoomMessageCenter:
         orchestration_resource_provider=None,
         cloud_health_cache_ttl: float = 30.0,
         cloud_health_check_timeout: float = 5.0,
-        event_publisher: EventPublisher | None = None,
+        internal_event_publisher: InternalEventPublisher | None = None,
     ):
-        if event_publisher is None:
+        if internal_event_publisher is None:
             raise RuntimeError(
-                "RoomMessageCenter event_publisher dependency is required"
+                "RoomMessageCenter internal_event_publisher dependency is required"
             )
         self.room_runtime = room_runtime
         self.message_reader = message_reader
@@ -199,7 +207,10 @@ class RoomMessageCenter:
         self.memory_writer = memory_writer
         self.hitl_reader = hitl_reader
         self.delivery = delivery
-        self.event_publisher = event_publisher
+        if cancellation_control is None:
+            raise RuntimeError("RoomMessageCenter cancellation_control is required")
+        self.cancellation_control = cancellation_control
+        self.internal_event_publisher = internal_event_publisher
         self.coordinator = coordinator
         self.summary_service = summary_service
         self.task_notifications = task_notifications
@@ -292,8 +303,9 @@ class RoomMessageCenter:
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             delivery=self.delivery,
+            cancellation_control=self.cancellation_control,
             room_runtime=self.room_runtime,
-            event_publisher=event_publisher,
+            internal_event_publisher=internal_event_publisher,
             message_reader=self.message_reader,
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
@@ -317,7 +329,7 @@ class RoomMessageCenter:
             message_writer=self.message_writer,
             task_state_store=self.task_state_store,
             continuation_store=self.continuation_store,
-            event_publisher=event_publisher,
+            internal_event_publisher=internal_event_publisher,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -348,6 +360,10 @@ class RoomMessageCenter:
 
     # -- Redis wiring (called from main.py at startup) ---------------------
 
+    def _release_cancellation_token(self, message_id: str, token) -> None:
+        if token is not None:
+            self.cancellation_control.release_token(message_id, token)
+
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
         self._processing_status_emitter = processing_status_emitter
         for component in (
@@ -370,10 +386,10 @@ class RoomMessageCenter:
     ) -> None:
         if not message_id:
             return
-        if self.event_publisher is None:
-            raise RuntimeError("RoomMessageCenter event_publisher not bound")
+        if self.internal_event_publisher is None:
+            raise RuntimeError("RoomMessageCenter internal_event_publisher not bound")
         await publish_message_committed(
-            self.event_publisher,
+            self.internal_event_publisher,
             room_id=room_id,
             message_id=message_id,
             message_type="agent",
@@ -393,13 +409,15 @@ class RoomMessageCenter:
         client_request_id: str | None = None,
         details=None,
         agents: list[dict] | None = None,
-    ) -> None:
+        system_message_id: str | None = None,
+        turn_event_enabled: bool = False,
+    ) -> dict[str, Any] | None:
         if getattr(self, "_processing_status_emitter", None) is None:
             raise RuntimeError(
                 "RoomMessageCenter execution event dependencies not bound"
             )
         status_value = status.value if hasattr(status, "value") else str(status)
-        await self._processing_status_emitter(
+        return await self._processing_status_emitter(
             room_id=room_id,
             status=status,
             message_id=message_id,
@@ -424,6 +442,8 @@ class RoomMessageCenter:
                 else None
             ),
             agents=agents,
+            system_message_id=system_message_id,
+            turn_event_enabled=turn_event_enabled,
         )
 
     async def _persist_turn_completion_kind(
@@ -805,7 +825,8 @@ class RoomMessageCenter:
     # ------------------------------------------------------------------
 
     async def process_room_user_message(
-        self, request: OrchestrationRequest
+        self,
+        request: OrchestrationRequest,
     ) -> OrchestrationResponse:
         """
         Process a room user message by executing all related agent messages in sequence.
@@ -834,7 +855,8 @@ class RoomMessageCenter:
         if validation_response:
             return validation_response
 
-        # Idempotency guard (SDR 2.5)
+        # Idempotency guard (SDR 2.5). A losing caller never acquires or
+        # releases the registry token owned by the admitted execution.
         claimed = await self._claim_user_message(request)
 
         if not claimed:
@@ -852,9 +874,21 @@ class RoomMessageCenter:
 
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
+        owned_token = self.cancellation_control.create_token(room_user_message_id)
+        try:
+            # Hydrate an L1 miss from Redis before the first synchronous
+            # cancellation checkpoint. check_cancelled signals the active token.
+            await self.cancellation_control.check_cancelled(room_user_message_id)
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            raise
 
         # ----- Per-room lock: serialise all processing within a room -----
-        lock_owner = await self._acquire_room_lock(room_id)
+        try:
+            lock_owner = await self._acquire_room_lock(room_id)
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            raise
         lock_acquired_at = time.monotonic()
         if lock_owner is None:
             logger.error(
@@ -863,27 +897,19 @@ class RoomMessageCenter:
                 room_id,
                 room_user_message_id,
             )
-            # Release the claim so the message can be retried (by user or
-            # stale-recovery) instead of staying permanently orphaned.
-            await self.message_writer.unclaim_user_message(room_user_message_id)
-            # Fail any descendant agent messages created during the
-            # parse/prepare step so they don't remain as orphaned
-            # non-terminal task bubbles in the frontend.
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id,
-                room_user_message_id,
-            )
-            # Send terminal SSE so the frontend clears the processing
-            # indicator.  Without this, the Stop button stays stuck because
-            # send_message_to_room already emitted PROCESSING and this
-            # BackgroundTask response is never seen by the client.
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            # Commit the public winner and its recovery intent before cleanup.
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
                 details="Room is busy processing another message — please retry shortly",
+                system_message_id=f"sys-{room_user_message_id}",
             )
+            # Release the claim so the message can be retried (by user or
+            # stale-recovery) instead of staying permanently orphaned.
+            await self.message_writer.unclaim_user_message(room_user_message_id)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -896,19 +922,33 @@ class RoomMessageCenter:
         # stale task checker (orphan_threshold_minutes=2 min) might consider
         # the message orphaned.  Touching the timestamp here resets the clock
         # so processing won't be reclaimed prematurely.
-        await self.message_writer.refresh_processing_claim(room_user_message_id)
-        claim_heartbeat = traced_create_task(
-            self._heartbeat_processing_claim(room_user_message_id),
-            name=f"processing-claim-heartbeat:{room_user_message_id}",
-        )
+        try:
+            await self.message_writer.refresh_processing_claim(room_user_message_id)
+            claim_heartbeat = traced_create_task(
+                self._heartbeat_processing_claim(room_user_message_id),
+                name=f"processing-claim-heartbeat:{room_user_message_id}",
+            )
+        except BaseException:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            try:
+                await self._release_room_lock(
+                    room_id, lock_owner, acquired_at=lock_acquired_at
+                )
+            except Exception:
+                logger.warning("failed to release room lock", exc_info=True)
+            raise
 
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
         try:
             return await self._process_room_user_message_locked(
-                request, room_id, room_user_message_id
+                request,
+                room_id,
+                room_user_message_id,
+                token=owned_token,
             )
         except asyncio.CancelledError as exc:
+            self._release_cancellation_token(room_user_message_id, owned_token)
             if is_graceful_shutdown_cancellation(exc):
                 logger.info(
                     "RoomMessageCenter: processing interrupted by graceful shutdown "
@@ -920,42 +960,45 @@ class RoomMessageCenter:
                 "RoomMessageCenter: processing task cancelled for message %s",
                 room_user_message_id,
             )
-            if getattr(self, "_turn_event_appender", None):
-                try:
-                    await self._turn_event_appender.append(
-                        room_id,
-                        room_user_message_id,
-                        "turn_canceled",
-                        {},
-                    )
-                except Exception:
-                    pass
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id
-            )
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.CANCELED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
+                system_message_id=f"sys-{room_user_message_id}",
             )
-            self.delivery.clear_cancellation(room_user_message_id)
+            raise
+        except Exception:
+            self._release_cancellation_token(room_user_message_id, owned_token)
             raise
         finally:
+            body_error = sys.exc_info()[1]
+            cleanup_error: BaseException | None = None
             claim_heartbeat.cancel()
             try:
                 await claim_heartbeat
             except asyncio.CancelledError:
                 pass
-            await self._release_room_lock(
-                room_id, lock_owner, acquired_at=lock_acquired_at
-            )
+            except BaseException as exc:
+                cleanup_error = exc
+            try:
+                await self._release_room_lock(
+                    room_id, lock_owner, acquired_at=lock_acquired_at
+                )
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            if cleanup_error is not None:
+                self._release_cancellation_token(room_user_message_id, owned_token)
+                if body_error is None:
+                    raise cleanup_error
 
     async def _process_room_user_message_locked(
         self,
         request: OrchestrationRequest,
         room_id: str,
         room_user_message_id: str,
+        *,
+        token,
     ) -> OrchestrationResponse:
         """Inner processing path — caller MUST hold the per-room lock."""
 
@@ -1010,21 +1053,13 @@ class RoomMessageCenter:
                     lifecycle_message_id=room_user_message_id,
                     details="Quoted context could not be loaded for this turn",
                 )
+                self._release_cancellation_token(room_user_message_id, token)
                 return OrchestrationResponse(
                     room_id=room_id,
                     success=False,
                     error=str(e),
                     status_code=400,
                 )
-
-        # Create a CancellationToken for this message pipeline (A-3).
-        # The token is pre-signalled if cancel_message() was called before
-        # processing started — no race window.
-        # If a token was already created (e.g. by send_message_to_room for
-        # the parsing phase), reuse it so the entire pipeline shares one token.
-        token = self.delivery.get_token(room_user_message_id)
-        if token is None:
-            token = self.delivery.create_token(room_user_message_id)
 
         # --- Supervisor branch ---
         is_supervisor = user_message and self._is_supervisor_envelope(
@@ -1052,6 +1087,7 @@ class RoomMessageCenter:
             )
         )
         if not query_response.success:
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -1078,16 +1114,15 @@ class RoomMessageCenter:
                     room_id,
                     room_user_message_id,
                 )
-                await self._notify_all_non_terminal_tasks_failed(
-                    room_id, room_user_message_id
-                )
                 await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.FAILED,
                     message_id=room_user_message_id,
                     lifecycle_message_id=room_user_message_id,
                     details="Supervisor-enabled room missing supervisor preparation data",
+                    system_message_id=f"sys-{room_user_message_id}",
                 )
+                self._release_cancellation_token(room_user_message_id, token)
                 return OrchestrationResponse(
                     room_id=room_id,
                     success=False,
@@ -1115,30 +1150,16 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Processing cancelled for message %s, stopping all processing",
                 room_user_message_id,
             )
-            # Capture IDs before cancellation for descendant cleanup
-            step1_ids = [msg.message_id for msg in message_queue]
-            await self.tsm.cancel_remaining_queue(message_queue)
-            # Cancel DB-only descendants (step 2, 3, …) downstream in the
-            # related_message_id chain from these step-1 messages.
-            for mid in step1_ids:
-                await self.message_writer.cancel_descendants(mid)
-            if getattr(self, "_turn_event_appender", None):
-                try:
-                    await self._turn_event_appender.append(
-                        room_id,
-                        room_user_message_id,
-                        "turn_canceled",
-                        {},
-                    )
-                except Exception:
-                    pass
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.CANCELED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
+                system_message_id=f"sys-{room_user_message_id}",
             )
-            self.delivery.clear_cancellation(room_user_message_id)
+            # Durable winner-owned projection performs descendant cleanup.
+            message_queue.clear()
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=True,
                 error="Processing cancelled by user",
@@ -1160,27 +1181,30 @@ class RoomMessageCenter:
         )
 
         if queue_processing_result.result == QueueResult.FAILED:
-            # Emit turn_failed event
-            if getattr(self, "_turn_event_appender", None):
-                try:
-                    await self._turn_event_appender.append(
-                        room_id,
-                        room_user_message_id,
-                        "turn_failed",
-                        {"reason": "Queue processing failed", "code": "error"},
-                    )
-                except Exception:
-                    pass
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id
-            )
+            # Durable root wins before any child task cleanup/projection.
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
-                details="Failed to process agent messages",
+                details={
+                    "message": (
+                        getattr(queue_processing_result, "error_message", None)
+                        or "Failed to process agent messages"
+                    ),
+                    "code": (
+                        getattr(queue_processing_result, "error_code", None)
+                        or "agent_processing_failed"
+                    ),
+                },
+                system_message_id=getattr(
+                    queue_processing_result,
+                    "system_message_id",
+                    f"sys-{room_user_message_id}",
+                ),
+                turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
             )
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
@@ -1188,46 +1212,68 @@ class RoomMessageCenter:
             )
 
         if queue_processing_result.result == QueueResult.PAUSED:
+            # Continuation persistence owns resume state; active tokens are rebuilt
+            # and Redis-hydrated by the resume path.
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id, success=True, error=None, status_code=200
             )
 
         if queue_processing_result.result == QueueResult.CANCELED:
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 success=True,
                 error="Processing cancelled by user",
                 status_code=200,
             )
 
-        # QueueResult.COMPLETED — emit unified summary + completion.
+        # QueueResult.COMPLETED — cancellation still owns the race until the
+        # durable completed transition and terminal projection succeed.
+        if token.is_cancelled:
+            await self._emit_completion_race_cancellation(
+                room_id, room_user_message_id, token
+            )
+            return OrchestrationResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
         room = await self.room_reader.get_room_by_room_id(room_id)
         is_debate = bool(
             room
             and isinstance(room.extend_info, dict)
             and room.extend_info.get("debateMode", False)
         )
-        turn_completion_kind, _ = await self._emit_unified_summary(
+        summary_coro = self._emit_unified_summary(
             room_id, room_user_message_id, is_debate=is_debate
         )
+        try:
+            turn_completion_kind, _ = await token.race(summary_coro)
+        except CancellationError:
+            await self._emit_completion_race_cancellation(
+                room_id, room_user_message_id, token
+            )
+            return OrchestrationResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
         turn_completion_kind = turn_completion_kind or "deterministic"
 
-        # Emit turn_completed event
-        if self._turn_event_appender:
-            try:
-                await self._turn_event_appender.append(
-                    room_id,
-                    room_user_message_id,
-                    "turn_completed",
-                    {"duration_ms": 0},
-                )
-            except Exception:
-                pass
+        if token.is_cancelled:
+            await self._emit_completion_race_cancellation(
+                room_id, room_user_message_id, token
+            )
+            return OrchestrationResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
 
-        # Send completion status
-        await self._persist_turn_completion_kind(
-            room_user_message_id, turn_completion_kind
-        )
-        await self._emit_processing_status(
+        # Claim the durable root terminal before publishing the child completed
+        # task, completion metadata, or turn_completed journal entry. A terminal
+        # CAS winner suppresses all downstream completion projections.
+        completion_payload = await self._emit_processing_status(
             room_id=room_id,
             status=SSEProcessingStatus.COMPLETED,
             message_id=room_user_message_id,
@@ -1236,14 +1282,50 @@ class RoomMessageCenter:
                 "turn_completion_kind": turn_completion_kind,
                 "turn_phase": "terminal",
             },
+            system_message_id=getattr(
+                queue_processing_result,
+                "system_message_id",
+                f"sys-{room_user_message_id}",
+            ),
+            turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
         )
+        if completion_payload is None:
+            await self.cancellation_control.check_cancelled(room_user_message_id)
+            if token.is_cancelled:
+                await self._emit_completion_race_cancellation(
+                    room_id, room_user_message_id, token
+                )
+            self._release_cancellation_token(room_user_message_id, token)
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=True,
+                error=("Processing cancelled by user" if token.is_cancelled else None),
+                status_code=200,
+            )
 
         # Log room memory stats (debug/monitoring)
         await self._log_room_memory_stats(room_id)
+        self._release_cancellation_token(room_user_message_id, token)
 
         return OrchestrationResponse(
             room_id=room_id, success=True, error=None, status_code=200
         )
+
+    async def _emit_completion_race_cancellation(
+        self,
+        room_id: str,
+        user_message_id: str,
+        token,
+    ) -> None:
+        await self._emit_processing_status(
+            room_id=room_id,
+            status=SSEProcessingStatus.CANCELED,
+            message_id=user_message_id,
+            lifecycle_message_id=user_message_id,
+            system_message_id=f"sys-{user_message_id}",
+            turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
+        )
+        self._release_cancellation_token(user_message_id, token)
 
     async def _notify_all_non_terminal_tasks_failed(
         self,
@@ -1253,9 +1335,9 @@ class RoomMessageCenter:
         """Safety net: send ``task_update`` SSE for every agent message under
         *user_message_id* whose task is still in a non-terminal state.
 
-        Called before terminal ``processing_status`` emits so that individual
-        task bubbles in the frontend also transition to their correct final
-        state.  The idempotency check inside
+        Called after the durable room-level terminal winner is committed so
+        individual task bubbles remain downstream projections of that winner.
+        The idempotency check inside
         ``notify_task_update`` ensures messages already notified as terminal
         are skipped (no double-notification).
         """
@@ -1447,6 +1529,19 @@ class RoomMessageCenter:
             )
         return agent_registry, room_config, conversation_context
 
+    async def _supervisor_system_message_id(self, run_id: str) -> str | None:
+        try:
+            state = await self.orchestration_run_store.get_run(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to read supervisor system message for terminal projection",
+                exc_info=True,
+            )
+            return None
+        if state is None:
+            return None
+        return state.system_agent_message_id or state.summary_message_id
+
     async def _process_supervisor(
         self,
         user_message,
@@ -1482,16 +1577,18 @@ class RoomMessageCenter:
                 "RoomMessageCenter: supervisor envelope is invalid: %s",
                 exc,
             )
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id
-            )
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
                 details="supervisor data corrupted or incomplete",
+                system_message_id=await self._supervisor_system_message_id(
+                    room_user_message_id
+                ),
+                turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
             )
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -1536,6 +1633,17 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Supervisor planning failed for %s",
                 room_user_message_id,
             )
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
+                details="Supervisor planning failed",
+                system_message_id=await self._supervisor_system_message_id(
+                    room_user_message_id
+                ),
+                turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
+            )
             try:
                 await self.coordinator.emit_synthesis_message(
                     room_id=room_id,
@@ -1552,17 +1660,7 @@ class RoomMessageCenter:
                     "RoomMessageCenter: Failed to emit planning error message: %s",
                     emit_err,
                 )
-            self.delivery.remove_token(room_user_message_id)
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id
-            )
-            await self._emit_processing_status(
-                room_id=room_id,
-                status=SSEProcessingStatus.FAILED,
-                message_id=room_user_message_id,
-                lifecycle_message_id=room_user_message_id,
-                details="Supervisor planning failed",
-            )
+            self._release_cancellation_token(room_user_message_id, token)
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -1575,16 +1673,17 @@ class RoomMessageCenter:
                 "for message %s",
                 room_user_message_id,
             )
-            self.delivery.remove_token(room_user_message_id)
-            await self._notify_all_non_terminal_tasks_failed(
-                room_id, room_user_message_id
-            )
+            self._release_cancellation_token(room_user_message_id, token)
             await self._emit_processing_status(
                 room_id=room_id,
                 status=SSEProcessingStatus.FAILED,
                 message_id=room_user_message_id,
                 lifecycle_message_id=room_user_message_id,
                 details="Supervisor execution failed unexpectedly",
+                system_message_id=await self._supervisor_system_message_id(
+                    room_user_message_id
+                ),
+                turn_event_enabled=bool(getattr(self, "_turn_event_appender", None)),
             )
             return OrchestrationResponse(
                 room_id=room_id,
@@ -1597,6 +1696,7 @@ class RoomMessageCenter:
             result=result,
             room_id=room_id,
             user_message_id=room_user_message_id,
+            token=token,
             user_message=user_message,
         )
         await self._log_room_memory_stats(room_id)
@@ -1618,15 +1718,44 @@ class RoomMessageCenter:
         result: SupervisorRunResult,
         room_id: str,
         user_message_id: str,
+        token=None,
         room=None,
         user_message=None,
     ) -> None:
         """Project durable orchestration state and emit terminal delivery."""
         result_run_state = result.run_state
+        durable_status = (
+            result_run_state.status if result_run_state is not None else None
+        )
+        durable_result_status = {
+            OrchestrationStatus.COMPLETED: RunStatus.COMPLETED,
+            OrchestrationStatus.CANCELED: RunStatus.CANCELED,
+            OrchestrationStatus.FAILED: RunStatus.FAILED,
+            OrchestrationStatus.BUDGET_EXHAUSTED: RunStatus.FAILED,
+        }.get(durable_status)
+        if durable_result_status is not None:
+            result.status = durable_result_status
+        elif (
+            result.status == RunStatus.COMPLETED
+            and token is not None
+            and token.is_cancelled
+        ):
+            result.status = RunStatus.CANCELED
+        completion_cancellable = durable_status != OrchestrationStatus.COMPLETED
         orchestration_status = (
             getattr(result_run_state.status, "value", result_run_state.status)
             if result_run_state is not None
             else getattr(result.status, "value", result.status)
+        )
+        result_trajectory = self._trajectory_for_supervisor_result(result)
+        system_message_id = (
+            getattr(result_run_state, "system_agent_message_id", None)
+            if result_run_state is not None
+            else None
+        ) or (
+            result_trajectory.system_agent_message_id
+            if result_trajectory is not None
+            else None
         )
         if user_message is None:
             user_message = (
@@ -1675,8 +1804,6 @@ class RoomMessageCenter:
                 user_message_id, user_message
             )
 
-        await self._run_supervisor_terminal_post_loop_integration(result, room_id)
-
         match result.status:
             case RunStatus.COMPLETED:
                 trajectory_responses = (
@@ -1692,8 +1819,14 @@ class RoomMessageCenter:
                     else False
                 )
 
+                if completion_cancellable and token is not None and token.is_cancelled:
+                    await self._emit_completion_race_cancellation(
+                        room_id, user_message_id, token
+                    )
+                    return
+
                 if result.synthesis_text is not None:
-                    turn_completion_kind, _ = await self._emit_unified_summary(
+                    summary_coro = self._emit_unified_summary(
                         room_id,
                         user_message_id,
                         synthesis_text=result.synthesis_text,
@@ -1701,12 +1834,20 @@ class RoomMessageCenter:
                         is_debate=is_debate,
                         working_already_emitted=True,
                     )
+                    try:
+                        turn_completion_kind, _ = (
+                            await token.race(summary_coro)
+                            if completion_cancellable and token is not None
+                            else await summary_coro
+                        )
+                    except CancellationError:
+                        await self._emit_completion_race_cancellation(
+                            room_id, user_message_id, token
+                        )
+                        return
                     turn_completion_kind = turn_completion_kind or "deterministic"
                 elif is_debate and len(trajectory_responses) >= 2:
-                    (
-                        turn_completion_kind,
-                        generated_summary,
-                    ) = await self._emit_unified_summary(
+                    summary_coro = self._emit_unified_summary(
                         room_id,
                         user_message_id,
                         synthesis_text=None,
@@ -1715,35 +1856,47 @@ class RoomMessageCenter:
                         working_already_emitted=False,
                         skip_db_write=True,
                     )
+                    try:
+                        turn_completion_kind, generated_summary = (
+                            await token.race(summary_coro)
+                            if completion_cancellable and token is not None
+                            else await summary_coro
+                        )
+                    except CancellationError:
+                        await self._emit_completion_race_cancellation(
+                            room_id, user_message_id, token
+                        )
+                        return
                     turn_completion_kind = turn_completion_kind or "deterministic"
                     if generated_summary:
                         result.synthesis_text = generated_summary
                 elif len(trajectory_responses) >= 2:
-                    await self._emit_deterministic_digest(
+                    digest_coro = self._emit_deterministic_digest(
                         room_id,
                         user_message_id,
                         agent_count=len(trajectory_responses),
                     )
+                    try:
+                        if completion_cancellable and token is not None:
+                            await token.race(digest_coro)
+                        else:
+                            await digest_coro
+                    except CancellationError:
+                        await self._emit_completion_race_cancellation(
+                            room_id, user_message_id, token
+                        )
+                        return
                     turn_completion_kind = "deterministic"
                 else:
                     turn_completion_kind = "deterministic"
 
-                # Emit turn_completed event
-                if getattr(self, "_turn_event_appender", None):
-                    try:
-                        await self._turn_event_appender.append(
-                            room_id,
-                            user_message_id,
-                            "turn_completed",
-                            {"duration_ms": 0},
-                        )
-                    except Exception:
-                        pass
+                if completion_cancellable and token is not None and token.is_cancelled:
+                    await self._emit_completion_race_cancellation(
+                        room_id, user_message_id, token
+                    )
+                    return
 
-                await self._persist_turn_completion_kind(
-                    user_message_id, turn_completion_kind
-                )
-                await self._emit_processing_status(
+                completion_payload = await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.COMPLETED,
                     message_id=user_message_id,
@@ -1752,7 +1905,23 @@ class RoomMessageCenter:
                         "turn_completion_kind": turn_completion_kind,
                         "turn_phase": "terminal",
                     },
+                    system_message_id=system_message_id,
+                    turn_event_enabled=bool(
+                        getattr(self, "_turn_event_appender", None)
+                    ),
                 )
+                if completion_payload is None:
+                    if completion_cancellable and token is not None:
+                        await self.cancellation_control.check_cancelled(user_message_id)
+                    if (
+                        completion_cancellable
+                        and token is not None
+                        and token.is_cancelled
+                    ):
+                        await self._emit_completion_race_cancellation(
+                            room_id, user_message_id, token
+                        )
+                    return
 
             case RunStatus.PAUSED:
                 pass
@@ -1762,40 +1931,16 @@ class RoomMessageCenter:
                 # Token stays alive — resume path creates/reuses it.
 
             case RunStatus.CANCELED:
-                canceled_parent_ids: list[str] = []
-                cleanup_trajectory = self._trajectory_for_supervisor_result(result)
-                for entry in cleanup_trajectory.entries if cleanup_trajectory else []:
-                    for step_result in entry.results:
-                        if step_result.agent_message_id:
-                            canceled_parent_ids.append(step_result.agent_message_id)
-                            await self.message_writer.cancel_descendants(
-                                step_result.agent_message_id
-                            )
-                if canceled_parent_ids:
-                    await self.message_writer.cancel_agent_messages_by_ids(
-                        canceled_parent_ids
-                    )
-                # Emit turn_canceled event
-                if getattr(self, "_turn_event_appender", None):
-                    try:
-                        await self._turn_event_appender.append(
-                            room_id,
-                            user_message_id,
-                            "turn_canceled",
-                            {},
-                        )
-                    except Exception:
-                        pass
-                await self._notify_all_non_terminal_tasks_failed(
-                    room_id, user_message_id
-                )
                 await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.CANCELED,
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
+                    system_message_id=system_message_id,
+                    turn_event_enabled=bool(
+                        getattr(self, "_turn_event_appender", None)
+                    ),
                 )
-                self.delivery.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
                 terminal_summary = result.terminal_summary
@@ -1813,63 +1958,46 @@ class RoomMessageCenter:
                     if terminal_summary is not None
                     else "error"
                 )
-                failed_parent_ids: list[str] = []
-                cleanup_trajectory = self._trajectory_for_supervisor_result(result)
-                for entry in cleanup_trajectory.entries if cleanup_trajectory else []:
-                    for step_result in entry.results:
-                        if step_result.agent_message_id:
-                            failed_parent_ids.append(step_result.agent_message_id)
-                            await self.message_writer.cancel_descendants(
-                                step_result.agent_message_id
-                            )
-                if failed_parent_ids:
-                    await self.message_writer.cancel_agent_messages_by_ids(
-                        failed_parent_ids
-                    )
-                # Emit turn_failed event
-                if getattr(self, "_turn_event_appender", None):
-                    try:
-                        await self._turn_event_appender.append(
-                            room_id,
-                            user_message_id,
-                            "turn_failed",
-                            {
-                                "reason": failure_reason,
-                                "code": failure_code,
-                                **(
-                                    {"terminal_summary": terminal_summary}
-                                    if terminal_summary is not None
-                                    else {}
-                                ),
-                            },
-                        )
-                    except Exception:
-                        pass
-                await self._notify_all_non_terminal_tasks_failed(
-                    room_id, user_message_id
-                )
                 await self._emit_processing_status(
                     room_id=room_id,
                     status=SSEProcessingStatus.FAILED,
                     message_id=user_message_id,
                     lifecycle_message_id=user_message_id,
                     details={
-                        "message": "supervisor execution failed",
+                        "message": failure_reason,
+                        "code": failure_code,
                         **(
                             {"terminal_summary": terminal_summary}
                             if terminal_summary is not None
                             else {}
                         ),
                     },
+                    system_message_id=system_message_id,
+                    turn_event_enabled=bool(
+                        getattr(self, "_turn_event_appender", None)
+                    ),
+                )
+
+        if getattr(result.status, "value", result.status) in {
+            RunStatus.COMPLETED.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELED.value,
+        }:
+            try:
+                await self._run_supervisor_terminal_post_loop_integration(
+                    result, room_id
+                )
+            except Exception:
+                logger.warning(
+                    "Supervisor terminal post-loop integration failed after root commit",
+                    exc_info=True,
                 )
 
         # Terminal run state is persisted via run_command_handler / runs; no room mirror write.
 
-        # Clean up cancellation token for all terminal statuses.
-        # PAUSED and AWAITING_INPUT runs keep their token alive — the
-        # webhook/HITL resume path will create/reuse it.
-        if result.status not in (RunStatus.PAUSED, RunStatus.AWAITING_INPUT):
-            self.delivery.remove_token(user_message_id)
+        # Continuations hold durable resume state. Active tokens must never be
+        # retained across PAUSED/AWAITING_INPUT; resume recreates and hydrates them.
+        self._release_cancellation_token(user_message_id, token)
 
     async def _run_supervisor_terminal_post_loop_integration(
         self,
@@ -1877,8 +2005,12 @@ class RoomMessageCenter:
         room_id: str,
     ) -> None:
         # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
-        terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
-        if result.status in terminal_statuses:
+        terminal_statuses = {
+            RunStatus.COMPLETED.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELED.value,
+        }
+        if getattr(result.status, "value", result.status) in terminal_statuses:
             trajectory = self._trajectory_for_supervisor_result(result)
             # Add synthesis text to room memory history
             if (
@@ -1976,6 +2108,24 @@ class RoomMessageCenter:
                 message_id
             )
         )
+        if continuation is None:
+            return await self._resume_durable_orchestration_from_agent_message(
+                message_id
+            )
+        if not isinstance(continuation, dict):
+            claimed = (
+                await self.continuation_store.get_and_clear_continuation_on_message(
+                    message_id
+                )
+            )
+            if claimed is None:
+                return False
+            await self.queue_executor._restore_invalid_continuation(
+                message_id,
+                claimed,
+                reason="continuation payload must be an object",
+            )
+            return False
         if not continuation:
             return await self._resume_durable_orchestration_from_agent_message(
                 message_id
@@ -2085,53 +2235,105 @@ class RoomMessageCenter:
 
         # Queue path: re-save the continuation so QueueExecutor can read it
         # (we already consumed it with get_and_clear above).
-        await self.continuation_store.save_continuation_on_message(
+        restored = await self.continuation_store.save_continuation_on_message(
             message_id, continuation
         )
+        if not restored:
+            await self.queue_executor._restore_invalid_continuation(
+                message_id,
+                continuation,
+                reason="continuation handoff restore failed",
+            )
+            return False
 
         result = await self.queue_executor.resume_from_continuation(
             message_id,
             task_result_text,
-            before_terminal_failure=self._notify_all_non_terminal_tasks_failed,
         )
 
         if not result.success:
             return False
 
         if result.needs_completion and result.room_id and result.user_message_id:
-            room = await self.room_reader.get_room_by_room_id(result.room_id)
-            is_debate = bool(
-                room
-                and isinstance(room.extend_info, dict)
-                and room.extend_info.get("debateMode", False)
-            )
-            turn_completion_kind, _ = await self._emit_unified_summary(
-                result.room_id, result.user_message_id, is_debate=is_debate
-            ) or ("deterministic", None)
-            if getattr(self, "_turn_event_appender", None):
-                try:
-                    await self._turn_event_appender.append(
+            completion_token = getattr(result, "token", None)
+            if completion_token is None:
+                completion_token = self.cancellation_control.create_token(
+                    result.user_message_id
+                )
+            try:
+                await self.cancellation_control.check_cancelled(result.user_message_id)
+                if completion_token.is_cancelled:
+                    await self._emit_completion_race_cancellation(
                         result.room_id,
                         result.user_message_id,
-                        "turn_completed",
-                        {"duration_ms": 0},
+                        completion_token,
                     )
-                except Exception:
-                    pass
-            await self._persist_turn_completion_kind(
-                result.user_message_id, turn_completion_kind
-            )
-            await self._emit_processing_status(
-                room_id=result.room_id,
-                status=SSEProcessingStatus.COMPLETED,
-                message_id=result.user_message_id,
-                lifecycle_message_id=result.user_message_id,
-                details={
-                    "turn_completion_kind": turn_completion_kind,
-                    "turn_phase": "terminal",
-                },
-            )
-            await self._log_room_memory_stats(result.room_id)
+                    return True
+
+                room = await self.room_reader.get_room_by_room_id(result.room_id)
+                is_debate = bool(
+                    room
+                    and isinstance(room.extend_info, dict)
+                    and room.extend_info.get("debateMode", False)
+                )
+                try:
+                    summary_result = await completion_token.race(
+                        self._emit_unified_summary(
+                            result.room_id,
+                            result.user_message_id,
+                            is_debate=is_debate,
+                        )
+                    )
+                except CancellationError:
+                    await self._emit_completion_race_cancellation(
+                        result.room_id,
+                        result.user_message_id,
+                        completion_token,
+                    )
+                    return True
+                turn_completion_kind, _ = summary_result or (
+                    "deterministic",
+                    None,
+                )
+                if completion_token.is_cancelled:
+                    await self._emit_completion_race_cancellation(
+                        result.room_id,
+                        result.user_message_id,
+                        completion_token,
+                    )
+                    return True
+
+                completion_payload = await self._emit_processing_status(
+                    room_id=result.room_id,
+                    status=SSEProcessingStatus.COMPLETED,
+                    message_id=result.user_message_id,
+                    lifecycle_message_id=result.user_message_id,
+                    details={
+                        "turn_completion_kind": turn_completion_kind,
+                        "turn_phase": "terminal",
+                    },
+                    system_message_id=f"sys-{result.user_message_id}",
+                    turn_event_enabled=bool(
+                        getattr(self, "_turn_event_appender", None)
+                    ),
+                )
+                if completion_payload is None:
+                    await self.cancellation_control.check_cancelled(
+                        result.user_message_id
+                    )
+                    if completion_token.is_cancelled:
+                        await self._emit_completion_race_cancellation(
+                            result.room_id,
+                            result.user_message_id,
+                            completion_token,
+                        )
+                    return True
+
+                await self._log_room_memory_stats(result.room_id)
+            finally:
+                self._release_cancellation_token(
+                    result.user_message_id, completion_token
+                )
 
         return True
 

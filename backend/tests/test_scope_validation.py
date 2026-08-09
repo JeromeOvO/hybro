@@ -561,7 +561,9 @@ class TestInlineMentionBehavior:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.cancellation_control = room_center.delivery
         room_center.delivery.create_token = MagicMock(return_value=None)
+        room_center.delivery.check_cancelled = AsyncMock(return_value=False)
         handle_mentions = AsyncMock()
         prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
         room_center._handle_mentions_flow = handle_mentions
@@ -699,7 +701,9 @@ class TestAllAgentsPostPersistMessageId:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.cancellation_control = room_center.delivery
         room_center.delivery.create_token = MagicMock()
+        room_center.delivery.check_cancelled = AsyncMock(return_value=False)
 
         # Make _resolve_explicit_target_scope return an error (simulating selector failure)
         error_response = RoomCenterUserMessageResponse(
@@ -769,7 +773,9 @@ class TestClientRequestIdPropagation:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.cancellation_control = room_center.delivery
         room_center.delivery.create_token = MagicMock()
+        room_center.delivery.check_cancelled = AsyncMock(return_value=False)
 
         # Make scope resolution return an error so the function returns early.
         error_response = RoomCenterUserMessageResponse(

@@ -106,19 +106,23 @@ class _RoomFiles:
         self.releases.append(message_id)
 
 
-class _EventPublisher:
+class _InternalEventPublisher:
     def __init__(self) -> None:
         self.internal_events = []
-        self.public_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ) -> None:
         self.internal_events.append(event)
+
+
+class _DeliveryEventPublisher:
+    def __init__(self) -> None:
+        self.public_events = []
 
     async def emit(self, event) -> None:
         self.public_events.append(event)
@@ -173,8 +177,11 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             )
         )
     )
-    room_services.delivery = SimpleNamespace(
-        create_token=MagicMock(return_value=object())
+    room_services.delivery = SimpleNamespace()
+    room_services.cancellation_control = SimpleNamespace(
+        create_token=MagicMock(return_value=object()),
+        release_token=MagicMock(return_value=True),
+        check_cancelled=AsyncMock(return_value=False),
     )
     room_files = _RoomFiles()
     room_services.bind_room_files(room_files)
@@ -194,8 +201,9 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             )
         )
     )
-    publisher = _EventPublisher()
-    room_services.bind_message_event_publisher(publisher)
+    internal_publisher = _InternalEventPublisher()
+    delivery_publisher = _DeliveryEventPublisher()
+    room_services.bind_internal_event_publisher(internal_publisher)
     preflight_count = 0
 
     async def preflight(context):
@@ -225,10 +233,15 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
+            get_active_token=MagicMock(return_value=None),
+            release_active_token=MagicMock(return_value=True),
+            clear_cancellation=MagicMock(),
         ),
-        cancellation_store=SimpleNamespace(
-            mark_cancellation_reconciled=AsyncMock(),
+        cancellation_repository=SimpleNamespace(
+            request=AsyncMock(return_value=True),
+            mark_reconciled=AsyncMock(),
         ),
+        cancellation_message_reader=AsyncMock(return_value=None),
         hitl_message_cancellation=SimpleNamespace(
             cancel_requests_for_message=AsyncMock(),
         ),
@@ -236,7 +249,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             cleanup_cancelled_message_tasks=AsyncMock(),
         ),
         agent_response_handler=SimpleNamespace(handle=AsyncMock()),
-        event_publisher=publisher,
+        event_publisher=delivery_publisher,
         run_event_enabled=lambda: False,
         client_request_id_resolver=SimpleNamespace(
             resolve_client_request_id=AsyncMock(
@@ -264,10 +277,10 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert preflight_count == 1
     assert room_services.run_message_preflight_to_room.await_count == 1
     assert room_message_center.process_room_user_message.await_count == 1
-    assert len(publisher.internal_events) == 1
+    assert len(internal_publisher.internal_events) == 1
     assert run_lifecycle.record_processing_status.await_count == 1
-    assert len(publisher.public_events) == 1
-    assert room_services.delivery.create_token.call_count == 1
+    assert len(delivery_publisher.public_events) == 1
+    assert room_services.cancellation_control.create_token.call_count == 1
     assert len(room_files.claims) == 2
     assert len(set(room_files.claims)) == 2
     assert "same-client-supplied-message-id" not in room_files.claims
@@ -278,7 +291,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     side_effect_counts = (
         len(user_messages.docs),
         preflight_count,
-        len(publisher.internal_events),
+        len(internal_publisher.internal_events),
         run_lifecycle.record_processing_status.await_count,
         room_message_center.process_room_user_message.await_count,
         len(room_files.claims),
@@ -293,7 +306,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert (
         len(user_messages.docs),
         preflight_count,
-        len(publisher.internal_events),
+        len(internal_publisher.internal_events),
         run_lifecycle.record_processing_status.await_count,
         room_message_center.process_room_user_message.await_count,
         len(room_files.claims),

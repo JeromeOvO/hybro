@@ -4,10 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from common.types import Task, TaskState, TaskStatus
-from execution.cancellation import (
-    AgentTaskCleanupAdapter,
-    MongoCancellationStoreAdapter,
-)
+from execution.cancellation import AgentTaskCleanupAdapter
 from models.room import MessageContent, RoomAgentMessage
 
 
@@ -25,19 +22,6 @@ def _tracked_message(message_id: str, state: TaskState) -> RoomAgentMessage:
             )
         ),
     )
-
-
-@pytest.mark.asyncio
-async def test_mongo_cancellation_adapter_exposes_reconciliation():
-    mongodb = SimpleNamespace(
-        cancel_message=AsyncMock(return_value=True),
-        mark_cancellation_reconciled=AsyncMock(return_value=True),
-    )
-    adapter = MongoCancellationStoreAdapter(mongodb)
-
-    assert await adapter.mark_cancellation_reconciled("message-1") is True
-
-    mongodb.mark_cancellation_reconciled.assert_awaited_once_with("message-1")
 
 
 @pytest.mark.asyncio

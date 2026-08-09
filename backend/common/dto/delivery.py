@@ -1,9 +1,18 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from common.dto.base import FrozenDTO
+
+
+class DeliveryEmitStatus(StrEnum):
+    DELIVERED = "delivered"
+    ALREADY_DELIVERED = "already_delivered"
+    IN_FLIGHT = "in_flight"
+    DEDUPLICATED = "deduplicated"  # Legacy publisher/deduplicator compatibility.
+    FAILED = "failed"
 
 
 class DeliveryEnvelope(FrozenDTO):
@@ -54,11 +63,13 @@ class ProcessingStatusEvent(DeliveryEventBase):
     related_message_id: str | None = None
     client_request_id: str | None = None
     agents: list[dict] | None = None
+    delivery_id: str | None = None
 
 
 class RunEventNotification(DeliveryEventBase):
     event_type: Literal["run_event"] = "run_event"
     event_id: str
+    delivery_id: str | None = None
     run_id: str
     seq: int
     run_event_type: str
@@ -99,6 +110,7 @@ class TaskUpdateEvent(DeliveryEventBase):
     event_type: Literal["task_update"] = "task_update"
     message_id: str
     status: str
+    delivery_id: str | None = None
     content: str | None = None
     error: str | None = None
     requires_input: bool = False

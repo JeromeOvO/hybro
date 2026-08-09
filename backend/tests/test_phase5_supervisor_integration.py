@@ -53,21 +53,21 @@ from models.supervisor import (
 
 
 async def _noop_processing_status_emitter(**_kwargs):
-    return None
+    return {"accepted": True}
 
 
 class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ):
-        self.internal_events.append((event, wait_for_local_handlers, broadcast))
+        self.internal_events.append((event, wait_for_handlers, fanout))
 
 
 class BoundRoomMemoryFacade:
@@ -743,6 +743,7 @@ class TestCompactionTrigger:
         rmc.message_writer = AsyncMock()
         rmc.room_reader = AsyncMock()
         rmc.delivery = AsyncMock()
+        rmc.cancellation_control = rmc.delivery
         rmc.delivery.remove_token = MagicMock()
         rmc.delivery.clear_cancellation = MagicMock()
         rmc.coordinator = AsyncMock()
@@ -1190,7 +1191,8 @@ class TestHandleRunResultUnifiedSummary:
 
             rmc = create_room_message_center(
                 debate_rounds=2,
-                event_publisher=RecordingEventPublisher(),
+                cancellation_control=mock_delivery,
+                internal_event_publisher=RecordingEventPublisher(),
             )
             rmc._emit_unified_summary = AsyncMock(
                 return_value=("synthesis", "Final synthesis.")
@@ -1478,8 +1480,10 @@ class _InMemoryRoomMessageStore:
         message_content,
     ):
         message = self.agent_messages.get(message_id)
-        if message is not None:
-            message.message_content = message_content
+        if message is None:
+            return False
+        message.message_content = message_content
+        return True
 
     async def cancel_descendants(self, message_id: str):
         return None
@@ -1598,7 +1602,7 @@ class _FakePhase5App:
             message_writer=self.room_store,
             task_state_store=self.task_state_store,
             continuation_store=self.continuation_store,
-            event_publisher=AsyncMock(),
+            internal_event_publisher=AsyncMock(),
             rate_limit_service=None,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -1624,7 +1628,7 @@ class _FakePhase5App:
         self.room_center.hitl_reader = AsyncMock()
         self.room_center.delivery = self.delivery
         self.room_center.coordinator = AsyncMock()
-        self.room_center.event_publisher = AsyncMock()
+        self.room_center.internal_event_publisher = AsyncMock()
         self.room_center.room_memory = AsyncMock()
         self.room_center.task_notifier = AsyncMock()
         self.room_center.task_notification_store = AsyncMock()

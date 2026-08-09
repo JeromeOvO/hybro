@@ -31,6 +31,7 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_optional(data, "agents", event.agents)
+        _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "processing_status", data, frame_timestamp)
 
@@ -43,6 +44,7 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
             "payload": event.payload,
             "correlation_id": event.correlation_id,
         }
+        _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "run_event", data, frame_timestamp)
 
@@ -100,6 +102,7 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "task_content", event.task_content)
         _add_optional(data, "parts", event.parts)
         _add_optional(data, "client_request_id", event.client_request_id)
+        _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "task_update", data, frame_timestamp)
 

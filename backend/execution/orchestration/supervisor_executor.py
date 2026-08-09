@@ -143,7 +143,7 @@ from models.supervisor import (
 )
 
 if TYPE_CHECKING:
-    from common.protocols import EventPublisher
+    from common.eventing import InternalEventPublisher
     from execution.dispatch.agent_dispatcher import AgentDispatcher
     from execution.dispatch.agent_message_processor import AgentMessageProcessor
     from execution.orchestration.room_supervisor_service import RoomSupervisorService
@@ -306,7 +306,7 @@ class SupervisorExecutor:
         message_writer: RoomMessageWriter,
         task_state_store: RoomTaskStateStore,
         continuation_store: RoomContinuationStore,
-        event_publisher: EventPublisher,
+        internal_event_publisher: InternalEventPublisher,
         rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
@@ -319,9 +319,9 @@ class SupervisorExecutor:
         delegation_outcome_evaluator: DelegationOutcomeEvaluator | None = None,
         guardrails_enabled: bool | None = None,
     ) -> None:
-        if event_publisher is None:
+        if internal_event_publisher is None:
             raise RuntimeError(
-                "SupervisorExecutor event_publisher dependency is required"
+                "SupervisorExecutor internal_event_publisher dependency is required"
             )
         self.supervisor_service = supervisor_service
         self.room_runtime = room_runtime
@@ -331,7 +331,7 @@ class SupervisorExecutor:
         self.message_writer = message_writer
         self.task_state_store = task_state_store
         self.continuation_store = continuation_store
-        self.event_publisher = event_publisher
+        self.internal_event_publisher = internal_event_publisher
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
@@ -637,6 +637,11 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         result: SupervisorRunResult,
     ) -> SupervisorRunResult:
+        if state.status in TERMINAL_ORCHESTRATION_STATUSES:
+            durable_status = self._run_status_from_orchestration_status(state.status)
+            if result.status != durable_status:
+                result = result.model_copy(update={"status": durable_status})
+
         if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
             logger.info(
                 "supervisor_run_paused",
@@ -682,40 +687,52 @@ class SupervisorExecutor:
                 },
             )
 
-        system_message_id = state.system_agent_message_id or state.summary_message_id
-        if system_message_id and result.status != RunStatus.PAUSED:
+        # The public durable root owns all terminal child projections. The
+        # RoomMessageCenter records this system message ID in that intent.
+        return result
+
+    async def _terminalize_system_task(
+        self,
+        *,
+        room_id: str,
+        system_message_id: str,
+        task_status: str,
+    ) -> None:
+        db_msg = await self.message_reader.get_room_agent_message_by_message_id(
+            system_message_id
+        )
+        if not (
+            db_msg and db_msg.message_content and db_msg.message_content.message_task
+        ):
+            raise RuntimeError(
+                f"system task message {system_message_id!r} is missing task state"
+            )
+
+        db_msg.message_content.message_task.status.state = (
+            system_task_state_from_runtime_status(task_status)
+        )
+        last_error: BaseException | None = None
+        for _attempt in range(3):
             try:
-                task_status = (
-                    "completed"
-                    if result.status == RunStatus.COMPLETED
-                    else result.status.value
+                persisted = await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                    db_msg.message_id,
+                    db_msg.message_content,
                 )
+            except Exception as exc:
+                last_error = exc
+                continue
+            if persisted:
                 await self.delivery.send_task_update(
                     room_id=room_id,
                     message_id=system_message_id,
                     status=task_status,
                 )
-
-                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    system_message_id
-                )
-                if (
-                    db_msg
-                    and db_msg.message_content
-                    and db_msg.message_content.message_task
-                ):
-                    db_msg.message_content.message_task.status.state = (
-                        system_task_state_from_runtime_status(task_status)
-                    )
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id,
-                        db_msg.message_content,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to update terminal state for system:hybro", exc_info=True
-                )
-        return result
+                return
+            last_error = RuntimeError(
+                f"failed to persist system task {system_message_id!r} as {task_status}"
+            )
+        assert last_error is not None
+        raise last_error
 
     def _claim_terminal_run_log(self, state: OrchestrationRunState) -> bool:
         if state.status not in TERMINAL_ORCHESTRATION_STATUSES:
@@ -765,7 +782,7 @@ class SupervisorExecutor:
         if not message_id:
             return
         await publish_message_committed(
-            self.event_publisher,
+            self.internal_event_publisher,
             room_id=room_id,
             message_id=message_id,
             message_type="agent",
@@ -1440,7 +1457,9 @@ class SupervisorExecutor:
                             room_id,
                             state,
                             self._state_run_result(
-                                status=RunStatus.COMPLETED,
+                                status=self._run_status_from_orchestration_status(
+                                    state.status
+                                ),
                                 state=state,
                             ),
                         )
@@ -4940,8 +4959,22 @@ class SupervisorExecutor:
                 ),
             )
 
+        if token is not None and token.is_cancelled:
+            trajectory.status = TrajectoryStatus.CANCELED
+            state = await self._mark_orchestration_terminal(
+                state,
+                OrchestrationStatus.CANCELED,
+                reason="request canceled",
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.CANCELED, state=state),
+            )
+
         if trajectory.system_agent_message_id:
-            try:
+
+            async def persist_and_emit_synthesis() -> None:
                 db_msg = await self.message_reader.get_room_agent_message_by_message_id(
                     trajectory.system_agent_message_id
                 )
@@ -4960,11 +4993,43 @@ class SupervisorExecutor:
                     related_message_id=user_message_id,
                     client_request_id=client_req_id,
                 )
+
+            try:
+                synthesis_delivery = persist_and_emit_synthesis()
+                if token is not None:
+                    await token.race(synthesis_delivery)
+                else:
+                    await synthesis_delivery
+            except CancellationError:
+                trajectory.status = TrajectoryStatus.CANCELED
+                state = await self._mark_orchestration_terminal(
+                    state,
+                    OrchestrationStatus.CANCELED,
+                    reason="request canceled",
+                )
+                return await self._log_state_and_return(
+                    room_id,
+                    state,
+                    self._state_run_result(status=RunStatus.CANCELED, state=state),
+                )
             except Exception:
                 logger.warning(
                     "Failed to emit orchestration agent_response for supervisor synthesis",
                     exc_info=True,
                 )
+
+        if token is not None and token.is_cancelled:
+            trajectory.status = TrajectoryStatus.CANCELED
+            state = await self._mark_orchestration_terminal(
+                state,
+                OrchestrationStatus.CANCELED,
+                reason="request canceled",
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.CANCELED, state=state),
+            )
 
         entry.completed_at = utcnow()
         trajectory.status = TrajectoryStatus.COMPLETED
@@ -4982,7 +5047,7 @@ class SupervisorExecutor:
             room_id,
             state,
             self._state_run_result(
-                status=RunStatus.COMPLETED,
+                status=self._run_status_from_orchestration_status(state.status),
                 state=state,
                 synthesis_text=synthesis,
             ),
@@ -5704,13 +5769,21 @@ class SupervisorExecutor:
             updated.terminal_summary = terminal_summary
         else:
             updated.terminal_summary = None
-        saved = await self.orchestration_run_store.save_state(
-            updated,
-            expected_version=expected_version,
-        )
-        payload = {"status": saved.status.value, "reason": reason}
-        if terminal_summary is not None:
-            payload["terminal_summary"] = terminal_summary
+        try:
+            saved = await self.orchestration_run_store.save_state(
+                updated,
+                expected_version=expected_version,
+            )
+        except OrchestrationStoreConflict:
+            latest = await self.orchestration_run_store.get_run(state.run_id)
+            if latest is None or latest.status not in TERMINAL_ORCHESTRATION_STATUSES:
+                raise
+            saved = latest
+
+        durable_reason = saved.terminal_reason or reason
+        payload = {"status": saved.status.value, "reason": durable_reason}
+        if saved.terminal_summary is not None:
+            payload["terminal_summary"] = saved.terminal_summary
         await self._append_orchestration_event(
             saved,
             OrchestrationEventType.RUN_TERMINAL,
@@ -7709,41 +7782,6 @@ class SupervisorExecutor:
                 "debate_mode": debate_mode,
             },
         )
-
-        # Phase 1: Emit terminal state for system:hybro
-        if trajectory.system_agent_message_id and result.status != RunStatus.PAUSED:
-            try:
-                # If we're done, or failed, or canceled, or awaiting input (HITL)
-                task_status = (
-                    "completed"
-                    if result.status == RunStatus.COMPLETED
-                    else result.status.value
-                )
-                await self.delivery.send_task_update(
-                    room_id=room_id,
-                    message_id=trajectory.system_agent_message_id,
-                    status=task_status,
-                )
-
-                # Update DB record
-                db_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    trajectory.system_agent_message_id
-                )
-                if (
-                    db_msg
-                    and db_msg.message_content
-                    and db_msg.message_content.message_task
-                ):
-                    db_msg.message_content.message_task.status.state = (
-                        system_task_state_from_runtime_status(task_status)
-                    )
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id, db_msg.message_content
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to update terminal state for system:hybro", exc_info=True
-                )
 
         return result
 

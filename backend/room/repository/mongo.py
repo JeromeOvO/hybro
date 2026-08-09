@@ -6,6 +6,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
+from common.a2a_constants import TERMINAL_STATES
 from common.dto import (
     RoomTimelineEntry,
     RoomTimelinePage,
@@ -18,7 +19,6 @@ from common.idempotency import (
 )
 from common.protocols import MongoDAL
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
 from room.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -33,6 +33,22 @@ from room.timeline import (
 )
 
 logger = get_logger(__name__)
+_TASK_STATE_PATH = "message_content.message_task.status.state"
+_TERMINAL_TASK_STATES = tuple(sorted(state.value for state in TERMINAL_STATES))
+
+
+def _updated_task_state(updates: dict[str, Any]) -> str | None:
+    state = updates.get(_TASK_STATE_PATH)
+    if state is None:
+        task = updates.get("message_content.message_task")
+        if not isinstance(task, dict):
+            content = updates.get("message_content")
+            task = content.get("message_task") if isinstance(content, dict) else None
+        status = task.get("status") if isinstance(task, dict) else None
+        state = status.get("state") if isinstance(status, dict) else None
+    if state is None:
+        return None
+    return str(getattr(state, "value", state))
 
 
 def _canonical_user_message_document(message: dict) -> dict:
@@ -269,21 +285,6 @@ class MessageMongoRepository:
             await self._cancelled_messages.find_one({"message_id": message_id})
         ) is not None
 
-    async def cancel_message(self, message_id: str, user_id: str) -> bool:
-        if self._cancelled_messages is None:
-            self._cancelled_messages = self._mongo.collection("cancelled_messages")
-        return await self._cancelled_messages.update_one(
-            {"message_id": message_id},
-            {
-                "$setOnInsert": {
-                    "message_id": message_id,
-                    "user_id": user_id,
-                    "cancelled_at": utcnow(),
-                }
-            },
-            upsert=True,
-        )
-
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         if not message_ids:
             return []
@@ -459,7 +460,10 @@ class MessageMongoRepository:
             _without_timeline_identity(fields),
         )
         return await self._agent_messages.update_one(
-            {"message_id": target_message_id},
+            {
+                "message_id": target_message_id,
+                _TASK_STATE_PATH: {"$nin": list(_TERMINAL_TASK_STATES)},
+            },
             {"$set": payload},
         )
 
@@ -482,15 +486,25 @@ class MessageMongoRepository:
 
     async def update_agent_message(self, message_id: str, updates: dict) -> bool:
         candidate = _without_timeline_identity(updates)
+        desired_task_state = _updated_task_state(candidate)
+        query: dict[str, Any] = {"message_id": message_id}
+        if desired_task_state is not None:
+            query[_TASK_STATE_PATH] = {"$nin": list(_TERMINAL_TASK_STATES)}
         updated = await self._agent_messages.update_one(
-            {"message_id": message_id},
+            query,
             {"$set": candidate},
         )
         if updated:
             return True
-        return (
-            await self._agent_messages.find_one({"message_id": message_id}) is not None
-        )
+        current = await self._agent_messages.find_one({"message_id": message_id})
+        if current is None:
+            return False
+        current_state = _updated_task_state(current)
+        # A task-state writer that lost to any durable terminal must observe a
+        # failed CAS rather than treating mere document existence as success.
+        if desired_task_state is not None and current_state in _TERMINAL_TASK_STATES:
+            return False
+        return True
 
     async def update_agent_message_if_not_terminal(
         self, message_id: str, updates: dict, terminal_states: list[str]
@@ -573,6 +587,12 @@ def _typed_row_key(item: tuple[str, dict[str, Any]]) -> tuple[int, int, str]:
 
 def _without_timeline_identity(updates: dict[str, Any]) -> dict[str, Any]:
     candidate = dict(updates)
-    for field in ("room_id", "message_id", "message_created_at", "timeline_sort_us"):
+    for field in (
+        "room_id",
+        "message_id",
+        "message_created_at",
+        "timeline_sort_us",
+        "terminal_projection_event_id",
+    ):
         candidate.pop(field, None)
     return candidate

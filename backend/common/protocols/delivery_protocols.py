@@ -1,33 +1,25 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
-from common.dto import DeliveryEvent, InternalEvent
+from common.dto import DeliveryEvent
 from common.protocols.json_types import JsonValue
 
 
 @runtime_checkable
-class EventPublisher(Protocol):
+class DeliveryEventPublisher(Protocol):
     async def emit(self, event: DeliveryEvent) -> bool | None: ...
-    async def emit_internal(
-        self,
-        event: InternalEvent,
-        *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
-    ) -> None: ...
-    def register_internal_handler(self, event_type: str, handler: Callable) -> None: ...
-    async def start(self) -> None: ...
-    async def stop(self) -> None: ...
+
+
+# Compatibility name for the public delivery-only contract.
+EventPublisher = DeliveryEventPublisher
 
 
 @runtime_checkable
 class SSETransport(Protocol):
     def connect(self, room_id: str, connection_id: str) -> AsyncIterator[dict]: ...
     async def disconnect(self, connection_id: str) -> None: ...
-    def is_cancelled(self, message_id: str) -> bool: ...
-    async def mark_cancelled(self, message_id: str) -> None: ...
+    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int: ...
     def set_draining(self, draining: bool) -> None: ...
-    async def start_cancellation_watcher(self) -> None: ...
 
 
 @runtime_checkable
@@ -45,4 +37,10 @@ class SSERouteTransport(Protocol):
     def get_room_status(self, room_id: str) -> dict[str, JsonValue]: ...
 
 
-__all__ = ["EventPublisher", "SSEConnectionLike", "SSERouteTransport", "SSETransport"]
+__all__ = [
+    "DeliveryEventPublisher",
+    "EventPublisher",
+    "SSEConnectionLike",
+    "SSERouteTransport",
+    "SSETransport",
+]

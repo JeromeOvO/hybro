@@ -7,13 +7,13 @@ Tests cover:
 - _managed_queue cleanup behavior (RAII)
 """
 
+import asyncio
 import inspect
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from a2a.types import TaskState
 
 from a2a_adapter.task_status import coerce_task_state
 from common.dto import MessageCommitted
@@ -24,18 +24,19 @@ from execution.orchestration.queue_executor import (
     QueueResult,
 )
 from models.processing import ProcessingResult, ProcessingStatus
+from models.room import MessageContent, RoomUserMessage
 
 
 class RecordingEventPublisher:
     def __init__(self):
         self.internal_events = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ):
         self.internal_events.append(event)
 
@@ -52,14 +53,10 @@ class TestQueueResult:
         assert QueueResult.PAUSED == "paused"
 
 
-def test_resume_from_continuation_before_terminal_failure_is_typed():
-    annotation = (
-        inspect.signature(QueueExecutor.resume_from_continuation)
-        .parameters["before_terminal_failure"]
-        .annotation
-    )
+def test_resume_from_continuation_has_no_imperative_terminal_cleanup_callback():
+    parameters = inspect.signature(QueueExecutor.resume_from_continuation).parameters
 
-    assert annotation == "Callable[[str, str], Awaitable[None]] | None"
+    assert "before_terminal_failure" not in parameters
 
 
 def test_constructor_memory_reader_is_typed_as_room_memory_reader():
@@ -68,12 +65,13 @@ def test_constructor_memory_reader_is_typed_as_room_memory_reader():
     assert annotation == "RoomMemoryReader"
 
 
-def test_constructor_requires_event_publisher():
+def test_constructor_requires_internal_event_publisher():
     deps = {
         "tsm": MagicMock(),
         "delivery": MagicMock(),
+        "cancellation_control": MagicMock(),
         "room_runtime": MagicMock(),
-        "event_publisher": None,
+        "internal_event_publisher": None,
         "message_reader": MagicMock(),
         "message_writer": MagicMock(),
         "task_state_store": MagicMock(),
@@ -88,7 +86,7 @@ def test_constructor_requires_event_publisher():
         "response_handler": MagicMock(),
     }
 
-    with pytest.raises(RuntimeError, match="event_publisher"):
+    with pytest.raises(RuntimeError, match="internal_event_publisher"):
         QueueExecutor(**deps)
 
 
@@ -101,11 +99,17 @@ def _make_queue_executor():
     qe = object.__new__(QueueExecutor)
     qe.rate_limit_service = MagicMock()
     qe.delivery = MagicMock()
+    qe.cancellation_control = MagicMock()
+    qe.cancellation_control.check_cancelled = AsyncMock(return_value=False)
+    qe.cancellation_control.create_token.side_effect = lambda message_id: (
+        CancellationToken(message_id=message_id)
+    )
     qe.tsm = MagicMock()
     qe.message_reader = MagicMock()
     qe.message_writer = MagicMock()
     qe.task_state_store = MagicMock()
     qe.continuation_store = MagicMock()
+    qe.continuation_store.save_continuation_on_message = AsyncMock(return_value=True)
     qe.agent_lookup = MagicMock()
     qe.room_reader = MagicMock()
     qe.memory_reader = MagicMock()
@@ -113,7 +117,7 @@ def _make_queue_executor():
         return_value=None
     )
     qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-    qe.message_writer.add_room_agent_message = AsyncMock()
+    qe.message_writer.add_room_agent_message = AsyncMock(return_value=True)
     qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
     qe.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
@@ -121,13 +125,48 @@ def _make_queue_executor():
     qe.delivery.send_task_submitted = AsyncMock()
     qe.delivery.send_task_update = AsyncMock()
     qe.room_runtime = MagicMock()
-    qe.event_publisher = RecordingEventPublisher()
+    qe.internal_event_publisher = RecordingEventPublisher()
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
     qe.response_handler.notify_task_update = AsyncMock(return_value=True)
     qe.hitl_coordinator = MagicMock()
     return qe
+
+
+@pytest.mark.asyncio
+async def test_system_message_unacknowledged_write_retries_then_refuses_dispatch():
+    qe = _make_queue_executor()
+    qe.message_writer.add_room_agent_message = AsyncMock(return_value=False)
+    qe.room_runtime.create_agent_message.return_value = MagicMock()
+    qe.agent_lookup.get_agent_by_agent_id = AsyncMock()
+    message = MagicMock(message_id="agent-msg-1")
+
+    result = await qe.process_queue(
+        deque([message]),
+        "room-1",
+        "root-1",
+    )
+
+    assert result.result == QueueResult.FAILED
+    assert result.system_message_id is None
+    assert result.error_code == "system_task_persistence_failed"
+    assert qe.message_writer.add_room_agent_message.await_count == 3
+    qe.agent_lookup.get_agent_by_agent_id.assert_not_awaited()
+    qe.delivery.send_task_submitted.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_agent_defers_child_db_and_sse_to_root_projection():
+    qe = _make_queue_executor()
+    message = MagicMock(message_id="msg-1", agent_id="missing-agent")
+    qe.agent_lookup.get_agent_by_agent_id = AsyncMock(return_value=None)
+    qe.tsm.transition_task = AsyncMock()
+    qe.response_handler.notify_task_update = AsyncMock()
+
+    assert await qe._resolve_agent_for_message(message, "room-1") is None
+    qe.tsm.transition_task.assert_not_awaited()
+    qe.response_handler.notify_task_update.assert_not_awaited()
 
 
 class TestCheckRateLimit:
@@ -148,7 +187,7 @@ class TestCheckRateLimit:
         assert is_limited is False
 
     @pytest.mark.asyncio
-    async def test_returns_true_and_cancels_when_rate_limited(self):
+    async def test_rate_limit_defers_child_state_and_sse_to_root_projection(self):
         qe = _make_queue_executor()
         result = MagicMock()
         result.allowed = False
@@ -171,10 +210,8 @@ class TestCheckRateLimit:
         is_limited = await qe._check_rate_limit(msg, agent, "room-1", "umsg-1", "u1")
 
         assert is_limited is True
-        qe.delivery.send_rate_limit_error.assert_called_once()
-        qe.tsm.transition_task.assert_called_once_with(
-            msg, TaskState.canceled, persist=True
-        )
+        qe.delivery.send_rate_limit_error.assert_not_awaited()
+        qe.tsm.transition_task.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_passes_correct_rate_limit_params(self):
@@ -202,6 +239,398 @@ class TestCheckRateLimit:
 # =============================================================================
 # TestProcessQueue — process_queue, single-message dispatch, continuation
 # =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_invalid_continuation_releases_paused_token():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={"remaining_queue": [], "user_message_id": "user-1"}
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
+        "agent-1", {"remaining_queue": [], "user_message_id": "user-1"}
+    )
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_missing_user_id_restores_destructively_claimed_continuation():
+    qe = _make_queue_executor()
+    continuation = {"remaining_queue": [], "room_id": "room-1"}
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value=continuation
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(related_message_id="user-1")
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
+        "agent-1", continuation
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_user_message_restores_destructively_claimed_continuation():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    continuation = {
+        "remaining_queue": [],
+        "room_id": "room-1",
+        "user_message_id": "user-1",
+    }
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value=continuation
+    )
+    qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
+        "agent-1", continuation
+    )
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remaining_queue", ["not-a-list", [None]])
+async def test_malformed_remaining_queue_restores_destructive_claim(remaining_queue):
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    continuation = {
+        "remaining_queue": remaining_queue,
+        "room_id": "room-1",
+        "user_message_id": "user-1",
+    }
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value=continuation
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
+        "agent-1", continuation
+    )
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+    qe.message_reader.get_room_user_message_by_message_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_malformed_queue_restore_failure_terminalizes_root_in_finally_path():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    continuation = {
+        "remaining_queue": {"unexpected": "mapping"},
+        "room_id": "room-1",
+        "user_message_id": "user-1",
+    }
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value=continuation
+    )
+    qe.continuation_store.save_continuation_on_message = AsyncMock(return_value=False)
+    emit = AsyncMock(return_value={"event_id": "terminal-fact"})
+    qe.bind_execution_event_deps(emit)
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["message_id"] == "user-1"
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_failed_continuation_restore_commits_reliable_root_terminal():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    continuation = {
+        "remaining_queue": [],
+        "room_id": "room-1",
+        "user_message_id": "user-1",
+    }
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value=continuation
+    )
+    qe.continuation_store.save_continuation_on_message = AsyncMock(return_value=False)
+    qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+    emit = AsyncMock(return_value={"event_id": "terminal-fact"})
+    qe.bind_execution_event_deps(emit)
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["message_id"] == "user-1"
+    assert emit.await_args.kwargs["system_message_id"] == "sys-user-1"
+
+
+@pytest.mark.asyncio
+async def test_resume_quote_failure_releases_paused_token():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+    qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+        return_value=RoomUserMessage(
+            room_id="room-1",
+            message_id="user-1",
+            message_content=MessageContent(message_text="question"),
+            extend_info={"quote_id": "missing-quote"},
+        )
+    )
+    qe.message_reader.get_quoted_snippet_by_id = AsyncMock(return_value=None)
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is False
+    qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
+        "agent-1",
+        {
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        },
+    )
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_empty_continuation_transfers_paused_token_to_completion_owner():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+    qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+        return_value=RoomUserMessage(
+            room_id="room-1",
+            message_id="user-1",
+            message_content=MessageContent(message_text="question"),
+            extend_info={},
+        )
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is True
+    assert result.needs_completion is True
+    assert result.token is token
+    qe.cancellation_control.release_token.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_system_task_completion_is_compensated_when_cancel_arrives_during_send():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    send_entered = asyncio.Event()
+    release_send = asyncio.Event()
+    statuses = []
+
+    async def send_task_update(*, status, **_kwargs):
+        statuses.append(status)
+        if status == "completed":
+            send_entered.set()
+            await release_send.wait()
+
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.delivery.send_task_update = send_task_update
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
+
+    terminalizing = asyncio.create_task(
+        qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=token,
+        )
+    )
+    await send_entered.wait()
+    token.cancel()
+    release_send.set()
+
+    assert await terminalizing == "canceled"
+    assert statuses == ["completed", "canceled"]
+    assert (
+        str(getattr(db_msg.message_content.message_task.status.state, "value", ""))
+        == "canceled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persists_before_sse():
+    qe = _make_queue_executor()
+    order: list[str] = []
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+
+    async def persist(*_args):
+        order.append("persist")
+        return True
+
+    async def emit(**_kwargs):
+        order.append("sse")
+
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        side_effect=persist
+    )
+    qe.delivery.send_task_update = AsyncMock(side_effect=emit)
+
+    assert (
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=None,
+        )
+        == "completed"
+    )
+    assert order == ["persist", "sse"]
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persistence_false_retries_without_sse():
+    qe = _make_queue_executor()
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        return_value=False
+    )
+    qe.delivery.send_task_update = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="failed to persist system task"):
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="completed",
+            token=None,
+        )
+
+    assert (
+        qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id.await_count
+        == 3
+    )
+    qe.delivery.send_task_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_task_terminal_persistence_exception_retries_without_sse():
+    qe = _make_queue_executor()
+    db_msg = SimpleNamespace(
+        message_id="sys-user-1",
+        message_content=SimpleNamespace(
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state=coerce_task_state("working"))
+            )
+        ),
+    )
+    qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=db_msg
+    )
+    qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+    qe.delivery.send_task_update = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await qe._terminalize_system_task(
+            room_id="room-1",
+            sys_message_id="sys-user-1",
+            task_status="failed",
+            token=None,
+        )
+
+    assert (
+        qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id.await_count
+        == 3
+    )
+    qe.delivery.send_task_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_empty_continuation_does_not_request_completion():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+
+    async def hydrate_cancellation(_message_id):
+        token.cancel()
+        return True
+
+    qe.cancellation_control.check_cancelled.side_effect = hydrate_cancellation
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+        }
+    )
+
+    result = await qe.resume_from_continuation("agent-1")
+
+    assert result.success is True
+    assert result.needs_completion is False
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
 
 
 class TestProcessQueue:
@@ -277,7 +706,7 @@ class TestProcessQueue:
         assert qe._process_single_message.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_process_queue_failed_result_persists_preflight_reason(self):
+    async def test_preflight_failure_defers_child_mutation_to_root_projection(self):
         qe = _make_queue_executor()
         msg = MagicMock(
             message_id="msg-1",
@@ -309,22 +738,18 @@ class TestProcessQueue:
         qe.tsm.fail_pre_dispatch_task = AsyncMock()
         qe.response_handler.notify_task_update = AsyncMock()
         qe.message_writer.cancel_descendants = AsyncMock()
+        qe._terminalize_system_task = AsyncMock(return_value="failed")
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.FAILED
-        qe.tsm.fail_pre_dispatch_task.assert_awaited_once_with(
-            msg,
-            error="Attached file report.pdf exceeds the inline A2A limit.",
-            error_code="file_too_large",
+        assert result.error_message == (
+            "Attached file report.pdf exceeds the inline A2A limit."
         )
-        qe.response_handler.notify_task_update.assert_awaited_once_with(
-            message_id="msg-1",
-            state=coerce_task_state("failed"),
-            room_id="room-1",
-            user_id="u1",
-            error="Attached file report.pdf exceeds the inline A2A limit.",
-        )
+        assert result.error_code == "file_too_large"
+        qe.tsm.fail_pre_dispatch_task.assert_not_awaited()
+        qe.response_handler.notify_task_update.assert_not_awaited()
+        qe.message_writer.cancel_descendants.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_process_queue_generic_failed_result_does_not_create_preflight_task(
@@ -356,6 +781,7 @@ class TestProcessQueue:
         qe.tsm.fail_pre_dispatch_task = AsyncMock()
         qe.response_handler.notify_task_update = AsyncMock()
         qe.message_writer.cancel_descendants = AsyncMock()
+        qe._terminalize_system_task = AsyncMock(return_value="failed")
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
@@ -407,7 +833,7 @@ class TestProcessQueue:
         )
 
     @pytest.mark.asyncio
-    async def test_process_queue_updates_system_hybro_task_through_focused_ports(self):
+    async def test_process_queue_delays_completed_system_task_until_root_cas(self):
         qe = _make_queue_executor()
         system_content = SimpleNamespace(
             message_task=SimpleNamespace(status=SimpleNamespace(state=None))
@@ -444,23 +870,13 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.COMPLETED
-        qe.delivery.send_task_update.assert_awaited_once_with(
-            room_id="room-1",
-            message_id="sys-umsg-1",
-            status="completed",
-        )
+        qe.delivery.send_task_update.assert_not_awaited()
         assert (
             qe.message_reader.get_room_agent_message_by_message_id.await_args_list
-            == [
-                call("sys-umsg-1"),
-                call("sys-umsg-1"),
-            ]
+            == [call("sys-umsg-1")]
         )
         update_content = qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id
-        update_content.assert_awaited_once_with(
-            "sys-umsg-1",
-            system_content,
-        )
+        update_content.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_process_queue_cancels_on_cancellation_token(self):
@@ -481,21 +897,26 @@ class TestProcessQueue:
         token.cancel()
 
         qe.tsm.transition_task = AsyncMock()
-        qe.delivery.clear_cancellation = MagicMock()
+        qe.cancellation_control.clear_cancellation = MagicMock()
         qe.message_writer.cancel_descendants = AsyncMock()
-        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe._terminalize_system_task = AsyncMock(return_value="canceled")
+
+        async def emit_accepted(*_args, **_kwargs):
+            order.append("emit")
+            return {"event_id": "canceled-winner"}
+
+        emit = AsyncMock(side_effect=emit_accepted)
         qe.bind_execution_event_deps(emit)
 
         result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
         assert result.result == QueueResult.CANCELED
-        qe.tsm.transition_task.assert_called_once_with(
-            msg, TaskState.canceled, persist=True
-        )
+        qe.tsm.transition_task.assert_not_awaited()
+        qe.message_writer.cancel_descendants.assert_not_awaited()
         emit.assert_awaited_once()
         qe.delivery.send_processing_status.assert_not_called()
         assert order == ["emit"]
-        qe.delivery.clear_cancellation.assert_called_once_with("umsg-1")
+        qe.cancellation_control.clear_cancellation.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_process_queue_records_before_awaiting_input_send(self):
@@ -549,10 +970,8 @@ class TestProcessQueue:
         assert order == ["emit"]
 
     @pytest.mark.asyncio
-    async def test_deferred_sse_status_has_no_required_post_emit_business_side_effects(
-        self,
-    ):
-        """Deferred terminal delivery leaves only cancellation-token cleanup after emit."""
+    async def test_queue_cancellation_leaves_tombstone_for_finalizer(self):
+        """No child mutation occurs before or after the durable root CAS."""
         qe = _make_queue_executor()
         order: list[str] = []
 
@@ -572,25 +991,54 @@ class TestProcessQueue:
         qe.message_writer.cancel_descendants = AsyncMock(
             side_effect=lambda *a, **k: order.append("cancel-descendants")
         )
-        qe.delivery.clear_cancellation = MagicMock(
+        qe.cancellation_control.clear_cancellation = MagicMock(
             side_effect=lambda *a, **k: order.append("clear-token")
         )
-        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+        qe._terminalize_system_task = AsyncMock(return_value="canceled")
+
+        async def emit_accepted(*_args, **_kwargs):
+            order.append("emit")
+            return {"event_id": "canceled-winner"}
+
+        emit = AsyncMock(side_effect=emit_accepted)
         qe.bind_execution_event_deps(emit)
 
         result = await qe.process_queue(queue, "room-1", "umsg-1", token=token)
 
         assert result.result == QueueResult.CANCELED
-        assert order == [
-            "cancel-task",
-            "cancel-descendants",
-            "emit",
-            "clear-token",
-        ]
+        assert order == ["emit"]
+        qe.cancellation_control.clear_cancellation.assert_not_called()
+        qe.tsm.transition_task.assert_not_awaited()
+        qe.message_writer.cancel_descendants.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_resume_from_continuation_failure_records_before_terminal_emit(self):
-        """Queue resume failure runs caller-owned notification before terminal emit."""
+    async def test_queue_cancellation_opposing_winner_never_mutates_children(self):
+        qe = _make_queue_executor()
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+        )
+        token = CancellationToken(message_id="umsg-1")
+        token.cancel()
+        qe.tsm.transition_task = AsyncMock()
+        qe.message_writer.cancel_descendants = AsyncMock()
+        qe.cancellation_control.clear_cancellation = MagicMock()
+        emit = AsyncMock(return_value=None)  # opposing canonical terminal winner
+        qe.bind_execution_event_deps(emit)
+
+        result = await qe.process_queue(deque([msg]), "room-1", "umsg-1", token=token)
+
+        assert result.result == QueueResult.CANCELED
+        emit.assert_awaited_once()
+        qe.tsm.transition_task.assert_not_awaited()
+        qe.message_writer.cancel_descendants.assert_not_awaited()
+        qe.cancellation_control.clear_cancellation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resume_from_continuation_failure_uses_durable_root_projection(self):
+        """Queue resume failure has no imperative child-cleanup callback."""
         qe = _make_queue_executor()
         order: list[str] = []
         continuation = {
@@ -609,24 +1057,74 @@ class TestProcessQueue:
         qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
             return_value=continuation
         )
-        qe.delivery.get_token = MagicMock(return_value=None)
-        qe.delivery.create_token = MagicMock(
+        qe.cancellation_control.get_token = MagicMock(return_value=None)
+        qe.cancellation_control.create_token = MagicMock(
             return_value=CancellationToken(message_id="umsg-1")
         )
         qe.process_queue = AsyncMock(
             return_value=QueueProcessingResult(result=QueueResult.FAILED)
         )
+        qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=RoomUserMessage(
+                room_id="room-1",
+                message_id="umsg-1",
+                message_content=MessageContent(message_text="question"),
+                extend_info={},
+            )
+        )
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
         qe.bind_execution_event_deps(emit)
-        notify = AsyncMock(side_effect=lambda *a, **k: order.append("notify"))
-
-        result = await qe.resume_from_continuation(
-            "paused-msg",
-            before_terminal_failure=notify,
-        )
+        result = await qe.resume_from_continuation("paused-msg")
 
         assert result.success is False
-        assert order == ["notify", "emit"]
+        assert order == ["emit"]
+        assert emit.await_args.kwargs["system_message_id"] is None
+        assert emit.await_args.kwargs["turn_event_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_resume_failure_commits_terminal_projection_intent(self):
+        qe = _make_queue_executor()
+        continuation = {
+            "remaining_queue": [
+                {
+                    "message_id": "msg-2",
+                    "room_id": "room-1",
+                    "message_type": "agent",
+                    "message_content": {"message_text": "work"},
+                }
+            ],
+            "room_id": "room-1",
+            "user_message_id": "umsg-1",
+        }
+        qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+            return_value=continuation
+        )
+        qe.cancellation_control.get_token = MagicMock(return_value=None)
+        qe.cancellation_control.create_token = MagicMock(
+            return_value=CancellationToken(message_id="umsg-1")
+        )
+        qe.process_queue = AsyncMock(
+            return_value=QueueProcessingResult(
+                result=QueueResult.FAILED,
+                system_message_id="sys-umsg-1",
+            )
+        )
+        qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=RoomUserMessage(
+                room_id="room-1",
+                message_id="umsg-1",
+                message_content=MessageContent(message_text="question"),
+                extend_info={},
+            )
+        )
+        emit = AsyncMock(return_value={"event_id": "terminal-fact"})
+        qe.bind_execution_event_deps(emit)
+
+        result = await qe.resume_from_continuation("paused-msg")
+
+        assert result.success is False
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["system_message_id"] == "sys-umsg-1"
 
     @pytest.mark.asyncio
     async def test_save_continuation_persists_to_db(self):
@@ -693,12 +1191,20 @@ class TestProcessQueue:
         qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
             return_value=continuation
         )
-        qe.delivery.get_token = MagicMock(return_value=None)
-        qe.delivery.create_token = MagicMock(
+        qe.cancellation_control.get_token = MagicMock(return_value=None)
+        qe.cancellation_control.create_token = MagicMock(
             return_value=CancellationToken(message_id="umsg-1")
         )
         qe.process_queue = AsyncMock(
             return_value=QueueProcessingResult(result=QueueResult.COMPLETED)
+        )
+        qe.message_reader.get_room_user_message_by_message_id = AsyncMock(
+            return_value=RoomUserMessage(
+                room_id="room-1",
+                message_id="umsg-1",
+                message_content=MessageContent(message_text="question"),
+                extend_info={},
+            )
         )
 
         with patch(
@@ -714,8 +1220,8 @@ class TestProcessQueue:
         assert result.room_id == "room-1"
         assert result.user_message_id == "umsg-1"
         qe.process_queue.assert_called_once()
-        assert len(qe.event_publisher.internal_events) == 1
-        event = qe.event_publisher.internal_events[0]
+        assert len(qe.internal_event_publisher.internal_events) == 1
+        event = qe.internal_event_publisher.internal_events[0]
         assert isinstance(event, MessageCommitted)
         assert event.room_id == "room-1"
         assert event.message_id == "paused-msg"

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
 from common.types import AgentCard
 from common.utils.cancellation import CancellationToken
+from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.memory import RoomMemory
@@ -523,6 +524,14 @@ class RoomMessageReader(QuotedSnippetReaderPort, Protocol):
 
 
 class RoomMessageWriter(Protocol):
+    async def set_turn_completion_kind(
+        self, message_id: str, completion_kind: str
+    ) -> str: ...
+
+    async def set_system_task_terminal_state(
+        self, message_id: str, target_state: str, *, event_id: str
+    ) -> str: ...
+
     async def add_room_agent_message(
         self,
         room_agent_message: RoomAgentMessage,
@@ -565,6 +574,15 @@ class RoomMessageWriter(Protocol):
         self,
         message_id: str,
     ) -> int: ...
+
+    async def project_descendant_terminal_state(
+        self,
+        message_id: str,
+        *,
+        event_id: str,
+        target_state: str,
+        exclude_message_ids: list[str] | None = None,
+    ) -> list[str]: ...
 
     async def claim_user_message_for_processing(
         self,
@@ -746,7 +764,8 @@ class ExecutionDeliveryPort(Protocol):
         task_content: str | None = None,
         parts: list[dict[str, Any]] | None = None,
         client_request_id: str | None = None,
-    ) -> None: ...
+        delivery_id: str | None = None,
+    ) -> bool | None: ...
 
     async def send_rate_limit_error(
         self,
@@ -791,13 +810,19 @@ class ExecutionDeliveryPort(Protocol):
         message_id: str | None = None,
     ) -> None: ...
 
-    def clear_cancellation(self, message_id: str) -> None: ...
-    def get_token(self, message_id: str) -> CancellationToken | None: ...
-    def create_token(self, message_id: str) -> CancellationToken: ...
-    def remove_token(self, message_id: str) -> None: ...
-
 
 SSEDeliveryPort = ExecutionDeliveryPort
+
+
+class CancellationControlPort(Protocol):
+    def create_token(self, message_id: str) -> CancellationToken: ...
+    def get_token(self, message_id: str) -> CancellationToken | None: ...
+    def release_token(
+        self, message_id: str, token: CancellationToken | None
+    ) -> bool: ...
+    def clear_cancellation(self, message_id: str) -> None: ...
+    async def check_cancelled(self, message_id: str) -> bool: ...
+    async def signal(self, message_id: str) -> Any: ...
 
 
 class RunReadPort(Protocol):
@@ -807,18 +832,12 @@ class RunReadPort(Protocol):
 
 
 class CancellationStatePort(Protocol):
-    async def cancel_message_and_broadcast(self, message_id: str) -> None: ...
-    def clear_cancellation(self, message_id: str) -> None: ...
-
-
-class CancellationStorePort(Protocol):
-    async def cancel_message(
-        self,
-        message_id: str,
-        requested_by_user_id: str,
+    async def cancel_message_and_broadcast(self, message_id: str) -> Any: ...
+    def get_active_token(self, message_id: str) -> CancellationToken | None: ...
+    def release_active_token(
+        self, message_id: str, token: CancellationToken | None
     ) -> bool: ...
-
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool: ...
+    def clear_cancellation(self, message_id: str) -> None: ...
 
 
 class HITLMessageCancellationPort(Protocol):
@@ -843,6 +862,18 @@ class ClientRequestIdResolver(Protocol):
 
 
 class RunLifecyclePort(Protocol):
+    async def write_processing_status(
+        self,
+        room_id: str,
+        status: ProcessingStatusLike,
+        message_id: str | None,
+        *,
+        client_request_id: str | None = None,
+        details: dict[str, Any] | None = None,
+        error_message: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
+    ) -> RunLifecycleWriteOutcome: ...
+
     async def record_processing_status(
         self,
         room_id: str,
@@ -852,6 +883,7 @@ class RunLifecyclePort(Protocol):
         client_request_id: str | None = None,
         details: dict[str, Any] | None = None,
         error_message: str | None = None,
+        terminal_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def project_run_state(

@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from common.eventing import InternalEventPublisher
 from common.observability import (
     MetricsCollector,
     NoopMetricsCollector,
@@ -12,7 +13,6 @@ from common.observability import (
 from common.protocols import (
     AgentCallCounter,
     AgentRegistryWriter,
-    EventPublisher,
     HubAgentStatusReader,
     HubRepository,
     HubResponseJournal,
@@ -44,7 +44,7 @@ class HubRuntimeBridgeDeps:
     offline_failure_port: OfflineHubFailurePort | None = None
     leader_elector: LeaderElector | None = None
     metrics: MetricsCollector = NoopMetricsCollector()
-    event_publisher: EventPublisher | None = None
+    internal_event_publisher: InternalEventPublisher | None = None
     streams: Any | None = None
     clock: Callable[[], Any] | None = None
     task_runner: TaskRunner = traced_create_task

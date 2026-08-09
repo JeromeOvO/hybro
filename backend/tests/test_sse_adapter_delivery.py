@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from delivery.config import DeliveryConfig
 from delivery.facade import DeliveryFacade
 from tests.fakes.delivery import (
     FakeDeliveryCompat,
@@ -257,16 +258,27 @@ async def test_successful_retry_after_failed_handoff_logs_success(caplog):
 
 
 @pytest.mark.asyncio
-async def test_cancellation_helpers_delegate_to_transport():
-    facade = _bind()
+async def test_delivery_start_timers_are_ttl_and_size_bounded():
+    facade = make_delivery_facade(
+        config=DeliveryConfig(
+            delivery_started_ttl_seconds=0.01,
+            delivery_started_cache_maxsize=2,
+        )
+    )
 
-    token = facade.create_token("msg-1")
-    facade.cancel_message("msg-1")
-    assert facade.is_cancelled("msg-1") is True
-    assert token.is_cancelled is True
-    assert await facade.check_cancelled("msg-1") is True
-    facade.clear_cancellation("msg-1")
-    assert facade.is_cancelled("msg-1") is False
+    for index in range(3):
+        await facade.send_task_submitted(
+            "room-1",
+            f"msg-{index}",
+            f"task-{index}",
+            "Agent",
+        )
+    assert len(facade._delivery_started_at) == 2
+
+    import asyncio
+
+    await asyncio.sleep(0.02)
+    assert len(facade._delivery_started_at) == 0
 
 
 @pytest.mark.asyncio
@@ -279,11 +291,9 @@ async def test_lifecycle_start_stop_uses_delivery_surfaces():
     await facade.stop()
 
     assert compat.lifecycle_calls == [
-        ("start_cancellation_watcher", None),
         ("start", None),
         ("refresh_health", None),
         ("close_all_connections", None),
         ("stop", None),
-        ("stop_cancellation_watcher", None),
     ]
-    assert fake_publisher.lifecycle_calls == [("start", None), ("stop", None)]
+    assert fake_publisher.lifecycle_calls == []

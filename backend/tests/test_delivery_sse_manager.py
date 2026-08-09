@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from itertools import count
 
 import pytest
 
@@ -24,6 +25,9 @@ class FakeEventBus:
         self.unsubscribed: list[str] = []
         self.subscribe_waiter: asyncio.Event | None = None
         self.subscribe_error: Exception | None = None
+        self.unsubscribe_entered = asyncio.Event()
+        self.unsubscribe_waiter: asyncio.Event | None = None
+        self.unsubscribe_tasks: list[asyncio.Task | None] = []
 
     async def subscribe_room(self, room_id: str) -> None:
         self.subscribed.append(room_id)
@@ -34,6 +38,10 @@ class FakeEventBus:
 
     async def unsubscribe_room(self, room_id: str) -> None:
         self.unsubscribed.append(room_id)
+        self.unsubscribe_tasks.append(asyncio.current_task())
+        self.unsubscribe_entered.set()
+        if self.unsubscribe_waiter is not None:
+            await self.unsubscribe_waiter.wait()
 
 
 class FakeCancellationWatcher:
@@ -84,7 +92,6 @@ def make_transport(
     id_factory: IdFactory | None = None,
 ):
     return SSETransportImpl(
-        cancellation_watcher=FakeCancellationWatcher(),
         event_bus=event_bus or FakeEventBus(),
         config=config or DeliveryConfig(),
         now=fixed_now,
@@ -122,6 +129,7 @@ async def test_first_connection_subscribes_once_and_last_disconnect_unsubscribes
     assert event_bus.unsubscribed == []
 
     await transport.remove_connection("room-1", second.connection_id)
+    await transport._drain_room_cleanup_tasks()
     assert event_bus.unsubscribed == ["room-1"]
     assert "room-1" not in transport.room_connections
     assert transport.connection_rooms == {}
@@ -134,6 +142,7 @@ async def test_new_first_connection_after_empty_room_resubscribes():
 
     first = await transport.open_connection("room-1")
     await transport.remove_connection("room-1", first.connection_id)
+    await transport._drain_room_cleanup_tasks()
     await transport.open_connection("room-1")
 
     assert event_bus.subscribed == ["room-1", "room-1"]
@@ -149,10 +158,11 @@ async def test_subscription_failure_rejects_without_local_admission():
 
     with pytest.raises(ConnectionRefusedError):
         await transport.open_connection("room-1")
+    await transport._drain_room_cleanup_tasks()
 
     assert transport.room_connections == {}
     assert transport.connection_rooms == {}
-    assert event_bus.unsubscribed == []
+    assert event_bus.unsubscribed == ["room-1"]
     assert metrics.gauges == [
         ("hybro_delivery_sse_connections", 0, {"worker_id": "worker-1"})
     ]
@@ -181,9 +191,10 @@ async def test_concurrent_first_connection_failure_has_no_partial_admission():
         await first
     with pytest.raises(ConnectionRefusedError):
         await second
+    await transport._drain_room_cleanup_tasks()
 
     assert event_bus.subscribed == ["room-1", "room-1"]
-    assert event_bus.unsubscribed == []
+    assert event_bus.unsubscribed == ["room-1"]
     assert transport.room_connections == {}
     assert transport.connection_rooms == {}
 
@@ -253,9 +264,12 @@ async def test_broadcast_frame_to_room_preserves_order_and_empty_room_is_noop():
     transport = make_transport()
     connection = await transport.open_connection("room-1")
 
-    await transport.broadcast_frame_to_room("missing", {"type": "noop"})
-    await transport.broadcast_frame_to_room(
-        "room-1", {"type": "one", "room_id": "room-1"}
+    assert await transport.broadcast_frame_to_room("missing", {"type": "noop"}) == 0
+    assert (
+        await transport.broadcast_frame_to_room(
+            "room-1", {"type": "one", "room_id": "room-1"}
+        )
+        == 1
     )
     await transport.broadcast_frame_to_room(
         "room-1", {"type": "two", "room_id": "room-1"}
@@ -272,6 +286,103 @@ async def test_broadcast_frame_to_room_preserves_order_and_empty_room_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_slow_connection_overflow_does_not_block_fast_connection():
+    config = DeliveryConfig(sse_connection_queue_maxsize=1)
+    transport = make_transport(config=config)
+    slow = await transport.open_connection("room-1")
+    fast = await transport.open_connection("room-1")
+
+    await transport.broadcast_frame_to_room("room-1", {"type": "first"})
+    assert await fast.next_frame(timeout=0.01) == {"type": "first"}
+    await transport.broadcast_frame_to_room("room-1", {"type": "second"})
+
+    assert slow.is_active is False
+    assert slow.connection_id not in transport.room_connections["room-1"]
+    assert await fast.next_frame(timeout=0.01) == {"type": "second"}
+
+
+@pytest.mark.asyncio
+async def test_overflow_broadcast_does_not_wait_for_background_unsubscribe():
+    event_bus = FakeEventBus()
+    event_bus.unsubscribe_waiter = asyncio.Event()
+    transport = make_transport(
+        event_bus=event_bus,
+        config=DeliveryConfig(sse_connection_queue_maxsize=1),
+    )
+    connection = await transport.open_connection("room-1")
+    await transport.broadcast_frame_to_room("room-1", {"type": "first"})
+
+    broadcast = asyncio.create_task(
+        transport.broadcast_frame_to_room("room-1", {"type": "overflow"})
+    )
+    await asyncio.wait_for(broadcast, timeout=0.1)
+    await event_bus.unsubscribe_entered.wait()
+
+    assert connection.is_active is False
+    assert transport.room_connections == {}
+    assert transport._room_cleanup_tasks
+    assert event_bus.unsubscribe_tasks != [broadcast]
+
+    event_bus.unsubscribe_waiter.set()
+    await transport._drain_room_cleanup_tasks()
+    assert transport._room_cleanup_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_last_disconnect_unsubscribe_cannot_cancel_new_room_admission():
+    event_bus = FakeEventBus()
+    event_bus.unsubscribe_waiter = asyncio.Event()
+    transport = make_transport(event_bus=event_bus)
+    old = await transport.open_connection("room-1")
+
+    removal = asyncio.create_task(
+        transport.remove_connection("room-1", old.connection_id)
+    )
+    await event_bus.unsubscribe_entered.wait()
+    admission = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+
+    assert "room-1" not in transport.room_connections
+    assert removal.done()
+    event_bus.unsubscribe_waiter.set()
+    new = await admission
+    await removal
+    await transport._drain_room_cleanup_tasks()
+
+    assert event_bus.unsubscribed == ["room-1"]
+    assert event_bus.subscribed == ["room-1", "room-1"]
+    assert transport.room_connections["room-1"][new.connection_id] is new
+
+
+@pytest.mark.asyncio
+async def test_broadcast_cleanup_serializes_unsubscribe_with_new_admission():
+    event_bus = FakeEventBus()
+    event_bus.unsubscribe_waiter = asyncio.Event()
+    transport = make_transport(event_bus=event_bus)
+    old = await transport.open_connection("room-1")
+    old.close()
+
+    broadcast = asyncio.create_task(
+        transport.broadcast_frame_to_room("room-1", {"type": "update"})
+    )
+    await event_bus.unsubscribe_entered.wait()
+    admission = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+
+    assert "room-1" not in transport.room_connections
+    assert broadcast.done()
+    assert event_bus.unsubscribe_tasks != [broadcast]
+    event_bus.unsubscribe_waiter.set()
+    new = await admission
+    await broadcast
+    await transport._drain_room_cleanup_tasks()
+
+    assert event_bus.unsubscribed == ["room-1"]
+    assert event_bus.subscribed == ["room-1", "room-1"]
+    assert transport.room_connections["room-1"][new.connection_id] is new
+
+
+@pytest.mark.asyncio
 async def test_broadcast_cleans_dead_last_connection_and_unsubscribes():
     event_bus = FakeEventBus()
     metrics = FakeMetrics()
@@ -280,6 +391,7 @@ async def test_broadcast_cleans_dead_last_connection_and_unsubscribes():
     connection.close()
 
     await transport.broadcast_frame_to_room("room-1", {"type": "update"})
+    await transport._drain_room_cleanup_tasks()
 
     assert transport.room_connections == {}
     assert transport.connection_rooms == {}
@@ -289,6 +401,25 @@ async def test_broadcast_cleans_dead_last_connection_and_unsubscribes():
         0,
         {"worker_id": "worker-1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_close_all_connections_drains_pending_room_cleanup_tasks():
+    event_bus = FakeEventBus()
+    event_bus.unsubscribe_waiter = asyncio.Event()
+    transport = make_transport(event_bus=event_bus)
+    connection = await transport.open_connection("room-1")
+    await transport.remove_connection("room-1", connection.connection_id)
+    await event_bus.unsubscribe_entered.wait()
+
+    close_all = asyncio.create_task(transport.close_all_connections())
+    await asyncio.sleep(0)
+
+    assert not close_all.done()
+    assert transport._room_cleanup_tasks
+    event_bus.unsubscribe_waiter.set()
+    await close_all
+    assert transport._room_cleanup_tasks == {}
 
 
 @pytest.mark.asyncio
@@ -312,6 +443,43 @@ async def test_close_all_connections_clears_maps_unsubscribes_and_is_idempotent(
         0,
         {"worker_id": "worker-1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_admission_locks_are_reclaimed_after_many_room_disconnects():
+    ids = count()
+    transport = make_transport(id_factory=lambda: f"conn-{next(ids)}")
+
+    for index in range(100):
+        room_id = f"room-{index}"
+        connection = await transport.open_connection(room_id)
+        await transport.remove_connection(room_id, connection.connection_id)
+    await transport._drain_room_cleanup_tasks()
+
+    assert transport._admission_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admission_waiter_does_not_abandon_room_lock():
+    event_bus = FakeEventBus()
+    event_bus.subscribe_waiter = asyncio.Event()
+    transport = make_transport(event_bus=event_bus)
+    first = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+    waiter = asyncio.create_task(transport.open_connection("room-1"))
+    await asyncio.sleep(0)
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    event_bus.subscribe_waiter.set()
+    connection = await first
+    await transport.remove_connection("room-1", connection.connection_id)
+    await transport._drain_room_cleanup_tasks()
+
+    assert transport._admission_locks == {}
+    assert event_bus.subscribed == ["room-1"]
+    assert event_bus.unsubscribed == ["room-1"]
 
 
 @pytest.mark.asyncio

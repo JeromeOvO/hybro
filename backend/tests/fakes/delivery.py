@@ -4,7 +4,7 @@ from typing import Any
 
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
-from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+from delivery.config import DeliveryConfig
 from delivery.facade import DeliveryFacade
 from delivery.sse.connection import SSEConnection
 from delivery.translator import to_sse_frame
@@ -96,6 +96,9 @@ class FakeDeliveryCompat:
         self.tokens.pop(message_id, None)
 
     def create_token(self, message_id: str) -> CancellationToken:
+        existing = self.tokens.get(message_id)
+        if existing is not None:
+            return existing
         token = CancellationToken(message_id=message_id)
         if message_id in self.cancelled_messages:
             token.cancel()
@@ -105,8 +108,24 @@ class FakeDeliveryCompat:
     def get_token(self, message_id: str) -> CancellationToken | None:
         return self.tokens.get(message_id)
 
+    def release_token(self, message_id: str, token: CancellationToken | None) -> bool:
+        if token is None or self.tokens.get(message_id) is not token:
+            return False
+        self.tokens.pop(message_id, None)
+        return True
+
+    def release_active_token(
+        self,
+        message_id: str,
+        token: CancellationToken | None,
+    ) -> bool:
+        return self.release_token(message_id, token)
+
     def remove_token(self, message_id: str) -> None:
         self.tokens.pop(message_id, None)
+
+    async def signal(self, message_id: str) -> None:
+        await self.cancel_message_and_broadcast(message_id)
 
     async def start(self) -> None:
         self.lifecycle_calls.append(("start", None))
@@ -133,14 +152,12 @@ class FakeDeliveryCompat:
                 connection.close()
         self.room_connections.clear()
 
-    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> None:
+    async def publish_sse(self, room_id: str, frame: dict[str, Any]) -> bool:
         self.frames.append((frame["type"], frame["data"]))
+        return True
 
     async def publish_dead_letter(self, envelope: dict[str, Any]) -> None:
         self.lifecycle_calls.append(("publish_dead_letter", envelope))
-
-    async def publish_internal(self, event: Any) -> None:
-        self.lifecycle_calls.append(("publish_internal", event))
 
     async def refresh_health(self) -> None:
         self.lifecycle_calls.append(("refresh_health", None))
@@ -208,24 +225,6 @@ class FakeEventPublisher:
         for connection in connections:
             await connection.queue.put(frame)
 
-    async def start(self) -> None:
-        self.lifecycle_calls.append(("start", None))
-
-    async def stop(self) -> None:
-        self.lifecycle_calls.append(("stop", None))
-
-    async def emit_internal(
-        self,
-        event,
-        *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
-    ) -> None:
-        self.lifecycle_calls.append(("emit_internal", event))
-
-    def register_internal_handler(self, event_type: str, handler) -> None:
-        self.lifecycle_calls.append(("register_internal_handler", event_type))
-
 
 def make_delivery_facade(
     *,
@@ -233,6 +232,7 @@ def make_delivery_facade(
     redis_service: Any | None = None,
     instance_id: str = "test-worker",
     event_publisher: FakeEventPublisher | None = None,
+    config: DeliveryConfig | None = None,
 ) -> DeliveryFacade:
     if compat is None:
         compat = FakeDeliveryCompat(redis_service=redis_service)
@@ -243,14 +243,8 @@ def make_delivery_facade(
         event_publisher=publisher,
         sse_transport=compat,
         event_bus=compat,
-        cancellation_watcher=compat,
         redis_kv=None,
-        config=DeliveryConfig(),
-        startup_policy=DeliveryStartupPolicy(
-            redis_expected=False,
-            multi_worker=False,
-            allow_degraded_change_stream=True,
-        ),
+        config=config or DeliveryConfig(),
         instance_id=instance_id,
     )
     return facade

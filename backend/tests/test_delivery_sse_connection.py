@@ -41,6 +41,22 @@ async def test_send_frame_queues_dict_frame():
 
 
 @pytest.mark.asyncio
+async def test_full_bounded_queue_closes_connection_without_waiting():
+    connection = SSEConnection(
+        room_id="room-1",
+        connection_id="conn-1",
+        heartbeat_interval=3.0,
+        queue_maxsize=1,
+        now=fixed_now,
+    )
+
+    assert await connection.send_frame({"type": "first"}) is True
+    assert await connection.send_frame({"type": "overflow"}) is False
+    assert connection.is_active is False
+    assert connection.queue.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_send_message_builds_legacy_frame_but_keeps_internal_dict():
     connection = SSEConnection(
         room_id="room-1",

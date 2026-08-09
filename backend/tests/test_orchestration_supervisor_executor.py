@@ -10,6 +10,7 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from execution.cancellation.finalizer import CancellationFinalizer
 from execution.orchestration import supervisor_executor as supervisor_executor_module
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
@@ -37,6 +38,7 @@ from execution.orchestration.resources import (
 )
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.orchestration.room_message_center import RoomMessageCenter
+from execution.orchestration.run_reducer import mark_terminal
 from execution.orchestration.run_store import (
     InMemoryOrchestrationRunStore,
     OrchestrationStoreConflict,
@@ -249,7 +251,7 @@ async def test_run_rejects_state_bound_to_another_request(
 
 
 @pytest.mark.asyncio
-async def test_unhandled_supervisor_failure_terminalizes_system_task():
+async def test_unhandled_supervisor_failure_defers_system_task_to_root_projection():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -291,16 +293,54 @@ async def test_unhandled_supervisor_failure_terminalizes_system_task():
         reason="planner failed",
     )
 
-    executor.delivery.send_task_update.assert_awaited_once_with(
-        room_id="room-1",
+    durable = await store.get_run("message-1")
+    assert durable.status == OrchestrationStatus.FAILED
+    assert durable.system_agent_message_id == "sys-message-1"
+    executor.delivery.send_task_update.assert_not_awaited()
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_not_awaited()
+    assert system_message.message_content.message_task.status.state == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_terminal_system_task_does_not_emit_sse_when_db_retries_fail():
+    executor = _executor(
+        store=InMemoryOrchestrationRunStore(),
+        planner=RecordingPlanner(),
+        user_message=RoomUserMessage(
+            room_id="room-1",
+            message_id="message-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Coordinate this"),
+        ),
+    )
+    system_message = SimpleNamespace(
         message_id="sys-message-1",
-        status="failed",
+        message_content=SimpleNamespace(
+            message_text="",
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state="working"),
+            ),
+        ),
     )
-    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
-        "sys-message-1",
-        system_message.message_content,
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=system_message
     )
-    assert system_message.message_content.message_task.status.state.value == "failed"
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        return_value=False
+    )
+
+    with pytest.raises(RuntimeError, match="failed to persist system task"):
+        await executor._terminalize_system_task(
+            room_id="room-1",
+            system_message_id="sys-message-1",
+            task_status="failed",
+        )
+
+    assert (
+        executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.await_count
+        == 3
+    )
+    executor.delivery.send_task_update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -706,7 +746,7 @@ def _executor(
         continuation_store=SimpleNamespace(
             save_continuation_on_user_message=AsyncMock(return_value=True)
         ),
-        event_publisher=SimpleNamespace(emit_internal=AsyncMock()),
+        internal_event_publisher=SimpleNamespace(publish=AsyncMock()),
         rate_limit_service=None,
         agent_dispatcher=SimpleNamespace(
             resolve_agent=AsyncMock(
@@ -7698,10 +7738,10 @@ async def test_durable_envelope_routes_to_single_orchestration_path():
     )
     rmc.message_writer = SimpleNamespace()
     rmc._turn_event_appender = None
-    rmc.delivery = SimpleNamespace(
-        get_token=MagicMock(return_value=token),
-        create_token=MagicMock(return_value=token),
-        remove_token=MagicMock(),
+    rmc.delivery = SimpleNamespace()
+    rmc.cancellation_control = SimpleNamespace(
+        release_token=MagicMock(return_value=True),
+        clear_cancellation=MagicMock(),
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock(
@@ -7746,6 +7786,7 @@ async def test_durable_envelope_routes_to_single_orchestration_path():
         ),
         "room-1",
         "message-1",
+        token=token,
     )
 
     assert response == OrchestrationResponse(
@@ -7787,10 +7828,10 @@ async def test_orchestration_initial_run_receives_context_memory():
     )
     rmc.message_writer = SimpleNamespace()
     rmc._turn_event_appender = None
-    rmc.delivery = SimpleNamespace(
-        get_token=MagicMock(return_value=token),
-        create_token=MagicMock(return_value=token),
-        remove_token=MagicMock(),
+    rmc.delivery = SimpleNamespace()
+    rmc.cancellation_control = SimpleNamespace(
+        release_token=MagicMock(return_value=True),
+        clear_cancellation=MagicMock(),
     )
     rmc.room_runtime = SimpleNamespace(
         inquiry_agent_messages_by_related_message_id=AsyncMock()
@@ -7839,6 +7880,7 @@ async def test_orchestration_initial_run_receives_context_memory():
         ),
         "room-1",
         "message-1",
+        token=token,
     )
 
     assert response.success is True
@@ -10988,6 +11030,157 @@ async def test_mark_orchestration_terminal_persists_actionable_terminal_summary(
     assert terminal_event.payload["terminal_summary"]["validated_blocker_keys"] == [
         "blocker-1"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("winner_status", "expected_run_status", "expected_child_status"),
+    [
+        (OrchestrationStatus.CANCELED, RunStatus.CANCELED, "canceled"),
+        (OrchestrationStatus.FAILED, RunStatus.FAILED, "failed"),
+    ],
+)
+async def test_completion_cas_loser_projects_only_durable_terminal_winner(
+    monkeypatch,
+    winner_status,
+    expected_run_status,
+    expected_child_status,
+):
+    store = InMemoryOrchestrationRunStore()
+    state = _run_state(
+        status=OrchestrationStatus.RUNNING,
+        participant_snapshot={
+            "mode": "direct",
+            "ordered_agent_ids": ["agent-1"],
+        },
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="agent-message-1",
+                agent_id="agent-1",
+                status="completed",
+                text="Work completed.",
+            )
+        ],
+        system_agent_message_id="sys-message-1",
+    )
+    state = await store.create_run(state)
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Race terminalization."),
+        extend_info={},
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(
+            PlannerAction(
+                action=PlannerActionType.COMPLETE,
+                reasoning="completed",
+            )
+        ),
+        user_message=user_message,
+        guardrails_enabled=False,
+    )
+    system_message = SimpleNamespace(
+        message_id="sys-message-1",
+        message_content=SimpleNamespace(
+            message_text="",
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state="working"),
+            ),
+        ),
+    )
+    child_observations: list[tuple[str, str]] = []
+
+    async def persist_child(_message_id, message_content):
+        child_state = message_content.message_task.status.state
+        child_observations.append(("db", getattr(child_state, "value", child_state)))
+        system_message.message_content = message_content
+        return True
+
+    async def emit_child_status(**kwargs):
+        durable_child_state = system_message.message_content.message_task.status.state
+        child_observations.append(
+            ("sse", getattr(durable_child_state, "value", durable_child_state))
+        )
+        assert kwargs["status"] == expected_child_status
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=system_message
+    )
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
+        side_effect=persist_child
+    )
+    executor.delivery.send_task_update = AsyncMock(side_effect=emit_child_status)
+    project_public_terminal = AsyncMock()
+    finalizer = CancellationFinalizer(
+        run_store=store,
+        project_status=AsyncMock(return_value=True),
+        broadcast_cancellation=AsyncMock(),
+        get_active_token=MagicMock(return_value=None),
+        release_active_token=MagicMock(return_value=True),
+        clear_cancellation=MagicMock(),
+        cancel_hitl=AsyncMock(),
+        project_public_terminal=project_public_terminal,
+        cleanup_agent_tasks=AsyncMock(),
+        mark_reconciled=AsyncMock(return_value=True),
+        get_public_run=AsyncMock(return_value=None),
+    )
+    original_save = store.save_state
+    winner_has_saved = False
+
+    async def save_with_terminal_winner(updated, *, expected_version):
+        nonlocal winner_has_saved
+        if updated.status == OrchestrationStatus.COMPLETED and not winner_has_saved:
+            winner_has_saved = True
+            if winner_status == OrchestrationStatus.CANCELED:
+                await finalizer.finalize(room_id="room-1", message_id="msg-1")
+            else:
+                current = await store.get_run(updated.run_id)
+                assert current is not None
+                await original_save(
+                    mark_terminal(current, winner_status, reason="concurrent failure"),
+                    expected_version=current.state_version,
+                )
+        return await original_save(updated, expected_version=expected_version)
+
+    monkeypatch.setattr(store, "save_state", save_with_terminal_winner)
+
+    result = await executor._execute_orchestration_loop(
+        state=state,
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Race terminalization.",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+
+    durable = await store.get_run(state.run_id)
+    assert durable is not None
+    assert result.status == expected_run_status
+    assert durable.status == winner_status
+    assert child_observations == []
+    assert system_message.message_content.message_task.status.state == "working"
+    emitted_statuses = [
+        call.kwargs["status"]
+        for call in executor.delivery.send_task_update.await_args_list
+    ]
+    assert emitted_statuses == []
+    assert all(
+        call.kwargs["status"] != OrchestrationStatus.COMPLETED
+        for call in project_public_terminal.await_args_list
+    )
+    terminal_events = [
+        event
+        for event in store._events_by_run[durable.run_id]
+        if event.type == OrchestrationEventType.RUN_TERMINAL
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0].event_id == (
+        f"{durable.run_id}:run-terminal:{winner_status.value}:{durable.state_version}"
+    )
 
 
 @pytest.mark.asyncio

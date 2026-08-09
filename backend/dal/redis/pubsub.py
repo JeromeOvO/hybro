@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -7,6 +8,8 @@ import redis.asyncio as aioredis
 
 from common.config import settings
 from common.errors import TransientError
+
+_PUBSUB_CLEANUP_TIMEOUT_SECONDS = 1.0
 
 
 class RedisPubSubImpl:
@@ -58,7 +61,17 @@ class RedisPubSubImpl:
         client = self._ensure_client()
         if client is None:
             return _empty_iterator()
-        return _message_iterator(client, channel, self._transient)
+        pubsub = client.pubsub()
+        try:
+            await pubsub.subscribe(channel)
+            await _wait_for_subscription_ready(pubsub, channel)
+        except asyncio.CancelledError:
+            await _close_pubsub(pubsub)
+            raise
+        except Exception as exc:
+            await _close_pubsub(pubsub)
+            raise self._transient("subscribe", exc) from exc
+        return _message_iterator(pubsub, channel, self._transient)
 
     async def ping(self) -> bool:
         client = self._ensure_client()
@@ -71,37 +84,75 @@ class RedisPubSubImpl:
             return False
 
     async def close(self) -> None:
-        if self._client is not None:
-            try:
-                await self._client.aclose()
-            except Exception:
-                pass
+        client = self._client
         self._client = None
+        if client is None:
+            return
+        try:
+            await asyncio.wait_for(
+                client.aclose(),
+                timeout=_PUBSUB_CLEANUP_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            pass
 
 
 async def _empty_iterator() -> AsyncIterator[str]:
+    await asyncio.Future()
     if False:
         yield ""
 
 
+async def _wait_for_subscription_ready(pubsub: Any, channel: str) -> None:
+    while True:
+        message = await pubsub.get_message(
+            ignore_subscribe_messages=False,
+            timeout=None,
+        )
+        if (
+            message is not None
+            and message.get("type") == "subscribe"
+            and message.get("channel") == channel
+        ):
+            return
+
+
+async def _close_pubsub(pubsub: Any) -> None:
+    try:
+        await asyncio.wait_for(
+            pubsub.aclose(),
+            timeout=_PUBSUB_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        pass
+
+
 async def _message_iterator(
-    client: Any,
+    pubsub: Any,
     channel: str,
     transient_factory,
 ) -> AsyncIterator[str]:
-    pubsub = client.pubsub()
+    cancelled = False
     try:
-        await pubsub.subscribe(channel)
         async for message in pubsub.listen():
             if message.get("type") != "message":
                 continue
             data = message.get("data")
             if data is not None:
                 yield data
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     except Exception as exc:
         raise transient_factory("subscribe", exc) from exc
     finally:
         try:
-            await pubsub.unsubscribe(channel)
+            if not cancelled:
+                await asyncio.wait_for(
+                    pubsub.unsubscribe(channel),
+                    timeout=_PUBSUB_CLEANUP_TIMEOUT_SECONDS,
+                )
+        except Exception:
+            pass
         finally:
-            await pubsub.aclose()
+            await _close_pubsub(pubsub)

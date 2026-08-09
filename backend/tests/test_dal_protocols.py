@@ -81,6 +81,29 @@ def test_redis_protocols_expose_health_properties():
     assert isinstance(RedisStreams.__dict__["is_connected"], property)
 
 
+def test_redis_kv_compare_delete_protocol_signature_matches_implementation():
+    from dal.redis.kv import RedisKVImpl
+
+    protocol_signature = inspect.signature(RedisKV.compare_delete)
+    implementation_signature = inspect.signature(RedisKVImpl.compare_delete)
+
+    assert tuple(protocol_signature.parameters) == (
+        "self",
+        "key",
+        "expected_value",
+    )
+    assert tuple(implementation_signature.parameters) == tuple(
+        protocol_signature.parameters
+    )
+    for name in ("key", "expected_value"):
+        protocol_parameter = protocol_signature.parameters[name]
+        implementation_parameter = implementation_signature.parameters[name]
+        assert protocol_parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        assert implementation_parameter.kind is protocol_parameter.kind
+        assert protocol_parameter.default is inspect.Parameter.empty
+        assert implementation_parameter.default is inspect.Parameter.empty
+
+
 def test_leader_elector_protocol_accepts_keyword_ttl_seconds():
     acquire_signature = inspect.signature(LeaderElector.try_acquire)
     renew_signature = inspect.signature(LeaderElector.renew)

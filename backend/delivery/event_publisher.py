@@ -1,24 +1,31 @@
 import asyncio
-import inspect
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from pydantic import TypeAdapter
-
-from common.dto import DeliveryEvent, InternalEvent, ProcessingStatusEvent
+from common.dto import (
+    DeliveryEmitStatus,
+    DeliveryEvent,
+    ProcessingStatusEvent,
+    RunEventNotification,
+    TaskUpdateEvent,
+)
 from common.observability import (
     MetricsCollector,
     NoopMetricsCollector,
     get_current_trace_id,
     trace_id_context,
+    traced_create_task,
 )
 from delivery.config import DeliveryConfig
-from delivery.sse.deduplication import TerminalStatusDeduplicator
+from delivery.sse.deduplication import (
+    DeliveryReservation,
+    DeliveryReservationStatus,
+    TerminalStatusDeduplicator,
+)
 from delivery.sse.manager import SSETransportImpl
 from delivery.translator import to_sse_frame
-from delivery.types import TaskRunner
 
 
 class EventPublisherImpl:
@@ -31,7 +38,6 @@ class EventPublisherImpl:
         config: DeliveryConfig,
         now: Callable[[], datetime],
         instance_id: str,
-        task_runner: TaskRunner,
         metrics: MetricsCollector | None = None,
     ) -> None:
         self.sse_transport = sse_transport
@@ -40,97 +46,123 @@ class EventPublisherImpl:
         self.config = config
         self._now = now
         self.instance_id = instance_id
-        self._task_runner = task_runner
         self._metrics = metrics or NoopMetricsCollector()
-        self._handlers: dict[str, list[Callable[[Any], Any]]] = defaultdict(list)
-        self._handler_tasks: set[asyncio.Task] = set()
         self.dead_letters: deque[dict[str, Any]] = deque(
             maxlen=config.dead_letter_memory_maxlen
         )
-        self._internal_event_adapter = TypeAdapter(InternalEvent)
-        self._stopping = False
 
     async def emit(self, event: DeliveryEvent) -> bool:
-        terminal_reserved = False
+        """Compatibility API: only a fresh confirmed delivery returns ``True``."""
+        return (await self.emit_checked(event)) == DeliveryEmitStatus.DELIVERED
+
+    async def emit_checked(  # noqa: C901
+        self, event: DeliveryEvent
+    ) -> DeliveryEmitStatus:
+        reservation: DeliveryReservation | None = None
         try:
-            if not await self._should_deliver_typed(event):
+            reservation_status, reservation = await self._reserve_typed_delivery(event)
+            if reservation_status == DeliveryReservationStatus.IN_FLIGHT:
+                return DeliveryEmitStatus.IN_FLIGHT
+            if reservation_status == DeliveryReservationStatus.ALREADY_DELIVERED:
                 self._increment(
                     "hybro_delivery_events_deduplicated_total",
-                    {"event_type": "processing_status"},
+                    {"event_type": event.event_type},
                 )
-                return False
-            terminal_reserved = self._is_terminal_typed(event)
+                return DeliveryEmitStatus.ALREADY_DELIVERED
+            if reservation_status is None and not await self._should_deliver_typed(
+                event
+            ):
+                self._increment(
+                    "hybro_delivery_events_deduplicated_total",
+                    {"event_type": event.event_type},
+                )
+                return DeliveryEmitStatus.DEDUPLICATED
             timestamp = event.timestamp or self._now()
             frame = to_sse_frame(event, timestamp=timestamp)
             trace_id = getattr(event, "trace_id", None) or get_current_trace_id()
             self._inject_typed_trace_id(frame, trace_id)
         except Exception as exc:
-            if terminal_reserved:
-                await self._release_typed_delivery(event)
+            if reservation is not None:
+                await self._release_typed_delivery(event, reservation)
             await self._dead_letter("translate", event, exc)
-            return False
+            return DeliveryEmitStatus.FAILED
 
         self._increment(
             "hybro_delivery_events_emitted_total",
             {"event_type": frame["type"]},
         )
-        delivered = await self._deliver_frontend(
-            event.room_id,
-            frame,
+        delivered, lease_owned = await self._deliver_with_reservation(
             event,
-            "sse_fanout",
+            frame,
             trace_id=trace_id,
+            reservation=reservation,
         )
         if not delivered:
-            await self._release_typed_delivery(event)
-        return delivered
+            await self._release_typed_delivery(event, reservation)
+            return DeliveryEmitStatus.FAILED
 
-    async def emit_internal(
+        # Transport acceptance is the delivery boundary. Losing the lease or
+        # Redis confirmation after fanout must not make durable reconciliation
+        # send the already-accepted terminal frame again.
+        if reservation is not None:
+            confirmed = False
+            if lease_owned and reservation.l2_owned:
+                try:
+                    confirmed = await self.deduplicator.confirm(reservation)
+                except Exception:
+                    confirmed = False
+            if not confirmed:
+                await self.deduplicator.mark_delivered_after_acceptance(
+                    reservation,
+                    status=self._dedup_status(event),
+                )
+        return DeliveryEmitStatus.DELIVERED
+
+    async def _deliver_with_reservation(
         self,
-        event: InternalEvent,
+        event,
+        frame,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
-    ) -> None:
-        handler_tasks = self._schedule_internal_handlers(event)
-        if broadcast:
-            try:
-                await self.event_bus.publish_internal(event)
-            except Exception as exc:
-                await self._dead_letter("internal_fanout", event, exc)
-        if wait_for_local_handlers and handler_tasks:
-            await asyncio.gather(*handler_tasks, return_exceptions=True)
-
-    def register_internal_handler(self, event_type: str, handler: Callable) -> None:
-        self._handlers[event_type].append(handler)
-
-    async def start(self) -> None:
-        self._stopping = False
-
-    async def stop(self) -> None:
-        self._stopping = True
-        if self._handler_tasks:
-            _, pending = await asyncio.wait(
-                self._handler_tasks,
-                timeout=self.config.handler_shutdown_timeout_seconds,
+        trace_id,
+        reservation,
+    ) -> tuple[bool, bool]:
+        lease_lost = asyncio.Event()
+        heartbeat = (
+            traced_create_task(
+                self._heartbeat_reservation(reservation, lease_lost),
+                name=f"delivery-reservation:{reservation.dedup_key}",
             )
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-    async def handle_remote_internal_event(self, envelope: dict[str, Any]) -> None:
-        if envelope.get("origin") == self.instance_id:
-            return
+            if reservation is not None
+            else None
+        )
         try:
-            event = self._internal_event_adapter.validate_python(envelope.get("event"))
-        except Exception as exc:
-            await self._dead_letter("internal_deserialize", envelope, exc)
-            return
-        if envelope.get("event_type") != event.event_type:
-            return
-        with trace_id_context(envelope.get("trace_id")):
-            self._schedule_internal_handlers(event)
+            delivered = await self._deliver_frontend(
+                event.room_id,
+                frame,
+                event,
+                "sse_fanout",
+                trace_id=trace_id,
+            )
+        finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                try:
+                    await heartbeat
+                except asyncio.CancelledError:
+                    pass
+        return delivered, not lease_lost.is_set()
+
+    async def _heartbeat_reservation(
+        self,
+        reservation: DeliveryReservation,
+        lease_lost: asyncio.Event,
+    ) -> None:
+        interval = max(0.05, self.deduplicator.reservation_ttl_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            if not await self.deduplicator.renew(reservation):
+                lease_lost.set()
+                return
 
     async def _deliver_frontend(
         self,
@@ -143,71 +175,109 @@ class EventPublisherImpl:
     ) -> bool:
         local_delivered = False
         try:
-            await self.sse_transport.broadcast_frame_to_room(room_id, frame)
-            local_delivered = True
+            local_count = await self.sse_transport.broadcast_frame_to_room(
+                room_id, frame
+            )
+            local_delivered = isinstance(local_count, int) and local_count > 0
         except Exception:
             pass
 
         remote_delivered = False
         with trace_id_context(trace_id):
             try:
-                await self.event_bus.publish_sse(room_id, frame)
-                remote_delivered = True
+                remote_delivered = (
+                    await self.event_bus.publish_sse(room_id, frame)
+                ) is True
             except Exception as exc:
                 await self._dead_letter(failure_stage, payload, exc)
         return local_delivered or remote_delivered
 
+    async def _reserve_typed_delivery(
+        self, event: DeliveryEvent
+    ) -> tuple[DeliveryReservationStatus | None, DeliveryReservation | None]:
+        if not self._is_terminal_typed(event):
+            return None, None
+        reserve = getattr(self.deduplicator, "reserve", None)
+        if not callable(reserve):
+            return None, None
+        reservation = await reserve(
+            room_id=event.room_id,
+            message_id=self._dedup_message_id(event),
+            status=self._dedup_status(event),
+            delivery_id=getattr(event, "delivery_id", None),
+        )
+        return reservation.status, reservation
+
     async def _should_deliver_typed(self, event: DeliveryEvent) -> bool:
-        if (
-            isinstance(event, ProcessingStatusEvent)
-            and event.status in self.config.terminal_processing_statuses
-        ):
-            return await self.deduplicator.should_deliver(
-                room_id=event.room_id,
-                message_id=event.message_id,
-                status=event.status,
-            )
+        if self._is_terminal_typed(event):
+            try:
+                return await self.deduplicator.should_deliver(
+                    room_id=event.room_id,
+                    message_id=self._dedup_message_id(event),
+                    status=self._dedup_status(event),
+                    delivery_id=getattr(event, "delivery_id", None),
+                )
+            except TypeError as exc:
+                if "delivery_id" not in str(exc):
+                    raise
+                return await self.deduplicator.should_deliver(
+                    room_id=event.room_id,
+                    message_id=self._dedup_message_id(event),
+                    status=self._dedup_status(event),
+                )
         return True
 
-    async def _release_typed_delivery(self, event: DeliveryEvent) -> None:
+    async def _release_typed_delivery(
+        self,
+        event: DeliveryEvent,
+        reservation: DeliveryReservation | None = None,
+    ) -> None:
         if not self._is_terminal_typed(event):
             return
         release = getattr(self.deduplicator, "release", None)
         if release is None:
             return
-        await release(
-            room_id=event.room_id,
-            message_id=event.message_id,
-            status=event.status,
-        )
+        try:
+            await release(
+                room_id=event.room_id,
+                message_id=self._dedup_message_id(event),
+                status=self._dedup_status(event),
+                delivery_id=getattr(event, "delivery_id", None),
+                reservation=reservation,
+            )
+        except TypeError as exc:
+            if "delivery_id" not in str(exc) and "reservation" not in str(exc):
+                raise
+            await release(
+                room_id=event.room_id,
+                message_id=self._dedup_message_id(event),
+                status=self._dedup_status(event),
+            )
 
     def _is_terminal_typed(self, event: DeliveryEvent) -> bool:
         return (
-            isinstance(event, ProcessingStatusEvent)
-            and event.status in self.config.terminal_processing_statuses
+            (
+                isinstance(event, ProcessingStatusEvent)
+                and event.status in self.config.terminal_processing_statuses
+            )
+            or (
+                isinstance(event, TaskUpdateEvent)
+                and event.delivery_id is not None
+                and event.status in self.config.terminal_processing_statuses
+            )
+            or (
+                isinstance(event, RunEventNotification)
+                and event.delivery_id is not None
+            )
         )
 
-    def _schedule_internal_handlers(self, event: InternalEvent) -> list[asyncio.Task]:
-        if self._stopping:
-            return []
-        tasks: list[asyncio.Task] = []
-        for handler in self._handlers.get(event.event_type, []):
-            task = self._task_runner(
-                self._run_handler(handler, event),
-                name=f"delivery-handler-{event.event_type}",
-            )
-            self._handler_tasks.add(task)
-            task.add_done_callback(self._handler_tasks.discard)
-            tasks.append(task)
-        return tasks
+    @staticmethod
+    def _dedup_message_id(event: DeliveryEvent) -> str | None:
+        return getattr(event, "message_id", None) or getattr(event, "event_id", None)
 
-    async def _run_handler(self, handler: Callable, event: InternalEvent) -> None:
-        try:
-            result = handler(event)
-            if inspect.isawaitable(result):
-                await result
-        except Exception as exc:
-            await self._dead_letter("internal_handler", event, exc)
+    @staticmethod
+    def _dedup_status(event: DeliveryEvent) -> str:
+        return str(getattr(event, "status", "delivered"))
 
     async def _dead_letter(self, stage: str, payload: Any, exc: Exception) -> None:
         envelope = {

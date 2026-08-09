@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -85,18 +86,7 @@ async def test_delivery_compatibility_uses_only_facade_public_api():
     await compat.remove_connection("room-1", "conn-1")
     assert compat.get_room_status("room-1") == {"room_id": "room-1"}
     assert compat.room_connections == {"room-1": ["conn-1"]}
-    assert compat.is_cancelled("msg-1") is False
-    compat.cancel_message("msg-1")
-    await compat.cancel_message_and_broadcast("msg-1")
-    assert await compat.check_cancelled("msg-1") is False
-    compat.clear_cancellation("msg-1")
-    assert compat.create_token("msg-1") == "token"
-    assert compat.get_token("msg-1") == "token"
-    compat.remove_token("msg-1")
-    await compat.start_change_stream_watcher()
-    await compat.stop_change_stream_watcher()
     compat.set_draining(True)
-    assert compat.change_stream_connected is True
     assert compat.delivery_kv_connected is True
     assert compat.delivery_pubsub_connected is True
     await compat.refresh_health()
@@ -180,7 +170,7 @@ def _attribute_chain(node: ast.AST) -> str | None:
 def test_delivery_package_skeleton_and_config_exports():
     delivery = importlib.import_module("delivery")
 
-    from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+    from delivery.config import DeliveryConfig
     from delivery.types import RoomSubscriptionLimitExceeded, TaskRunner
 
     if getattr(delivery, "__all__", []) != []:
@@ -192,22 +182,19 @@ def test_delivery_package_skeleton_and_config_exports():
 
     config = DeliveryConfig()
     assert config.heartbeat_interval_seconds == 30.0
+    assert config.sse_connection_queue_maxsize == 100
     assert config.shutdown_drain_seconds == 5.0
+    assert config.terminal_reservation_ttl_seconds == 30
+    assert config.terminal_redis_io_timeout_seconds == 1.0
     assert config.redis_sse_channel_prefix == "sse:room:"
-    assert config.redis_cancel_channel == "cancel:global"
-    assert config.redis_internal_channel == "internal:global"
     assert config.redis_dead_letter_channel == "delivery:dead_letter"
     assert config.redis_room_subscription_production_limit == 40
+    assert config.redis_room_subscription_ready_timeout_seconds == 5.0
     assert config.redis_subscription_reserved_connections == 10
     assert config.redis_max_connections == 50
     assert config.terminal_processing_statuses == frozenset(
         {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
     )
-
-    policy = DeliveryStartupPolicy(redis_expected=True, multi_worker=True)
-    assert policy.redis_expected is True
-    assert policy.multi_worker is True
-    assert policy.allow_degraded_change_stream is False
 
     assert issubclass(RoomSubscriptionLimitExceeded, RuntimeError)
     assert callable(TaskRunner)
@@ -217,27 +204,21 @@ def test_delivery_package_skeleton_and_config_exports():
     ("field", "value"),
     [
         ("heartbeat_interval_seconds", 0),
+        ("sse_connection_queue_maxsize", 0),
         ("shutdown_drain_seconds", 0),
-        ("cancellation_ttl_seconds", 0),
         ("terminal_dedup_ttl_seconds", 0),
-        ("cancellation_cache_maxsize", 0),
-        ("cancellation_token_cache_maxsize", 0),
+        ("terminal_reservation_ttl_seconds", 0),
+        ("terminal_redis_io_timeout_seconds", 0),
         ("terminal_dedup_cache_maxsize", 0),
         ("dead_letter_memory_maxlen", 0),
-        ("handler_shutdown_timeout_seconds", 0),
         ("redis_reconnect_delay", 0),
         ("redis_reconnect_max_delay", 0),
         ("redis_max_connections", 0),
         ("redis_subscription_reserved_connections", 0),
         ("redis_room_subscription_production_limit", 0),
-        ("cs_backoff_base", 0),
-        ("cs_backoff_max", 0),
-        ("cs_backoff_factor", 0.5),
+        ("redis_room_subscription_ready_timeout_seconds", 0),
         ("redis_sse_channel_prefix", ""),
-        ("redis_cancel_channel", ""),
-        ("redis_internal_channel", ""),
         ("redis_dead_letter_channel", ""),
-        ("redis_cancel_key_prefix", ""),
         ("redis_terminal_key_prefix", ""),
     ],
 )
@@ -252,9 +233,6 @@ def test_delivery_config_rejects_invalid_values(field, value):
     "kwargs",
     [
         {"redis_reconnect_delay": 2.0, "redis_reconnect_max_delay": 1.0},
-        {"cs_backoff_base": 2.0, "cs_backoff_max": 1.0},
-        {"cs_jitter_fraction": -0.1},
-        {"cs_jitter_fraction": 1.1},
         {
             "redis_max_connections": 50,
             "redis_subscription_reserved_connections": 10,
@@ -279,24 +257,6 @@ def test_delivery_config_normalizes_terminal_statuses():
     config = DeliveryConfig(terminal_processing_statuses={" Completed ", "FAILED"})
 
     assert config.terminal_processing_statuses == frozenset({"completed", "failed"})
-
-
-def test_delivery_startup_policy_rejects_invalid_degraded_combinations():
-    from delivery.config import DeliveryStartupPolicy
-
-    with pytest.raises(ValueError):
-        DeliveryStartupPolicy(
-            redis_expected=True,
-            multi_worker=False,
-            allow_degraded_change_stream=True,
-        )
-
-    with pytest.raises(ValueError):
-        DeliveryStartupPolicy(
-            redis_expected=False,
-            multi_worker=True,
-            allow_degraded_change_stream=True,
-        )
 
 
 def test_common_settings_expose_delivery_config_fields():
@@ -345,6 +305,29 @@ def test_delivery_facade_exports_and_protocol_conformance():
     assert DeliveryFacade is delivery.DeliveryFacade
     assert isinstance(EventPublisherImpl.__new__(EventPublisherImpl), EventPublisher)
     assert isinstance(SSETransportImpl.__new__(SSETransportImpl), SSETransport)
+
+
+@pytest.mark.asyncio
+async def test_facade_treats_confirmed_stable_task_delivery_as_success():
+    from common.dto import DeliveryEmitStatus
+    from delivery.config import DeliveryConfig
+    from delivery.facade import DeliveryFacade
+
+    facade = DeliveryFacade.__new__(DeliveryFacade)
+    facade._event_publisher = SimpleNamespace(
+        emit_checked=AsyncMock(return_value=DeliveryEmitStatus.ALREADY_DELIVERED)
+    )
+    facade.config = DeliveryConfig()
+    facade._record_terminal_delivery = MagicMock()
+
+    assert await facade.send_task_update(
+        room_id="room-1",
+        message_id="sys-msg-1",
+        status="completed",
+        delivery_id="terminal:event-1:system-task",
+    )
+    event = facade._event_publisher.emit_checked.await_args.args[0]
+    assert event.delivery_id == "terminal:event-1:system-task"
 
 
 def test_tracing_helpers_preserve_explicit_trace_context():
@@ -557,7 +540,7 @@ class _FakeRedisKV:
 
 
 def _make_facade(redis_kv=None, bus_connected=True):
-    from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+    from delivery.config import DeliveryConfig
     from delivery.facade import DeliveryFacade
 
     calls: list[str] = []
@@ -568,10 +551,8 @@ def _make_facade(redis_kv=None, bus_connected=True):
         event_publisher=publisher,
         sse_transport=transport,
         event_bus=bus,
-        cancellation_watcher=None,
         redis_kv=redis_kv,
         config=DeliveryConfig(),
-        startup_policy=DeliveryStartupPolicy(redis_expected=False, multi_worker=False),
         instance_id="worker-1",
     )
     return facade, publisher, transport, bus, calls
@@ -583,11 +564,7 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     facade, publisher, transport, bus, calls = _make_facade(redis_kv=redis_kv)
 
     await facade.start()
-    assert calls == [
-        "transport.start_cancellation_watcher",
-        "bus.start",
-        "publisher.start",
-    ]
+    assert calls == ["bus.start"]
     assert facade.instance_id == "worker-1"
     assert facade.delivery_kv_connected is True
     assert facade.delivery_pubsub_connected is True
@@ -601,11 +578,9 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     assert transport.draining is True
 
     await facade.stop()
-    assert calls[-4:] == [
-        "publisher.stop",
+    assert calls[-2:] == [
         "transport.close_all_connections",
         "bus.stop",
-        "transport.stop_cancellation_watcher",
     ]
     assert redis_kv.closed == 1
 
@@ -630,9 +605,8 @@ def test_container_delivery_factories_and_config_mapping():
         create_delivery_deps,
         create_delivery_facade,
         create_delivery_redis_clients,
-        create_delivery_startup_policy,
     )
-    from delivery.config import DeliveryConfig, DeliveryStartupPolicy
+    from delivery.config import DeliveryConfig
     from delivery.facade import DeliveryFacade
 
     values = {
@@ -642,41 +616,42 @@ def test_container_delivery_factories_and_config_mapping():
     values.update(
         {
             "heartbeat_interval_seconds": 2.5,
+            "sse_connection_queue_maxsize": 23,
             "shutdown_drain_seconds": 1.25,
-            "cancellation_ttl_seconds": 42,
             "terminal_dedup_ttl_seconds": 43,
-            "cancellation_cache_maxsize": 44,
-            "cancellation_token_cache_maxsize": 45,
+            "terminal_reservation_ttl_seconds": 4,
+            "terminal_redis_io_timeout_seconds": 0.2,
             "terminal_dedup_cache_maxsize": 46,
             "redis_sse_channel_prefix": "custom:sse:",
-            "redis_cancel_channel": "custom:cancel",
-            "redis_internal_channel": "custom:internal",
             "redis_dead_letter_channel": "custom:dead",
-            "redis_cancel_key_prefix": "custom:cancelled:",
             "redis_terminal_key_prefix": "custom:terminal:",
             "dead_letter_memory_maxlen": 47,
-            "handler_shutdown_timeout_seconds": 0.5,
             "redis_reconnect_delay": 0.25,
             "redis_reconnect_max_delay": 3.0,
             "redis_max_connections": 120,
             "redis_subscription_reserved_connections": 10,
             "redis_room_subscription_production_limit": 100,
-            "cs_backoff_base": 0.5,
-            "cs_backoff_max": 8.0,
-            "cs_backoff_factor": 1.5,
-            "cs_jitter_fraction": 0.1,
+            "redis_room_subscription_ready_timeout_seconds": 0.75,
             "terminal_processing_statuses": "Done, FAILED",
         }
     )
     config = create_delivery_config(SimpleNamespace(**values))
 
     assert config.heartbeat_interval_seconds == 2.5
+    assert config.sse_connection_queue_maxsize == 23
+    assert config.terminal_reservation_ttl_seconds == 4
+    assert config.terminal_redis_io_timeout_seconds == 0.2
     assert config.redis_sse_channel_prefix == "custom:sse:"
-    assert config.redis_internal_channel == "custom:internal"
     assert config.redis_dead_letter_channel == "custom:dead"
     assert config.redis_max_connections == 120
     assert config.redis_room_subscription_production_limit == 100
+    assert config.redis_room_subscription_ready_timeout_seconds == 0.75
     assert config.terminal_processing_statuses == frozenset({"done", "failed"})
+
+    legacy_values = dict(values)
+    legacy_values.pop("terminal_redis_io_timeout_seconds")
+    legacy_config = create_delivery_config(SimpleNamespace(**legacy_values))
+    assert legacy_config.terminal_redis_io_timeout_seconds == 1.0
 
     redis_kv, redis_pubsub = create_delivery_redis_clients(
         redis_url="redis://localhost:6379/0",
@@ -687,28 +662,7 @@ def test_container_delivery_factories_and_config_mapping():
     assert redis_pubsub.max_connections == 120
     assert create_delivery_redis_clients(redis_url="", config=config) == (None, None)
 
-    policy = create_delivery_startup_policy(redis_url="", multi_worker=False)
-    assert policy == DeliveryStartupPolicy(
-        redis_expected=False,
-        multi_worker=False,
-        allow_degraded_change_stream=True,
-    )
-    fatal_policy = create_delivery_startup_policy(
-        redis_url="redis://localhost:6379/0",
-        multi_worker=True,
-    )
-    assert fatal_policy == DeliveryStartupPolicy(
-        redis_expected=True,
-        multi_worker=True,
-        allow_degraded_change_stream=False,
-    )
-
-    class FakeCollection:
-        pass
-
     facade = create_delivery_facade(
-        cancellation_collection=FakeCollection(),
-        startup_policy=fatal_policy,
         redis_kv=None,
         redis_pubsub=None,
         config=DeliveryConfig(),

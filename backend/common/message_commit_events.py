@@ -3,14 +3,14 @@ from __future__ import annotations
 from typing import Literal
 
 from common.dto import MessageCommitted
-from common.protocols import EventPublisher
+from common.eventing import InternalEventPublisher
 from common.utils.time import utcnow
 
 MessageCommitType = Literal["user", "agent"]
 
 
 async def publish_message_committed(
-    event_publisher: EventPublisher,
+    internal_event_publisher: InternalEventPublisher,
     *,
     room_id: str,
     message_id: str,
@@ -19,7 +19,7 @@ async def publish_message_committed(
     room_agent_set: dict[str, str] | None = None,
     agent_name: str | None = None,
     was_successful: bool | None = None,
-    wait_for_local_handlers: bool = False,
+    wait_for_handlers: bool = False,
 ) -> None:
     event = MessageCommitted(
         timestamp=utcnow(),
@@ -32,14 +32,11 @@ async def publish_message_committed(
         agent_name=agent_name,
         was_successful=was_successful,
     )
-    if wait_for_local_handlers:
-        await event_publisher.emit_internal(
-            event,
-            wait_for_local_handlers=True,
-            broadcast=False,
-        )
-        return
-    await event_publisher.emit_internal(event, broadcast=False)
+    await internal_event_publisher.publish(
+        event,
+        wait_for_handlers=wait_for_handlers,
+        fanout=False,
+    )
 
 
 __all__ = ["MessageCommitType", "publish_message_committed"]

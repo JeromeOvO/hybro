@@ -159,11 +159,16 @@ class TaskStateManager:
             )
             return
 
+        previous_status = task.status
+        previous_updated_at = message.task_updated_at
         task.status = build_task_status(new_state, error_text=error)
         message.task_updated_at = utcnow()
 
-        if persist:
-            await self.persist_message(message)
+        if persist and not await self.persist_message(message):
+            # The Mongo CAS may have lost to a durable terminal projection.
+            # Do not let this stale in-memory copy masquerade as the winner.
+            task.status = previous_status
+            message.task_updated_at = previous_updated_at
 
     async def fail_pre_dispatch_task(
         self,
@@ -192,13 +197,22 @@ class TaskStateManager:
                     {"preflight_failure_code": error_code} if error_code else None
                 ),
             )
+            prior_text = message.message_content.message_text
+            prior_tracking = message.has_task_tracking
+            prior_created_at = message.task_created_at
+            prior_updated_at = message.task_updated_at
             message.message_content.message_task = task
             message.message_content.message_text = error
             message.has_task_tracking = True
             if message.task_created_at is None:
                 message.task_created_at = now
             message.task_updated_at = now
-            await self.persist_message(message)
+            if not await self.persist_message(message):
+                message.message_content.message_task = None
+                message.message_content.message_text = prior_text
+                message.has_task_tracking = prior_tracking
+                message.task_created_at = prior_created_at
+                message.task_updated_at = prior_updated_at
             return
 
         if task.status and is_terminal_state(task.status.state):
@@ -210,6 +224,10 @@ class TaskStateManager:
             )
             return
 
+        previous_task = task.model_copy(deep=True)
+        prior_tracking = message.has_task_tracking
+        prior_created_at = message.task_created_at
+        prior_updated_at = message.task_updated_at
         task.status = build_task_status(TaskState.failed, error_text=error)
         if error_code:
             task.metadata = dict(task.metadata or {})
@@ -219,7 +237,11 @@ class TaskStateManager:
         if message.task_created_at is None:
             message.task_created_at = now
         message.task_updated_at = now
-        await self.persist_message(message)
+        if not await self.persist_message(message):
+            message.message_content.message_task = previous_task
+            message.has_task_tracking = prior_tracking
+            message.task_created_at = prior_created_at
+            message.task_updated_at = prior_updated_at
 
     # ------------------------------------------------------------------
     # Convenience wrappers

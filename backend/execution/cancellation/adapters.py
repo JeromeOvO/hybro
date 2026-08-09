@@ -3,35 +3,31 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from common.utils.a2a_helpers import is_terminal_task_state_value
+from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class CancellationStateC3Adapter:
-    def __init__(self, delivery) -> None:
-        self._delivery = delivery
+class CancellationStateAdapter:
+    def __init__(self, control) -> None:
+        self._control = control
 
-    async def cancel_message_and_broadcast(self, message_id: str) -> None:
-        await self._delivery.cancel_message_and_broadcast(message_id)
+    async def cancel_message_and_broadcast(self, message_id: str):
+        return await self._control.signal(message_id)
 
-    def clear_cancellation(self, message_id: str) -> None:
-        self._delivery.clear_cancellation(message_id)
+    def get_active_token(self, message_id: str) -> CancellationToken | None:
+        return self._control.get_token(message_id)
 
-
-class MongoCancellationStoreAdapter:
-    def __init__(self, mongodb) -> None:
-        self._mongodb = mongodb
-
-    async def cancel_message(
+    def release_active_token(
         self,
         message_id: str,
-        requested_by_user_id: str,
+        token: CancellationToken | None,
     ) -> bool:
-        return await self._mongodb.cancel_message(message_id, requested_by_user_id)
+        return self._control.release_active_token(message_id, token)
 
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
-        return await self._mongodb.mark_cancellation_reconciled(message_id)
+    def clear_cancellation(self, message_id: str) -> None:
+        self._control.clear_cancellation(message_id)
 
 
 class HITLMessageCancellationAdapter:
@@ -164,7 +160,6 @@ class AgentTaskCleanupAdapter:
 
 __all__ = [
     "AgentTaskCleanupAdapter",
-    "CancellationStateC3Adapter",
+    "CancellationStateAdapter",
     "HITLMessageCancellationAdapter",
-    "MongoCancellationStoreAdapter",
 ]

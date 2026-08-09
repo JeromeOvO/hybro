@@ -13,7 +13,7 @@ The backend is a FastAPI monolith that coordinates:
 - A2A agent communication, including synchronous, streaming, and webhook-based
   long-running task updates.
 - Context memory projection, search, and compaction.
-- Cross-instance SSE delivery, cancellation, and background recovery jobs.
+- Cross-instance SSE delivery, Execution-owned cancellation, and background recovery jobs.
 
 The application entry point is `main.py`. Dependency construction is centralized
 in `container.py`, while request routers live under `api_gateway/routes`.
@@ -74,7 +74,7 @@ Startup has three practical phases:
      runtime adapters.
 
 2. Runtime guard and background services:
-   - Start Delivery/SSE runtime.
+   - Start the Execution cancellation runtime, then Delivery/SSE runtime.
    - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
@@ -82,8 +82,13 @@ Startup has three practical phases:
 3. Serving and normal shutdown:
    - Verify all required bindings in `validate_runtime_bindings`.
    - Serve `/health` and `/api/v1/*`.
-   - On shutdown, stop relay, jobs, leader locks, in-flight execution tasks,
-     Delivery/SSE connections, Redis, and MongoDB.
+   - On shutdown, stop Relay ingress before jobs and in-flight execution, then
+     stop internal eventing before Delivery/SSE, cancellation, Redis, and MongoDB.
+     Cleanup stages are failure-isolated: the first error is preserved while
+     later resource owners still receive their close call. Startup rollback uses
+     the reverse dependency order and bounds every cleanup stage with owned tasks
+     plus `asyncio.wait`; a cancellation-resistant close is detached observably
+     without blocking later Relay/Eventing/Delivery cleanup.
 
 The application router is mounted from `api_gateway.router` under the configured
 API prefix, defaulting to `/api/v1`.
@@ -350,7 +355,76 @@ projection accepts an explicit public `RunState` and is idempotent by causation
 id. Public projection is unconditional: `OrchestrationRunState` is the execution
 source of truth, while `runs` and `run_events` are public lifecycle projections.
 A projection with a new causation id records that binding even when the public
-head is already at the requested active state; repeated processing projections
+head is already at the requested active state. Processing-status lifecycle writes
+return a typed `accepted`/`replayed`/`conflict`/`error` outcome. Each new terminal
+`run_events` fact stores an optional, versioned `terminal_projection` intent before
+any SSE, system-task, or completion-metadata side effect runs. The retired turn
+journal has no production appender, so production intents omit a turn-event step
+rather than pretending to recover one; a future re-enable must bind a persistent
+appender with the terminal event id as its idempotency key. `run_events` is the
+only authority for this intent; `runs` heads no longer copy it, and head repair
+removes a legacy copied field while continuing to read old heads. A same-terminal
+replay atomically enriches the canonical Mongo fact with only absent intent fields
+and absent steps. It never changes canonical status or replaces an existing
+completed, blocked, or claimed step, and immediate finalization uses the enriched
+canonical document. Legacy terminal events with no stored intent are never
+backfilled from a replay request—even for failed subtypes such as `rejected`—as
+that request cannot prove the original side-effect targets. An opposing terminal
+winner remains a conflict and emits nothing. Each projection
+step is independently leased and completed, so a child or delivery failure leaves
+only that step pending and never blocks or rewrites the root terminal state.
+Failed and canceled intents also include durable descendant cleanup rooted at the
+turn message; traversal crosses terminal intermediates and stale recovery closes
+crashes between root commit and cleanup. The cleanup tags the winner-owned child
+set durably and emits a stable-ID terminal `task_update` for every affected child;
+a retry reconstructs the same IDs after a DB-before-SSE crash. The dedicated
+system task is excluded from descendant cleanup and remains owned exclusively by
+its system-task DB/delivery steps. Terminal task projections atomically write a
+winner event marker with task state. All full-content, status, HITL, finalization,
+and `TaskStateManager` persistence paths use a non-terminal Mongo CAS, so a late
+completion or opposing terminal writer cannot overwrite the durable marked
+winner. Queue execution retries creation of its system task and refuses all agent
+dispatch if the create remains unacknowledged; the resulting root failure omits
+system-task projection intent because no recoverable target exists. Queue and room
+orchestration never mutate children before the root CAS—including attachment
+preflight failures—and do not run imperative cleanup after an opposing
+winner; only the canonical fact's projection owns cleanup. Retryable failures receive bounded
+exponential backoff; irreparable missing or
+opposing child targets become durable `blocked` steps and no longer occupy the due
+queue. Schedule refresh is one MongoDB aggregation update pipeline that derives
+`pending` and `next_attempt_at` from the then-current persisted step object; it
+cannot clear a step concurrently added by richer replay. Recovery isolates each
+fact; malformed steps are skipped from scheduling and unknown forward-schema
+steps are durably blocked so one poison record cannot abort or starve the batch.
+The stale-task checker scans only due, pending markers and can rebuild work directly from
+the terminal event after a crash, including an event/head divergence window.
+Terminal processing, system-task, and run-event SSE use stable delivery IDs in
+both the frame and Redis/local dedup key. Dedup is two phase: an expiring
+reservation is `in_flight`, while only post-transport confirmation becomes
+`already_delivered`. Reservations use a short configurable lease; confirmed
+markers retain the longer dedup TTL. Active fanout heartbeats renew owned L1/L2
+reservations until confirmation and fail safely if ownership is lost. L1-only
+reservations created during Redis failure record that ownership mode explicitly.
+After transport acceptance, a failed/lost confirmation writes L1 first and makes
+an unconditional best-effort long-TTL `delivered:` Redis write, preventing another
+instance from retrying after the reservation lease expires. Confirm, renewal,
+and accepted-marker Redis commands use the configurable
+`terminal_redis_io_timeout_seconds` bound and owned background tasks, so a hung
+connected Redis command cannot delay an accepted result. Redis write failure or
+timeout cannot change that result. Per-key local locks make Redis-error fallback
+reservation atomic, so concurrent coroutines
+produce one provisional owner. The compatibility `should_deliver` API retains its
+historical one-stage behavior by confirming immediately with the long TTL; checked
+publishers use explicit reserve/confirm. Local SSE
+broadcast reports an actual delivery count; zero local subscribers plus failed
+Redis fanout stays pending and never confirms the global marker. Cross-instance
+publish returns explicit broker acceptance; disabled/no-op brokers return false.
+A projector completes only confirmed fresh
+delivery or an already-confirmed replay; an in-flight reservation remains pending
+and is retried after its lease expires. Old documents without the optional intent remain readable and are not
+replayed or migrated. If an event append succeeds but head projection fails, the
+writer repairs the head from that exact event before returning `accepted`; failed
+repair returns `error`. Repeated processing projections
 use `RUN_RESUMED` rather than emitting another start event. Mapping
 orchestration-specific statuses into public run states is performed by the
 single state-driven supervisor loop. Graceful process shutdown is treated as an
@@ -575,16 +649,16 @@ The facade uses:
   chat-context generation, and turn-note extraction.
 - `RoomHistoryReader` from `room.RoomFacade` for source message history.
 
-`container.py` creates the facade before execution orchestration, registers
-`ContextMemoryEventHandler` with Delivery's internal `message_committed` event,
-and exposes the facade through `ContextMemoryDeps.context_memory_runtime` for
-supervisor and agent context assembly. Frontdoor user-message persistence and
+`container.py` creates the facade before execution orchestration and registers
+`ContextMemoryEventHandler` on the independent internal event bus before that bus
+starts. The facade is exposed through `ContextMemoryDeps.context_memory_runtime`
+for supervisor and agent context assembly. Frontdoor user-message persistence and
 execution response paths publish local-only `MessageCommitted` events only after
 the message write succeeds; user-message commits wait for local handler
-completion before preflight continues. Delivery records handler failures in a
-bounded in-memory dead-letter buffer and sends a best-effort Redis dead-letter
-notification rather than propagating failures to the message writer, so this
-wait establishes local ordering but does not guarantee projection success. User
+completion before preflight continues. Eventing records handler failures in its
+bounded dead-letter buffer and sends a best-effort Redis dead-letter notification
+rather than propagating failures to the message writer, so this wait establishes
+local ordering but does not guarantee projection success. User
 commit events carry `room_agent_set` so event projection can clean raw
 `<@id|name>` mentions with canonical room agent names before appending
 attachment descriptions. Agent commit events carry `agent_name` and
@@ -614,9 +688,48 @@ execution room-memory compatibility uses the facade-backed
 `ContextMemoryRoomMemoryAdapter` instead of removed-package memory service
 objects.
 
+### `common.eventing`
+
+Internal domain events are independent from Delivery. `common.eventing` owns the
+generic envelope and dead-letter models, frozen event-model registry, focused
+publisher/bus/transport protocols, and bounded local handler bus. Each registered
+handler has its own bounded FIFO and exactly one worker, preserving per-handler
+order while allowing different handlers to run concurrently. Queue admission,
+handler, fan-out, and deserialization failures use the eventing dead-letter path.
+Trace context is captured in envelopes and restored for local and remote handler
+execution. Startup registers `MessageCommitted`, `RunStateChanged`, and
+`HubAgentResponseInternal` models plus ContextMemory and Hub handlers before
+starting the bus; start freezes the registry. Public publication remains closed
+until transport startup and health finish, while already-received remote
+callbacks wait on that startup transition instead of being dropped. The Hub
+handler waits on an explicit relay-ready gate, so remote startup-window events
+remain in its bounded FIFO until the concrete relay router is bound. Legacy
+remote envelopes without the envelope timestamp hydrate it from the internal
+event timestamp (or an explicit UTC-now fallback); newly serialized envelopes
+always include it. Dead letters never retain event bodies and instead use an
+8-KiB-capped size/hash/key/allow-listed-identifier projection. Shutdown stops
+Relay ingress first, keeps eventing live while remaining publishers drain, and
+then stops eventing before Delivery. Worker cancellation/join uses the remaining shutdown deadline;
+a handler that suppresses `CancelledError` is abandoned observably without
+blocking publishers or queue/completion cleanup. Timeout/caller-canceled transport
+operations are canceled and joined; cancellation-resistant inner tasks remain in
+a bus-owned auxiliary registry with exception-consuming callbacks, are retried
+within the stop deadline, and emit `auxiliary_task_timeout` if still live.
+
+`dal.redis.internal_eventing.RedisInternalEventTransport` owns a separate
+`RedisPubSubImpl`, generic internal channel subscription/reconnect/health, and the
+independent `eventing:dead_letter` channel. Ping, subscribe, publish, DLT publish,
+iterator cleanup, and close I/O are timeout-bounded. Listener cancellation shields
+and then joins the one in-flight remote callback before transport close. Its client
+is never shared with or closed by the
+Delivery bus. `EVENTING_REDIS_CHANNEL` is the canonical setting; legacy
+`REDIS_INTERNAL_CHANNEL` remains a lower-priority rolling-deployment alias. With
+no Redis configuration, the bounded local handlers remain available and only
+cross-instance fan-out is disabled.
+
 ### `delivery`
 
-`delivery.DeliveryFacade` owns SSE delivery and cross-instance event fan-out.
+`delivery.DeliveryFacade` owns SSE delivery and cross-instance SSE fan-out.
 Backend modules emit typed `common.dto.DeliveryEvent` objects; Delivery is the
 only layer that translates those DTOs into frontend room SSE frames. The wire
 shape is always:
@@ -634,20 +747,91 @@ room processing-status helper; Delivery receives typed DTO fields.
 It is composed from:
 
 - `SSETransportImpl`: local room connection management.
-- `EventPublisherImpl`: emits frames/events and handles deduplication.
+- `EventPublisherImpl`: emits typed public Delivery events, handles terminal
+  deduplication, and records public delivery dead letters.
 - `TaskUpdateNotifier`: execution-facing task update publisher that resolves
   final agent display fields and delegates to `DeliveryFacade.send_task_update`.
-- `CrossInstanceEventBus`: Redis Pub/Sub based fan-out when Redis is enabled.
-- `CancellationWatcher`: tracks cancellation state through Mongo change streams
-  and Redis KV when available.
+- `CrossInstanceEventBus`: Redis Pub/Sub SSE room fan-out when Redis is enabled;
+  it has no cancellation or internal-domain-event API.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
+
+Each local SSE connection has a bounded, non-blocking queue. An overflowing
+queue closes and removes only that slow connection, so it cannot apply
+backpressure to other connections in the room. Per-room admission locks
+serialize first-subscribe and last-unsubscribe transitions; local removal still
+happens immediately, followed by a tracked background cleanup task that performs
+a locked empty-room recheck before Redis unsubscribe. Shutdown drains these
+cleanup tasks. Admission-lock states count holders and waiters and are reclaimed
+only after the room is empty and its cleanup owner has finished, preventing both
+room-churn growth and lock replacement races. Delivery-start latency timestamps
+are likewise held in a configurable TTL/max-size cache. This also keeps Redis
+listener callbacks from synchronously unsubscribing and orphaning their own
+listener task.
+
+When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
+operation has completed, while the subscription task owns the bounded readiness
+timeout. Concurrent admissions share one shielded readiness future, and
+cancelling any waiter cancels only that wait. If a first SSE admission is
+cancelled before it creates a connection, the transport schedules the same
+locked empty-room cleanup after releasing the admission lock. Explicit
+unsubscribe cancels a pending readiness future and wakes all remaining waiters;
+a stopped bus rejects new subscriptions, and stop races resolve pending
+readiness. Failure before readiness removes the desired subscription and task;
+failures after readiness retain the desired subscription and reconnect with
+backoff. Pub/Sub iterator
+unsubscribe and close cleanup are bounded so broker shutdown cannot wait
+indefinitely. Redis-free mode remains immediately available.
+
+Cancellation ownership lives in `execution.cancellation`, not Delivery,
+Orchestration, or Jobs. `CancellationService` exclusively owns durable marker
+request/finalize/pending reconciliation through the Execution-defined
+`CancellationMarkerRepositoryPort`; the Mongo adapter uses the existing
+`cancelled_messages` collection and indexes. New markers upsert against the
+deterministic Mongo `_id` `cancellation:{message_id}`, preventing two current
+binaries from inserting duplicate first-request markers without requiring a new
+unique index. Existing markers are detected by `message_id`; request and
+reconciliation updates use `update_many` so historical duplicates converge
+together while all externally consumed marker fields remain unchanged. During a
+rolling mixed-version deployment, an older binary can still race a current
+binary and insert one legacy duplicate because the collection intentionally has
+no unique `message_id` index. Current binaries tolerate and bulk-update those
+documents, and the risk ends after older writers leave service.
+`CancellationRuntime` owns TTL-bounded tombstones and a separate active-token
+registry. Creating a token for an already-active message reuses the same token;
+identity-fenced release prevents an old owner from removing a replacement token.
+The Execution-owned Mongo watcher projects durable marker inserts locally. It
+retains resume tokens across ordinary stream errors and resets one only when
+Mongo labels the error `NonResumableChangeStreamError`. An independent Redis
+KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
+`cancelled:` key compatibility. Execution starts this runtime before Delivery and
+stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
+state immediately after token creation and identity-releases that token for every
+outcome, including ready. Admitted orchestration independently creates and
+hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
+paused/awaiting-input paths. Resume creates a fresh owner and hydrates Redis, so
+a cancellation tombstone pre-signals it without accumulating dormant active
+tokens. Cancellation signaling reports KV and Pub/Sub propagation separately;
+when configured propagation fails, finalization still performs local terminal,
+HITL, and task cleanup but leaves the durable marker pending for the service job
+to retry broadcast. RMC and queue execution never clear the L1 tombstone;
+finalization clears it only after durable marker reconciliation. Finalization
+captures the active token before propagation and identity-releases only that
+owner, so a concurrent resume token is retained and pre-signaled while a marker
+is pending. A concurrent completion winner does not release an active execution
+token. Shutdown clears the registry after in-flight execution
+is stopped. Terminal status claims store unique owner IDs in
+Redis. Losing instances do not cache the loss locally, and failed-delivery release uses Redis Lua
+compare-and-delete so an expired and subsequently reclaimed reservation cannot
+be deleted by its former owner.
 
 Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
 through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
 provider. Routes call the delivery transport, while the runtime implementation
 lives in `delivery`. Delivery never calls back into Execution or removed-package
 business services; lifecycle recording happens before typed delivery events are
-emitted.
+emitted. Queue-owned `system:hybro` completed task publication is delayed until
+the root lifecycle writer wins durable `COMPLETED`, preventing cancellation during
+a child task-update await from leaving a conflicting completed child projection.
 
 ### `room_files`
 
@@ -1234,16 +1418,24 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` persists a pending cancellation marker in MongoDB.
-3. The shared `OrchestrationCancellationFinalizer` CAS-terminalizes any
-   nonterminal durable run while preserving a concurrently completed result.
-4. The finalizer updates the message projection, broadcasts the cancellation
-   token, cancels HITL, emits terminal public lifecycle/SSE, and cleans agent
-   tasks.
-5. The marker is marked reconciled only after every idempotent effect succeeds.
-6. The stale-task checker scans only pending markers and invokes the same typed
-   finalizer after crashes or partial failures. Old no-run markers settle only
-   after the orphan threshold, leaving time to catch a late-created run.
+2. `ExecutionFacade.cancel` delegates to `CancellationService`, which persists a
+   pending cancellation marker through `CancellationMarkerRepositoryPort`.
+3. The shared `CancellationFinalizer` in `execution.cancellation` CAS-terminalizes
+   any nonterminal durable run while preserving a concurrently completed result.
+4. The finalizer updates the message projection, signals the Execution-owned
+   cancellation runtime across instances, cancels HITL, emits terminal public
+   lifecycle/SSE, and cleans agent tasks.
+5. After cancellation terminalization succeeds, the active token is released
+   without clearing its tombstone; completion-winning finalization leaves active
+   execution ownership untouched. The marker is marked reconciled only after
+   every idempotent effect succeeds.
+6. The stale-task checker only triggers
+   `CancellationService.reconcile_pending(settle_cutoff=...)`. The service pages
+   pending markers by message ID, resolves room ownership, marks missing-message
+   markers reconciled, and invokes the same typed finalizer after crashes or
+   partial failures. One marker failure remains pending and does not starve later
+   markers; scan failures propagate. Old no-run markers settle only after the
+   orphan threshold, leaving time to catch a late-created run.
 7. Executors observe cancellation tokens at checkpoints and stop gracefully.
 
 In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
@@ -1410,6 +1602,12 @@ Multi-worker production:
   services are connected.
 - `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, relay
   streams, DAL Redis runtime, or cancellation change streams are missing.
+- MongoDB 4.2 or newer is required for atomic aggregation update pipelines
+  (`docker-compose.yml` currently pins MongoDB 7.0).
+- The terminal task writer-fencing release requires a coordinated drain: stop or
+  drain every old backend writer, deploy the new binary to all replicas, then
+  resume traffic. A rolling mixed-version writer fleet is unsupported because
+  old writers lack the terminal winner filters and can overwrite fenced state.
 
 This guard exists because without Redis:
 

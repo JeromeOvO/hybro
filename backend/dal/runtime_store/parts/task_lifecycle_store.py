@@ -322,63 +322,6 @@ class TaskLifecycleRuntimeStorePart:
             await self._cancelled_messages.find_one({"message_id": message_id})
         ) is not None
 
-    async def list_pending_cancellation_markers(
-        self,
-        limit: int = 100,
-        after_message_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        query: dict[str, Any] = {
-            "message_id": {"$type": "string"},
-            "reconciliation_status": "pending",
-        }
-        if after_message_id is not None:
-            query["message_id"]["$gt"] = after_message_id
-        return await self._cancelled_messages.find(
-            query,
-            projection={"_id": 0},
-            sort=[("message_id", 1)],
-            limit=limit,
-        )
-
-    async def mark_cancellation_reconciled(self, message_id: str) -> bool:
-        try:
-            await self._cancelled_messages.update_one(
-                {"message_id": message_id},
-                {
-                    "$set": {
-                        "reconciliation_status": "reconciled",
-                        "reconciled_at": utcnow(),
-                    }
-                },
-            )
-            return True
-        except Exception:
-            logger.error("Failed to reconcile cancellation marker", exc_info=True)
-            return False
-
-    async def cancel_message(
-        self,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> bool:
-        try:
-            await self._cancelled_messages.update_one(
-                {"message_id": message_id},
-                {
-                    "$set": {"reconciliation_status": "pending"},
-                    "$setOnInsert": {
-                        "message_id": message_id,
-                        "user_id": requested_by_user_id,
-                        "cancelled_at": utcnow(),
-                    },
-                },
-                upsert=True,
-            )
-            return True
-        except Exception:
-            logger.error("Failed to cancel message", exc_info=True)
-            return False
-
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         try:
             ids = await self._runs.distinct(

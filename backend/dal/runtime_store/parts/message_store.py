@@ -166,6 +166,106 @@ class MessageRuntimeStorePart:
             logger.error("Failed to add room user message", exc_info=True)
             return False
 
+    async def set_turn_completion_kind(
+        self, message_id: str, completion_kind: str
+    ) -> str:
+        """Atomically set terminal completion metadata without replacing the message."""
+        doc = await self._room_user_messages.find_one({"message_id": message_id})
+        if doc is None:
+            return "missing"
+        current = (doc.get("extend_info") or {}).get("turn_completion_kind")
+        if current == completion_kind:
+            return "already"
+        if current is not None:
+            return "conflict"
+        updated = await self._room_user_messages.update_one(
+            {
+                "message_id": message_id,
+                "$or": [
+                    {"extend_info.turn_completion_kind": {"$exists": False}},
+                    {"extend_info.turn_completion_kind": None},
+                ],
+            },
+            {"$set": {"extend_info.turn_completion_kind": completion_kind}},
+        )
+        if updated:
+            return "updated"
+        reread = await self._room_user_messages.find_one({"message_id": message_id})
+        if reread is None:
+            return "missing"
+        return (
+            "already"
+            if (reread.get("extend_info") or {}).get("turn_completion_kind")
+            == completion_kind
+            else "conflict"
+        )
+
+    async def set_system_task_terminal_state(
+        self, message_id: str, target_state: str, *, event_id: str
+    ) -> str:
+        """CAS and tag a system task with its durable projection winner."""
+        state_path = "message_content.message_task.status.state"
+        doc = await self._room_agent_messages.find_one({"message_id": message_id})
+        if doc is None:
+            return "missing"
+        current = (
+            ((doc.get("message_content") or {}).get("message_task") or {})
+            .get("status", {})
+            .get("state")
+        )
+        current_value = getattr(current, "value", current)
+        current_winner = doc.get("terminal_projection_event_id")
+        if current_winner == event_id and current_value == target_state:
+            return "already"
+        if current_winner not in {None, event_id}:
+            return "conflict"
+        terminal_values = {state.value for state in TERMINAL_STATES}
+        if current_value in terminal_values and current_value != target_state:
+            return "conflict"
+        updated = await self._room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "$and": [
+                    {
+                        "$or": [
+                            {"terminal_projection_event_id": {"$exists": False}},
+                            {"terminal_projection_event_id": None},
+                            {"terminal_projection_event_id": event_id},
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {state_path: target_state},
+                            {state_path: {"$nin": sorted(terminal_values)}},
+                        ]
+                    },
+                ],
+            },
+            {
+                "$set": {
+                    state_path: target_state,
+                    "terminal_projection_event_id": event_id,
+                    "task_updated_at": utcnow(),
+                }
+            },
+        )
+        if updated:
+            return "updated"
+        reread = await self._room_agent_messages.find_one({"message_id": message_id})
+        if reread is None:
+            return "missing"
+        reread_state = (
+            ((reread.get("message_content") or {}).get("message_task") or {})
+            .get("status", {})
+            .get("state")
+        )
+        return (
+            "already"
+            if reread_state == target_state
+            and reread.get("terminal_projection_event_id") == event_id
+            else "conflict"
+        )
+
     async def update_room_user_message_by_message_id(
         self, message_id: str, room_user_message: RoomUserMessage
     ) -> bool:
@@ -180,7 +280,7 @@ class MessageRuntimeStorePart:
             logger.error("Failed to update room user message", exc_info=True)
             return False
 
-    async def upsert_room_agent_message(
+    async def upsert_room_agent_message(  # noqa: C901
         self, room_agent_message: RoomAgentMessage
     ) -> None:
         try:
@@ -210,6 +310,17 @@ class MessageRuntimeStorePart:
 
             if existing.get("room_id") != room_id:
                 raise ValueError("Agent-message upsert room_id mismatch")
+            existing_state = (
+                ((existing.get("message_content") or {}).get("message_task") or {}).get(
+                    "status"
+                )
+                or {}
+            ).get("state")
+            existing_state = getattr(existing_state, "value", existing_state)
+            if existing_state in {state.value for state in TERMINAL_STATES}:
+                # Full-document retry/upsert is stale once any terminal winner
+                # is durable; in particular it must not erase its projection tag.
+                return
             immutable_fields = (
                 "room_id",
                 "message_id",
@@ -225,13 +336,38 @@ class MessageRuntimeStorePart:
             normalize_timeline_document(existing)
             immutable = {field: existing[field] for field in immutable_fields}
             candidate.update(immutable)
+            terminal_states = sorted(state.value for state in TERMINAL_STATES)
+            replace_filter = {
+                **immutable,
+                "message_content.message_task.status.state": {"$nin": terminal_states},
+                "$or": [
+                    {"terminal_projection_event_id": {"$exists": False}},
+                    {"terminal_projection_event_id": None},
+                ],
+            }
             replaced = await self._room_agent_messages.replace_one(
-                immutable,
+                replace_filter,
                 candidate,
                 upsert=False,
             )
             if not replaced:
-                raise RuntimeError("Agent-message upsert lost immutable-identity race")
+                durable = await self._room_agent_messages.find_one(
+                    {"message_id": message_id}
+                )
+                durable_state = (
+                    (
+                        ((durable or {}).get("message_content") or {}).get(
+                            "message_task"
+                        )
+                        or {}
+                    ).get("status")
+                    or {}
+                ).get("state")
+                durable_state = getattr(durable_state, "value", durable_state)
+                durable_winner = (durable or {}).get("terminal_projection_event_id")
+                if durable_state in set(terminal_states) or durable_winner is not None:
+                    return
+                raise RuntimeError("Agent-message upsert lost replacement CAS")
         except Exception:
             logger.error(
                 "Failed to upsert room agent message room_id=%s message_id=%s",
@@ -433,24 +569,21 @@ class MessageRuntimeStorePart:
     async def cancel_descendants(self, message_id: str) -> int:
         terminal_statuses = sorted(state.value for state in TERMINAL_STATES)
         to_visit = [message_id]
+        visited = {message_id}
         all_descendant_ids: list[str] = []
 
         while to_visit:
             children = await self._room_agent_messages.find(
-                {
-                    "related_message_id": {"$in": to_visit},
-                    "message_content.message_task": {"$ne": None},
-                    "message_content.message_task.status.state": {
-                        "$nin": terminal_statuses
-                    },
-                },
+                {"related_message_id": {"$in": to_visit}},
                 projection={"message_id": 1},
             )
             child_ids = [
                 str(child["message_id"])
                 for child in children
                 if child.get("message_id") is not None
+                and str(child["message_id"]) not in visited
             ]
+            visited.update(child_ids)
             all_descendant_ids.extend(child_ids)
             to_visit = child_ids
 
@@ -458,7 +591,13 @@ class MessageRuntimeStorePart:
             return 0
 
         result = await self._room_agent_messages.update_many(
-            {"message_id": {"$in": all_descendant_ids}},
+            {
+                "message_id": {"$in": all_descendant_ids},
+                "message_content.message_task": {"$ne": None},
+                "message_content.message_task.status.state": {
+                    "$nin": terminal_statuses
+                },
+            },
             {
                 "$set": {
                     "message_content.message_task.status.state": (
@@ -468,6 +607,69 @@ class MessageRuntimeStorePart:
             },
         )
         return _modified_count(result)
+
+    async def project_descendant_terminal_state(
+        self,
+        message_id: str,
+        *,
+        event_id: str,
+        target_state: str,
+        exclude_message_ids: list[str] | None = None,
+    ) -> list[str]:
+        """Terminalize descendants and durably tag the winner-owned child set."""
+        terminal_statuses = sorted(state.value for state in TERMINAL_STATES)
+        excluded = set(exclude_message_ids or [])
+        to_visit = [message_id]
+        visited = {message_id}
+        all_descendant_ids: list[str] = []
+        while to_visit:
+            children = await self._room_agent_messages.find(
+                {"related_message_id": {"$in": to_visit}},
+                projection={"message_id": 1},
+            )
+            child_ids = [
+                str(child["message_id"])
+                for child in children
+                if child.get("message_id") is not None
+                and str(child["message_id"]) not in visited
+            ]
+            visited.update(child_ids)
+            all_descendant_ids.extend(child_ids)
+            to_visit = child_ids
+        if all_descendant_ids:
+            await self._room_agent_messages.update_many(
+                {
+                    "message_id": {
+                        "$in": all_descendant_ids,
+                        "$nin": sorted(excluded),
+                    },
+                    "message_content.message_task": {"$ne": None},
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_statuses
+                    },
+                },
+                {
+                    "$set": {
+                        "message_content.message_task.status.state": target_state,
+                        "terminal_projection_event_id": event_id,
+                    }
+                },
+            )
+        projected = await self._room_agent_messages.find(
+            {
+                "message_id": {
+                    "$in": all_descendant_ids,
+                    "$nin": sorted(excluded),
+                },
+                "terminal_projection_event_id": event_id,
+            },
+            projection={"message_id": 1},
+        )
+        return sorted(
+            str(child["message_id"])
+            for child in projected
+            if child.get("message_id") is not None
+        )
 
     async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
         if not message_ids:
@@ -924,6 +1126,10 @@ class MessageRuntimeStorePart:
                 "message_id": message_id,
                 "terminal_finalization.state": "finalizing",
                 "terminal_finalization.token": token,
+                "terminal_projection_event_id": {"$exists": False},
+                "message_content.message_task.status.state": {
+                    "$nin": sorted(value.value for value in TERMINAL_STATES)
+                },
             },
             {
                 "$set": {

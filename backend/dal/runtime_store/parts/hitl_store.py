@@ -6,10 +6,12 @@ from typing import Any
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from common.a2a_constants import TERMINAL_STATES
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 logger = get_logger(__name__)
+_TERMINAL_TASK_STATES = sorted(state.value for state in TERMINAL_STATES)
 
 _PENDING_HITL_DISPLAY_INDEX = "uq_pending_hitl_display_message"
 _PENDING_HITL_CONTINUATION_INDEX = "uq_pending_hitl_continuation_message"
@@ -271,7 +273,12 @@ class HITLRuntimeStorePart:
     ) -> bool:
         try:
             return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": _TERMINAL_TASK_STATES
+                    },
+                },
                 {"$set": {"message_content.message_task.status.state": state}},
             )
         except Exception:
@@ -577,7 +584,12 @@ class HITLRuntimeStorePart:
             }
 
             projected = await self._room_agent_messages.find_one_and_update(
-                {"message_id": message_id},
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": _TERMINAL_TASK_STATES
+                    },
+                },
                 {"$set": updates},
                 return_document=ReturnDocument.AFTER,
             )

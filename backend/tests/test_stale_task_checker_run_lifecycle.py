@@ -91,7 +91,7 @@ async def test_message_finalization_with_agent_url_resumes_persisted_projection(
 
 
 @pytest.mark.asyncio
-async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(
+async def test_watchdog_terminal_append_owns_durable_delivery_projection(
     monkeypatch,
 ):
     import jobs.stale_task_checker as mod
@@ -134,13 +134,9 @@ async def test_watchdog_broadcasts_pre_recorded_payload_before_failed_status(
     await checker._fail_stale_runs()
 
     append_timeout.assert_awaited_once_with("room-1", "run-1", stale_minutes=90)
-    emit_run_event.assert_awaited_once_with(
-        room_id="room-1",
-        payload=payload,
-        client_request_id="cr-1",
-    )
-    emit_status.assert_awaited_once()
-    assert calls == ["metric", "broadcast", "send"]
+    emit_run_event.assert_not_awaited()
+    emit_status.assert_not_awaited()
+    assert calls == ["metric"]
 
 
 @pytest.mark.asyncio

@@ -177,6 +177,18 @@ class TestTransitionTask:
         tsm.room_runtime.update_agent_message_by_message_id.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_lost_terminal_cas_restores_stale_in_memory_state(self, tsm):
+        msg = _make_message_with_task(TaskState.working)
+        tsm.room_runtime.update_agent_message_by_message_id.return_value = MagicMock(
+            success=False,
+            error="durable terminal winner",
+        )
+
+        await tsm.transition_task(msg, TaskState.completed)
+
+        assert get_task(msg).status.state == TaskState.working
+
+    @pytest.mark.asyncio
     async def test_skips_persist_when_disabled(self, tsm):
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working, persist=False)

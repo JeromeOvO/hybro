@@ -21,12 +21,25 @@ class RuntimeHealthCheck:
         delivery_facade = getattr(request.app.state, "delivery_facade", None)
         if delivery_facade is not None:
             await delivery_facade.refresh_health()
+        eventing_bus = getattr(request.app.state, "eventing_bus", None)
+        if eventing_bus is not None:
+            await eventing_bus.refresh_health()
+        cancellation_runtime = getattr(request.app.state, "cancellation_runtime", None)
+        if cancellation_runtime is not None:
+            await cancellation_runtime.refresh_health()
         redis_runtime = getattr(request.app.state, "redis_runtime", None)
         redis_service = getattr(redis_runtime, "command_client", None)
         relay_streams = getattr(redis_runtime, "relay_streams", None)
         result = self._compute_health_status(
             delivery_pubsub_connected=bool(
-                delivery_facade and delivery_facade.delivery_pubsub_connected
+                delivery_facade
+                and delivery_facade.delivery_pubsub_connected
+                and cancellation_runtime
+                and cancellation_runtime.redis_connected
+            ),
+            eventing_connected=(
+                not bool(self._redis_url)
+                or bool(eventing_bus and eventing_bus.is_connected)
             ),
             delivery_kv_connected=bool(
                 delivery_facade and delivery_facade.delivery_kv_connected
@@ -35,7 +48,7 @@ class RuntimeHealthCheck:
             relay_streams_available=bool(relay_streams and relay_streams.is_connected),
             redis_url=self._redis_url,
             change_stream_connected=bool(
-                delivery_facade and delivery_facade.change_stream_connected
+                cancellation_runtime and cancellation_runtime.change_stream_connected
             ),
             agent_search_index_ready=bool(
                 getattr(request.app.state, "agent_search_index_ready", False)

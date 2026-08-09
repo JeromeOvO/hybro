@@ -92,7 +92,7 @@ class HubFacade:
                     "publish_authorization_reader"
                 ),
                 cancellation_reader=legacy_deps.get("cancellation_reader"),
-                event_publisher=legacy_deps.get("event_publisher"),
+                internal_event_publisher=legacy_deps.get("internal_event_publisher"),
                 streams=legacy_deps.get("streams"),
                 offline_failure_port=legacy_deps.get("offline_failure_port"),
             )
@@ -130,7 +130,7 @@ class HubFacade:
         self._sync = self._build_sync_service()
         self._publish = HubPublishService(
             journal=deps.hub_response_journal,
-            event_publisher=deps.event_publisher,
+            internal_event_publisher=deps.internal_event_publisher,
             publish_authorization_reader=deps.publish_authorization_reader,
             cancellation_reader=deps.cancellation_reader,
             worker_id=deps.worker_id,

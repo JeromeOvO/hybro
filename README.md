@@ -41,7 +41,7 @@ Hybro AI allows developers and teams to deploy, coordinate, and inspect clusters
 ### Prerequisites
 - Docker and Docker Compose
 - Node.js 20.19+ (if running the frontend outside of Docker)
-- Python 3.12+ (if running the backend outside of Docker)
+- Python 3.12+ and MongoDB 4.2+ (if running the backend outside of Docker; Docker Compose uses MongoDB 7.0)
 
 ### Quick Start (Docker)
 The easiest way to get started is using the automated installation script, which will clone the repository, set up the environment, and spin up the Docker containers.

@@ -15,6 +15,10 @@ from execution.events import (
     emit_room_processing_status,
     run_event_notification_from_payload,
 )
+from execution.run_lifecycle_outcome import (
+    RunLifecycleWriteError,
+    RunLifecycleWriteOutcome,
+)
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
@@ -268,7 +272,7 @@ async def test_emit_room_processing_status_normalizes_legacy_string_details():
 async def test_emit_processing_status_uses_typed_event_for_all_final_statuses():
     publisher = AsyncMock()
     run_lifecycle = AsyncMock()
-    run_lifecycle.record_processing_status.return_value = None
+    run_lifecycle.record_processing_status.return_value = {"accepted": True}
     resolver = AsyncMock()
     resolver.resolve_client_request_id.return_value = "cr-1"
 
@@ -478,7 +482,7 @@ async def test_emit_processing_status_keeps_typed_frame_when_lifecycle_noops():
 
 
 @pytest.mark.asyncio
-async def test_emit_processing_status_keeps_typed_final_status_when_lifecycle_noops():
+async def test_emit_processing_status_keeps_typed_awaiting_status_when_lifecycle_noops():
     lifecycle = AsyncMock()
     lifecycle.record_processing_status.return_value = None
     publisher = AsyncMock()
@@ -499,6 +503,70 @@ async def test_emit_processing_status_keeps_typed_final_status_when_lifecycle_no
     lifecycle.record_processing_status.assert_awaited_once()
     publisher.emit.assert_awaited_once()
     assert publisher.emit.await_args.args[0].status == "awaiting_input"
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_suppresses_terminal_sse_when_lifecycle_cas_loses():
+    lifecycle = AsyncMock()
+    lifecycle.record_processing_status.return_value = None
+    publisher = AsyncMock()
+
+    result = await emit_processing_status(
+        room_id="room-1",
+        status="completed",
+        message_id="msg-1",
+        run_lifecycle=lifecycle,
+        event_publisher=publisher,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=make_client_request_id_resolver(),
+    )
+
+    assert result is None
+    lifecycle.record_processing_status.assert_awaited_once()
+    publisher.emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_checked_conflict_suppresses_terminal_sse():
+    class Lifecycle:
+        async def write_processing_status(self, *_args, **_kwargs):
+            return RunLifecycleWriteOutcome.conflict()
+
+    publisher = AsyncMock()
+    result = await emit_processing_status(
+        room_id="room-1",
+        status="completed",
+        message_id="msg-1",
+        run_lifecycle=Lifecycle(),
+        event_publisher=publisher,
+        run_event_enabled=lambda: True,
+        client_request_id_resolver=make_client_request_id_resolver(),
+    )
+
+    assert result is None
+    publisher.emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_emit_processing_status_checked_error_is_observable_and_not_conflict():
+    class Lifecycle:
+        async def write_processing_status(self, *_args, **_kwargs):
+            return RunLifecycleWriteOutcome.error(RuntimeError("mongo unavailable"))
+
+    publisher = AsyncMock()
+    with pytest.raises(RunLifecycleWriteError) as raised:
+        await emit_processing_status(
+            room_id="room-1",
+            status="completed",
+            message_id="msg-1",
+            run_lifecycle=Lifecycle(),
+            event_publisher=publisher,
+            run_event_enabled=lambda: True,
+            client_request_id_resolver=make_client_request_id_resolver(),
+        )
+
+    assert raised.value.outcome.error_class == "RuntimeError"
+    publisher.emit.assert_not_awaited()
 
 
 def test_run_event_notification_from_payload_maps_legacy_payload():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -60,7 +61,7 @@ class EventPublisher:
     def __init__(self) -> None:
         self.events = []
 
-    async def emit_internal(self, event):
+    async def publish(self, event, *, wait_for_handlers=False, fanout=True):
         self.events.append(event)
 
 
@@ -555,14 +556,12 @@ async def test_publish_stable_response_seq_retries_unprocessed_dispatch_failure(
 
 
 @pytest.mark.asyncio
-async def test_publish_claims_but_does_not_mark_processed_after_publisher_only_delivery() -> (
-    None
-):
+async def test_publish_broadcasts_unclaimed_event_for_router_competition() -> None:
     journal = InMemoryHubResponseJournal()
     publisher = EventPublisher()
     service = HubPublishService(
         journal=journal,
-        event_publisher=publisher,
+        internal_event_publisher=publisher,
         worker_id="worker-1",
     )
 
@@ -581,24 +580,18 @@ async def test_publish_claims_but_does_not_mark_processed_after_publisher_only_d
     )
 
     assert len(publisher.events) == 1
-    assert publisher.events[0].claim_token
-    await journal.release_claim(
-        publisher.events[0].journal_id,
-        publisher.events[0].claim_token,
-    )
+    assert publisher.events[0].claim_token is None
     assert len(await journal.find_replayable()) == 1
 
 
 @pytest.mark.asyncio
-async def test_publish_deduplicates_remote_fanout_while_journal_claim_is_active() -> (
-    None
-):
+async def test_duplicate_unclaimed_fanout_is_left_for_router_journal_dedup() -> None:
     journal = InMemoryHubResponseJournal()
     publisher = EventPublisher()
     service = HubPublishService(
         journal=journal,
         dispatcher=NoopDispatcher(),
-        event_publisher=publisher,
+        internal_event_publisher=publisher,
         worker_id="worker-1",
     )
     event = {
@@ -615,11 +608,56 @@ async def test_publish_deduplicates_remote_fanout_while_journal_claim_is_active(
     await service.publish_from_hub("hub-1", event)
     await service.publish_from_hub("hub-1", event)
 
-    assert len(publisher.events) == 1
+    assert len(publisher.events) == 2
+    assert all(item.claim_token is None for item in publisher.events)
 
 
 @pytest.mark.asyncio
-async def test_publish_does_not_emit_after_direct_dispatch_processed_journal() -> None:
+async def test_two_routers_sharing_journal_allow_exactly_one_sink_without_ownership():
+    journal = InMemoryHubResponseJournal()
+    publisher = EventPublisher()
+    service = HubPublishService(
+        journal=journal,
+        internal_event_publisher=publisher,
+    )
+    await service.publish_from_hub(
+        "hub-1",
+        {
+            "room_id": "room-1",
+            "events": [
+                {
+                    "type": "agent_response",
+                    "agent_message_id": "msg-1",
+                    "data": {"task_id": "task-1", "content": "ok"},
+                }
+            ],
+        },
+    )
+    event = publisher.events[0]
+    first_sink = Sink()
+    second_sink = Sink()
+    routers = (
+        HubInternalResponseRouter(
+            sink=first_sink,
+            journal=journal,
+            worker_id="worker-1",
+        ),
+        HubInternalResponseRouter(
+            sink=second_sink,
+            journal=journal,
+            worker_id="worker-2",
+        ),
+    )
+
+    await asyncio.gather(
+        *(router.dispatch_hub_internal_response(event) for router in routers)
+    )
+
+    assert len(first_sink.events) + len(second_sink.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_uses_eventing_instead_of_extra_direct_dispatch() -> None:
     journal = InMemoryHubResponseJournal()
     sink = Sink()
     dispatcher = HubInternalResponseRouter(
@@ -631,7 +669,7 @@ async def test_publish_does_not_emit_after_direct_dispatch_processed_journal() -
     service = HubPublishService(
         journal=journal,
         dispatcher=dispatcher,
-        event_publisher=publisher,
+        internal_event_publisher=publisher,
     )
 
     await service.publish_from_hub(
@@ -648,8 +686,8 @@ async def test_publish_does_not_emit_after_direct_dispatch_processed_journal() -
         },
     )
 
-    assert len(sink.events) == 1
-    assert publisher.events == []
+    assert sink.events == []
+    assert len(publisher.events) == 1
 
 
 @pytest.mark.asyncio

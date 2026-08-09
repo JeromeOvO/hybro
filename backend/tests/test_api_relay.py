@@ -228,21 +228,21 @@ def test_init_relay_service_binds_processor_relay_path():
     processor.bind_relay_service.assert_called_once_with(svc)
 
 
-def test_init_relay_service_wires_hub_worker_and_event_publisher():
+def test_init_relay_service_wires_hub_worker_and_internal_event_publisher():
     publisher = MagicMock()
     converter = MagicMock()
     svc = init_relay_service(
         mongo=MagicMock(),
         db=MagicMock(),
         room_message_center=MagicMock(agent_response_handler=MagicMock()),
-        event_publisher=publisher,
+        internal_event_publisher=publisher,
         worker_id="worker-123",
         response_converter=converter,
         offline_failure_port=MagicMock(),
     )
 
     assert svc.worker_id == "worker-123"
-    assert svc._facade.deps.event_publisher is publisher
+    assert svc._facade.deps.internal_event_publisher is publisher
     assert svc._response_converter is converter
 
 

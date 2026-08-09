@@ -171,12 +171,15 @@ def _execution_facade_for_scope_test(room_center):
         ),
         cancellation_state=SimpleNamespace(
             cancel_message_and_broadcast=AsyncMock(),
+            get_active_token=MagicMock(return_value=None),
+            release_active_token=MagicMock(return_value=True),
             clear_cancellation=MagicMock(),
         ),
-        cancellation_store=SimpleNamespace(
-            cancel_message=AsyncMock(return_value=True),
-            mark_cancellation_reconciled=AsyncMock(return_value=True),
+        cancellation_repository=SimpleNamespace(
+            request=AsyncMock(return_value=True),
+            mark_reconciled=AsyncMock(return_value=True),
         ),
+        cancellation_message_reader=AsyncMock(return_value=None),
         hitl_message_cancellation=SimpleNamespace(
             cancel_requests_for_message=AsyncMock(),
         ),

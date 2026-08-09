@@ -19,8 +19,17 @@ from common.dto import (
 from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
+from execution.cancellation.finalizer import (
+    CancellationFinalizationResult,
+    CancellationFinalizer,
+)
+from execution.cancellation.ports import (
+    CancellationMarkerRepositoryPort,
+    CancellationMessageReaderPort,
+)
+from execution.cancellation.service import CancellationService
 from execution.dispatch.agent_event import AgentEvent
-from execution.events import emit_processing_status, emit_room_processing_status
+from execution.events import emit_room_processing_status
 from execution.hitl.translators import (
     hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
@@ -31,10 +40,6 @@ from execution.idempotency import (
     build_execution_request_fingerprint,
     normalize_client_request_id,
 )
-from execution.orchestration.cancellation_finalizer import (
-    CancellationFinalizationResult,
-    OrchestrationCancellationFinalizer,
-)
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import (
     OrchestrationRunStore,
@@ -44,7 +49,6 @@ from execution.ports import (
     AgentResponseHandlerPort,
     AgentTaskCleanupPort,
     CancellationStatePort,
-    CancellationStorePort,
     ClientRequestIdResolver,
     HITLMessageCancellationPort,
     RunEventEnabled,
@@ -149,6 +153,8 @@ class RoomCenterPort(Protocol):
     ) -> tuple[Any, Any | None]: ...
 
     async def run_message_preflight_to_room(self, context: Any) -> Any: ...
+
+    def discard_message_preflight(self, context: Any) -> None: ...
 
     async def update_user_message_orchestration_status(
         self,
@@ -408,7 +414,8 @@ class ExecutionFacade:
         run_lifecycle: RunLifecyclePort,
         run_reader: RunReadPort,
         cancellation_state: CancellationStatePort,
-        cancellation_store: CancellationStorePort,
+        cancellation_repository: CancellationMarkerRepositoryPort,
+        cancellation_message_reader: CancellationMessageReaderPort,
         hitl_message_cancellation: HITLMessageCancellationPort,
         agent_task_cleanup: AgentTaskCleanupPort,
         agent_response_handler: AgentResponseHandlerPort,
@@ -424,7 +431,6 @@ class ExecutionFacade:
         self._run_lifecycle = run_lifecycle
         self._run_reader = run_reader
         self._cancellation_state = cancellation_state
-        self._cancellation_store = cancellation_store
         self._hitl_message_cancellation = hitl_message_cancellation
         self._agent_task_cleanup = agent_task_cleanup
         self._agent_response_handler = agent_response_handler
@@ -432,19 +438,27 @@ class ExecutionFacade:
         self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
         self._orchestration_run_store = orchestration_run_store
-        self._cancellation_finalizer = OrchestrationCancellationFinalizer(
+        cancellation_finalizer = CancellationFinalizer(
             run_store=orchestration_run_store,
             project_status=self._project_orchestration_status,
             broadcast_cancellation=cancellation_state.cancel_message_and_broadcast,
+            get_active_token=cancellation_state.get_active_token,
+            release_active_token=cancellation_state.release_active_token,
+            clear_cancellation=cancellation_state.clear_cancellation,
             cancel_hitl=hitl_message_cancellation.cancel_requests_for_message,
             project_public_terminal=self._project_public_terminal_status,
             cleanup_agent_tasks=agent_task_cleanup.cleanup_cancelled_message_tasks,
-            mark_reconciled=cancellation_store.mark_cancellation_reconciled,
+            mark_reconciled=cancellation_repository.mark_reconciled,
             get_public_run=getattr(
                 run_reader,
                 "get_run_strict",
                 run_reader.get_run,
             ),
+        )
+        self._cancellation_service = CancellationService(
+            repository=cancellation_repository,
+            finalizer=cancellation_finalizer,
+            message_reader=cancellation_message_reader,
         )
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
@@ -681,28 +695,34 @@ class ExecutionFacade:
             idempotency_fingerprint=idempotency.fingerprint,
             idempotency_fingerprint_version=idempotency.fingerprint_version,
         )
-        persisted_ack = room_response_to_execution_ack(persisted_response)
         if preflight_context is None:
-            return persisted_ack
+            return room_response_to_execution_ack(persisted_response)
         try:
-            await self._emit_room_preflight_processing_status(request, persisted_ack)
-        except Exception:
-            logger.warning(
-                "room preflight processing status emission failed after persistence",
-                exc_info=True,
+            persisted_ack = room_response_to_execution_ack(persisted_response)
+            try:
+                await self._emit_room_preflight_processing_status(
+                    request, persisted_ack
+                )
+            except Exception:
+                logger.warning(
+                    "room preflight processing status emission failed after persistence",
+                    exc_info=True,
+                )
+            response = await self._room_center.run_message_preflight_to_room(
+                preflight_context
             )
-        response = await self._room_center.run_message_preflight_to_room(
-            preflight_context
-        )
-        ack = room_response_to_execution_ack(response)
-        try:
-            await self._emit_room_preflight_terminal_status(request, ack)
-        except Exception:
-            logger.warning(
-                "room preflight terminal status emission failed after preflight",
-                exc_info=True,
-            )
-        return ack
+            ack = room_response_to_execution_ack(response)
+            try:
+                await self._emit_room_preflight_terminal_status(request, ack)
+            except Exception:
+                logger.warning(
+                    "room preflight terminal status emission failed after preflight",
+                    exc_info=True,
+                )
+            return ack
+        except BaseException:
+            self._room_center.discard_message_preflight(preflight_context)
+            raise
 
     async def start_orchestration(
         self,
@@ -726,7 +746,7 @@ class ExecutionFacade:
         ):
             task = self._spawn_orchestration(
                 self._room_message_center.process_room_user_message(
-                    orchestration_request
+                    orchestration_request,
                 ),
                 name=f"execution-orchestrate-{ack.message_id}",
             )
@@ -838,17 +858,6 @@ class ExecutionFacade:
             )
             if public_state != target_state.value:
                 raise RuntimeError("public terminal lifecycle projection failed")
-        await emit_processing_status(
-            room_id=room_id,
-            status=target_state.value,
-            message_id=message_id,
-            lifecycle_message_id=message_id,
-            record_lifecycle=False,
-            run_lifecycle=self._run_lifecycle,
-            event_publisher=self._event_publisher,
-            run_event_enabled=self._run_event_enabled,
-            client_request_id_resolver=self._client_request_id_resolver,
-        )
 
     async def finalize_pending_cancellation(
         self,
@@ -857,11 +866,15 @@ class ExecutionFacade:
         message_id: str,
         settle_no_run: bool = False,
     ) -> CancellationFinalizationResult:
-        return await self._cancellation_finalizer.finalize(
+        return await self._cancellation_service.finalize(
             room_id=room_id,
             message_id=message_id,
             settle_no_run=settle_no_run,
         )
+
+    @property
+    def cancellation_service(self) -> CancellationService:
+        return self._cancellation_service
 
     async def cancel(
         self,
@@ -870,35 +883,11 @@ class ExecutionFacade:
         *,
         requested_by_user_id: str,
     ) -> bool | CancellationAck:
-        persisted = await self._cancellation_store.cancel_message(
-            message_id,
-            requested_by_user_id,
+        return await self._cancellation_service.cancel(
+            room_id=room_id,
+            message_id=message_id,
+            requested_by_user_id=requested_by_user_id,
         )
-        if not persisted:
-            return False
-        try:
-            result = await self.finalize_pending_cancellation(
-                room_id=room_id,
-                message_id=message_id,
-            )
-            if result.cancellation_applied:
-                return True
-            return CancellationAck(
-                status=result.status.value,
-                cancellation_applied=False,
-                reconciled=result.reconciled,
-            )
-        except Exception:
-            logger.warning(
-                "cancellation marker persisted but finalization remains pending",
-                extra={"room_id": room_id, "message_id": message_id},
-                exc_info=True,
-            )
-            return CancellationAck(
-                status="cancellation_pending",
-                cancellation_applied=False,
-                reconciled=False,
-            )
 
     async def get_run(self, run_id: str) -> RunInfo | None:
         return await self._run_reader.get_run(run_id)

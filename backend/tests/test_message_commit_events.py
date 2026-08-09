@@ -20,16 +20,16 @@ class RecordingEventPublisher:
         self.wait_flags = []
         self.broadcast_flags = []
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ) -> None:
         self.internal_events.append(event)
-        self.wait_flags.append(wait_for_local_handlers)
-        self.broadcast_flags.append(broadcast)
+        self.wait_flags.append(wait_for_handlers)
+        self.broadcast_flags.append(fanout)
 
 
 class SchedulingEventPublisher:
@@ -37,22 +37,22 @@ class SchedulingEventPublisher:
         self.handlers: dict[str, list] = {}
         self.tasks: list[asyncio.Task] = []
 
-    def register_internal_handler(self, event_type: str, handler) -> None:
+    def register_handler(self, event_type: str, handler) -> None:
         self.handlers.setdefault(event_type, []).append(handler)
 
-    async def emit_internal(
+    async def publish(
         self,
         event,
         *,
-        wait_for_local_handlers: bool = False,
-        broadcast: bool = True,
+        wait_for_handlers: bool = False,
+        fanout: bool = True,
     ) -> None:
         tasks = [
             asyncio.create_task(handler(event))
             for handler in self.handlers.get(event.event_type, [])
         ]
         self.tasks.extend(tasks)
-        if wait_for_local_handlers and tasks:
+        if wait_for_handlers and tasks:
             await asyncio.gather(*tasks)
 
 
@@ -162,7 +162,7 @@ async def test_publish_message_committed_can_wait_for_local_handlers():
         room_id="room-1",
         message_id="user-msg-1",
         message_type="user",
-        wait_for_local_handlers=True,
+        wait_for_handlers=True,
     )
 
     assert publisher.wait_flags == [True]
@@ -222,7 +222,7 @@ async def test_new_room_user_then_agent_events_project_both_turns():
         project_for_event=projector.project_message_for_event,
     )
     publisher = SchedulingEventPublisher()
-    publisher.register_internal_handler(
+    publisher.register_handler(
         "message_committed",
         handler.handle_message_committed,
     )
@@ -232,7 +232,7 @@ async def test_new_room_user_then_agent_events_project_both_turns():
         room_id="room-1",
         message_id="user-msg-1",
         message_type="user",
-        wait_for_local_handlers=True,
+        wait_for_handlers=True,
     )
     await publish_message_committed(
         publisher,

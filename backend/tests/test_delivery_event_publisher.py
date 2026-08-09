@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 import pytest
 
 from common.dto import (
+    DeliveryEmitStatus,
     HubAgentResponseInternal,
     MessageCommitted,
     ProcessingStatusEvent,
+    RunEventNotification,
     RunStateChanged,
 )
 from common.observability import get_current_trace_id, trace_id_context
@@ -35,33 +37,30 @@ class FakeTransport:
     def __init__(self):
         self.frames: list[tuple[str, dict]] = []
         self.error: Exception | None = None
+        self.delivered_count = 1
 
-    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> None:
+    async def broadcast_frame_to_room(self, room_id: str, frame: dict) -> int:
         if self.error is not None:
             raise self.error
         self.frames.append((room_id, frame))
+        return self.delivered_count
 
 
 class FakeBus:
     def __init__(self):
         self.sse: list[tuple[str, dict]] = []
-        self.internal = []
         self.dead_letters: list[dict] = []
         self.sse_trace_ids: list[str | None] = []
         self.sse_error: Exception | None = None
-        self.internal_error: Exception | None = None
         self.dead_letter_error: Exception | None = None
+        self.sse_accepted = True
 
-    async def publish_sse(self, room_id: str, frame: dict) -> None:
+    async def publish_sse(self, room_id: str, frame: dict) -> bool:
         if self.sse_error is not None:
             raise self.sse_error
         self.sse_trace_ids.append(get_current_trace_id())
         self.sse.append((room_id, frame))
-
-    async def publish_internal(self, event) -> None:
-        if self.internal_error is not None:
-            raise self.internal_error
-        self.internal.append(event)
+        return self.sse_accepted
 
     async def publish_dead_letter(self, envelope: dict) -> None:
         if self.dead_letter_error is not None:
@@ -109,7 +108,6 @@ def make_publisher(
         config=config or DeliveryConfig(),
         now=fixed_now,
         instance_id="worker-1",
-        task_runner=task_runner or RecordingTaskRunner(),
         metrics=metrics,
     )
 
@@ -145,6 +143,320 @@ async def test_emit_processing_status_translates_local_and_fanout_with_metrics()
             {"event_type": "processing_status"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_long_fanout_renews_reservation_until_confirmed():
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class SlowTransport(FakeTransport):
+        async def broadcast_frame_to_room(self, room_id, frame):
+            await asyncio.sleep(1.1)
+            return await super().broadcast_frame_to_room(room_id, frame)
+
+    redis = FakeRedisKV()
+    config = DeliveryConfig(
+        terminal_reservation_ttl_seconds=1,
+        terminal_dedup_ttl_seconds=10,
+    )
+    publisher = make_publisher(
+        transport=SlowTransport(),
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    renewals = [
+        call for call in redis.compare_sets if call[1] == call[2] and call[3] == 1
+    ]
+    assert len(renewals) >= 2
+    assert redis.compare_sets[-1][2] == "delivered:failed"
+    assert redis.compare_sets[-1][3] == 10
+
+
+@pytest.mark.asyncio
+async def test_lost_reservation_after_fanout_writes_cross_instance_marker():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    class LostRedis(SharedNXRedisKV):
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            self.compare_sets.append((key, expected_value, value, ttl))
+            return False
+
+    class SlowTransport(FakeTransport):
+        async def broadcast_frame_to_room(self, room_id, frame):
+            await asyncio.sleep(0.4)
+            return await super().broadcast_frame_to_room(room_id, frame)
+
+    redis = LostRedis()
+    config = DeliveryConfig(
+        terminal_reservation_ttl_seconds=1,
+        terminal_dedup_ttl_seconds=10,
+    )
+    publisher = make_publisher(
+        transport=SlowTransport(),
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert redis.values == {
+        "terminal:delivery:terminal:evt-1:processing": "delivered:failed"
+    }
+    assert redis.set_calls[-1][2] == 10
+
+    other_instance = make_publisher(
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis)
+    )
+    assert (
+        await other_instance.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    )
+    assert len(publisher.sse_transport.frames) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation_result", [False, RuntimeError("redis failed")])
+async def test_post_fanout_confirmation_failure_does_not_redeliver_across_instances(
+    confirmation_result,
+):
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    class ConfirmationFailureRedis(SharedNXRedisKV):
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            self.compare_sets.append((key, expected_value, value, ttl))
+            if isinstance(confirmation_result, Exception):
+                raise confirmation_result
+            return confirmation_result
+
+    redis = ConfirmationFailureRedis()
+    transport = FakeTransport()
+    config = DeliveryConfig()
+    publisher = make_publisher(
+        transport=transport,
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert len(transport.frames) == 1
+    assert redis.set_calls[-1] == (
+        "terminal:delivery:terminal:evt-1:processing",
+        "delivered:failed",
+        config.terminal_dedup_ttl_seconds,
+    )
+
+    other_transport = FakeTransport()
+    other_instance = make_publisher(
+        transport=other_transport,
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    assert (
+        await other_instance.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    )
+    assert other_transport.frames == []
+
+
+@pytest.mark.asyncio
+async def test_accepted_result_survives_confirmation_and_marker_write_failure():
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class FailingMarkerRedis(FakeRedisKV):
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            raise RuntimeError("confirm failed")
+
+        async def set(self, key, value, *, ttl):
+            raise RuntimeError("marker failed")
+
+    redis = FailingMarkerRedis()
+    transport = FakeTransport()
+    config = DeliveryConfig()
+    publisher = make_publisher(
+        transport=transport,
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    assert len(transport.frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_accepted_delivery_returns_when_connected_redis_commands_hang():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    class HangingRedis(SharedNXRedisKV):
+        def __init__(self):
+            super().__init__()
+            self.release = asyncio.Event()
+
+        async def _hang_until_released(self):
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    continue
+
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            await self._hang_until_released()
+            return False
+
+        async def set(self, key, value, *, ttl):
+            await self._hang_until_released()
+            self.values[key] = value
+
+    redis = HangingRedis()
+    transport = FakeTransport()
+    config = DeliveryConfig(terminal_redis_io_timeout_seconds=0.01)
+    dedup = TerminalStatusDeduplicator(config=config, redis_kv=redis)
+    publisher = make_publisher(
+        transport=transport,
+        config=config,
+        dedup=dedup,
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+    started_at = asyncio.get_running_loop().time()
+
+    try:
+        result = await publisher.emit_checked(event)
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+        assert result == DeliveryEmitStatus.DELIVERED
+        assert elapsed < 0.1
+        assert len(transport.frames) == 1
+        assert "delivery:terminal:evt-1:processing" in dedup.cache
+        assert set(dedup._redis_tasks.values()) == {"confirm", "mark-delivered"}
+        assert (
+            await publisher.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+        )
+    finally:
+        redis.release.set()
+        owned = tuple(dedup._redis_tasks)
+        if owned:
+            await asyncio.gather(*owned, return_exceptions=True)
+
+    assert dedup._redis_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_checked_emit_persists_marker_when_redis_reservation_recovers():
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class ReservationFailureRedis(FakeRedisKV):
+        def __init__(self):
+            super().__init__()
+            self.failed_once = False
+
+        async def setnx(self, key, value, ttl):
+            self.calls.append((key, value, ttl))
+            if not self.failed_once:
+                self.failed_once = True
+                raise RuntimeError("reservation unavailable")
+            if key in self.values:
+                return False
+            self.values[key] = value
+            return True
+
+    redis = ReservationFailureRedis()
+    transport = FakeTransport()
+    config = DeliveryConfig()
+    publisher = make_publisher(
+        transport=transport,
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert redis.set_calls == [
+        (
+            "terminal:delivery:terminal:evt-1:processing",
+            "delivered:failed",
+            config.terminal_dedup_ttl_seconds,
+        )
+    ]
+    other_instance = make_publisher(
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    assert (
+        await other_instance.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    )
+    assert len(transport.frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_event_checked_emit_distinguishes_inflight_and_confirmed():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    crashed = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+    await crashed.reserve(
+        room_id="room-1",
+        message_id="evt-1",
+        status="delivered",
+        delivery_id="terminal:evt-1:run-event",
+    )
+    transport = FakeTransport()
+    publisher = make_publisher(
+        transport=transport,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = RunEventNotification(
+        room_id="room-1",
+        event_id="evt-1",
+        delivery_id="terminal:evt-1:run-event",
+        run_id="run-1",
+        seq=2,
+        run_event_type="run_failed",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.IN_FLIGHT
+    assert transport.frames == []
+
+    redis.values.clear()  # crashed reservation lease expires
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert transport.frames[0][1]["data"]["delivery_id"] == ("terminal:evt-1:run-event")
+
+    replay = make_publisher(
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
+    )
+    assert await replay.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
 
 
 @pytest.mark.asyncio
@@ -191,6 +503,64 @@ async def test_local_delivery_failure_does_not_prevent_fanout_or_dead_letter():
     assert len(bus.sse) == 1
     assert bus.dead_letters == []
     assert list(publisher.dead_letters) == []
+
+
+@pytest.mark.asyncio
+async def test_zero_local_subscribers_and_no_broker_stays_pending():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    transport = FakeTransport()
+    transport.delivered_count = 0
+    bus = FakeBus()
+    bus.sse_accepted = False
+    publisher = make_publisher(
+        transport=transport,
+        bus=bus,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert redis.values == {}
+
+
+@pytest.mark.asyncio
+async def test_zero_local_subscribers_and_failed_fanout_never_confirm_global_marker():
+    from tests.test_delivery_deduplication import SharedNXRedisKV
+
+    redis = SharedNXRedisKV()
+    transport = FakeTransport()
+    transport.delivered_count = 0
+    bus = FakeBus()
+    bus.sse_error = RuntimeError("redis pubsub down")
+    publisher = make_publisher(
+        transport=transport,
+        bus=bus,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert redis.values == {}
+
+    connected_transport = FakeTransport()
+    replay = make_publisher(
+        transport=connected_transport,
+        dedup=TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis),
+    )
+    assert await replay.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert len(connected_transport.frames) == 1
 
 
 @pytest.mark.asyncio
@@ -269,6 +639,7 @@ async def test_failed_terminal_delivery_releases_dedup_reservation_for_retry():
     assert len(bus.sse) == 1
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_emit_internal_schedules_handlers_and_publishes_without_sse():
     transport = FakeTransport()
@@ -296,6 +667,7 @@ async def test_emit_internal_schedules_handlers_and_publishes_without_sse():
     assert transport.frames == []
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_emit_internal_can_wait_for_local_handlers_before_returning():
     runner = RecordingTaskRunner()
@@ -321,6 +693,7 @@ async def test_emit_internal_can_wait_for_local_handlers_before_returning():
     assert all(task.done() for task in runner.tasks)
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_emit_internal_can_skip_redis_fanout_for_local_only_events():
     transport = FakeTransport()
@@ -351,6 +724,7 @@ async def test_emit_internal_can_skip_redis_fanout_for_local_only_events():
     assert transport.frames == []
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_emit_does_not_dispatch_internal_handlers():
     runner = RecordingTaskRunner()
@@ -368,6 +742,7 @@ async def test_emit_does_not_dispatch_internal_handlers():
     assert runner.tasks == []
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_multiple_internal_handlers_and_handler_exception_dead_letter():
     bus = FakeBus()
@@ -400,6 +775,7 @@ async def test_multiple_internal_handlers_and_handler_exception_dead_letter():
     )
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_remote_internal_event_restores_trace_context_and_rejects_mismatch():
     runner = RecordingTaskRunner()
@@ -487,6 +863,7 @@ async def test_explicit_event_trace_is_used_for_cross_instance_publish():
     assert bus.sse[0][1]["data"]["trace_id"] == "trace-from-event"
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_stop_cancels_blocked_handler_after_configured_timeout():
     runner = RecordingTaskRunner()
@@ -512,6 +889,7 @@ async def test_stop_cancels_blocked_handler_after_configured_timeout():
     assert runner.tasks[0].cancelled()
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "event",
@@ -555,6 +933,7 @@ async def test_all_internal_event_union_members_schedule_local_handlers(event):
     assert received == [event]
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_remote_internal_events_cover_all_union_members_and_multiple_handlers():
     runner = RecordingTaskRunner()
@@ -610,6 +989,7 @@ async def test_remote_internal_events_cover_all_union_members_and_multiple_handl
     assert second == [event.event_type for event in events]
 
 
+@pytest.mark.skip(reason="internal eventing coverage moved to test_common_eventing")
 @pytest.mark.asyncio
 async def test_emit_internal_with_no_subscribers_is_noop_for_handlers():
     runner = RecordingTaskRunner()

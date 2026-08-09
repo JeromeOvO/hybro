@@ -60,10 +60,14 @@ def test_execution_runtime_ports_use_named_method_contracts() -> None:
             "send_agent_response",
             "send_artifact_update",
             "send_error",
-            "clear_cancellation",
-            "get_token",
+        ],
+        ports.CancellationControlPort: [
             "create_token",
-            "remove_token",
+            "get_token",
+            "release_token",
+            "clear_cancellation",
+            "check_cancelled",
+            "signal",
         ],
         ports.NotificationServicePort: ["send_task_update"],
         ports.RateLimitPort: ["check_rate_limit", "record_request"],
@@ -261,7 +265,7 @@ FORBIDDEN_CONSTRUCTOR_PARAMETER_NAMES = {
 def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> None:
     from execution.cancellation import (
         AgentTaskCleanupAdapter,
-        CancellationStateC3Adapter,
+        CancellationStateAdapter,
     )
     from execution.hitl.adapters import (
         A2AHITLContinuationAdapter,
@@ -285,7 +289,7 @@ def test_execution_runtime_constructors_do_not_use_shell_dependency_names() -> N
             "database_service",
             "db_service",
         },
-        CancellationStateC3Adapter: {
+        CancellationStateAdapter: {
             "sse_manager",
         },
         HITLPersistenceAdapter: {

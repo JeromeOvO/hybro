@@ -18,7 +18,9 @@ The API is available at <http://localhost:8000> and its health endpoint is
 
 ### Run the backend directly
 
-Python 3.12+ and a reachable MongoDB instance are required.
+Python 3.12+ and MongoDB 4.2+ are required. Terminal projection scheduling uses
+MongoDB aggregation update pipelines; Docker Compose currently provides MongoDB
+7.0.
 
 ```sh
 cd backend
@@ -30,6 +32,14 @@ uv run uvicorn main:app --reload
 Use `AUTH_MODE=mock` for local development without Clerk credentials. Redis is
 optional for a single-process local server; cross-process delivery and locking
 require it.
+
+### Production upgrade note
+
+Releases that introduce terminal task writer fencing must not be deployed with a
+rolling mixed-version writer fleet. Coordinately drain or stop all old backend
+writers, deploy the new version to every replica, and only then resume traffic.
+An older writer does not apply the MongoDB terminal winner fences and can undo the
+new version's guarantees.
 
 ## Project layout
 
