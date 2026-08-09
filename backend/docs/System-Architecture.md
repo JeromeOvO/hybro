@@ -536,16 +536,17 @@ selected prior-turn attachment is resolved from room history under the same
 room boundary before preflight, so follow-up dispatches can forward the original
 file rather than failing against the attachment-less approval message. For
 orchestrated dispatch, the target Agent's current request is the private,
-capability-scoped dispatch task—not the user's short approval message—and
-selected text resources are compiled into that same request body so single-text
-and multi-part A2A consumers receive equivalent input. Each assembly uses nonce-scoped
-start and end markers so task or resource text cannot collide with the selected-resource
-boundary. If context assembly truncates any selected-text section, the incomplete marked
-block is removed and every selected text resource is delivered as its own complete
-`TextPart`. This also strips an exact non-empty suffix of that assembly's nonce-scoped
-start marker when truncation occurs inside the marker; marker-like user text with another
-nonce is not matched. A fully assembled block has its start and end markers removed and
-is kept without duplicate parts. The action validator also
+capability-scoped dispatch task—not the user's short approval message. Canonical
+ContextMemory assembly budgets only that task together with canonical history,
+quoted context, and room awareness. Every resolved plain-text selected resource
+is appended exactly once afterward as its own metadata-bearing A2A `TextPart`;
+JSON data and files retain their typed `DataPart` and file-part handling. Selected
+resources therefore do not consume the ContextMemory assembly budget and remain
+independent of assembly success or truncation. The A2A message model and both
+local and relay transports preserve this ordered multi-part input. Upstream
+materialization still enforces the existing per-resource text limit
+(`max_resource_text_chars`, 120,000 characters by default), so this separation
+is not an unbounded-payload promise. The action validator also
 rejects a delegate task that mentions an available resource ID without selecting
 that exact ID through dispatch refs, allowing the next planner attempt to repair
 the omission before any external Agent is called. The resource provider and

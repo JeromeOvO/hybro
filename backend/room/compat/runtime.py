@@ -167,15 +167,6 @@ def _public_attachment_preflight_failure(
     }
 
 
-def _strip_partial_marker_suffix(text: str, marker: str) -> str:
-    """Remove an exact, non-empty partial marker left at the end of text."""
-    max_prefix_length = min(len(text), len(marker) - 1)
-    for prefix_length in range(max_prefix_length, 0, -1):
-        if text.endswith(marker[:prefix_length]):
-            return text[:-prefix_length].rstrip()
-    return text
-
-
 def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | None:
     if not isinstance(extend_info, dict):
         return None
@@ -3906,39 +3897,6 @@ class RoomServices:
             current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
             agent_task_for_cas = original_text if turn_ctx else None
 
-        embedded_text_resource_indexes: set[int] = set()
-        selected_text_resources: list[tuple[int, str]] = []
-        selected_resources_nonce = uuid4().hex
-        selected_resources_start = (
-            f"[[HYBRO_SELECTED_RESOURCES_START:{selected_resources_nonce}]]"
-        )
-        selected_resources_end = (
-            f"[[HYBRO_SELECTED_RESOURCES_END:{selected_resources_nonce}]]"
-        )
-        if dispatch_task_text and isinstance(resolved_resource_payloads, list):
-            for index, payload in enumerate(resolved_resource_payloads):
-                if not isinstance(payload, dict):
-                    continue
-                text = payload.get("text")
-                mime_type = str(payload.get("mime_type") or "").split(";", 1)[0]
-                if (
-                    not isinstance(text, str)
-                    or not text.strip()
-                    or mime_type == "application/json"
-                ):
-                    continue
-                ref_id = payload.get("ref_id")
-                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
-                selected_text_resources.append(
-                    (index, f"Resource {label}:\n{text.strip()}")
-                )
-        if selected_text_resources:
-            current_task_for_cas = (
-                f"{current_task_for_cas}\n\n{selected_resources_start}\n"
-                "Selected source material follows.\n"
-                + "\n\n".join(section for _, section in selected_text_resources)
-                + f"\n{selected_resources_end}"
-            )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
         )
@@ -4005,44 +3963,6 @@ class RoomServices:
                         )
 
                 agent_message.parts[0].root.text = context
-                final_text = agent_message.parts[0].root.text
-                if isinstance(final_text, str) and selected_text_resources:
-                    start_index = final_text.find(selected_resources_start)
-                    if start_index >= 0:
-                        content_start = start_index + len(selected_resources_start)
-                        end_index = final_text.find(
-                            selected_resources_end,
-                            content_start,
-                        )
-                        resource_block = (
-                            final_text[content_start:end_index]
-                            if end_index >= 0
-                            else ""
-                        )
-                        if end_index >= 0 and all(
-                            section in resource_block
-                            for _, section in selected_text_resources
-                        ):
-                            agent_message.parts[0].root.text = (
-                                final_text[:start_index]
-                                + resource_block
-                                + final_text[end_index + len(selected_resources_end) :]
-                            )
-                            embedded_text_resource_indexes.update(
-                                index for index, _ in selected_text_resources
-                            )
-                        else:
-                            agent_message.parts[0].root.text = final_text[
-                                :start_index
-                            ].rstrip()
-                    else:
-                        agent_message.parts[0].root.text = _strip_partial_marker_suffix(
-                            final_text,
-                            selected_resources_start,
-                        ).replace(
-                            selected_resources_end,
-                            "",
-                        )
         except Exception as exc:
             # Log but continue with original message if context building fails
             logger.warning(
@@ -4053,7 +3973,7 @@ class RoomServices:
         if isinstance(resolved_resource_payloads, list):
             target_agent_card = getattr(agent, "agent_card", None)
             accepted_modes = agent_input_modes(target_agent_card)
-            for index, payload in enumerate(resolved_resource_payloads):
+            for payload in resolved_resource_payloads:
                 if not isinstance(payload, dict):
                     continue
                 text = payload.get("text")
@@ -4118,8 +4038,6 @@ class RoomServices:
                     continue
 
                 if not isinstance(text, str) or not text.strip():
-                    continue
-                if index in embedded_text_resource_indexes:
                     continue
                 if mime_type == "application/json" and mime_type_is_accepted(
                     mime_type, accepted_modes

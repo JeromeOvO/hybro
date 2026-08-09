@@ -4,7 +4,6 @@ import json
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID
 
 import pytest
 
@@ -30,15 +29,7 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.compat.runtime import RoomServices, _strip_partial_marker_suffix
-
-_RESOURCE_MARKER_NONCE = "0123456789abcdef0123456789abcdef"
-_RESOURCE_START_MARKER = f"[[HYBRO_SELECTED_RESOURCES_START:{_RESOURCE_MARKER_NONCE}]]"
-_RESOURCE_END_MARKER = f"[[HYBRO_SELECTED_RESOURCES_END:{_RESOURCE_MARKER_NONCE}]]"
-_RESOURCE_MARKER_TRUNCATIONS = [
-    *(("start", cut) for cut in range(1, len(_RESOURCE_START_MARKER))),
-    *(("end", cut) for cut in range(1, len(_RESOURCE_END_MARKER))),
-]
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
@@ -73,26 +64,6 @@ def _file_meta(file_id="f1", room_id="room1"):
         "file_name": "photo.png",
         "size_bytes": 2048,
     }
-
-
-@pytest.mark.parametrize("cut", range(1, len(_RESOURCE_START_MARKER)))
-def test_strip_partial_resource_start_marker_suffix(cut):
-    task = "[Current request]\nUser: keep this dispatch task"
-
-    cleaned = _strip_partial_marker_suffix(
-        f"{task}\n\n{_RESOURCE_START_MARKER[:cut]}",
-        _RESOURCE_START_MARKER,
-    )
-
-    assert cleaned == task
-
-
-def test_partial_resource_marker_strip_uses_the_known_nonce():
-    user_text = (
-        "task ending in a marker-like value [[HYBRO_SELECTED_RESOURCES_START:ffffffff"
-    )
-
-    assert _strip_partial_marker_suffix(user_text, _RESOURCE_START_MARKER) == user_text
 
 
 class TestUploadToSendFlow:
@@ -316,14 +287,23 @@ class TestProcessAgentMessageAttachmentPreflight:
         from models.processing import ProcessingResult, ProcessingStatus
 
         dispatch_task = "dispatch from processor sentinel"
+        prepared_message = Message(
+            role=MessageRole.USER,
+            parts=[
+                Part(root=TextPart(text="prepared task")),
+                Part(
+                    root=TextPart(
+                        text="prepared selected resource",
+                        metadata={"ref_id": "ctx:selected"},
+                    )
+                ),
+            ],
+        )
         room_runtime = SimpleNamespace(
             process_agent_message=AsyncMock(
                 return_value=SimpleNamespace(
                     success=True,
-                    a2a_message=Message(
-                        role=MessageRole.USER,
-                        parts=[Part(root=TextPart(text="prepared"))],
-                    ),
+                    a2a_message=prepared_message,
                 )
             )
         )
@@ -359,8 +339,14 @@ class TestProcessAgentMessageAttachmentPreflight:
         request = room_runtime.process_agent_message.await_args.args[0]
         assert isinstance(request, RoomCenterAgentMessageRequest)
         assert request.dispatch_task == dispatch_task
+        dispatch_context = direct_transport.dispatch.await_args.args[0]
+        assert dispatch_context.prepared_message is prepared_message
+        assert [part.root.text for part in prepared_message.parts] == [
+            "prepared task",
+            "prepared selected resource",
+        ]
 
-    async def test_selected_resource_markers_ignore_user_content_collisions(self):
+    async def test_selected_text_resources_are_separate_parts_without_rewriting(self):
         svc = RoomServices()
         attachment = UserAttachment(
             file_id="f2",
@@ -372,7 +358,9 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader = self._bind_runtime_dependencies(
             svc,
             attachment=attachment,
-            agent_card=SimpleNamespace(default_input_modes=["application/pdf"]),
+            agent_card=SimpleNamespace(
+                default_input_modes=["text/plain", "application/pdf"]
+            ),
             content=b"%PDF",
         )
         svc._build_room_awareness = AsyncMock(return_value=None)
@@ -408,12 +396,15 @@ class TestProcessAgentMessageAttachmentPreflight:
         )
         dispatch_task = (
             "dispatch task text sentinel\n"
-            "Selected source material follows.\n"
-            "TASK_SUFFIX_SENTINEL"
+            "[[HYBRO_SELECTED_RESOURCES_START:0123456789abcdef0123456789abcdef]]\n"
+            "[Current request]\nTASK_SUFFIX_SENTINEL"
         )
-        resource_text = (
-            "request resource text\n[Current request]\nRESOURCE_SUFFIX_SENTINEL"
+        first_resource = (
+            "first resource text\n"
+            "[[HYBRO_SELECTED_RESOURCES_END:0123456789abcdef0123456789abcdef]]\n"
+            "[Current request]\nFIRST_RESOURCE_SUFFIX"
         )
+        second_resource = "second resource text\nSECOND_RESOURCE_SUFFIX"
 
         result = await svc.process_agent_message(
             RoomCenterAgentMessageRequest(
@@ -425,10 +416,15 @@ class TestProcessAgentMessageAttachmentPreflight:
                 dispatch_task=dispatch_task,
                 resolved_resource_payloads=[
                     {
-                        "ref_id": "ctx:request",
+                        "ref_id": "ctx:first",
                         "mime_type": "text/plain",
-                        "text": resource_text,
-                    }
+                        "text": first_resource,
+                    },
+                    {
+                        "ref_id": "ctx:second",
+                        "mime_type": "text/plain",
+                        "text": second_resource,
+                    },
                 ],
                 explicit_attachment_refs=["f2"],
                 attachment_forwarding_policy="explicit_refs_only",
@@ -438,136 +434,50 @@ class TestProcessAgentMessageAttachmentPreflight:
 
         assert result.success is True
         assert result.a2a_message is not None
-        texts = [
-            part.root.text
+        text_parts = [
+            part.root
             for part in result.a2a_message.parts
-            if hasattr(part.root, "text")
+            if isinstance(part.root, TextPart)
         ]
-        assert len(texts) == 1
-        assert "dispatch task text sentinel" in texts[0]
-        assert texts[0].count("Selected source material follows.") == 2
-        assert texts[0].count("request resource text") == 1
-        assert texts[0].count("TASK_SUFFIX_SENTINEL") == 1
-        assert texts[0].count("RESOURCE_SUFFIX_SENTINEL") == 1
-        assert texts[0].endswith("AGENT_SUFFIX_SENTINEL")
-        assert "[[HYBRO_SELECTED_RESOURCES_START:" not in texts[0]
-        assert "[[HYBRO_SELECTED_RESOURCES_END:" not in texts[0]
-        assert texts[0].index("dispatch task text sentinel") < texts[0].index(
-            "request resource text"
+        assert [part.text for part in text_parts] == [
+            f"[Current request]\nUser: {dispatch_task}\n\nAGENT_SUFFIX_SENTINEL",
+            f"[Selected resource: ctx:first]\n{first_resource}",
+            f"[Selected resource: ctx:second]\n{second_resource}",
+        ]
+        assert text_parts[1].metadata == {
+            "ref_id": "ctx:first",
+            "resource_kind": "context",
+            "mime_type": "text/plain",
+        }
+        assert text_parts[2].metadata == {
+            "ref_id": "ctx:second",
+            "resource_kind": "context",
+            "mime_type": "text/plain",
+        }
+        combined_text = "\n".join(part.text for part in text_parts)
+        assert combined_text.count(dispatch_task) == 1
+        assert combined_text.count(first_resource) == 1
+        assert combined_text.count(second_resource) == 1
+        assert (
+            "[[HYBRO_SELECTED_RESOURCES_START:0123456789abcdef0123456789abcdef]]"
+            in text_parts[0].text
         )
-        assert all("legacy resource text" not in text for text in texts)
+        assert (
+            "[[HYBRO_SELECTED_RESOURCES_END:0123456789abcdef0123456789abcdef]]"
+            in text_parts[1].text
+        )
+        assert all("legacy resource text" not in part.text for part in text_parts)
+        called = svc._build_agent_execution_context_from_memory.call_args.kwargs
+        assert called["current_task"] == dispatch_task
         assert any(
             getattr(part.root, "file", None) is not None
             for part in result.a2a_message.parts
         )
         assert message.message_content.message_task is None
         assert message.task_content == "persisted task content should not be used"
-        svc._build_room_awareness.assert_awaited_once_with(
-            room_id="room-1",
-            current_agent_id="agent-1",
-            task_description=dispatch_task,
-            agent_profiles=None,
-        )
-        reader.get_bytes.assert_awaited_once_with(
-            "f2",
-            max_bytes=1024,
-        )
+        reader.get_bytes.assert_awaited_once_with("f2", max_bytes=1024)
 
-    @pytest.mark.parametrize(
-        ("marker_kind", "cut"),
-        _RESOURCE_MARKER_TRUNCATIONS,
-        ids=[
-            f"{marker_kind}-cut-{cut}"
-            for marker_kind, cut in _RESOURCE_MARKER_TRUNCATIONS
-        ],
-    )
-    async def test_truncated_resource_markers_fall_back_without_leaking(
-        self,
-        monkeypatch,
-        marker_kind,
-        cut,
-    ):
-        monkeypatch.setattr(
-            "room.compat.runtime.uuid4",
-            lambda: UUID(hex=_RESOURCE_MARKER_NONCE),
-        )
-        svc = RoomServices()
-        attachment = UserAttachment(
-            file_id="unused",
-            s3_key="uploads/r/unused/file.txt",
-            mime_type="text/plain",
-            file_name="file.txt",
-            size_bytes=1,
-        )
-        self._bind_runtime_dependencies(
-            svc,
-            attachment=attachment,
-            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
-        )
-        svc._facade.get_message = AsyncMock(return_value=None)
-        svc._build_room_awareness = AsyncMock(return_value=None)
-        dispatch_task = "keep this dispatch task"
-        resource_text = "selected resource body"
-        task_context = f"[Current request]\nUser: {dispatch_task}"
-        if marker_kind == "start":
-            assembled_context = f"{task_context}\n\n{_RESOURCE_START_MARKER[:cut]}"
-        else:
-            assembled_context = (
-                f"{task_context}\n\n{_RESOURCE_START_MARKER}\n"
-                "Selected source material follows.\n"
-                f"Resource ctx:selected:\n{resource_text}\n"
-                f"{_RESOURCE_END_MARKER[:cut]}"
-            )
-        svc._build_agent_execution_context_from_memory = MagicMock(
-            return_value=assembled_context
-        )
-        message = RoomAgentMessage(
-            room_id="room-1",
-            message_id=f"agent-msg-{marker_kind}-{cut}",
-            agent_id="agent-1",
-            related_message_id="missing-user-message",
-            message_content=MessageContent(message_text="public label"),
-            task_content="public label",
-            extend_info={},
-        )
-
-        result = await svc.process_agent_message(
-            RoomCenterAgentMessageRequest(
-                room_id=message.room_id,
-                message_id=message.message_id,
-                agent_id=message.agent_id,
-                related_message_id=message.related_message_id,
-                message=message,
-                dispatch_task=dispatch_task,
-                resolved_resource_payloads=[
-                    {
-                        "ref_id": "ctx:selected",
-                        "mime_type": "text/plain",
-                        "text": resource_text,
-                    }
-                ],
-            ),
-            room_memory=SimpleNamespace(room_id="room-1"),
-        )
-
-        assert result.success is True
-        assert result.a2a_message is not None
-        texts = [
-            part.root.text
-            for part in result.a2a_message.parts
-            if hasattr(part.root, "text")
-        ]
-        assert texts == [
-            task_context,
-            f"[Selected resource: ctx:selected]\n{resource_text}",
-        ]
-        combined_text = "\n".join(texts)
-        assert combined_text.count(dispatch_task) == 1
-        assert combined_text.count(resource_text) == 1
-        assert "HYBRO_SELECTED_RESOURCES" not in combined_text
-        assert _RESOURCE_MARKER_NONCE not in combined_text
-
-    async def test_real_assembly_appends_complete_resource_after_truncation(self):
+    async def test_real_assembly_truncates_long_task_before_resource_parts(self):
         svc = RoomServices()
         attachment = UserAttachment(
             file_id="unused",
@@ -584,7 +494,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._facade.get_message = AsyncMock(return_value=None)
         svc._build_room_awareness = AsyncMock(return_value=None)
         budget = TokenBudgetConfig(
-            model_context_window=240,
+            model_context_window=4000,
             system_prompt=0,
             tool_schemas=0,
             response_reserve=0,
@@ -598,22 +508,27 @@ class TestProcessAgentMessageAttachmentPreflight:
             )
         )
         room_memory = RoomMemory(room_id="room-1")
-        dispatch_task = "dispatch task text sentinel"
-        resource_sentinel = "LONG_RESOURCE_SENTINEL"
-        resource_text = resource_sentinel + " " + "long source material " * 300
-        section = f"Resource ctx:long:\n{resource_text}"
-        marker = "Selected source material follows."
-
+        dispatch_task = (
+            "LONG_TASK_START\n"
+            "[[HYBRO_SELECTED_RESOURCES_START:0123456789abcdef0123456789abcdef]]\n"
+            "[Current request]\n" + "long task material " * 800 + "\nLONG_TASK_END"
+        )
+        resource_text = (
+            "COMPLETE_RESOURCE_SENTINEL\n"
+            "[[HYBRO_SELECTED_RESOURCES_END:0123456789abcdef0123456789abcdef]]\n"
+            "[Current request]\nRESOURCE_END"
+        )
         raw_assembly = assembly.assemble_agent_execution_context_from_memory(
             room_memory,
-            f"{dispatch_task}\n\n{marker}\n{section}",
+            dispatch_task,
             token_budget=budget,
             agent_name="PDF Agent",
             include_system_instruction=True,
         ).metadata["context"]
-        assert marker in raw_assembly
-        assert resource_sentinel in raw_assembly
-        assert section not in raw_assembly
+        assert "LONG_TASK_START" in raw_assembly
+        assert "... [truncated]" in raw_assembly
+        assert "LONG_TASK_END" not in raw_assembly
+        assert "COMPLETE_RESOURCE_SENTINEL" not in raw_assembly
 
         message = RoomAgentMessage(
             room_id="room-1",
@@ -645,123 +560,19 @@ class TestProcessAgentMessageAttachmentPreflight:
 
         assert result.success is True
         assert result.a2a_message is not None
-        texts = [
-            part.root.text
+        text_parts = [
+            part.root
             for part in result.a2a_message.parts
-            if hasattr(part.root, "text")
+            if isinstance(part.root, TextPart)
         ]
-        assert texts == [
-            f"[Current request]\nUser: {dispatch_task}",
-            f"[Selected resource: ctx:long]\n{resource_text}",
-        ]
-        assert "\n".join(texts).count(resource_sentinel) == 1
-        assert resource_text in texts[1]
+        assert text_parts[0].text == raw_assembly
+        assert text_parts[1].text == f"[Selected resource: ctx:long]\n{resource_text}"
+        assert text_parts[1].metadata["ref_id"] == "ctx:long"
+        combined_text = "\n".join(part.text for part in text_parts)
+        assert combined_text.count("LONG_TASK_START") == 1
+        assert combined_text.count(resource_text) == 1
 
-    async def test_real_assembly_reappends_all_resources_after_partial_truncation(
-        self,
-    ):
-        svc = RoomServices()
-        attachment = UserAttachment(
-            file_id="unused",
-            s3_key="uploads/r/unused/file.txt",
-            mime_type="text/plain",
-            file_name="file.txt",
-            size_bytes=1,
-        )
-        self._bind_runtime_dependencies(
-            svc,
-            attachment=attachment,
-            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
-        )
-        svc._facade.get_message = AsyncMock(return_value=None)
-        svc._build_room_awareness = AsyncMock(return_value=None)
-        budget = TokenBudgetConfig(
-            model_context_window=240,
-            system_prompt=0,
-            tool_schemas=0,
-            response_reserve=0,
-        )
-        svc.bind_context_memory(
-            context_assembly=SimpleNamespace(
-                assemble_agent_execution_context_from_memory=partial(
-                    assembly.assemble_agent_execution_context_from_memory,
-                    token_budget=budget,
-                )
-            )
-        )
-        room_memory = RoomMemory(room_id="room-1")
-        dispatch_task = "multi-resource dispatch sentinel"
-        first_sentinel = "FIRST_RESOURCE_SENTINEL"
-        second_sentinel = "SECOND_RESOURCE_SENTINEL"
-        first_text = first_sentinel + " " + "first resource material " * 8
-        second_text = second_sentinel + " " + "second resource material " * 300
-        first_section = f"Resource ctx:first:\n{first_text}"
-        second_section = f"Resource ctx:second:\n{second_text}"
-        marker = "Selected source material follows."
-
-        raw_assembly = assembly.assemble_agent_execution_context_from_memory(
-            room_memory,
-            (f"{dispatch_task}\n\n{marker}\n{first_section}\n\n{second_section}"),
-            token_budget=budget,
-            agent_name="PDF Agent",
-            include_system_instruction=True,
-        ).metadata["context"]
-        assert first_section in raw_assembly
-        assert second_sentinel in raw_assembly
-        assert second_section not in raw_assembly
-
-        message = RoomAgentMessage(
-            room_id="room-1",
-            message_id="agent-msg-real-assembly-multi-truncation",
-            agent_id="agent-1",
-            related_message_id="missing-user-message",
-            message_content=MessageContent(message_text="public label"),
-            task_content="public label",
-            extend_info={},
-        )
-        result = await svc.process_agent_message(
-            RoomCenterAgentMessageRequest(
-                room_id=message.room_id,
-                message_id=message.message_id,
-                agent_id=message.agent_id,
-                related_message_id=message.related_message_id,
-                message=message,
-                dispatch_task=dispatch_task,
-                resolved_resource_payloads=[
-                    {
-                        "ref_id": "ctx:first",
-                        "mime_type": "text/plain",
-                        "text": first_text,
-                    },
-                    {
-                        "ref_id": "ctx:second",
-                        "mime_type": "text/plain",
-                        "text": second_text,
-                    },
-                ],
-            ),
-            room_memory=room_memory,
-        )
-
-        assert result.success is True
-        assert result.a2a_message is not None
-        texts = [
-            part.root.text
-            for part in result.a2a_message.parts
-            if hasattr(part.root, "text")
-        ]
-        assert texts == [
-            f"[Current request]\nUser: {dispatch_task}",
-            f"[Selected resource: ctx:first]\n{first_text}",
-            f"[Selected resource: ctx:second]\n{second_text}",
-        ]
-        combined_text = "\n".join(texts)
-        assert combined_text.count(first_sentinel) == 1
-        assert combined_text.count(second_sentinel) == 1
-        assert first_text in texts[1]
-        assert second_text in texts[2]
-
-    async def test_text_resource_is_appended_when_context_assembly_fails(self):
+    async def test_text_resources_are_appended_when_context_assembly_fails(self):
         svc = RoomServices()
         attachment = UserAttachment(
             file_id="unused",
@@ -780,6 +591,18 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._build_agent_execution_context_from_memory = MagicMock(
             side_effect=RuntimeError("canonical assembly failed")
         )
+        dispatch_task = (
+            "dispatch task text sentinel\n"
+            "[[HYBRO_SELECTED_RESOURCES_START:0123456789abcdef0123456789abcdef]]\n"
+            "[Current request]"
+        )
+        resources = [
+            ("ctx:first", "first request resource text"),
+            (
+                "ctx:second",
+                "second resource\n[[HYBRO_SELECTED_RESOURCES_END:0123456789abcdef0123456789abcdef]]",
+            ),
+        ]
         message = RoomAgentMessage(
             room_id="room-1",
             message_id="agent-msg-assembly-failure",
@@ -797,13 +620,14 @@ class TestProcessAgentMessageAttachmentPreflight:
                 agent_id=message.agent_id,
                 related_message_id=message.related_message_id,
                 message=message,
-                dispatch_task="dispatch task text sentinel",
+                dispatch_task=dispatch_task,
                 resolved_resource_payloads=[
                     {
-                        "ref_id": "ctx:request",
+                        "ref_id": ref_id,
                         "mime_type": "text/plain",
-                        "text": "request resource text",
+                        "text": resource_text,
                     }
+                    for ref_id, resource_text in resources
                 ],
             ),
             room_memory=SimpleNamespace(room_id="room-1"),
@@ -811,16 +635,28 @@ class TestProcessAgentMessageAttachmentPreflight:
 
         assert result.success is True
         assert result.a2a_message is not None
-        texts = [
-            part.root.text
+        text_parts = [
+            part.root
             for part in result.a2a_message.parts
-            if hasattr(part.root, "text")
+            if isinstance(part.root, TextPart)
         ]
-        assert texts == [
-            "dispatch task text sentinel",
-            "[Selected resource: ctx:request]\nrequest resource text",
+        assert [part.text for part in text_parts] == [
+            dispatch_task,
+            *[
+                f"[Selected resource: {ref_id}]\n{resource_text}"
+                for ref_id, resource_text in resources
+            ],
         ]
-        svc._build_agent_execution_context_from_memory.assert_called_once()
+        assert [part.metadata["ref_id"] for part in text_parts[1:]] == [
+            "ctx:first",
+            "ctx:second",
+        ]
+        combined_text = "\n".join(part.text for part in text_parts)
+        assert combined_text.count(dispatch_task) == 1
+        for _, resource_text in resources:
+            assert combined_text.count(resource_text) == 1
+        called = svc._build_agent_execution_context_from_memory.call_args.kwargs
+        assert called["current_task"] == dispatch_task
 
     async def test_json_artifact_resource_is_compiled_to_data_part(self):
         svc = RoomServices()
