@@ -508,8 +508,13 @@ Durable run-store queries and the stale-task checker can claim and resume stale
 runs after process interruption. The checker also recovers old unclaimed or
 stale claimed Supervisor envelopes that were interrupted before durable run
 creation; terminal envelopes are excluded before the bounded query limit, and
-terminal projection clears the processing claim. The canonical entry point then
-claims or reclaims the message and creates the run normally. A processing-claim
+terminal projection clears the processing claim. Newly created projection steps
+with a null per-step retry timestamp are immediately claimable; this guarantees
+that terminal processing SSE and the HYBRO system-task terminal state are emitted
+inline instead of waiting for stale recovery. Same-terminal Agent response
+backfill may fill previously empty public text/artifacts, but it cannot replace
+an opposing terminal winner or overwrite an existing task snapshot. The canonical
+entry point then claims or reclaims the message and creates the run normally. A processing-claim
 heartbeat prevents recovery
 from preempting live turns, optimistic write conflicts exit cleanly for the
 winning writer to continue, and deterministic supervisor HITL artifacts can

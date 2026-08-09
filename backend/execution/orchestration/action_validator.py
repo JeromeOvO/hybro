@@ -67,12 +67,22 @@ class PlannerActionValidator:
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 
+        candidate_output_modes: dict[str, tuple[str, ...]] = {}
         if run_state is not None:
             candidate_agent_ids = (
                 run_state.candidate_scope.agent_ids
                 if run_state.candidate_scope is not None
                 else run_state.candidate_agent_ids
             )
+            if run_state.candidate_scope is not None:
+                candidate_output_modes = {
+                    agent.agent_id: tuple(
+                        mode.strip().lower()
+                        for mode in agent.output_modes
+                        if isinstance(mode, str) and mode.strip()
+                    )
+                    for agent in run_state.candidate_scope.agents
+                }
             steps_used = run_state.steps_used
             step_budget = run_state.step_budget
             has_agent_output = bool(run_state.agent_outputs)
@@ -85,6 +95,7 @@ class PlannerActionValidator:
                 action,
                 candidate_agent_ids=candidate_agent_ids,
                 run_state=run_state,
+                candidate_output_modes=candidate_output_modes,
                 available_resource_refs=set((resource_fingerprints or {}).keys()),
             )
             PlannerActionValidator._validate_delegate_outcome_policy(
@@ -587,6 +598,7 @@ def _validate_delegate(
     *,
     candidate_agent_ids: Iterable[str],
     run_state: OrchestrationRunState | None,
+    candidate_output_modes: Mapping[str, tuple[str, ...]],
     available_resource_refs: set[str],
 ) -> None:
     if not action.targets:
@@ -613,6 +625,10 @@ def _validate_delegate(
                 f"delegate target {target.agent_id!r} requires a non-empty task",
                 code="delegate_task_empty",
             )
+        _validate_expected_output_modes(
+            target,
+            candidate_output_modes.get(target.agent_id, ()),
+        )
         selected_resource_refs = {
             *target.required_resource_refs,
             *(
@@ -638,6 +654,33 @@ def _validate_delegate(
             )
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)
+
+
+def _validate_expected_output_modes(
+    target: PlannedDelegateTarget,
+    output_modes: tuple[str, ...],
+) -> None:
+    textual_modes = {"text", "text/plain", "markdown", "text/markdown"}
+    text_only = bool(output_modes) and all(
+        mode in textual_modes or mode.startswith("text/") for mode in output_modes
+    )
+    for expected in target.expected_outputs:
+        kind = expected.kind.strip().lower()
+        requests_artifact = kind == "artifact" or bool(expected.artifact_name)
+        if text_only and requests_artifact:
+            raise PlannerActionValidationError(
+                f"delegate target {target.agent_id!r} advertises only text output "
+                "but the planner requested an artifact",
+                code="unsupported_expected_output_mode",
+            )
+        if kind in textual_modes and (
+            expected.artifact_name or expected.required_fields
+        ):
+            raise PlannerActionValidationError(
+                "text expected outputs cannot require an artifact name or "
+                "structured artifact fields",
+                code="invalid_text_output_contract",
+            )
 
 
 def _validate_terminal_output(

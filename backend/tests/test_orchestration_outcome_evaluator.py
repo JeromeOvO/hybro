@@ -116,6 +116,32 @@ def test_fingerprint_ignores_volatile_projection_fields_and_mapping_order():
     assert canonical_content_fingerprint(first) == canonical_content_fingerprint(second)
 
 
+def test_nonempty_text_fulfills_text_expected_output_without_semantic_fact():
+    message_id = "msg-text"
+    intent = _intent(message_id)
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="travel_plan",
+            kind="text",
+            required=True,
+        )
+    ]
+    output = _output(message_id, text="A complete seven-day itinerary")
+    output.artifact_keys = []
+
+    outcome = DelegationOutcomeEvaluator().evaluate(
+        _state(),
+        _state(),
+        intent,
+        output,
+        [],
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.satisfied_output_keys == ["travel_plan"]
+    assert outcome.remaining_required_obligations == []
+
+
 def test_agent_text_fact_is_not_semantic_progress():
     facts = [
         {

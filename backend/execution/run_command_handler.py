@@ -1122,6 +1122,7 @@ class RunCommandHandler:
                         f"{path}.state": "pending",
                         "$or": [
                             {f"{path}.next_attempt_at": {"$exists": False}},
+                            {f"{path}.next_attempt_at": None},
                             {f"{path}.next_attempt_at": {"$lte": now}},
                         ],
                     },

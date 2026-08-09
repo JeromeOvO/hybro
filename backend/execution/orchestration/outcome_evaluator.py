@@ -187,6 +187,13 @@ def _artifact_data(artifact: object) -> list[object]:
     ]
 
 
+def _is_text_output(output: DispatchExpectedOutput) -> bool:
+    kind = output.kind.strip().lower()
+    return kind in {"text", "text/plain", "markdown", "text/markdown"} or kind.startswith(
+        "text/"
+    )
+
+
 def _output_artifacts(
     state: OrchestrationRunState,
     expected_output: DispatchExpectedOutput,
@@ -242,6 +249,9 @@ def _freshly_satisfied_obligations(
         if not output.required:
             continue
         key = effective_output_key(output)
+        if _is_text_output(output) and agent_output.text and agent_output.text.strip():
+            satisfied.add(f"{key}:$present")
+            continue
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
             for artifact in _output_artifacts(
@@ -290,6 +300,9 @@ def _satisfied_obligations(
         if not output.required:
             continue
         key = effective_output_key(output)
+        if _is_text_output(output) and agent_output.text and agent_output.text.strip():
+            satisfied.add(f"{key}:$present")
+            continue
         artifacts = _output_artifacts(
             state,
             output,
@@ -335,6 +348,8 @@ def _has_matching_output_evidence(
             allow_name_fallback=allow_name_fallback,
         )
         if output.kind == "artifact"
+        else bool(agent_output.text and agent_output.text.strip())
+        if _is_text_output(output)
         else effective_output_key(output) in facts
         for output in outputs
     )
@@ -541,6 +556,14 @@ class DelegationOutcomeEvaluator:
                         _stable_value(artifact) for artifact in output_artifacts
                     ],
                     "facts": after_facts,
+                    "text": (
+                        output.text
+                        if any(
+                            _is_text_output(expected)
+                            for expected in intent.expected_outputs
+                        )
+                        else None
+                    ),
                 }
             )
         )

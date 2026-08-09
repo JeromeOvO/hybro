@@ -325,6 +325,71 @@ describe('Room lifecycle characterization tests', () => {
       ])
     })
 
+    it('keeps polling until a later missed terminal SSE is recovered', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryActiveRuns)
+        .mockResolvedValueOnce({
+          success: true,
+          active_runs: [{ state: 'processing', trigger_message_id: 'msg-late-terminal' }],
+        })
+        .mockResolvedValue({ success: true, active_runs: [] })
+
+      const { result } = await mountAndWaitForRoom()
+      mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-late-terminal' })
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValue({
+        success: true,
+        message_list: [
+          {
+            room_id: 'room-1',
+            message_id: 'msg-late-terminal',
+            message_type: 'user',
+            user_id: 'u1',
+            message_created_at: '2026-06-04T01:00:00.000Z',
+            message_content: { message_text: 'Late terminal turn' },
+            extend_info: { orchestration_status: 'failed' },
+          },
+          {
+            room_id: 'room-1',
+            message_id: 'agent-late-terminal',
+            message_type: 'agent',
+            agent_id: 'agent-1',
+            related_message_id: 'msg-late-terminal',
+            message_created_at: '2026-06-04T01:00:01.000Z',
+            task_updated_at: '2026-06-04T01:00:01.000Z',
+            task_content: 'Answering',
+            message_content: {
+              message_text: 'Task failed',
+              message_task: {
+                status: { state: 'failed' },
+                metadata: { agent_id: 'agent-1' },
+              },
+            },
+          },
+        ] as any,
+      })
+
+      await act(async () => {
+        await result.current.sendUserMessage({ userInput: 'Late terminal turn', mode: 'supervisor', agentScope: { source: 'room_default' } })
+      })
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+
+      await waitFor(() => {
+        expect(flags('room-1').processing).toBe(false)
+      })
+      expect(vi.mocked(inquiryActiveRuns).mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(useMessageStore.getState().entities['msg-late-terminal'].turnTerminalStatus).toBe('failed')
+    })
+
     it('preserves live processing logs when backend says active runs ended after a missed terminal SSE', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')

@@ -615,6 +615,56 @@ async def test_task_state_update_cannot_overwrite_durable_terminal_projection_wi
 
 
 @pytest.mark.asyncio
+async def test_same_terminal_state_can_backfill_final_agent_response():
+    terminal = {
+        "message_id": "a1",
+        "room_id": "r1",
+        "terminal_projection_event_id": "winner-1",
+        "message_content": {
+            "message_text": None,
+            "message_task": {
+                "id": "durable-task",
+                "status": {"state": "completed"},
+                "artifacts": [{"artifactId": "durable-artifact"}],
+            },
+        },
+    }
+    repo, _, _, agents = _message_repo(agent_docs=[terminal])
+
+    updated = await repo.update_agent_message(
+        "a1",
+        {
+            "message_content": {
+                "message_text": "Final travel plan",
+                "message_task": {
+                    "id": "stale-task",
+                    "status": {"state": "completed"},
+                    "artifacts": [{"artifactId": "stale-artifact"}],
+                },
+            }
+        },
+    )
+
+    assert updated is True
+    durable = agents.docs[0]
+    assert durable["message_content"]["message_text"] == "Final travel plan"
+    assert durable["message_content"]["message_task"]["id"] == "durable-task"
+    assert durable["message_content"]["message_task"]["artifacts"] == [
+        {"artifactId": "durable-artifact"}
+    ]
+    assert durable["terminal_projection_event_id"] == "winner-1"
+    query, update, _ = agents.update_one_calls[-1]
+    assert query == {
+        "message_id": "a1",
+        "message_content.message_task.status.state": "completed",
+        "message_content.message_text": None,
+    }
+    assert update == {
+        "$set": {"message_content.message_text": "Final travel plan"}
+    }
+
+
+@pytest.mark.asyncio
 async def test_enable_task_tracking_whole_task_update_respects_terminal_cas():
     from dal.runtime_store import RuntimeRepositoryStore
 

@@ -91,6 +91,59 @@ def _validate(
     )
 
 
+def test_text_only_candidate_rejects_artifact_expected_output():
+    state = _state_for_validation()
+    state.candidate_scope = CandidateScopeSnapshot(
+        snapshot_id="scope-text",
+        source="mention",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Text Agent",
+                output_modes=["text"],
+            )
+        ],
+    )
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="answer",
+            kind="artifact",
+            artifact_name="answer-file",
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "unsupported_expected_output_mode"
+
+
+def test_text_expected_output_rejects_artifact_fields():
+    state = _state_for_validation()
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="answer",
+            kind="text",
+            required_fields=["summary"],
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "invalid_text_output_contract"
+
+
 def test_valid_delegate_returns_action_unchanged():
     action = _action(PlannerActionType.DELEGATE, targets=[_target()])
 
@@ -1287,6 +1340,8 @@ def test_planner_prompt_is_compact_and_execution_owned():
     assert "there is no synthesize action" in prompt
     assert "execution generates all ids and parallel groups" in prompt
     assert "never repeat an identical request without new evidence" in prompt
+    assert "use text expected outputs for text-only agents" in prompt
+    assert "never relabel an ordinary written answer as an artifact" in prompt
     assert "decision_summary under 500 characters" in prompt
     assert "private chain-of-thought" in prompt
 

@@ -462,7 +462,9 @@ Room DB synchronization lives under `src/lib/room-sync/`:
 - Mirrors SSE connection state into `room-ui-store`.
 - Rehydrates pending HITL requests on reconnect.
 - Reconciles with DB after reconnect gaps.
-- Uses a 15-second safety net to clear stuck processing state when the backend reports no active run.
+- While a turn is processing, polls backend run truth every five seconds until a
+  terminal state is observed. A transient poll/reconcile failure does not stop
+  later checks, so a missed terminal SSE cannot leave the turn spinning until refresh.
 
 ## 11. Timeline And View Models
 

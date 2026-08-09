@@ -500,10 +500,57 @@ class MessageMongoRepository:
         if current is None:
             return False
         current_state = _updated_task_state(current)
-        # A task-state writer that lost to any durable terminal must observe a
-        # failed CAS rather than treating mere document existence as success.
+        # A writer may discover that another path committed the same terminal
+        # state first, then still need to backfill final response text/artifacts.
+        # Never replay the full stale task snapshot: enrich only empty public
+        # output fields behind an exact-state/value fence, preserving the task
+        # id, history, projection winner, and any artifacts already committed.
         if desired_task_state is not None and current_state in _TERMINAL_TASK_STATES:
-            return False
+            if desired_task_state != current_state:
+                return False
+            content = candidate.get("message_content")
+            current_content = current.get("message_content")
+            content = content if isinstance(content, dict) else {}
+            current_content = (
+                current_content if isinstance(current_content, dict) else {}
+            )
+            safe_updates: dict[str, Any] = {}
+            safe_query: dict[str, Any] = {
+                "message_id": message_id,
+                _TASK_STATE_PATH: current_state,
+            }
+            candidate_text = content.get("message_text")
+            current_text = current_content.get("message_text")
+            if (
+                isinstance(candidate_text, str)
+                and candidate_text.strip()
+                and not (isinstance(current_text, str) and current_text.strip())
+            ):
+                safe_updates["message_content.message_text"] = candidate_text
+                safe_query["message_content.message_text"] = current_text
+
+            candidate_task = content.get("message_task")
+            current_task = current_content.get("message_task")
+            candidate_task = candidate_task if isinstance(candidate_task, dict) else {}
+            current_task = current_task if isinstance(current_task, dict) else {}
+            candidate_artifacts = candidate_task.get("artifacts")
+            current_artifacts = current_task.get("artifacts")
+            if candidate_artifacts and not current_artifacts:
+                safe_updates["message_content.message_task.artifacts"] = (
+                    candidate_artifacts
+                )
+                safe_query["message_content.message_task.artifacts"] = (
+                    current_artifacts
+                )
+
+            if not safe_updates:
+                return True
+            return bool(
+                await self._agent_messages.update_one(
+                    safe_query,
+                    {"$set": safe_updates},
+                )
+            )
         return True
 
     async def update_agent_message_if_not_terminal(
