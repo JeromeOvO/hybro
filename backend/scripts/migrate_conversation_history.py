@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -377,15 +379,24 @@ async def run_migration(
     return final
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit or apply the canonical conversation-history cutover"
+        description="Audit or apply the canonical conversation-history cutover",
+        allow_abbrev=False,
     )
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--mongo-url", default=settings.mongodb_url)
     parser.add_argument("--database", default=settings.mongodb_db_name)
     parser.add_argument("--batch-size", type=int, default=500)
-    args = parser.parse_args()
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    credential_option = "--mongo-url"
+    if any(
+        argument == credential_option or argument.startswith(f"{credential_option}=")
+        for argument in raw_args
+    ):
+        parser.error(
+            "MongoDB URI arguments are not supported; configure settings/environment"
+        )
+    args = parser.parse_args(raw_args)
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
     return args
@@ -393,7 +404,7 @@ def _parse_args() -> argparse.Namespace:
 
 async def _main() -> None:
     args = _parse_args()
-    client = AsyncIOMotorClient(args.mongo_url)
+    client = AsyncIOMotorClient(settings.mongodb_url)
     try:
         await client.admin.command("ping")
         await run_migration(

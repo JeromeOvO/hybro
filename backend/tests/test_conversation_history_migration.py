@@ -9,6 +9,7 @@ from common.utils.context_utils import estimate_tokens
 from context_memory.translators import turn_from_dict
 from scripts.migrate_conversation_history import (
     MigrationBlocker,
+    _parse_args,
     audit_collection,
     plan_document,
     run_migration,
@@ -109,6 +110,45 @@ def _matches_snapshot(document, query):
         elif not present or actual != expected:
             return False
     return True
+
+
+def test_parser_accepts_only_noncredential_connection_overrides():
+    args = _parse_args(
+        ["--database", "history_archive", "--batch-size", "25", "--apply"]
+    )
+
+    assert args.database == "history_archive"
+    assert args.batch_size == 25
+    assert args.apply is True
+    assert not hasattr(args, "mongo_url")
+
+
+def test_parser_help_does_not_advertise_mongo_url(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "--mongo-url" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--mongo-url", "mongodb://migration-user:secret@db.example/hybro"],
+        ["--mongo-url=mongodb://migration-user:secret@db.example/hybro"],
+    ],
+)
+def test_parser_rejects_mongo_url_without_echoing_credential(arguments, capsys):
+    credential = "mongodb://migration-user:secret@db.example/hybro"
+
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_args(arguments)
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert credential not in captured.out
+    assert credential not in captured.err
+    assert "configure settings/environment" in captured.err
 
 
 def turn(turn_id=None, content="content"):
