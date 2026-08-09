@@ -3898,7 +3898,7 @@ class RoomServices:
             agent_task_for_cas = original_text if turn_ctx else None
 
         embedded_text_resource_indexes: set[int] = set()
-        selected_text_sections: list[str] = []
+        selected_text_resources: list[tuple[int, str]] = []
         if dispatch_task_text and isinstance(resolved_resource_payloads, list):
             for index, payload in enumerate(resolved_resource_payloads):
                 if not isinstance(payload, dict):
@@ -3913,13 +3913,14 @@ class RoomServices:
                     continue
                 ref_id = payload.get("ref_id")
                 label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
-                selected_text_sections.append(f"Resource {label}:\n{text.strip()}")
-                embedded_text_resource_indexes.add(index)
-        if selected_text_sections:
+                selected_text_resources.append(
+                    (index, f"Resource {label}:\n{text.strip()}")
+                )
+        if selected_text_resources:
             current_task_for_cas = (
                 f"{current_task_for_cas}\n\n"
                 "Selected source material follows.\n"
-                + "\n\n".join(selected_text_sections)
+                + "\n\n".join(section for _, section in selected_text_resources)
             )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
@@ -3987,6 +3988,13 @@ class RoomServices:
                         )
 
                 agent_message.parts[0].root.text = context
+                final_text = agent_message.parts[0].root.text
+                if isinstance(final_text, str):
+                    embedded_text_resource_indexes.update(
+                        index
+                        for index, section in selected_text_resources
+                        if section in final_text
+                    )
         except Exception as exc:
             # Log but continue with original message if context building fails
             logger.warning(
