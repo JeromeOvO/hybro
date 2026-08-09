@@ -592,6 +592,86 @@ wheels = [
 ]
 
 [[package]]
+name = "hybro-backend"
+version = "0.2.11"
+source = { editable = "." }
+dependencies = [
+    { name = "a2a-sdk" },
+    { name = "aiohttp" },
+    { name = "cachetools" },
+    { name = "clerk-backend-api" },
+    { name = "fastapi" },
+    { name = "google-genai" },
+    { name = "gunicorn" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "jwcrypto" },
+    { name = "mcp" },
+    { name = "motor" },
+    { name = "openai" },
+    { name = "platformdirs" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "pymongo" },
+    { name = "pypdf" },
+    { name = "python-dateutil" },
+    { name = "python-dotenv" },
+    { name = "redis" },
+    { name = "requests" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "tiktoken" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "a2a-sdk", specifier = ">=0.3.25,<1" },
+    { name = "aiohttp", specifier = ">=3.12.13" },
+    { name = "cachetools", specifier = ">=5.5.2" },
+    { name = "clerk-backend-api", specifier = ">=1.0.0" },
+    { name = "fastapi" },
+    { name = "google-genai", specifier = ">=1.20.0" },
+    { name = "gunicorn", specifier = ">=25.3.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx-sse", specifier = ">=0.4.0" },
+    { name = "jwcrypto", specifier = ">=1.5.6" },
+    { name = "mcp", specifier = ">=1.9.4" },
+    { name = "motor", specifier = ">=3.7.1" },
+    { name = "openai", specifier = ">=1.86.0" },
+    { name = "platformdirs", specifier = ">=4.3.8" },
+    { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "pydantic-settings", specifier = ">=2.9.1" },
+    { name = "pyjwt", specifier = ">=2.8,<3" },
+    { name = "pymongo" },
+    { name = "pypdf", specifier = ">=5.0.0,<7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
+    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "redis", specifier = ">=5.2.0" },
+    { name = "requests", specifier = ">=2.32.4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
+    { name = "sse-starlette", specifier = ">=2.3.6" },
+    { name = "starlette", specifier = ">=0.46.2" },
+    { name = "tiktoken", specifier = ">=0.9.0" },
+    { name = "uvicorn", extras = ["standard"] },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "idna"
 version = "3.10"
 source = { registry = "https://pypi.org/simple" }
@@ -730,86 +810,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/93/ae/96b88362d6a84cb37
 wheels = [
     { url = "https://files.pythonhosted.org/packages/01/9a/35e053d4f442addf751ed20e0e922476508ee580786546d699b0567c4c67/motor-3.7.1-py3-none-any.whl", hash = "sha256:8a63b9049e38eeeb56b4fdd57c3312a6d1f25d01db717fe7d82222393c410298", size = 74996, upload-time = "2025-05-14T18:56:31.665Z" },
 ]
-
-[[package]]
-name = "hybro-backend"
-version = "0.2.10"
-source = { editable = "." }
-dependencies = [
-    { name = "a2a-sdk" },
-    { name = "aiohttp" },
-    { name = "cachetools" },
-    { name = "clerk-backend-api" },
-    { name = "fastapi" },
-    { name = "google-genai" },
-    { name = "gunicorn" },
-    { name = "httpx" },
-    { name = "httpx-sse" },
-    { name = "jwcrypto" },
-    { name = "mcp" },
-    { name = "motor" },
-    { name = "openai" },
-    { name = "platformdirs" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "pymongo" },
-    { name = "pypdf" },
-    { name = "python-dateutil" },
-    { name = "python-dotenv" },
-    { name = "redis" },
-    { name = "requests" },
-    { name = "sse-starlette" },
-    { name = "starlette" },
-    { name = "tiktoken" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "a2a-sdk", specifier = ">=0.3.25,<1" },
-    { name = "aiohttp", specifier = ">=3.12.13" },
-    { name = "cachetools", specifier = ">=5.5.2" },
-    { name = "clerk-backend-api", specifier = ">=1.0.0" },
-    { name = "fastapi" },
-    { name = "google-genai", specifier = ">=1.20.0" },
-    { name = "gunicorn", specifier = ">=25.3.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "httpx-sse", specifier = ">=0.4.0" },
-    { name = "jwcrypto", specifier = ">=1.5.6" },
-    { name = "mcp", specifier = ">=1.9.4" },
-    { name = "motor", specifier = ">=3.7.1" },
-    { name = "openai", specifier = ">=1.86.0" },
-    { name = "platformdirs", specifier = ">=4.3.8" },
-    { name = "pydantic", specifier = ">=2.11.7" },
-    { name = "pydantic-settings", specifier = ">=2.9.1" },
-    { name = "pyjwt", specifier = ">=2.8,<3" },
-    { name = "pymongo" },
-    { name = "pypdf", specifier = ">=5.0.0,<7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
-    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
-    { name = "redis", specifier = ">=5.2.0" },
-    { name = "requests", specifier = ">=2.32.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
-    { name = "sse-starlette", specifier = ">=2.3.6" },
-    { name = "starlette", specifier = ">=0.46.2" },
-    { name = "tiktoken", specifier = ">=0.9.0" },
-    { name = "uvicorn", extras = ["standard"] },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "multidict"
