@@ -41,6 +41,7 @@ _SUMMARY_FIELDS = (
     "recent_agent_contributions",
     "important_constraints",
 )
+_LIST_EXTRACTION_FIELDS = (*_SUMMARY_FIELDS[1:], "room_facts")
 
 
 def build_summary_prompt(
@@ -82,6 +83,19 @@ def build_summary_prompt(
         "Existing projection:\n"
         f"{json.dumps(existing_projection, ensure_ascii=False)}\n\n"
         f"Synthesis:\n{synthesis_text}"
+    )
+
+
+def _valid_extraction(extracted: dict[str, Any]) -> bool:
+    if "current_goal" not in extracted:
+        return False
+    goal = extracted["current_goal"]
+    if goal is not None and not isinstance(goal, str):
+        return False
+    return all(
+        isinstance(value := extracted.get(field), list)
+        and all(isinstance(item, str) for item in value)
+        for field in _LIST_EXTRACTION_FIELDS
     )
 
 
@@ -162,7 +176,7 @@ async def update_room_summary(
             extra={"room_id": room_id},
         )
         return False
-    if not isinstance(extracted, dict):
+    if not isinstance(extracted, dict) or not _valid_extraction(extracted):
         logger.warning(
             "Room summary extraction returned invalid payload",
             extra={"room_id": room_id, "payload_type": type(extracted).__name__},
@@ -202,7 +216,7 @@ async def update_room_summary(
         if isinstance(fact, dict)
     }
     new_facts = []
-    for fact_text in extracted.get("room_facts") or []:
+    for fact_text in extracted["room_facts"]:
         if not isinstance(fact_text, str) or not fact_text.strip():
             continue
         key = fact_text.casefold().strip()

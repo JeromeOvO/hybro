@@ -167,6 +167,38 @@ async def test_summary_merges_durable_lists_and_replaces_non_empty_recent_lists(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "malformed"),
+    [
+        ("current_goal", ["not a string"]),
+        ("key_decisions", "not a list"),
+        ("open_questions", {"not": "a list"}),
+        ("recent_agent_contributions", ["valid", 7]),
+        ("important_constraints", None),
+        ("room_facts", "Do not split this into character facts"),
+    ],
+)
+async def test_malformed_extraction_fields_are_rejected_without_persistence(
+    field: str, malformed
+):
+    repository = SummaryRepository({"room_summary": {}, "room_facts": []})
+    llm = RecordingLLM(extraction(**{field: malformed}))
+
+    assert await run_update(repository, llm) is False
+    assert repository.updates == []
+
+
+@pytest.mark.asyncio
+async def test_missing_required_extraction_field_is_rejected():
+    repository = SummaryRepository({"room_summary": {}, "room_facts": []})
+    data = extraction()
+    data.pop("current_goal")
+
+    assert await run_update(repository, RecordingLLM(data)) is False
+    assert repository.updates == []
+
+
+@pytest.mark.asyncio
 async def test_missing_projection_does_not_call_llm():
     repository = SummaryRepository(None)
     llm = RecordingLLM(extraction(current_goal="Should not be used"))

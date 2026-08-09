@@ -688,8 +688,11 @@ invariants are:
    turn; no display window slices or removes canonical history.
 2. If the pre-append canonical length is already at least `max_turns`, the turn at
    `len(history) - max_turns` has just crossed the recent-display boundary. Append
-   only its bounded preview to `memory_content.summary`. The old canonical turn
-   remains in the array, so the display/summary boundary loses no turn.
+   only its bounded preview to `memory_content.summary`. Full turns use bounded
+   content; compact turns use the deterministic bounded `brief_summary` persisted
+   by compaction from the original full content, never a pointer-only placeholder.
+   The old canonical turn remains in the array, so the display/summary boundary
+   loses no turn.
 3. After the new append is durably visible, evaluate compaction thresholds against
    all canonical full turns. The just-persisted history can therefore reach the
    threshold before any representation is compacted.
@@ -729,7 +732,18 @@ The facade satisfies caller-specific leaf protocols from `common.protocols`:
 `ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`, and
 `RoomMemoryCleanupPort`. `container.py` injects only the narrow port each Room,
 Execution, event, or job consumer needs, even though one facade implements them.
-All production assembly goes through `context_memory.assembly`.
+All production assembly goes through `context_memory.assembly`. Agent assembly is
+canonical-only: a failure is logged and leaves the outbound message unchanged; it
+never falls back to the removed nested history.
+
+Supervisor assembly treats `max_turns=0` as an explicit request to include no
+history and reports the omitted turns as `turn_count_exceeded`; a negative value is
+invalid and raises `ValueError` before assembly. When more than one limit applies,
+reported truncation reasons use this priority: `token_budget_exceeded`, then
+`turn_count_exceeded`, then `char_limit_exceeded`. Context-memory configuration
+validation is fail-fast when the typed config objects are constructed (including
+normal startup composition from settings). It does not claim to pre-validate
+subsequent external configuration changes or deferred operational migration state.
 
 The following ContextMemory-era surfaces are retired and must not be rewired:
 
@@ -739,6 +753,10 @@ The following ContextMemory-era surfaces are retired and must not be rewired:
   and ContextMemory-specific room-memory adapter;
 - usage tracking formerly attached to that compatibility runtime as a pseudo-
   memory dependency.
+
+The generic `extend_info` fields on active Room and message models remain supported
+metadata containers. They are unrelated to ChatContext compatibility and are not
+part of this retirement guard.
 
 Deployments must confirm that external consumers no longer call the retired
 ChatContext endpoints. Operations must separately decide retention or archival of

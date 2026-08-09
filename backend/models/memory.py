@@ -271,9 +271,6 @@ class MemoryContent(BaseModel):
     # must not serialize this nested history.
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
 
-    # Legacy field (for backward compatibility/migration)
-    memory_text: str | None = None
-
 
 class RoomMemory(BaseModel):
     """

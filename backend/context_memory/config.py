@@ -167,8 +167,8 @@ class MemorySearchConfig:
 
 @dataclass(frozen=True)
 class ContextMemoryLLMConfig:
-    turn_notes_model: str = "context_memory_legacy_json_model"
-    summary_model: str = "context_memory_legacy_json_model"
+    turn_notes_model: str = "context_memory_json_model"
+    summary_model: str = "context_memory_json_model"
 
 
 def _require_non_negative(name: str, value: int) -> None:

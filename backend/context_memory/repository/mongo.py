@@ -604,7 +604,13 @@ def _turn_summary_preview_expression(turn: str) -> dict:
         "$cond": [
             {"$eq": [{"$type": f"{turn}.content"}, "string"]},
             f"{turn}.content",
-            "[compact turn]",
+            {
+                "$cond": [
+                    {"$eq": [{"$type": f"{turn}.brief_summary"}, "string"]},
+                    f"{turn}.brief_summary",
+                    "[compact turn]",
+                ]
+            },
         ]
     }
     return {
@@ -664,6 +670,10 @@ def _compact_history_expression(
                                     compacted_turns,
                                     "estimated_tokens_compact",
                                     default=20,
+                                ),
+                                "brief_summary": _switch_for_field(
+                                    compacted_turns,
+                                    "brief_summary",
                                 ),
                             },
                         ]

@@ -428,7 +428,7 @@ class TestExtractTurnNotesLLM:
         mock_gateway.generate_structured.assert_awaited_once()
         assert (
             mock_gateway.generate_structured.await_args.kwargs["model"]
-            == "context_memory_legacy_json_model"
+            == "context_memory_json_model"
         )
 
     @pytest.mark.asyncio

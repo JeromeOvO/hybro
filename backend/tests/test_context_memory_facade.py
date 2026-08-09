@@ -218,7 +218,16 @@ class FakeLLM:
         return [0.1]
 
     async def generate_structured(self, messages, schema, model=None):
-        return SimpleNamespace(data={})
+        return SimpleNamespace(
+            data={
+                "current_goal": None,
+                "key_decisions": [],
+                "open_questions": [],
+                "recent_agent_contributions": [],
+                "important_constraints": [],
+                "room_facts": [],
+            }
+        )
 
 
 class RaisingLLM(FakeLLM):

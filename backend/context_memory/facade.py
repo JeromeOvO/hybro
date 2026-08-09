@@ -188,12 +188,12 @@ class ContextMemoryFacade:
 
     def assemble_supervisor_context_from_memory(
         self,
-        room_memory_doc: dict,
+        room_memory_doc: Any,
         current_task: str,
         *,
-        agent_registry: list[dict] | None = None,
+        agent_registry: list[dict[str, Any]] | None = None,
         max_turns: int = 5,
-        memory_search_results: list | None = None,
+        memory_search_results: list[MemorySearchResult] | None = None,
     ) -> AssembledContext:
         return assembly.assemble_supervisor_context_from_memory(
             room_memory_doc,
@@ -206,7 +206,7 @@ class ContextMemoryFacade:
 
     def assemble_agent_execution_context_from_memory(
         self,
-        room_memory_doc: dict,
+        room_memory_doc: Any,
         current_task: str,
         *,
         agent_id: str | None = None,

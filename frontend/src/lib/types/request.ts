@@ -291,7 +291,6 @@ export interface RoomMemory {
 export interface MemoryContent {
   summary?: string | null;
   conversation_history?: ConversationTurn[];
-  memory_text?: string | null;
   [k: string]: unknown;
 }
 /**

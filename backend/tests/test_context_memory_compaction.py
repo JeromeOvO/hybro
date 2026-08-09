@@ -78,6 +78,7 @@ class StateMemoryRepository:
                     turn["content"] = None
                     turn["content_ref"] = entry["content_ref"]
                     turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
+                    turn["brief_summary"] = entry["brief_summary"]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 
@@ -189,9 +190,12 @@ async def test_compact_room_memory_preserves_recent():
 
 
 @pytest.mark.asyncio
-async def test_compact_room_memory_stores_content():
+async def test_compact_room_memory_stores_content_and_bounded_brief_summary():
+    semantic_content = "  Deploy   the React frontend with zero downtime.  " + (
+        "retain details " * 30
+    )
     repo = StateMemoryRepository(
-        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+        room_doc([full_turn("t1", semantic_content), full_turn("t2", "two")])
     )
     content_repo = StateContentRepository()
 
@@ -205,7 +209,14 @@ async def test_compact_room_memory_stores_content():
     )
 
     assert make_document_id("r1", "t1") in content_repo.docs
-    assert content_repo.docs[make_document_id("r1", "t1")]["content"] == "one"
+    assert (
+        content_repo.docs[make_document_id("r1", "t1")]["content"] == semantic_content
+    )
+    summary = repo.doc["conversation_history"][0]["brief_summary"]
+    assert summary.startswith("Deploy the React frontend with zero downtime.")
+    assert "  " not in summary
+    assert len(summary) == compaction.BRIEF_SUMMARY_MAX_CHARS
+    assert summary.endswith("...")
 
 
 @pytest.mark.asyncio

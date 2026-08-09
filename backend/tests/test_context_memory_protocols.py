@@ -4,6 +4,7 @@ import sys
 import tomllib
 from datetime import UTC
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 
@@ -183,6 +184,35 @@ def _facade():
     )
 
 
+def test_context_assembly_port_and_facade_parameter_types_match():
+    from context_memory import ContextMemoryFacade
+
+    protocol_hints = get_type_hints(
+        ContextAssemblyPort.assemble_supervisor_context_from_memory
+    )
+    facade_hints = get_type_hints(
+        ContextMemoryFacade.assemble_supervisor_context_from_memory
+    )
+
+    for parameter in (
+        "room_memory_doc",
+        "current_task",
+        "agent_registry",
+        "max_turns",
+        "memory_search_results",
+        "return",
+    ):
+        assert facade_hints[parameter] == protocol_hints[parameter]
+
+    protocol_hints = get_type_hints(
+        ContextAssemblyPort.assemble_agent_execution_context_from_memory
+    )
+    facade_hints = get_type_hints(
+        ContextMemoryFacade.assemble_agent_execution_context_from_memory
+    )
+    assert facade_hints == protocol_hints
+
+
 def test_context_memory_port_conformance():
     from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
@@ -200,15 +230,46 @@ def test_context_memory_port_conformance():
     )
 
 
-def test_production_python_has_no_legacy_search():
-    violations = [
-        str(path)
-        for path in Path(".").rglob("*.py")
-        if "tests" not in path.parts
-        and ".venv" not in path.parts
-        and "legacy_search" in path.read_text()
-    ]
+def test_retired_context_memory_residue_does_not_return():
+    retired_text = {
+        "ChatContext",
+        "RuntimeChatContext",
+        "ChatContextGenerationInput",
+        "LegacyChatContextAPI",
+        "/memoryCenter/addChatContext",
+        "/memoryCenter/getChatContextBySessionId",
+        "/memoryCenter/updateChatContextBySessionId",
+        "/memoryCenter/deleteChatContextBySessionId",
+        "legacy_search",
+        "context_memory.compat",
+        "context_memory.legacy_assembly",
+        "context_memory_legacy_json_model",
+    }
+    checked_suffixes = {".py", ".json", ".toml", ".yaml", ".yml"}
+    violations: list[str] = []
+    for path in Path(".").rglob("*"):
+        if (
+            not path.is_file()
+            or path.suffix not in checked_suffixes
+            or "tests" in path.parts
+            or "docs" in path.parts
+            or ".venv" in path.parts
+        ):
+            continue
+        source = path.read_text(errors="ignore")
+        for residue in retired_text:
+            if residue in source:
+                violations.append(f"{path}:{residue}")
 
+    retired_paths = {
+        Path("context_memory/compat"),
+        Path("context_memory/legacy_assembly.py"),
+        Path("api_gateway/routes/memory_routes.py"),
+    }
+    violations.extend(str(path) for path in retired_paths if path.exists())
+
+    # extend_info is active generic room/message metadata, not ChatContext residue.
+    assert "extend_info" not in retired_text
     assert violations == []
 
 
@@ -341,6 +402,51 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
     with pytest.raises(RuntimeError, match="settings validation failed"):
         context_memory_config._setting("context_model_window", 128000)
+
+
+def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
+    from models.memory import ConversationTurn, RoomMemory, TurnRole
+    from room.compat.runtime import RoomServices
+
+    class FailingAssembly:
+        received_memory = None
+
+        def assemble_agent_execution_context_from_memory(
+            self, room_memory, current_task, **kwargs
+        ):
+            self.received_memory = room_memory
+            raise RuntimeError("canonical assembly failed")
+
+    assembly = FailingAssembly()
+    services = object.__new__(RoomServices)
+    services._context_assembly = assembly
+    room_memory = RoomMemory(
+        room_id="room-1",
+        conversation_history=[
+            ConversationTurn(turn_id="turn-1", role=TurnRole.USER, content="canonical")
+        ],
+        memory_content={
+            "summary": "summary only",
+            "conversation_history": [
+                {"turn_id": "nested", "role": "user", "content": "retired nested"}
+            ],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="canonical assembly failed"):
+        services._build_agent_execution_context_from_memory(
+            room_memory=room_memory,
+            current_task="task",
+            agent_name="Agent",
+            room_awareness=None,
+            quoted_text=None,
+            agent_task=None,
+        )
+
+    assert assembly.received_memory is room_memory
+    source = inspect.getsource(RoomServices.process_agent_message)
+    assert "build_context_for_agent" not in source
+    assert "room_memory_content" not in source
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():

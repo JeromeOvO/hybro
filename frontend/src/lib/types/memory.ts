@@ -23,7 +23,6 @@ export interface ConversationTurn {
 export interface MemoryContent {
   summary?: string | null;
   conversation_history?: ConversationTurn[];
-  memory_text?: string | null;
 }
 export interface RoomMemory {
   room_id: string;

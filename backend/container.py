@@ -1209,8 +1209,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
                 ),
                 llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_legacy_json_model",
-                    summary_model="context_memory_legacy_json_model",
+                    turn_notes_model="context_memory_json_model",
+                    summary_model="context_memory_json_model",
                 ),
             )
             execution_room_memory = SimpleNamespace(

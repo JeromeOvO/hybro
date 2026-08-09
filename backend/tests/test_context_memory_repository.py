@@ -615,6 +615,29 @@ async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
         for turn in compacted_doc["conversation_history"][-10:]
         if turn["representation"] == "full"
     ] == [f"t{index}" for index in range(12, 22)]
+    assert (
+        compacted_doc["conversation_history"][1]["brief_summary"] == "short message 2"
+    )
+
+    await memory_repo.push_and_trim_conversation_turn(
+        "r1",
+        {
+            "turn_id": "t22",
+            "role": "user",
+            "representation": "full",
+            "content": "short message 22",
+            "content_type": "text",
+            "estimated_tokens_full": 3,
+            "estimated_tokens_compact": 20,
+        },
+        max_turns=20,
+        summary_stub="new turn preview 22",
+        max_summary_chars=1000,
+    )
+
+    appended_doc = await memory_repo.get_room_memory("r1")
+    assert "[User] short message 2..." in appended_doc["memory_content"]["summary"]
+    assert "[User] [compact turn]..." not in appended_doc["memory_content"]["summary"]
 
 
 @pytest.mark.asyncio
@@ -1299,7 +1322,8 @@ def _turn_summary_preview(turn: dict) -> str:
         label = role or "Unknown"
     content = turn.get("content")
     if not isinstance(content, str):
-        content = "[compact turn]"
+        brief_summary = turn.get("brief_summary")
+        content = brief_summary if isinstance(brief_summary, str) else "[compact turn]"
     return f"[{label}] {content[:200]}..."
 
 
@@ -1315,6 +1339,7 @@ def _eval_history_expression(doc: dict, expression) -> list[dict]:
                 turn["content"] = None
                 turn["content_ref"] = deepcopy(entry["content_ref"])
                 turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
+                turn["brief_summary"] = entry["brief_summary"]
         if "$slice" in expression:
             return turns[expression["$slice"][1] :]
         return turns
@@ -1376,6 +1401,7 @@ def _compact_entries_from_expression(expression: dict) -> dict[str, dict]:
     patch = map_expression["$map"]["in"]["$cond"][1]["$mergeObjects"][1]
     ref_branches = patch["content_ref"]["$switch"]["branches"]
     token_branches = patch["estimated_tokens_compact"]["$switch"]["branches"]
+    summary_branches = patch["brief_summary"]["$switch"]["branches"]
     entries: dict[str, dict] = {}
     for branch in ref_branches:
         turn_id = branch["case"]["$eq"][1]
@@ -1383,6 +1409,9 @@ def _compact_entries_from_expression(expression: dict) -> dict[str, dict]:
     for branch in token_branches:
         turn_id = branch["case"]["$eq"][1]
         entries.setdefault(turn_id, {})["estimated_tokens_compact"] = branch["then"]
+    for branch in summary_branches:
+        turn_id = branch["case"]["$eq"][1]
+        entries.setdefault(turn_id, {})["brief_summary"] = branch["then"]
     return entries
 
 

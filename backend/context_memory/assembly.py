@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from common.dto import MemorySearchResult
 from common.utils.context_utils import MAX_CONTEXT_CHARS, estimate_tokens
 from common.utils.logger import get_logger
 from context_memory.config import TokenBudgetConfig
@@ -241,7 +242,7 @@ def assemble_supervisor_context_from_memory(
     token_budget: TokenBudgetConfig | None = None,
     agent_registry: list[dict] | None = None,
     max_turns: int = 5,
-    memory_search_results: list | None = None,
+    memory_search_results: list[MemorySearchResult] | None = None,
 ):
     if max_turns < 0:
         raise ValueError("max_turns must be non-negative")
@@ -606,7 +607,9 @@ def _truncate_current_request_section(
     return best
 
 
-def _search_snippets(memory_search_results: list | None) -> list[str] | None:
+def _search_snippets(
+    memory_search_results: list[MemorySearchResult] | None,
+) -> list[str] | None:
     if not memory_search_results:
         return None
     snippets = []

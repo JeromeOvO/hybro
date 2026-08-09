@@ -18,6 +18,16 @@ from context_memory.translators import (
     turn_from_dict,
 )
 
+BRIEF_SUMMARY_MAX_CHARS = 200
+
+
+def brief_summary_from_content(content: str) -> str:
+    """Build a deterministic, bounded semantic preview from a full turn."""
+    normalized = " ".join(content.split())
+    if len(normalized) <= BRIEF_SUMMARY_MAX_CHARS:
+        return normalized
+    return f"{normalized[: BRIEF_SUMMARY_MAX_CHARS - 3].rstrip()}..."
+
 
 def safe_tokens_full(turn) -> int:
     if turn.estimated_tokens_full > 0:
@@ -176,6 +186,7 @@ async def compact_room_memory(
                     "turn_id": turn.turn_id,
                     "content_ref": content_ref,
                     "estimated_tokens_compact": turn.estimated_tokens_compact,
+                    "brief_summary": brief_summary_from_content(turn.content),
                 }
                 saved = max(0, safe_tokens_full(turn) - turn.estimated_tokens_compact)
                 return entry, saved

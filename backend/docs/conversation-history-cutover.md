@@ -23,7 +23,7 @@ Before enabling the cutover runtime, operations must:
 
    ```bash
    cd backend
-   uv run python scripts/migrate_conversation_history.py \
+   uv run --frozen python scripts/migrate_conversation_history.py \
      --mongo-url "$MONGODB_URL" --database "$MONGODB_DB_NAME"
    ```
 
@@ -40,7 +40,7 @@ Before enabling the cutover runtime, operations must:
 6. Apply only with the explicit flag:
 
    ```bash
-   uv run python scripts/migrate_conversation_history.py \
+   uv run --frozen python scripts/migrate_conversation_history.py \
      --mongo-url "$MONGODB_URL" --database "$MONGODB_DB_NAME" --apply
    ```
 

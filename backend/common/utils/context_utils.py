@@ -19,7 +19,6 @@ logger = get_logger(__name__)
 class MemoryContentLike(Protocol):
     summary: str | None
     conversation_history: list[Any]
-    memory_text: str | None
 
 
 TMemoryContent = TypeVar("TMemoryContent", bound=MemoryContentLike)
@@ -384,7 +383,7 @@ async def _generate_turn_notes_json(
             ],
             schema=None,
             json_mode=True,
-            model="context_memory_legacy_json_model",
+            model="context_memory_json_model",
         )
         if isinstance(response, dict):
             return response
@@ -395,7 +394,7 @@ async def _generate_turn_notes_json(
         return await legacy_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model="context_memory_legacy_json_model",
+            model="context_memory_json_model",
         )
     return None
 
@@ -833,24 +832,4 @@ def get_context_stats(memory_content: MemoryContentLike) -> dict:
         "summary_length": len(memory_content.summary) if memory_content.summary else 0,
         "total_chars": total_chars,
         "total_tokens": total_tokens,
-        "has_legacy_text": bool(memory_content.memory_text),
     }
-
-
-def migrate_legacy_memory(memory_content: TMemoryContent) -> TMemoryContent:
-    """
-    Migrate old memory_text format to new conversation history structure.
-    Call this when loading rooms with legacy data.
-
-    Args:
-        memory_content: MemoryContent that might have legacy memory_text
-
-    Returns:
-        Updated MemoryContent with legacy text moved to summary
-    """
-    if memory_content.memory_text and not memory_content.conversation_history:
-        # Move old text to summary
-        memory_content.summary = memory_content.memory_text
-        memory_content.memory_text = None
-        logger.info("Migrated legacy memory_text to summary field")
-    return memory_content

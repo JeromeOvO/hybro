@@ -49,11 +49,7 @@ from common.utils.a2a_file_modes import (
 )
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.cancellation import CancellationToken
-from common.utils.context_utils import (
-    build_context_for_agent,
-    build_minimal_context,
-    migrate_legacy_memory,
-)
+from common.utils.context_utils import build_minimal_context
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from context_memory.projection import _human_size, build_turn_content
@@ -69,7 +65,7 @@ from execution.task_tracking import (
 )
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
-from models.memory import MemoryContent, RoomMemory
+from models.memory import RoomMemory
 from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     AgentCenterRequest,
@@ -2866,10 +2862,6 @@ class RoomServices:
         room_memory = None
         if not use_supervisor and len(selected_agent_set) > 1:
             room_memory = await self._store.get_room_memory_by_room_id(request.room_id)
-            if room_memory and room_memory.memory_content:
-                room_memory.memory_content = migrate_legacy_memory(
-                    room_memory.memory_content
-                )
 
         # Build conversation context only for queue/debate message preparation.
         conversation_context = None
@@ -3749,8 +3741,9 @@ class RoomServices:
         """
         Process an agent message by building budget-aware context.
 
-        Uses the core context-memory assembly implementation for structured
-        MemoryContent and falls back to string formatting for old-style memory.
+        Uses canonical top-level RoomMemory history through ContextAssemblyPort.
+        If assembly fails, the original outbound message is retained and the
+        failure is logged; deleted nested history is never used as a fallback.
 
         Args:
             request: The agent message request
@@ -3923,71 +3916,19 @@ class RoomServices:
             agent_profiles=agent_profiles,
         )
 
-        # Build context using core context-memory assembly or the old-style fallback
+        # Build context only from canonical RoomMemory assembly when memory exists.
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
-                room_memory_content = (
-                    room_memory.memory_content if room_memory else None
-                )
-
-                if isinstance(room_memory_content, MemoryContent):
-                    # Budget-aware context via ContextAssemblyPort (§11.2)
-                    try:
-                        context = self._build_agent_execution_context_from_memory(
-                            room_memory=room_memory,
-                            current_task=current_task_for_cas,
-                            agent_name=agent_name,
-                            room_awareness=room_awareness,
-                            quoted_text=quoted_for_cas,
-                            agent_task=agent_task_for_cas,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Context assembly failed for agent, falling back to "
-                            "DEPRECATED build_context_for_agent (to be removed): %s",
-                            e,
-                        )
-                        context = build_context_for_agent(
-                            memory_content=room_memory_content,
-                            current_task=current_task_for_cas,
-                            agent_name=agent_name,
-                            include_system_instruction=True,
-                            quoted_text=quoted_for_cas,
-                            room_awareness=room_awareness,
-                            agent_task=agent_task_for_cas,
-                        )
-                elif (
-                    isinstance(room_memory_content, str) and room_memory_content.strip()
-                ):
-                    # Legacy style: Use raw text as context
-                    quoted_section = ""
-                    if quoted_for_cas:
-                        if "\n---\n" in quoted_for_cas:
-                            quoted_section = f"[Quoted context]\n{quoted_for_cas}\n\n"
-                        else:
-                            quoted_section = (
-                                f"[Quoted context]\n"
-                                f"The user is referencing the following specific content:\n"
-                                f'"{quoted_for_cas}"\n\n'
-                            )
-                    room_awareness_section = ""
-                    if room_awareness:
-                        room_awareness_section = f"{room_awareness}\n\n"
-                    task_section = ""
-                    if agent_task_for_cas:
-                        task_section = f"\n\n[Task]\n{agent_task_for_cas}"
-                    context = (
-                        f"[Context]\n{room_memory_content}\n\n"
-                        f"{quoted_section}"
-                        f"{room_awareness_section}"
-                        f"[Current request]\nUser: {current_task_for_cas}"
-                        f"{task_section}"
+                if room_memory is not None:
+                    # Canonical-only, budget-aware context via ContextAssemblyPort.
+                    context = self._build_agent_execution_context_from_memory(
+                        room_memory=room_memory,
+                        current_task=current_task_for_cas,
+                        agent_name=agent_name,
+                        room_awareness=room_awareness,
+                        quoted_text=quoted_for_cas,
+                        agent_task=agent_task_for_cas,
                     )
-                    if agent_name:
-                        context += (
-                            f"\n\nYou are {agent_name}. "
-                            "Please respond to the current request above."
-                        )
                 else:
                     # No context available
                     quoted_section = ""

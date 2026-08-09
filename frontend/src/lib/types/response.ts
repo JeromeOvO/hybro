@@ -292,7 +292,6 @@ export interface RoomMemory {
   extend_info?: unknown;
 }
 export interface MemoryContent {
-  memory_text: string;
   [k: string]: unknown;
 }
 export interface RoomCenterRoomMessageResponse {

@@ -10,7 +10,7 @@ class ContextAssemblyPort(Protocol):
         room_memory_doc: Any,
         current_task: str,
         *,
-        agent_registry: list[dict] | None = None,
+        agent_registry: list[dict[str, Any]] | None = None,
         max_turns: int = 5,
         memory_search_results: list[MemorySearchResult] | None = None,
     ) -> AssembledContext: ...
