@@ -8,6 +8,13 @@ from context_memory.translators import assemble_context_dto, normalize_room_memo
 
 logger = get_logger(__name__)
 
+_TRUNCATION_REASON_PRIORITY = {
+    None: 0,
+    TruncationReason.CHAR_LIMIT_EXCEEDED: 1,
+    TruncationReason.TURN_COUNT_EXCEEDED: 2,
+    TruncationReason.TOKEN_BUDGET_EXCEEDED: 3,
+}
+
 
 def build_stable_prefix(
     *,
@@ -236,6 +243,9 @@ def assemble_supervisor_context_from_memory(
     max_turns: int = 5,
     memory_search_results: list | None = None,
 ):
+    if max_turns < 0:
+        raise ValueError("max_turns must be non-negative")
+
     budget = token_budget or TokenBudgetConfig()
     state = normalize_room_memory(room_memory_doc)
     search_snippets = _search_snippets(memory_search_results)
@@ -245,7 +255,8 @@ def assemble_supervisor_context_from_memory(
         include_room_facts=False,
         memory_search_snippets=search_snippets,
     )
-    recent_turns = state.conversation_history[-max_turns:]
+    recent_turns = [] if max_turns == 0 else state.conversation_history[-max_turns:]
+    turns_truncated = len(state.conversation_history) - len(recent_turns)
     dynamic_suffix = build_dynamic_suffix(
         turns=recent_turns,
         current_task=current_task,
@@ -258,6 +269,10 @@ def assemble_supervisor_context_from_memory(
         dynamic_suffix=dynamic_suffix,
         budget=budget,
         turns=recent_turns,
+        turns_truncated=turns_truncated,
+        truncation_reason=(
+            TruncationReason.TURN_COUNT_EXCEEDED if turns_truncated else None
+        ),
         rebuild=lambda turns: build_dynamic_suffix(
             turns=turns,
             current_task=current_task,
@@ -331,6 +346,9 @@ def assemble_agent_execution_context_from_memory(
         budget=budget,
         turns=selected_turns,
         turns_truncated=turns_truncated,
+        truncation_reason=(
+            TruncationReason.TOKEN_BUDGET_EXCEEDED if turns_truncated else None
+        ),
         rebuild=lambda turns: build_agent_dynamic_suffix(
             turns=turns,
             summary=state.summary,
@@ -366,20 +384,23 @@ def _finalize(
     turns: list[ConversationTurnData],
     rebuild,
     turns_truncated: int = 0,
+    truncation_reason: TruncationReason | None = None,
 ) -> tuple[AssemblyResult, str, str]:
     stable_tokens = estimate_tokens(stable_prefix)
     dynamic_tokens = estimate_tokens(dynamic_suffix)
     total_tokens = stable_tokens + dynamic_tokens
     was_truncated = turns_truncated > 0
-    truncation_reason = (
-        TruncationReason.TOKEN_BUDGET_EXCEEDED if was_truncated else None
-    )
+    if was_truncated and truncation_reason is None:
+        truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
     available = budget.available_for_content
     selected_turns = list(turns)
 
     if total_tokens > available:
         was_truncated = True
-        truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
+        truncation_reason = _preferred_truncation_reason(
+            truncation_reason,
+            TruncationReason.TOKEN_BUDGET_EXCEEDED,
+        )
         while total_tokens > available and selected_turns:
             turns_truncated += 1
             selected_turns = selected_turns[1:]
@@ -391,7 +412,10 @@ def _finalize(
     )
     if total_tokens > available:
         was_truncated = True
-        truncation_reason = TruncationReason.TOKEN_BUDGET_EXCEEDED
+        truncation_reason = _preferred_truncation_reason(
+            truncation_reason,
+            TruncationReason.TOKEN_BUDGET_EXCEEDED,
+        )
         context = _truncate_context_to_token_budget(context, available)
         stable_prefix, dynamic_suffix = _split_context_blocks(
             context,
@@ -405,8 +429,10 @@ def _finalize(
         total_tokens = estimate_tokens(context)
     if len(context) > MAX_CONTEXT_CHARS:
         was_truncated = True
-        if truncation_reason is None:
-            truncation_reason = TruncationReason.CHAR_LIMIT_EXCEEDED
+        truncation_reason = _preferred_truncation_reason(
+            truncation_reason,
+            TruncationReason.CHAR_LIMIT_EXCEEDED,
+        )
         context = _truncate_context_to_char_limit(context, MAX_CONTEXT_CHARS)
         stable_prefix, dynamic_suffix = _split_context_blocks(
             context,
@@ -436,6 +462,15 @@ def _finalize(
         stable_prefix,
         dynamic_suffix,
     )
+
+
+def _preferred_truncation_reason(
+    current: TruncationReason | None,
+    candidate: TruncationReason,
+) -> TruncationReason:
+    if _TRUNCATION_REASON_PRIORITY[candidate] > _TRUNCATION_REASON_PRIORITY[current]:
+        return candidate
+    return current or candidate
 
 
 def _truncate_context_to_token_budget(context: str, available_tokens: int) -> str:

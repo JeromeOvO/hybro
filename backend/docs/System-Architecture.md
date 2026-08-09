@@ -1553,7 +1553,11 @@ Room memory is updated and used across turns.
 5. ContextMemory runs `run_compaction(room_id)` after a new projection, while
    duplicate/missing/empty/mismatched messages skip compaction.
 6. Before agent execution, context assembly builds a token-budgeted context for
-   the supervisor or the target agent.
+   the supervisor or the target agent. Supervisor history windows treat zero as
+   no history and report initially discarded turns; truncation reasons use the
+   precedence token budget, turn count, then character limit. Context-memory
+   budget, compaction, and search configuration objects reject invalid direct
+   construction while Settings retains its compatibility normalization.
 7. Memory search can retrieve relevant historical turns with keyword scoring
    and temporal decay.
 8. The compaction sweep still handles periodic compaction for eligible rooms.
