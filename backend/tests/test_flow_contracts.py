@@ -252,9 +252,7 @@ class TestRoomLifecycleFlow:
             }
         )
         with pytest.raises(HTTPException) as exc:
-            await send_message(
-                req, other_user, store=mock_db, engine=MagicMock()
-            )
+            await send_message(req, other_user, store=mock_db, engine=MagicMock())
         assert exc.value.status_code == 403
 
 

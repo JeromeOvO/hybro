@@ -39,10 +39,7 @@ class SavedGroupAgentScope(_StrictAgentScope):
 
 
 AgentScopeInput = Annotated[
-    MentionAgentScope
-    | RoomDefaultAgentScope
-    | AllAgentsScope
-    | SavedGroupAgentScope,
+    MentionAgentScope | RoomDefaultAgentScope | AllAgentsScope | SavedGroupAgentScope,
     Field(discriminator="source"),
 ]
 

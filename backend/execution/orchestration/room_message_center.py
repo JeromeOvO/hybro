@@ -745,9 +745,7 @@ class RoomMessageCenter:
                 ROOM_LOCK_HOLD_TTL_SECONDS,
             )
             if not renewed:
-                raise RuntimeError(
-                    f"lost distributed room lock for room {room_id}"
-                )
+                raise RuntimeError(f"lost distributed room lock for room {room_id}")
 
     async def _release_room_lock(
         self,
@@ -1851,7 +1849,9 @@ class RoomMessageCenter:
 
                 # Supervisor owns finalization. Never write or emit a second summary.
                 turn_completion_kind = (
-                    "synthesis" if result.synthesis_text is not None else "deterministic"
+                    "synthesis"
+                    if result.synthesis_text is not None
+                    else "deterministic"
                 )
 
                 if completion_cancellable and token is not None and token.is_cancelled:

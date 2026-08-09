@@ -472,9 +472,13 @@ async def send_message(
                 status_code=400,
             )
         raw_agent_ids = raw_scope.get("agent_ids")
-        if not isinstance(raw_agent_ids, list) or not raw_agent_ids or not all(
-            isinstance(agent_id, str) and agent_id.strip()
-            for agent_id in raw_agent_ids
+        if (
+            not isinstance(raw_agent_ids, list)
+            or not raw_agent_ids
+            or not all(
+                isinstance(agent_id, str) and agent_id.strip()
+                for agent_id in raw_agent_ids
+            )
         ):
             return RoomCenterUserMessageResponse(
                 message_id=None,

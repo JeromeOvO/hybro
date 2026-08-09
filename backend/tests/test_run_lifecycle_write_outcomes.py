@@ -440,7 +440,9 @@ async def test_projection_claim_accepts_initial_pending_step_with_null_schedule(
         run_event_repository=events,
     )
 
-    assert await handler.claim_terminal_projection_step("evt-1", "processing_sse") is None
+    assert (
+        await handler.claim_terminal_projection_step("evt-1", "processing_sse") is None
+    )
 
     query = events.find_one_and_update.await_args.args[0]
     pending_branch = query["$or"][0]

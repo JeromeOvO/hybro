@@ -539,9 +539,7 @@ class MessageMongoRepository:
                 safe_updates["message_content.message_task.artifacts"] = (
                     candidate_artifacts
                 )
-                safe_query["message_content.message_task.artifacts"] = (
-                    current_artifacts
-                )
+                safe_query["message_content.message_task.artifacts"] = current_artifacts
 
             if not safe_updates:
                 return True

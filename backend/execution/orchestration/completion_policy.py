@@ -86,14 +86,14 @@ def _remaining_required_gaps(
         return gaps
     satisfied = set(evidence.satisfied_output_keys)
     waived = {
-        waiver.output_key
-        for waiver in evidence.waived_outputs
-        if waiver.reason.strip()
+        waiver.output_key for waiver in evidence.waived_outputs if waiver.reason.strip()
     }
     return {
         gap
         for gap in gaps
-        if not any(_obligation_matches_output_key(gap, key) for key in satisfied | waived)
+        if not any(
+            _obligation_matches_output_key(gap, key) for key in satisfied | waived
+        )
     }
 
 
@@ -118,8 +118,7 @@ def _validate_completion_gate(
         ),
         (
             any(
-                blocker.status == "open"
-                and blocker.validation_status == "validated"
+                blocker.status == "open" and blocker.validation_status == "validated"
                 for blocker in state.blockers
             ),
             "complete rejected by validated blocker",

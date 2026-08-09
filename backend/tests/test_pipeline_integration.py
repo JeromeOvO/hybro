@@ -197,9 +197,17 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
 
 
 def test_dispatch_strategy_resolution_all_cases():
-    assert resolve_strategy(use_supervisor=True, agent_count=3) == DispatchStrategy.SUPERVISOR
-    assert resolve_strategy(use_supervisor=False, agent_count=3) == DispatchStrategy.SEQUENTIAL
-    assert resolve_strategy(use_supervisor=False, agent_count=1) == DispatchStrategy.SINGLE
+    assert (
+        resolve_strategy(use_supervisor=True, agent_count=3)
+        == DispatchStrategy.SUPERVISOR
+    )
+    assert (
+        resolve_strategy(use_supervisor=False, agent_count=3)
+        == DispatchStrategy.SEQUENTIAL
+    )
+    assert (
+        resolve_strategy(use_supervisor=False, agent_count=1) == DispatchStrategy.SINGLE
+    )
 
 
 @pytest.mark.asyncio

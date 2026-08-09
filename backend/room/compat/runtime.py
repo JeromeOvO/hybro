@@ -2818,9 +2818,7 @@ class RoomServices:
 
         # Resolve dispatch strategy and annotate in-memory user_message for
         # downstream dispatch logic. NOT persisted back to DB (message already written).
-        dispatch_strategy = resolve_strategy(
-            use_supervisor, len(selected_agent_set)
-        )
+        dispatch_strategy = resolve_strategy(use_supervisor, len(selected_agent_set))
         user_message.extend_info = {
             **(user_message.extend_info or {}),
             "dispatch_strategy": dispatch_strategy.value,

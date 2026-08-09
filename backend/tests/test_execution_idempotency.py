@@ -46,7 +46,9 @@ def test_v2_fingerprint_normalizes_mention_order() -> None:
         agent_scope={"source": "mention", "agent_ids": ["agent-1", "agent-2"]}
     )
     assert IDEMPOTENCY_FINGERPRINT_VERSION == 2
-    assert build_execution_request_fingerprint(first) == build_execution_request_fingerprint(second)
+    assert build_execution_request_fingerprint(
+        first
+    ) == build_execution_request_fingerprint(second)
 
 
 @pytest.mark.parametrize(
@@ -69,7 +71,9 @@ def test_execution_contract_changes_affect_fingerprint(change) -> None:
 def test_saved_group_id_affects_fingerprint() -> None:
     first = _request(agent_scope={"source": "saved_group", "group_id": "group-1"})
     second = _request(agent_scope={"source": "saved_group", "group_id": "group-2"})
-    assert build_execution_request_fingerprint(first) != build_execution_request_fingerprint(second)
+    assert build_execution_request_fingerprint(
+        first
+    ) != build_execution_request_fingerprint(second)
 
 
 def test_server_owned_fields_do_not_affect_fingerprint() -> None:
@@ -78,7 +82,9 @@ def test_server_owned_fields_do_not_affect_fingerprint() -> None:
     message["message_id"] = "server-generated"
     message["message_created_at"] = "2030-01-01T00:00:00Z"
     second = _request(sender_name="Changed", message=message)
-    assert build_execution_request_fingerprint(first) == build_execution_request_fingerprint(second)
+    assert build_execution_request_fingerprint(
+        first
+    ) == build_execution_request_fingerprint(second)
 
 
 def test_v2_payload_contains_only_canonical_mode_and_scope() -> None:
