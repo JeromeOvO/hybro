@@ -123,7 +123,6 @@ class FakeMongo:
     def __init__(self):
         self.collections = {
             "room_memories": FakeMongoCollection(),
-            "user_memories": FakeMongoCollection(),
             "conversation_content": FakeMongoCollection(),
         }
 

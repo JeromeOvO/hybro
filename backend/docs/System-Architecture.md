@@ -680,20 +680,18 @@ projection.
 ### ContextMemory Runtime Ownership
 
 `context_memory/` owns room memory projection, memory search, turn indexing,
-compaction, content expansion, context assembly, and the room-memory runtime
-adapter. `ContextMemoryFacade` is the canonical runtime object for Room,
-Execution, background compaction, and event-driven projection.
+compaction, content expansion, and context assembly. `ContextMemoryFacade` is
+the canonical runtime object for Room, Execution, background compaction, and
+event-driven projection.
 
-The former application-shell ContextMemory service files have been removed.
-Startup wiring in `container.py` constructs ContextMemory repositories, facade,
-and the room-memory compatibility adapter directly. The preserved event path
-remains:
+The former application-shell ContextMemory services and compatibility adapters
+have been removed. Startup wiring in `container.py` constructs the repositories
+and facade directly, and binds Execution's synthesis-history and room-summary
+callbacks to facade methods. The preserved event path remains:
 `MessageCommitted -> ContextMemoryEventHandler -> ContextMemoryFacade.project_message_for_event`,
-with compaction triggered through ContextMemory-owned facade methods.
-Legacy turn-selection and context metric logging helpers live in
-`context_memory.legacy_assembly`. Execution room-memory compatibility uses the
-facade-backed `ContextMemoryRoomMemoryAdapter` instead of removed-package memory
-service objects.
+with compaction triggered through ContextMemory-owned facade methods. All
+production context assembly uses the core `context_memory.assembly`
+implementation.
 
 The legacy `/api/v1/memoryCenter/*ChatContext*` API and its `chat_contexts`
 runtime persistence wiring are retired. Deployments must confirm that no
@@ -987,8 +985,6 @@ Important Mongo collections include:
 - `room_quotes`
 - `room_memories`
 - `conversation_content`
-- `user_memories`
-- `agent_memories`
 - `cancelled_messages`
 - `runs`
 - `room_files`

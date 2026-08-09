@@ -3749,8 +3749,8 @@ class RoomServices:
         """
         Process an agent message by building budget-aware context.
 
-        Uses ContextAssemblyService for structured MemoryContent (§11.2),
-        falls back to legacy string formatting for old-style memory.
+        Uses the core context-memory assembly implementation for structured
+        MemoryContent and falls back to string formatting for old-style memory.
 
         Args:
             request: The agent message request
@@ -3923,7 +3923,7 @@ class RoomServices:
             agent_profiles=agent_profiles,
         )
 
-        # Build context using ContextAssemblyService (§11.2) or legacy fallback
+        # Build context using core context-memory assembly or the old-style fallback
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
                 room_memory_content = (

@@ -198,7 +198,7 @@ class Settings(BaseSettings):
 
     # ===========================================
     # Context & Memory System Settings
-    # See CONTEXT_MEMORY_SYSTEM_DESIGN.md section 14 for specification
+    # See docs/System-Architecture.md for the current architecture
     # ===========================================
 
     # Token Budget Settings

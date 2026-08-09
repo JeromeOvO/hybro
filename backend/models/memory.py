@@ -1,12 +1,8 @@
 """
 Memory models for room conversation history and context management.
 
-This module defines the core data structures for:
-- Conversation turns (full and compact representations)
-- Room memory with rolling summaries
-- User and agent memory for cross-session learning
-
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
+This module defines conversation turns and room memory with rolling summaries.
+See docs/System-Architecture.md for the current architecture.
 """
 
 from datetime import datetime
@@ -40,7 +36,7 @@ class TurnRepresentation(str, Enum):
     FULL: Actual content stored in the `content` field
     COMPACT: Content stored externally, `content_ref` points to it
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     FULL = "full"
@@ -86,7 +82,7 @@ class ConversationTurn(BaseModel):
     Full representation: actual content stored in `content` field
     Compact representation: content stored externally, `content_ref` points to it
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for canonical specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     # Core identification
@@ -194,7 +190,7 @@ class RoomSummary(BaseModel):
     This is NOT a replacement for lossless compaction — it is a structured overlay
     that avoids the round-trip cost of fetch_turn_content for common context queries.
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.2 for specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     # Structured named slots (agent-maintainable)
@@ -231,10 +227,6 @@ class RoomFact(BaseModel):
     confidence: float = 1.0  # Confidence score (0-1)
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: datetime | None = None  # Optional expiry for time-sensitive facts
-
-
-# Type alias: design §4.3 specifies UserFact; structurally identical to RoomFact.
-UserFact = RoomFact
 
 
 class AgentSuccessRecord(BaseModel):
@@ -287,7 +279,7 @@ class RoomMemory(BaseModel):
     """
     Durable memory for a chat room.
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.2 for specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     room_id: str
@@ -331,84 +323,3 @@ class RoomMemory(BaseModel):
         if self.memory_content:
             return self.memory_content.summary
         return None
-
-
-class TaskTypeMetrics(BaseModel):
-    """Metrics for a specific task type."""
-
-    task_type: str
-    total_calls: int = 0
-    successful_calls: int = 0
-    average_response_time_ms: float = 0.0
-
-
-class FailurePattern(BaseModel):
-    """A detected failure pattern for an agent."""
-
-    pattern_id: str = Field(default_factory=lambda: str(uuid4()))
-    description: str
-    occurrence_count: int = 1
-    first_seen_at: datetime = Field(default_factory=utcnow)
-    last_seen_at: datetime = Field(default_factory=utcnow)
-
-
-class UserMemory(BaseModel):
-    """
-    Durable memory for a user across all rooms.
-
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.3 for specification.
-    """
-
-    user_id: str
-
-    # User preferences (explicit)
-    preferences: dict[str, Any] = Field(default_factory=dict)
-
-    # Learned patterns
-    preferred_agents: list[str] = Field(
-        default_factory=list
-    )  # agent_ids user frequently uses
-    communication_style: str | None = None  # Detected style
-
-    # Cross-room facts
-    user_facts: list[UserFact] = Field(default_factory=list)
-
-    # Metadata
-    created_at: datetime = Field(default_factory=utcnow)
-    last_active_at: datetime = Field(default_factory=utcnow)
-    total_interactions: int = 0
-
-
-class AgentMemory(BaseModel):
-    """
-    Durable memory for an agent's learned context.
-
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §4.4 for specification.
-    """
-
-    agent_id: str
-
-    # Performance metrics
-    total_calls: int = 0
-    successful_calls: int = 0
-    total_response_time_ms: float = 0.0
-    average_response_time_ms: float = 0.0
-
-    # Task type performance
-    task_type_success: dict[str, TaskTypeMetrics] = Field(default_factory=dict)
-
-    # Common failure patterns
-    failure_patterns: list[FailurePattern] = Field(default_factory=list)
-
-    # Metadata
-    last_called_at: datetime | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _compute_avg_response_time(cls, values: Any) -> Any:
-        if isinstance(values, dict):
-            total = values.get("total_response_time_ms", 0.0)
-            calls = values.get("total_calls", 0)
-            if calls > 0 and total > 0:
-                values["average_response_time_ms"] = round(total / calls, 2)
-        return values

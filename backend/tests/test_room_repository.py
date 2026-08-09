@@ -1043,15 +1043,8 @@ async def test_runtime_store_task_tracking_noop_successes_by_readback():
 
 
 @pytest.mark.asyncio
-async def test_runtime_store_memory_write_methods_use_expected_dependencies():
+async def test_runtime_store_memory_write_uses_room_repository():
     from dal.runtime_store import RuntimeRepositoryStore
-
-    class RecordingUpsertCollection(FakeCollection):
-        async def update_one(self, query: dict, update: dict, **kwargs) -> bool:
-            self.update_one_calls.append(
-                (deepcopy(query), deepcopy(update), deepcopy(kwargs))
-            )
-            return True
 
     class RoomRepositoryWithTurnNotes:
         def __init__(self) -> None:
@@ -1070,61 +1063,13 @@ async def test_runtime_store_memory_write_methods_use_expected_dependencies():
         async def update_turn_notes(self, *args, **kwargs):
             raise RuntimeError("database down")
 
-    user_memories = RecordingUpsertCollection()
-    agent_memories = RecordingUpsertCollection()
     room_repository = RoomRepositoryWithTurnNotes()
     store = RuntimeRepositoryStore(
-        mongo=FakeMongo(
-            {
-                "user_memories": user_memories,
-                "agent_memories": agent_memories,
-            }
-        ),
+        mongo=FakeMongo(),
         room_repository=room_repository,
         message_repository=object(),
         agent_repository=object(),
     )
-
-    assert await store.increment_user_interactions("user-1") is True
-    query, update, kwargs = user_memories.update_one_calls[0]
-    assert query == {"user_id": "user-1"}
-    assert update["$inc"] == {"total_interactions": 1}
-    assert set(update["$set"]) == {"last_active_at"}
-    assert update["$setOnInsert"]["user_id"] == "user-1"
-    assert "created_at" in update["$setOnInsert"]
-    assert kwargs == {"upsert": True}
-
-    assert (
-        await store.record_agent_call(
-            agent_id="agent-1",
-            success=True,
-        )
-        is True
-    )
-    query, update, kwargs = agent_memories.update_one_calls[0]
-    assert query == {"agent_id": "agent-1"}
-    assert update["$inc"] == {
-        "total_calls": 1,
-        "total_response_time_ms": 0.0,
-        "successful_calls": 1,
-    }
-    assert set(update["$set"]) == {"last_called_at"}
-    assert update["$setOnInsert"] == {"agent_id": "agent-1"}
-    assert kwargs == {"upsert": True}
-
-    assert (
-        await store.record_agent_call(
-            agent_id="agent-1",
-            success=False,
-            response_time_ms=12.5,
-        )
-        is True
-    )
-    _, failed_update, _ = agent_memories.update_one_calls[1]
-    assert failed_update["$inc"] == {
-        "total_calls": 1,
-        "total_response_time_ms": 12.5,
-    }
 
     turn_notes = {"summary": "note"}
     assert await store.update_turn_notes("room-1", "turn-1", turn_notes) is True

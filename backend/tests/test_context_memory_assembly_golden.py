@@ -102,7 +102,7 @@ def test_agent_quoted_context_fixed_golden():
     )
 
 
-def test_supervisor_assembly_fixed_golden_with_search_and_compact_pointer():
+def test_supervisor_assembly_fixed_golden_with_search_and_compact_reference():
     result = assembly.assemble_supervisor_context_from_memory(
         _assembly_room_doc(),
         "Review the plan",

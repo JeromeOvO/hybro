@@ -1,7 +1,7 @@
 """
 Context utilities for room conversation memory management.
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
+See docs/System-Architecture.md for design details.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def estimate_tokens(text: str | None, model: str = "gpt-4") -> int:
 
     Uses tiktoken for accuracy if available. Falls back to char/4 heuristic.
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §19 for specification.
+    See docs/System-Architecture.md for the current architecture.
 
     Args:
         text: The text to estimate tokens for
@@ -128,7 +128,7 @@ def extract_turn_notes(content: str | None) -> dict | None:
     For short turns (<100 tokens), uses simple heuristics.
     For long turns, a fast LLM could be used (not implemented in Phase 1).
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 and §8.3 for specification.
+    See docs/System-Architecture.md for the current architecture.
 
     Args:
         content: The turn content to extract notes from
@@ -334,7 +334,7 @@ async def extract_turn_notes_llm(
     Callers should check content length before calling. This function always
     attempts the LLM path and falls back to the heuristic on failure.
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 and §8.3.
+    See docs/System-Architecture.md for the current architecture.
     """
     if not content or len(content.strip()) < 10:
         return None
@@ -465,7 +465,7 @@ def add_turn_to_history(
     - Older turns are summarized and moved to the summary field
 
     IMPORTANT: This function now populates estimated_tokens_full and turn_notes
-    at turn creation time, as required by CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2.
+    at turn creation time, as documented in docs/System-Architecture.md.
 
     Args:
         memory_content: The MemoryContent to update
@@ -598,7 +598,7 @@ def build_context_for_agent(
     max_tokens: int | None = None,
 ) -> str:
     """
-    DEPRECATED: Use ContextAssemblyService.build_agent_execution_context() instead.
+    DEPRECATED: Use context_memory.assembly for budget-aware assembly instead.
     This function is kept only as a fallback and will be removed in a future release.
 
     Build context string for an agent request (ChatGPT/Claude style).
@@ -611,11 +611,10 @@ def build_context_for_agent(
     5. Optionally adds room awareness (other agents in the team)
     6. Optionally adds agent-specific instructions
 
-    IMPORTANT: This function now enforces MAX_CONTEXT_CHARS and logs context_occupancy_pct
-    as required by CONTEXT_MEMORY_SYSTEM_DESIGN.md §17.2.
+    IMPORTANT: This function enforces MAX_CONTEXT_CHARS.
 
-    For budget-aware context assembly with KV-cache optimization, use
-    ContextAssemblyService.build_agent_execution_context() instead.
+    For budget-aware context assembly with KV-cache optimization, use the
+    core context-memory assembly implementation instead.
 
     Args:
         memory_content: The room's MemoryContent with conversation history

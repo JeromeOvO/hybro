@@ -80,9 +80,6 @@ class MemoryRepositorySpy:
             return self.doc
         return None
 
-    async def get_user_memories(self, _user_id: str) -> list[dict]:
-        return []
-
     async def create_room_memory(self, memory: dict) -> str:
         self.doc = memory
         return memory["memory_id"]

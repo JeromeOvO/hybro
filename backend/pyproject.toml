@@ -134,7 +134,6 @@ ignore = ["E501"]
 "common/utils/context_utils.py" = ["C901", "UP047"]
 "common/utils/remote_agent_connection.py" = ["C901"]
 "context_memory/assembly.py" = ["C901"]
-"context_memory/compat/context_assembly.py" = ["C901", "UP042"]
 "context_memory/compaction.py" = ["C901"]
 "context_memory/models.py" = ["UP042"]
 "delivery/translator.py" = ["C901"]
@@ -157,7 +156,6 @@ ignore = ["E501"]
 "models/hitl.py" = ["UP042"]
 "models/memory.py" = ["UP042"]
 "models/response.py" = ["UP046"]
-"models/search.py" = ["UP042"]
 "scripts/_discovery_client.py" = ["C901"]
 "tests/test_api_thin_adapters.py" = ["C901"]
 "tests/test_compaction_service.py" = ["C901"]
@@ -181,7 +179,6 @@ packages = [
     "room.repository",
     "room_files",
     "context_memory",
-    "context_memory.compat",
     "context_memory.repository",
     "dal",
     "dal.mongo",

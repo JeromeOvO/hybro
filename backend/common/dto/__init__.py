@@ -14,7 +14,6 @@ from common.dto.context_memory import (
     ContextBlock,
     MemorySearchResult,
     RoomMemoryInfo,
-    UserMemory,
 )
 from common.dto.dal import (
     PaginationParams,
@@ -242,7 +241,6 @@ __all__ = [
     "TaskSubmittedEvent",
     "TaskUpdateEvent",
     "TimelinePosition",
-    "UserMemory",
     "UserMessageInput",
     "UserMessageInsertResult",
     "WorkflowState",

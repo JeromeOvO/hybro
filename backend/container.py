@@ -389,9 +389,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
-            from context_memory.compat.runtime import (
-                ContextMemoryRoomMemoryAdapter,
-            )
             from context_memory.config import ContextMemoryLLMConfig
             from execution.orchestration.debate_prompt_injector import (
                 DebatePromptInjector,
@@ -1216,15 +1213,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     summary_model="context_memory_legacy_json_model",
                 ),
             )
-            context_memory_room_memory = ContextMemoryRoomMemoryAdapter(
-                facade=context_memory_facade,
-                usage_store=memory_store,
-            )
             execution_room_memory = SimpleNamespace(
-                add_synthesis_to_history=(
-                    context_memory_room_memory.add_synthesis_to_history
-                ),
-                update_room_summary=context_memory_room_memory.update_room_summary,
+                add_synthesis_to_history=context_memory_facade.add_synthesis_to_history,
+                update_room_summary=context_memory_facade.update_room_summary,
             )
             agent_rate_limiter = None
             if getattr(app.state, "agent_rate_limiter_factory", None):
@@ -2120,22 +2111,6 @@ async def _ensure_context_memory_indexes(mongo: MongoDAL) -> bool:
         name="content_ttl",
         expireAfterSeconds=0,
         sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "user_memories",
-        [("user_id", 1)],
-        name="user_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "agent_memories",
-        [("agent_id", 1)],
-        name="agent_id_unique",
-        unique=True,
-        critical=True,
     )
     await _create_index(
         mongo,

@@ -27,7 +27,6 @@ class StateMemoryRepository:
         self.doc = doc
         self.fail_delete = fail_delete
         self.deleted = []
-        self.user_docs = []
         self.created = []
         self.updated = []
         self.compacted = []
@@ -37,9 +36,6 @@ class StateMemoryRepository:
 
     async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
         self.doc = {"room_id": room_id, **memory}
-
-    async def get_user_memories(self, user_id: str) -> list[dict]:
-        return [doc for doc in self.user_docs if doc["user_id"] == user_id]
 
     async def delete_room_memory(self, room_id: str) -> bool:
         self.deleted.append(room_id)
@@ -428,17 +424,6 @@ def test_facade_does_not_expose_legacy_search():
 
 
 @pytest.mark.asyncio
-async def test_facade_get_user_memories():
-    repo = StateMemoryRepository()
-    repo.user_docs = [{"user_id": "u1", "communication_style": "direct"}]
-
-    memories = await facade(memory_repo=repo).get_user_memories("u1")
-
-    assert memories[0].memory_id == "user_memory:u1"
-    assert memories[0].content == "Communication Style: direct"
-
-
-@pytest.mark.asyncio
 async def test_facade_delete_room_memory_nothing_to_delete():
     repo = StateMemoryRepository(None)
     content_repo = StateContentRepository()
@@ -680,40 +665,3 @@ async def test_facade_legacy_crud_helpers():
     assert updated is True
     assert updated_by_memory_id is True
     assert repo.doc["extra"] == "by-memory-id"
-
-
-@pytest.mark.asyncio
-async def test_facade_content_helpers():
-    content_repo = StateContentRepository()
-    service = facade(content_repo=content_repo)
-
-    document_id = await service.content_upsert_full_content(
-        "r1", "t1", "stored", "text", {"one_liner": "stored"}
-    )
-
-    assert await service.content_get_content_by_document_id(document_id) == "stored"
-    assert await service.content_get_content_by_turn_id("r1", "t1") == "stored"
-    assert (await service.content_get_content_stats_for_room("r1"))[
-        "total_documents"
-    ] == 1
-
-
-@pytest.mark.asyncio
-async def test_facade_content_helpers_do_not_hydrate_expired_documents():
-    content_repo = StateContentRepository()
-    content_repo.docs["doc-expired"] = {
-        "document_id": "doc-expired",
-        "room_id": "r1",
-        "turn_id": "t1",
-        "content": "expired",
-        "expires_at": datetime(2026, 5, 12, tzinfo=UTC),
-    }
-    service = facade(content_repo=content_repo)
-
-    assert await service.content_get_content_by_document_id("doc-expired") is None
-    assert await service.content_get_content_by_turn_id("r1", "t1") is None
-    with pytest.raises(Exception, match="not found in storage"):
-        await service.content_expand_mongodb_reference(
-            {"storage_type": "mongodb", "document_id": "doc-expired"},
-            "t1",
-        )

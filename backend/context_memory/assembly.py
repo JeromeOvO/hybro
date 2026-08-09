@@ -611,11 +611,14 @@ def _search_snippets(memory_search_results: list | None) -> list[str] | None:
         return None
     snippets = []
     for result in memory_search_results[:5]:
-        preview = getattr(result, "content_preview", None) or getattr(
-            result, "content", ""
+        metadata = getattr(result, "metadata", {}) or {}
+        preview = (
+            getattr(result, "content_preview", None)
+            or metadata.get("content_preview")
+            or getattr(result, "content", "")
         )
-        role = getattr(result, "role", None) or "unknown"
-        agent = getattr(result, "agent_name", None)
+        role = getattr(result, "role", None) or metadata.get("role") or "unknown"
+        agent = getattr(result, "agent_name", None) or metadata.get("agent_name")
         role_val = getattr(role, "value", role)
         label = f"[{agent}]" if agent else f"[{role_val}]"
         if preview:

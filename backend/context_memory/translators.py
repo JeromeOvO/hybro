@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +9,6 @@ from common.dto import (
     ContextBlock,
     MemorySearchResult,
     RoomMemoryInfo,
-    UserMemory,
 )
 from common.utils.context_utils import estimate_tokens
 from context_memory.models import (
@@ -203,51 +201,6 @@ def render_room_memory_content(state: RoomMemoryState) -> str:
         for fact in state.room_facts
         if isinstance(fact, dict) and fact.get("content")
     )
-    if facts:
-        parts.append(f"Facts: {'; '.join(facts)}")
-    return "\n".join(parts)
-
-
-def user_memory_from_doc(doc: dict[str, Any]) -> UserMemory:
-    return UserMemory(
-        user_id=doc["user_id"],
-        memory_id=doc.get("memory_id") or f"user_memory:{doc['user_id']}",
-        content=render_user_memory_content(doc),
-        created_at=_maybe_datetime(doc.get("created_at")),
-        metadata={
-            "preferences": doc.get("preferences", {}),
-            "preferred_agents": doc.get("preferred_agents", []),
-            "communication_style": doc.get("communication_style"),
-            "user_facts": doc.get("user_facts", []),
-            "last_active_at": doc.get("last_active_at"),
-            "total_interactions": doc.get("total_interactions", 0),
-        },
-    )
-
-
-def render_user_memory_content(doc: dict[str, Any]) -> str:
-    parts: list[str] = []
-    if doc.get("communication_style"):
-        parts.append(f"Communication Style: {doc['communication_style']}")
-    preferences = doc.get("preferences") or {}
-    if preferences:
-        rendered = []
-        for key in sorted(preferences):
-            value = preferences[key]
-            if isinstance(value, dict | list):
-                value_text = json.dumps(value, sort_keys=True, separators=(",", ":"))
-            else:
-                value_text = str(value)
-            rendered.append(f"{key}={value_text}")
-        parts.append(f"Preferences: {'; '.join(rendered)}")
-    preferred_agents = doc.get("preferred_agents") or []
-    if preferred_agents:
-        parts.append(f"Preferred Agents: {', '.join(preferred_agents)}")
-    facts = [
-        str(fact.get("content"))
-        for fact in (doc.get("user_facts") or [])
-        if isinstance(fact, dict) and fact.get("content")
-    ]
     if facts:
         parts.append(f"Facts: {'; '.join(facts)}")
     return "\n".join(parts)

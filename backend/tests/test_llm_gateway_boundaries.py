@@ -147,9 +147,8 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "synthesis_coordinator.bind_summary_service(summary_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
-        "ContextMemoryRoomMemoryAdapter(",
-        "facade=context_memory_facade,",
-        "usage_store=memory_store,",
+        "add_synthesis_to_history=context_memory_facade.add_synthesis_to_history,",
+        "update_room_summary=context_memory_facade.update_room_summary,",
         "summary_service=summary_llm_service,",
     ]
     forbidden_snippets = [
@@ -180,7 +179,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
 
 
 def test_focused_llm_binding_targets_expose_startup_methods():
-    from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
     from execution.orchestration.room_supervisor_service import room_supervisor_service
     from execution.orchestration.synthesis_coordinator import SynthesisCoordinator
     from room.compat.runtime import room_runtime
@@ -199,7 +197,6 @@ def test_focused_llm_binding_targets_expose_startup_methods():
         if not callable(getattr(target, method, None))
     ]
     assert missing == [], f"startup binding targets missing methods: {missing}"
-    assert ContextMemoryRoomMemoryAdapter.__name__ == "ContextMemoryRoomMemoryAdapter"
 
 
 def test_llm_settings_are_not_read_by_feature_runtime_modules():

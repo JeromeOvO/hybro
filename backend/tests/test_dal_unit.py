@@ -170,7 +170,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
 
     assert set(collections) >= {
         "agent_capability_issues",
-        "agent_memories",
         "agents",
         "conversation_content",
         "cancelled_messages",
@@ -183,7 +182,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "room_quotes",
         "run_events",
         "runs",
-        "user_memories",
     }
     collections["agents"].drop_index.assert_awaited_once_with("unique_normalized_url")
     assert _has_create_index(

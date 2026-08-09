@@ -16,10 +16,8 @@ class MemoryMongoRepository:
         *,
         mongo: MongoDAL,
         collection_name: str = "room_memories",
-        user_collection_name: str = "user_memories",
     ) -> None:
         self._memories = mongo.collection(collection_name)
-        self._user_memories = mongo.collection(user_collection_name)
 
     async def get_room_memory(self, room_id: str) -> dict | None:
         return await self._memories.find_one({"room_id": room_id})
@@ -40,9 +38,6 @@ class MemoryMongoRepository:
             },
             upsert=True,
         )
-
-    async def get_user_memories(self, user_id: str) -> list[dict]:
-        return await self._user_memories.find({"user_id": user_id})
 
     async def delete_room_memory(self, room_id: str) -> bool:
         return await self._memories.delete_one({"room_id": room_id})

@@ -857,8 +857,6 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RuntimeMemoryStore: {
             "get_room_memory_by_room_id",
-            "increment_user_interactions",
-            "record_agent_call",
             "update_turn_notes",
         },
         protocols.RuntimeMessageStore: {
@@ -1129,7 +1127,6 @@ def test_protocol_methods_match_design_doc():
         protocols.MemoryRepository: {
             "get_room_memory",
             "upsert_room_memory",
-            "get_user_memories",
             "delete_room_memory",
             "create_room_memory",
             "ensure_room_memory",

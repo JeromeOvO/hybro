@@ -31,9 +31,6 @@ class FakeMemoryRepository:
     async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
         return None
 
-    async def get_user_memories(self, user_id: str) -> list[dict]:
-        return []
-
     async def delete_room_memory(self, room_id: str) -> bool:
         return True
 
@@ -417,20 +414,7 @@ def test_context_memory_import_boundary():
     }
     allowed_stdlib = set(sys.stdlib_module_names) | {"__future__"}
     allowed_roots = allowed_stdlib | {"common", "context_memory"}
-    protocol_legacy_model_imports = {
-        "models.request",
-        "models.response",
-    }
-    path_legacy_compat_imports = {
-        Path("context_memory/protocols.py"): protocol_legacy_model_imports,
-        Path("context_memory/compat/runtime.py"): {
-            "llm_gateway.errors",
-            "models.error",
-            "models.memory",
-            "models.request",
-            "models.response",
-        },
-    }
+    path_legacy_compat_imports: dict[Path, set[str]] = {}
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -457,23 +441,6 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "context_memory/compat/context_assembly.py": {
-            "assemble_supervisor_context_from_memory",
-            "assemble_agent_execution_context_from_memory",
-        },
-        "context_memory/compat/runtime.py": {
-            "legacy_create_room_memory",
-            "legacy_get_room_memory_by_room_id",
-            "legacy_get_room_memory_by_memory_id",
-            "legacy_update_room_memory_by_room_id",
-            "legacy_update_room_memory_by_memory_id",
-            "legacy_delete_room_memory_by_room_id",
-            "legacy_delete_room_memory_by_memory_id",
-            "initialize_or_update_room_memory",
-            "add_agent_response_to_memory",
-            "add_synthesis_to_history",
-            "update_room_summary",
-        },
         f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
             "legacy_create_room_memory",
             "legacy_get_room_memory_by_room_id",
