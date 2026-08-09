@@ -22,7 +22,8 @@ At runtime the system follows this broad layering:
 
 ```mermaid
 flowchart TD
-    Client[Frontend / API client] --> FastAPI[main.py FastAPI app]
+    Frontend[Next.js frontend] -->|REST sendMessage / room reads| FastAPI[main.py FastAPI app]
+    APIClient[Other API clients] --> FastAPI
     FastAPI --> APIGateway[api_gateway routers]
     APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
     APIGateway --> OwnerPorts[owner protocols / facades]
@@ -47,7 +48,9 @@ flowchart TD
 
     ResponseHandler --> Mongo[(MongoDB)]
     ResponseHandler --> Delivery[delivery facade / SSE]
-    RoomServices --> ContextMemory[context_memory facade]
+    RoomWrites[Persisted room messages] --> InternalEventing[common.eventing MessageCommitted]
+    InternalEventing --> ContextMemory[context_memory facade]
+    RoomServices --> ContextMemory
     RoomServices --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
@@ -625,80 +628,143 @@ oversized text, and control content fall back to a generic public prompt.
 
 ### `context_memory`
 
-`context_memory.ContextMemoryFacade` owns room memory projection, assembly,
-search, and compaction:
+`context_memory/` is the only runtime owner of room-memory projection, context
+assembly, typed search, structured room summaries, turn indexing, content
+expansion, and compaction. `container.py` constructs one
+`ContextMemoryFacade` directly over `MemoryMongoRepository`,
+`ContentStorageMongoRepository`, the Room-owned `RoomHistoryReader`, and the LLM
+gateway. There is no intermediate ContextMemory service singleton or application-
+shell adapter.
 
-- `project_message_for_event`: updates room memory from persisted message
-  history.
-- `assemble_context`: builds supervisor or agent context within token budgets.
-- `search_memory`: performs Mongo keyword search with temporal decay. It ranks
-  at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight records, then hydrates
-  ranked content in bounded batches until the requested number of surviving
-  snippets is available. Results expose explicit `keyword_score`,
-  `relevance_score`, and `temporal_decay_factor` fields.
-- `run_compaction`: compacts older turns using pointer-based full-content
-  storage.
-- `content_repository`: stores full content references for compacted turns.
+The primary product path is:
 
-Room-memory persistence has one canonical, unwindowed history at top-level
-`conversation_history`. Runtime reads, appends, note updates, and compaction touch
-only that field; `memory_content` retains summary metadata and no nested history.
-On append, the summary eviction boundary is derived directly from the canonical
-length: once the history already contains `max_turns` items, the item at
-`len(history) - max_turns` crosses the recent-display boundary and is summarized.
-Canonical turns remain present and reachable by lossless compaction. The migration,
-rollout preconditions, and rollback procedure are documented in
-[`conversation-history-cutover.md`](conversation-history-cutover.md).
+```text
+frontend POST /api/v1/roomCenter/sendMessage
+  -> API Gateway -> Execution/Room persists the user message
+  -> common.eventing publishes local-only MessageCommitted after persistence
+  -> ContextMemoryEventHandler reloads the authoritative Room message
+  -> ContextMemoryFacade projects one idempotent canonical turn
+  -> ContextMemory compacts only after a successful new projection
+  -> Room/Execution later assemble bounded context and typed search results
+```
 
-The facade uses:
+Agent-message commits enter the same event path after their Room write. User
+commits wait for the local handler before preflight continues; agent commits use
+asynchronous local handling. This wait provides local ordering, not transactional
+coupling: handler failures go to the internal eventing dead-letter path and do not
+roll back a persisted message. User events carry `room_agent_set` for canonical
+mention cleanup and attachment descriptions; agent events carry `agent_name` and
+`was_successful` so projection preserves the expected turn shape. Projection
+reloads by `message_id`, verifies room lineage and non-empty content, and dedupes
+with `turn_id == "message:{message_id}"`.
 
-- MongoDB for room memory and stored content documents.
-- MongoDB text search for relevant compacted turns.
-- `LLMGatewayImpl` and focused gateway services for summary and turn-note
-  extraction.
-- `RoomHistoryReader` from `room.RoomFacade` for source message history.
+#### Canonical persistence and append order
 
-`container.py` creates the facade before execution orchestration and registers
-`ContextMemoryEventHandler` on the independent internal event bus before that bus
-starts. The facade structurally conforms to the caller-specific
-`ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`,
-and `RoomMemoryCleanupPort`; the composition root injects only the ports each
-Room, Execution, event, or background-job consumer uses. Frontdoor user-message persistence and
-execution response paths publish local-only `MessageCommitted` events only after
-the message write succeeds; user-message commits wait for local handler
-completion before preflight continues. Eventing records handler failures in its
-bounded dead-letter buffer and sends a best-effort Redis dead-letter notification
-rather than propagating failures to the message writer, so this wait establishes
-local ordering but does not guarantee projection success. User
-commit events carry `room_agent_set` so event projection can clean raw
-`<@id|name>` mentions with canonical room agent names before appending
-attachment descriptions. Agent commit events carry `agent_name` and
-`was_successful` metadata so event projection preserves the old direct-memory
-turn shape. ContextMemory reloads the persisted message by `message_id`,
-projects it idempotently, and runs compaction only after a successful new
-projection.
-### ContextMemory Runtime Ownership
+`room_memories.conversation_history` is the single canonical, unwindowed history.
+Its persisted shape is:
 
-`context_memory/` owns room memory projection, memory search, turn indexing,
-compaction, content expansion, and context assembly. `ContextMemoryFacade` is
-the canonical runtime object for Room, Execution, background compaction, and
-event-driven projection.
+```text
+room_memories {
+  room_id,
+  memory_content: { summary, ... },
+  conversation_history: [
+    { turn_id, role, timestamp, representation: "full", content, ..., turn_notes },
+    { turn_id, role, timestamp, representation: "compact", content_ref, ..., turn_notes }
+  ]
+}
+```
 
-The former application-shell ContextMemory services and compatibility adapters
-have been removed. Startup wiring in `container.py` constructs the repositories
-and facade directly, and binds Execution's synthesis-history and room-summary
-callbacks to facade methods. The preserved event path remains:
-`MessageCommitted -> ContextMemoryEventHandler -> ContextMemoryFacade.project_message_for_event`,
-with compaction triggered through ContextMemory-owned facade methods. All
-production context assembly uses the core `context_memory.assembly`
-implementation.
+Full and compact entries share stable turn identity and ordering; a compact
+`content_ref` identifies the `conversation_content` document that holds the full
+payload under the configured retention policy. Runtime reads, appends, turn-note
+updates, assembly, search indexing, and compaction use only the top-level array.
+`memory_content` may contain the bounded display summary, but it must never contain
+a nested `conversation_history`.
 
-The legacy `/api/v1/memoryCenter/*ChatContext*` API and its `chat_contexts`
-runtime persistence wiring are retired. Deployments must confirm that no
-external consumers still call those endpoints. Operations must also review any
-production `chat_contexts` documents and indexes and decide their retention or
-archival policy separately; application startup does not drop that collection
-or its indexes.
+A projection append uses one MongoDB aggregation update. Its semantic order and
+invariants are:
+
+1. Start from the persisted top-level canonical array and append the new full
+   turn; no display window slices or removes canonical history.
+2. If the pre-append canonical length is already at least `max_turns`, the turn at
+   `len(history) - max_turns` has just crossed the recent-display boundary. Append
+   only its bounded preview to `memory_content.summary`. The old canonical turn
+   remains in the array, so the display/summary boundary loses no turn.
+3. After the new append is durably visible, evaluate compaction thresholds against
+   all canonical full turns. The just-persisted history can therefore reach the
+   threshold before any representation is compacted.
+4. For eligible older full turns, store lossless content in
+   `conversation_content`, then atomically replace each matching canonical array
+   element with its compact pointer. Compaction changes representation, not turn
+   membership or order, and recent turns remain full according to
+   `preserve_recent_turns`.
+
+Supervisor completion has a related explicit order while the normal
+`RoomMessageCenter` per-room lock is held: append the synthesis turn to canonical
+history, await the incremental structured room-summary update, then await
+`compact_if_needed`. Event-driven message projection similarly appends first and
+calls `run_compaction` only when the projection reports a new turn. The periodic
+compaction sweep is an additional safety path.
+
+#### Summary, search, and ports
+
+Room-summary extraction reads the existing `room_summary` and `room_facts` before
+calling the LLM. Merge semantics are incremental:
+
+- a non-empty `current_goal` replaces the previous goal; null/blank preserves it;
+- `key_decisions` and `important_constraints` append existing-first with
+  case-insensitive deduplication;
+- non-empty `open_questions` and `recent_agent_contributions` replace their prior
+  lists, while empty lists preserve them;
+- new `room_facts` append with case-insensitive deduplication and the bounded fact
+  retention policy; an empty list preserves existing facts.
+
+Search returns `list[common.dto.MemorySearchResult]` through `MemorySearchPort`.
+Mongo keyword search ranks at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight
+records using explicit keyword/relevance/temporal-decay scores, then hydrates
+content in bounded batches. Room and Execution consume the DTOs without parsing
+legacy dictionaries.
+
+The facade satisfies caller-specific leaf protocols from `common.protocols`:
+`ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`, and
+`RoomMemoryCleanupPort`. `container.py` injects only the narrow port each Room,
+Execution, event, or job consumer needs, even though one facade implements them.
+All production assembly goes through `context_memory.assembly`.
+
+The following ContextMemory-era surfaces are retired and must not be rewired:
+
+- the four legacy `/api/v1/memoryCenter/*ChatContext*` routes and application
+  access to `chat_contexts`;
+- the ContextMemory compatibility runtime, compatibility/legacy assembly service,
+  and ContextMemory-specific room-memory adapter;
+- usage tracking formerly attached to that compatibility runtime as a pseudo-
+  memory dependency.
+
+Deployments must confirm that external consumers no longer call the retired
+ChatContext endpoints. Operations must separately decide retention or archival of
+production `chat_contexts` documents and indexes; startup deliberately does not
+drop them.
+
+#### Migration and deferred concurrency work
+
+The canonical-history migration is an operational cutover, not an automatic
+startup action. Follow
+[`conversation-history-cutover.md`](conversation-history-cutover.md): take and
+verify a restorable `room_memories` backup, stop every room-memory writer, run and
+archive the default dry-run, resolve all blockers, rerun the dry-run while
+quiesced, apply only with `--apply`, deploy the canonical-only runtime, and verify
+representative reads/appends/deduplication/summary boundaries/compaction/assembly
+before resuming traffic. Rollback also requires stopped writers: retain migrated
+documents only if the rollback runtime reads the top-level field; otherwise
+restore the verified snapshot after accounting for post-snapshot writes. There is
+no automatic reverse migration.
+
+Cross-worker/sweep/event-handler single-flight compaction and compare-and-set or
+field-level conflict handling for concurrent room-summary refreshes are explicitly
+deferred from this migration. The regular RoomMessageCenter path is locally
+serialized and compaction writes tolerate already-compacted stale targets, but
+this release does not claim global compaction serialization or lost-update
+protection between concurrent whole-summary snapshots.
 
 ### `common.eventing`
 
@@ -1534,55 +1600,31 @@ creation.
 
 ## Context Memory Workflow
 
-Room memory is updated and used across turns.
+The canonical workflow and persistence invariants are defined in
+[`context_memory`](#context_memory). In operational sequence:
 
-1. User and agent messages are persisted in MongoDB.
-2. Frontdoor user-message persistence and execution response paths publish
-   `MessageCommitted(room_id, message_id, message_type, agent_id?,
-   room_agent_set?, agent_name?, was_successful?)` through Delivery's internal
-   event publisher with Redis fan-out disabled.
-   User commits request `wait_for_local_handlers=True`; agent commits keep the
-   default asynchronous local-handler behavior. Waiting means the local handler
-   task has completed; handler failures are captured in Delivery's bounded
-   in-memory dead-letter buffer with best-effort Redis notification.
-3. `ContextMemoryEventHandler` consumes `message_committed`, reloads the
-   persisted message through `RoomHistoryReader`, and calls
-   `project_message_for_event`.
-4. Projection is idempotent by `turn_id == "message:{message_id}"`; duplicate
-   hits do not add another turn.
-5. ContextMemory runs `run_compaction(room_id)` after a new projection, while
-   duplicate/missing/empty/mismatched messages skip compaction.
-6. Before agent execution, context assembly builds a token-budgeted context for
-   the supervisor or the target agent. Supervisor history windows treat zero as
-   no history and report initially discarded turns; truncation reasons use the
-   precedence token budget, turn count, then character limit. Context-memory
-   budget, compaction, and search configuration objects reject invalid direct
-   construction while Settings retains its compatibility normalization.
-7. Memory search can retrieve relevant historical turns with keyword scoring
-   and temporal decay.
-8. The compaction sweep still handles periodic compaction for eligible rooms.
-   Its non-terminal-run lookup is a fail-closed safety gate, and active rooms are
-   skipped before a fixed worker pool starts. The pool is fully reaped on normal
-   completion, failure, or cancellation.
+1. Persist the Room user or agent message before publishing `MessageCommitted`
+   on `common.eventing`; internal fan-out is local-only.
+2. Reload that persisted message, validate its room/content, and idempotently
+   append it to top-level `conversation_history`.
+3. In the append update, advance the bounded display summary when a turn crosses
+   the recent boundary without deleting that turn from canonical history.
+4. Only after the canonical append succeeds, evaluate and perform lossless
+   pointer compaction. Duplicate, missing, empty, or room-mismatched projections
+   do not trigger this event-driven compaction.
+5. For completed Supervisor synthesis, append synthesis, merge structured room
+   summary, then compact while the normal per-room execution lock is held.
+6. Before later execution, assemble supervisor/agent context from canonical
+   history and consume optional typed `MemorySearchResult` values under separate
+   token budgets. Current task, recent turns, room summary/facts, search snippets,
+   and quoted reply context stay separate so each boundary remains bounded.
+7. Periodic `compaction_sweep` covers eligible inactive rooms; its non-terminal-
+   run lookup fails closed, and its fixed worker pool is reaped on success,
+   failure, and cancellation.
 
-Room-summary extraction reads the existing projection before calling the LLM and
-includes it with the incremental merge rules in the prompt. A non-empty goal
-replaces the prior goal; durable decisions and constraints merge existing-first
-with case-insensitive deduplication; non-empty question and recent-contribution
-lists replace their prior lists; empty lists preserve prior values. Room facts
-continue to append with case-insensitive deduplication. Summary persistence still
-writes a whole-summary snapshot, so compare-and-set or field-level atomic handling
-for concurrent summary refreshes is explicitly deferred.
-
-The design keeps current task context, recent conversation context, room summary,
-memory search results, and quoted reply context separate so each can be bounded
-and tested independently.
-
-Memory search is provided by `ContextMemoryFacade` through the injected
-`MemorySearchPort`. Its typed boundary returns
-`list[common.dto.MemorySearchResult]`; Room and Execution pass those DTOs to
-context assembly without parsing response dictionaries. Keyword search and
-two-stage content hydration go through the context-memory content repository.
+This workflow does not add a frontend API or UI state: the frontend still sends
+and renders Room messages through the existing REST/SSE flow, while ContextMemory
+is an internal backend projection and execution dependency.
 
 An optional provider-neutral `extensions.vector_store.VectorStore` protocol is
 available for future features. It has no factory, default implementation,
