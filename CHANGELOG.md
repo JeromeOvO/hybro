@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12](https://github.com/hybroai/hybro/compare/v0.2.11...v0.2.12) (2026-08-09)
+
+
+### Features
+
+* discover host A2A agents ([19bfdcc](https://github.com/hybroai/hybro/commit/19bfdcc145717919ec2029aa08bf68fb5d3401a5))
+* discover local A2A agents and harden artifact delivery ([0fe3167](https://github.com/hybroai/hybro/commit/0fe31673713649cb489d1f033e156a569c4bf249))
+* **room:** add stable timeline cursor pagination ([57e8a77](https://github.com/hybroai/hybro/commit/57e8a77560b05b7850d8136b2990c71effb0240d))
+* **room:** add stable timeline cursor pagination ([515db98](https://github.com/hybroai/hybro/commit/515db981c2a31efbb49d45d0eb480b562165d109))
+* **ui:** mark debate mode as coming soon ([baae5ff](https://github.com/hybroai/hybro/commit/baae5ff421cb3b7e2e3335bd45e66bf3b43766ee))
+* **ui:** rename agent groups as teams ([96450de](https://github.com/hybroai/hybro/commit/96450decf69e985ca8029f15abcf24247cc11b36))
+* **ui:** simplify featured use cases ([ee61dda](https://github.com/hybroai/hybro/commit/ee61dda0394e1f36dd34f9038c743c2efde07afa))
+* **ui:** simplify use cases and improve team selection ([c7b2d3b](https://github.com/hybroai/hybro/commit/c7b2d3bf4049652966180843489b8b8e24c992be))
+* unify agent inventory and chat handoff ([72b123b](https://github.com/hybroai/hybro/commit/72b123b0f1a3d5cbda42a49076f9306d6178a7b1))
+* unify Agent inventory, management, and chat handoff ([ff9cadb](https://github.com/hybroai/hybro/commit/ff9cadb18bdc986856695d5024e023c09192a948))
+
+
+### Bug Fixes
+
+* address PR review feedback ([c283fd4](https://github.com/hybroai/hybro/commit/c283fd43b579eb357bd8bc723567b05e1ec92c26))
+* **agents:** add missing appending setting for artifacts ([c3df05c](https://github.com/hybroai/hybro/commit/c3df05c592d894065456e225f034e1e2a9dcc785))
+* **artifacts:** restore file rendering and strip hallucinated image embeds ([1a250a1](https://github.com/hybroai/hybro/commit/1a250a16cb547194c60bf16fcf2a6252a0340f89))
+* avoid replay after accepted terminal fanout ([5187523](https://github.com/hybroai/hybro/commit/51875239f5384e684b7926e362c46d85f3ac7cf4))
+* close cancellation and eventing reliability gaps ([8784fb0](https://github.com/hybroai/hybro/commit/8784fb0729d89655c969ed2f06d694507cc065b6))
+* close cancellation and shutdown races ([84bbe94](https://github.com/hybroai/hybro/commit/84bbe94fabed49f89ebd876be27894e98b9670b0))
+* fence terminal projection races ([d716be1](https://github.com/hybroai/hybro/commit/d716be17476d04c289a3e5541fb93f0ab2d453db))
+* handle unavailable agent artifacts ([43f42ee](https://github.com/hybroai/hybro/commit/43f42ee0ba289059b13129172d2e34747d6d7398))
+* harden delivery, cancellation, and terminal reconciliation ([498048a](https://github.com/hybroai/hybro/commit/498048a7063028d6090ee31aedce7ea1504154b2))
+* include cancellation configuration module ([0dd0646](https://github.com/hybroai/hybro/commit/0dd06460ad9f47f2e6b5aa96d8ede25b8cbd8abb))
+* **memory:** avoid duplicate truncated resources ([2b0fc36](https://github.com/hybroai/hybro/commit/2b0fc365358d521578c5d23faba9177fa4ecfdc0))
+* **memory:** backfill compact summaries in migration ([d6fb668](https://github.com/hybroai/hybro/commit/d6fb6687d09354fc6b804531890084f056d883c2))
+* **memory:** close context memory review gaps ([259e011](https://github.com/hybroai/hybro/commit/259e0113067c85de7640c837f067435b4b5f74d6))
+* **memory:** compact before history window eviction ([2215b16](https://github.com/hybroai/hybro/commit/2215b16accc5dc478a18cba420827013c4ca76e1))
+* **memory:** deliver selected resources as separate parts ([ce1594a](https://github.com/hybroai/hybro/commit/ce1594a6cb918d1a5149ea5d4ffe7c6d41d715c7))
+* **memory:** isolate selected resource boundaries ([72bf482](https://github.com/hybroai/hybro/commit/72bf4820304ffdf297bf4359aeff8f9ff3f8fd0c))
+* **memory:** literalize mongo pipeline values ([7e07c8b](https://github.com/hybroai/hybro/commit/7e07c8bd33e4631361d135431a6fe2f8f20d2e63))
+* **memory:** measure canonical compact context ([add25ba](https://github.com/hybroai/hybro/commit/add25ba8b28f60bf262b8dc3da92f7ec17a5a370))
+* **memory:** merge incremental room summaries ([f59e1c1](https://github.com/hybroai/hybro/commit/f59e1c1bff13faaacf756e1e4c2872f74f5782e7))
+* **memory:** normalize migrated compact token estimates ([ed3cc79](https://github.com/hybroai/hybro/commit/ed3cc7971fee8f753360bf2dd001eafa8f56c996))
+* **memory:** preserve resources on assembly failure ([7c3f309](https://github.com/hybroai/hybro/commit/7c3f3090d1e26adba2cdc7cb3cb80792f5ef560c))
+* **memory:** redact migration CLI errors ([44f0954](https://github.com/hybroai/hybro/commit/44f0954991359bc7e6418cfaef82134ea49f7fbd))
+* **memory:** remove migration URI argument ([ed63e1c](https://github.com/hybroai/hybro/commit/ed63e1ce55181edc5dd801cefd56bc232cf70218))
+* **memory:** strip partial resource markers ([d09cd74](https://github.com/hybroai/hybro/commit/d09cd748be59bb180188c9fa7180a97d6b2d94a5))
+* **memory:** use canonical history for fast routing ([e906e5e](https://github.com/hybroai/hybro/commit/e906e5e1385f51f1278e2754e34c3f8c42f88a80))
+* **memory:** validate assembly and memory config ([ee5ab59](https://github.com/hybroai/hybro/commit/ee5ab59024b489279bd65cb0dd888a652f33cc86))
+* **memory:** validate cross-field memory config ([2ffcd87](https://github.com/hybroai/hybro/commit/2ffcd87a6f408903279ae70d075ec888dc29986e))
+* **orchestration:** recover fulfilled goals and fix empty Story bodies ([6d0fda1](https://github.com/hybroai/hybro/commit/6d0fda116562006b65027010cd784b404d1e3db5))
+* preserve agent chat handoff on remount ([21f9fd4](https://github.com/hybroai/hybro/commit/21f9fd40dc5e97d20081c68276c7d17fe87ef3f0))
+* reconcile terminal run projections ([325fde8](https://github.com/hybroai/hybro/commit/325fde83c8d8134f7d10b5c30754f44d9cfb396b))
+* **supervisor:** finish synthesis turns and unblock stuck supervisor runs ([1f7e028](https://github.com/hybroai/hybro/commit/1f7e028ba56358d85e18bed69ca6c027509d98b7))
+* **synthesis:** persist completion kind before SSE and merge turn artifacts ([7e0a53c](https://github.com/hybroai/hybro/commit/7e0a53c22f528ac8a46c3071d3c830456e309cda))
+* **ui:** align room team selector behavior ([5a2bcf4](https://github.com/hybroai/hybro/commit/5a2bcf41e75886c6906166d27d7c7d8af7e9adfa))
+* **ui:** preserve room snapshot dispatch ([737c8d5](https://github.com/hybroai/hybro/commit/737c8d55028fd2e2f1ebd0d9cb70e66e4d993960))
+* **ui:** remove team description field ([4295a35](https://github.com/hybroai/hybro/commit/4295a35923fc458408d20c04d48d2eb3b3bd5ba5))
+* **ui:** restore snapshot routing on default selection ([b6450ca](https://github.com/hybroai/hybro/commit/b6450ca348e3e93d5826389c17bb8628935050a7))
+
 ## [0.2.11](https://github.com/hybroai/hybro/compare/v0.2.10...v0.2.11) (2026-08-03)
 
 
