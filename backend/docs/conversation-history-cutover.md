@@ -10,15 +10,24 @@ The migration reconciles transition-era documents in the same order as the forme
 runtime reducer: nested history first, direct history second. A later direct item
 replaces an earlier item with the same non-null `turn_id` at its stable position.
 Items with no `turn_id` or a null id are retained in stable order and are never
-deduplicated. Non-array history fields, non-object history items, and malformed
-`memory_content` values are blockers; they are reported and never silently dropped.
+deduplicated. After reconciliation, compact turns with a missing or blank
+`brief_summary` are backfilled with the same deterministic 200-character helper
+used by current compaction. The migration reads full content from
+`conversation_content` by `content_ref.document_id`, with a legacy
+`room_id` + `turn_id` lookup when needed. A non-empty existing
+`turn_notes.one_liner` is the only fallback when full content is unavailable.
+Non-array history fields, non-object history items, malformed `memory_content`
+values, and compact turns with neither recoverable content nor a reliable one-liner
+are blockers; they are reported and never silently replaced with a placeholder.
 
 ## Rollout preconditions (operations must execute)
 
 This repository change does **not** apply or observe the migration in production.
 Before enabling the cutover runtime, operations must:
 
-1. Take and verify a restorable backup/snapshot of `room_memories`.
+1. Take and verify a restorable backup/snapshot of `room_memories`. Record the
+   `conversation_content` TTL policy and confirm the migration identity can read
+   that collection; the migration does not modify it.
 2. Run the read-only audit against the target database and archive its output:
 
    ```bash
@@ -28,7 +37,12 @@ Before enabling the cutover runtime, operations must:
    ```
 
 3. Resolve every reported blocker. An apply is prohibited while blockers remain.
-   Confirm that every API client and worker which submits a full room-memory DTO
+   Review `backfill_count` separately from `missing_content_blockers`. A missing
+   content document may have been removed by the `conversation_content` TTL; if no
+   trustworthy existing one-liner remains, restore/recover the content through an
+   approved operational process before rerunning. Do not substitute
+   `[compact turn]` or another placeholder. Confirm that every API client and worker
+   which submits a full room-memory DTO
    populates top-level `conversation_history`; nested-only payload producers must be
    upgraded before cutover.
 4. Establish a maintenance window and stop **all** room-memory writers, including
@@ -51,8 +65,11 @@ Before enabling the cutover runtime, operations must:
    context assembly. Then monitor application errors and room-memory write metrics
    for the agreed observation window.
 
-The script is idempotent: a repeat apply after success reports zero updates. It is
-read-only by default and does not write a completion marker.
+The script is idempotent: a repeat apply after success reports zero updates and
+zero backfills. It is read-only by default, performs only reads against
+`conversation_content`, and does not write a completion marker. The optimistic
+apply predicate still snapshots both top-level and nested history fields; any
+concurrent history change stops the migration.
 
 ## Rollback
 

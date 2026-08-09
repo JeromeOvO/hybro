@@ -7,6 +7,7 @@ import pytest
 
 from scripts.migrate_conversation_history import (
     MigrationBlocker,
+    audit_collection,
     plan_document,
     run_migration,
 )
@@ -27,17 +28,21 @@ class FakeCursor:
         return rows
 
 
-class FakeCollection:
-    def __init__(self, documents):
+class FakeRoomCollection:
+    def __init__(self, documents, *, before_update=None):
         self.documents = [deepcopy(document) for document in documents]
         self.update_calls = 0
+        self.before_update = before_update
 
     def find(self, _query, *, projection):
         assert projection["conversation_history"] == 1
+        assert projection["room_id"] == 1
         return FakeCursor(self.documents)
 
     async def update_one(self, query, update):
         self.update_calls += 1
+        if self.before_update is not None:
+            self.before_update(self.documents, query)
         for document in self.documents:
             if _matches_snapshot(document, query):
                 before = deepcopy(document)
@@ -54,13 +59,31 @@ class FakeCollection:
         return SimpleNamespace(matched_count=0, modified_count=0)
 
 
-class FakeDatabase:
+class FakeContentCollection:
     def __init__(self, documents):
-        self.collection = FakeCollection(documents)
+        self.documents = [deepcopy(document) for document in documents]
+
+    async def find_one(self, query):
+        return next(
+            (
+                deepcopy(document)
+                for document in self.documents
+                if all(document.get(key) == value for key, value in query.items())
+            ),
+            None,
+        )
+
+
+class FakeDatabase:
+    def __init__(self, documents, content_documents=None, *, before_update=None):
+        self.collection = FakeRoomCollection(documents, before_update=before_update)
+        self.content_collection = FakeContentCollection(content_documents or [])
 
     def __getitem__(self, name):
-        assert name == "room_memories"
-        return self.collection
+        if name == "room_memories":
+            return self.collection
+        assert name == "conversation_content"
+        return self.content_collection
 
 
 def _matches_snapshot(document, query):
@@ -90,6 +113,30 @@ def turn(turn_id=None, content="content"):
     value = {"role": "user", "content": content}
     if turn_id is not None:
         value["turn_id"] = turn_id
+    return value
+
+
+def compact_turn(
+    turn_id,
+    document_id=None,
+    *,
+    brief_summary=None,
+    one_liner=None,
+):
+    value = {
+        "turn_id": turn_id,
+        "role": "user",
+        "content": None,
+        "representation": "compact",
+        "content_ref": {
+            "collection": "conversation_content",
+            "document_id": document_id,
+        },
+    }
+    if brief_summary is not None:
+        value["brief_summary"] = brief_summary
+    if one_liner is not None:
+        value["turn_notes"] = {"one_liner": one_liner}
     return value
 
 
@@ -197,6 +244,153 @@ def test_plan_document_malformed_is_a_blocker(document):
         plan_document(document)
 
 
+@pytest.mark.parametrize(
+    ("document", "content_document", "category"),
+    [
+        (
+            {
+                "_id": "legacy",
+                "room_id": "room-legacy",
+                "memory_content": {
+                    "conversation_history": [compact_turn("l", "content-l")]
+                },
+            },
+            {
+                "document_id": "content-l",
+                "room_id": "room-legacy",
+                "turn_id": "l",
+                "content": "  legacy   compact content  ",
+            },
+            "legacy_only",
+        ),
+        (
+            {
+                "_id": "direct",
+                "room_id": "room-direct",
+                "conversation_history": [
+                    compact_turn("d", "missing-id", brief_summary="   ")
+                ],
+            },
+            {
+                "document_id": "different-id",
+                "room_id": "room-direct",
+                "turn_id": "d",
+                "content": "direct fallback by room and turn",
+            },
+            "direct_only",
+        ),
+        (
+            {
+                "_id": "divergent",
+                "room_id": "room-divergent",
+                "memory_content": {
+                    "conversation_history": [compact_turn("same", "old-content")]
+                },
+                "conversation_history": [
+                    compact_turn("same", "winner-content", brief_summary="")
+                ],
+            },
+            {
+                "document_id": "winner-content",
+                "room_id": "room-divergent",
+                "turn_id": "same",
+                "content": "direct winner compact content",
+            },
+            "divergent",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_migration_backfills_reconciled_legacy_direct_and_divergent_compact(
+    document, content_document, category
+):
+    database = FakeDatabase([document], [content_document])
+    original = deepcopy(database.collection.documents)
+
+    dry_run = await run_migration(database, apply=False, batch_size=1)
+
+    assert getattr(dry_run, category) == 1
+    assert dry_run.backfill_count == 1
+    assert dry_run.missing_content_blockers == 0
+    assert database.collection.documents == original
+
+    applied = await run_migration(database, apply=True, batch_size=1)
+
+    assert applied.updated == 1
+    assert applied.backfilled == 1
+    migrated = database.collection.documents[0]
+    assert "conversation_history" not in migrated.get("memory_content", {})
+    summary = migrated["conversation_history"][0]["brief_summary"]
+    assert summary in {
+        "legacy compact content",
+        "direct fallback by room and turn",
+        "direct winner compact content",
+    }
+
+    repeated = await run_migration(database, apply=True, batch_size=1)
+
+    assert repeated.updated == 0
+    assert repeated.backfilled == 0
+
+
+@pytest.mark.asyncio
+async def test_migration_uses_bounded_existing_one_liner_when_content_is_missing():
+    one_liner = "  reliable   note " + ("detail " * 40)
+    database = FakeDatabase(
+        [
+            {
+                "_id": "fallback",
+                "room_id": "room-fallback",
+                "conversation_history": [
+                    compact_turn("fallback", "gone", one_liner=one_liner)
+                ],
+            }
+        ]
+    )
+
+    result = await run_migration(database, apply=True, batch_size=1)
+
+    summary = database.collection.documents[0]["conversation_history"][0][
+        "brief_summary"
+    ]
+    assert result.backfilled == 1
+    assert len(summary) == 200
+    assert summary.startswith("reliable note detail")
+    assert summary.endswith("...")
+
+
+@pytest.mark.asyncio
+async def test_migration_reports_missing_compact_content_as_distinct_blocker(capsys):
+    database = FakeDatabase(
+        [
+            {
+                "_id": "missing",
+                "room_id": "room-missing",
+                "conversation_history": [compact_turn("missing", "expired")],
+            }
+        ]
+    )
+
+    audit = await audit_collection(
+        database.collection,
+        database.content_collection,
+        batch_size=1,
+    )
+
+    assert audit.blockers == 1
+    assert audit.missing_content_blockers == 1
+    assert audit.backfill_count == 0
+    assert "missing full content" in capsys.readouterr().out
+
+    with pytest.raises(RuntimeError, match="blockers"):
+        await run_migration(database, apply=True, batch_size=1)
+    assert database.collection.update_calls == 0
+    assert (
+        "brief_summary"
+        not in database.collection.documents[0]["conversation_history"][0]
+    )
+
+
 @pytest.mark.asyncio
 async def test_migration_dry_run_is_read_only_and_apply_is_repeatable():
     database = FakeDatabase(
@@ -263,3 +457,36 @@ async def test_apply_fails_closed_before_any_write_when_a_blocker_exists():
 
     assert database.collection.update_calls == 0
     assert "conversation_history" not in database.collection.documents[0]
+
+
+@pytest.mark.asyncio
+async def test_compact_backfill_preserves_optimistic_history_snapshot():
+    def concurrent_write(documents, _query):
+        documents[0]["conversation_history"].append(turn("concurrent", "new"))
+
+    database = FakeDatabase(
+        [
+            {
+                "_id": "race",
+                "room_id": "room-race",
+                "conversation_history": [compact_turn("race", "content-race")],
+            }
+        ],
+        [
+            {
+                "document_id": "content-race",
+                "room_id": "room-race",
+                "turn_id": "race",
+                "content": "recover this summary",
+            }
+        ],
+        before_update=concurrent_write,
+    )
+
+    with pytest.raises(RuntimeError, match="snapshot changed during apply"):
+        await run_migration(database, apply=True, batch_size=1)
+
+    assert database.collection.update_calls == 1
+    history = database.collection.documents[0]["conversation_history"]
+    assert [item["turn_id"] for item in history] == ["race", "concurrent"]
+    assert "brief_summary" not in history[0]
