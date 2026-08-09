@@ -79,8 +79,11 @@ from execution.orchestration.planner_recovery import (
     resolve_open_planner_validation_failures,
 )
 from execution.orchestration.recovery_policy import (
+    action_for_rejected_ask_user,
     action_for_rejected_delegate,
     normalize_delegate_repair_lineage,
+    normalize_independent_parallel_group,
+    normalize_prose_expected_outputs,
 )
 from execution.orchestration.resources import (
     OrchestrationResourceProvider,
@@ -1211,6 +1214,8 @@ class SupervisorExecutor:
                 state,
                 planner_action,
             )
+            planner_action = normalize_independent_parallel_group(planner_action)
+            planner_action = normalize_prose_expected_outputs(planner_action)
             planner_action = normalize_delegate_repair_lineage(
                 planner_action,
                 state,
@@ -1292,21 +1297,65 @@ class SupervisorExecutor:
                     stage="state_validation",
                 )
                 if exhausted or state.steps_used >= state.step_budget:
-                    state = await self._mark_orchestration_terminal(
+                    recovery_action = action_for_rejected_ask_user(
                         state,
-                        OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        error_code=exc.code,
                     )
-                    return await self._log_state_and_return(
-                        room_id,
-                        state,
-                        self._state_run_result(status=RunStatus.FAILED, state=state),
-                    )
+                    if recovery_action is not None:
+                        try:
+                            planner_action = PlannerActionValidator.validate(
+                                recovery_action,
+                                run_state=state,
+                                resource_fingerprints=resource_fingerprints,
+                                guardrails_enabled=self.guardrails_enabled,
+                            )
+                        except PlannerActionValidationError as recovery_exc:
+                            logger.warning(
+                                "orchestration_recovery_exhausted_fallback_rejected "
+                                "run_id=%s from_error=%s fallback_error=%s",
+                                state.run_id,
+                                exc.code,
+                                str(recovery_exc),
+                            )
+                            recovery_action = None
+                        else:
+                            logger.info(
+                                "orchestration_recovery_exhausted_fallback_selected "
+                                "run_id=%s from_error=%s action=%s",
+                                state.run_id,
+                                exc.code,
+                                planner_action.action.value,
+                            )
+                    if recovery_action is None:
+                        await self._emit_supervisor_stage(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            client_request_id=state.client_request_id,
+                            details="Unable to continue the workflow.",
+                            stage="unable_to_continue",
+                        )
+                        state = await self._mark_orchestration_terminal(
+                            state,
+                            OrchestrationStatus.FAILED,
+                            reason=str(exc),
+                        )
+                        return await self._log_state_and_return(
+                            room_id,
+                            state,
+                            self._state_run_result(
+                                status=RunStatus.FAILED, state=state
+                            ),
+                        )
 
                 fallback_action = action_for_rejected_delegate(
                     state,
                     error_code=exc.code,
                 )
+                if fallback_action is None:
+                    fallback_action = action_for_rejected_ask_user(
+                        state,
+                        error_code=exc.code,
+                    )
                 if fallback_action is None:
                     continue
 
@@ -4975,19 +5024,46 @@ class SupervisorExecutor:
         if trajectory.system_agent_message_id:
 
             async def persist_and_emit_synthesis() -> None:
+                sys_message_id = trajectory.system_agent_message_id
+                assert sys_message_id is not None
                 db_msg = await self.message_reader.get_room_agent_message_by_message_id(
-                    trajectory.system_agent_message_id
+                    sys_message_id
                 )
                 if db_msg and db_msg.message_content:
                     db_msg.message_content.message_text = synthesis
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id,
-                        db_msg.message_content,
+                    task = db_msg.message_content.message_task
+                    if task is not None and task.status is not None:
+                        task.status.state = system_task_state_from_runtime_status(
+                            "completed"
+                        )
+                    extend_info = (
+                        dict(db_msg.extend_info)
+                        if isinstance(db_msg.extend_info, dict)
+                        else {}
                     )
+                    extend_info["summary_origin"] = "llm"
+                    db_msg.extend_info = extend_info
+                    await self.message_writer.update_room_agent_message_by_message_id(
+                        db_msg.message_id,
+                        db_msg,
+                    )
+                    try:
+                        await self.delivery.send_task_update(
+                            room_id=room_id,
+                            message_id=sys_message_id,
+                            status="completed",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to emit completed task_update for system:hybro "
+                            "message_id=%s",
+                            sys_message_id,
+                            exc_info=True,
+                        )
 
                 await self.delivery.send_agent_response(
                     room_id=room_id,
-                    message_id=trajectory.system_agent_message_id,
+                    message_id=sys_message_id,
                     agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
                     content=synthesis,
                     related_message_id=user_message_id,

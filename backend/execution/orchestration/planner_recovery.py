@@ -31,7 +31,10 @@ def recovery_hints_for_planner_error(error_code: str) -> list[str]:
             "remove_resource_ids_and_facts_from_task",
         ]
     if error_code.startswith("ask_user_blocker"):
-        return ["reference_validated_blocker_keys"]
+        return [
+            "reference_validated_blocker_keys",
+            "complete_when_agent_results_satisfy_goal",
+        ]
     return ["replan_with_valid_schema", "choose_valid_refs"]
 
 

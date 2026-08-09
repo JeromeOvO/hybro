@@ -1303,6 +1303,11 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
+        await self._persist_turn_completion_kind(
+            room_user_message_id,
+            turn_completion_kind,
+        )
+
         # Log room memory stats (debug/monitoring)
         await self._log_room_memory_stats(room_id)
         self._release_cancellation_token(room_user_message_id, token)
@@ -1923,6 +1928,10 @@ class RoomMessageCenter:
                         )
                     return
 
+                await self._persist_turn_completion_kind(
+                    user_message_id,
+                    turn_completion_kind,
+                )
             case RunStatus.PAUSED:
                 pass
 
@@ -2329,6 +2338,11 @@ class RoomMessageCenter:
                         )
                     return True
 
+                await self._persist_turn_completion_kind(
+                    result.user_message_id,
+                    turn_completion_kind or "deterministic",
+                )
+
                 await self._log_room_memory_stats(result.room_id)
             finally:
                 self._release_cancellation_token(
@@ -2504,12 +2518,12 @@ class RoomMessageCenter:
             # 1. Determine content — check agent count BEFORE emitting placeholder
             if synthesis_text is not None and synthesis_text.strip():
                 # When the supervisor synthesized from fewer than 2 agent
-                # responses, the individual task_update SSE already delivered
-                # the agent's content — skip the redundant summary to avoid
-                # duplicate content in the UI.  This mirrors the < 2 guard
-                # on the non-synthesis (coordinator) path below.
+                # responses, skip creating a duplicate summary-* message — the
+                # answer already lives on system:hybro (sys-*). Still report
+                # synthesis completion kind so hydrate/reconnect do not treat
+                # the turn as deterministic or still synthesizing.
                 if trajectory_responses is not None and len(trajectory_responses) < 2:
-                    return "deterministic", None
+                    return "synthesis", None
 
                 if not working_already_emitted:
                     await self._emit_summary_working(

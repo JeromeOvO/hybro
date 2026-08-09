@@ -738,6 +738,7 @@ def _executor(
             upsert_room_agent_message=AsyncMock(),
             delete_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_user_message_by_message_id=AsyncMock(return_value=True),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(),
         ),
         task_state_store=SimpleNamespace(
@@ -7596,6 +7597,8 @@ async def test_run_dispatch_failure_without_message_id_is_visible_to_planner():
 
 @pytest.mark.asyncio
 async def test_run_synthesis_persists_system_message_content():
+    from common.types import TaskState
+
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -7629,6 +7632,9 @@ async def test_run_synthesis_persists_system_message_content():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
     system_db_msg = _agent_message("sys-message-1")
+    system_db_msg.message_content.message_task = SimpleNamespace(
+        status=SimpleNamespace(state=TaskState.submitted)
+    )
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         return_value=system_db_msg
     )
@@ -7644,11 +7650,18 @@ async def test_run_synthesis_persists_system_message_content():
     )
 
     assert result.status == RunStatus.COMPLETED
-    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_awaited_once_with(
-        "sys-message-1",
-        system_db_msg.message_content,
-    )
+    executor.message_writer.update_room_agent_message_by_message_id.assert_awaited()
     assert system_db_msg.message_content.message_text == "Final summary"
+    assert (
+        system_db_msg.message_content.message_task.status.state == TaskState.completed
+    )
+    assert system_db_msg.extend_info["summary_origin"] == "llm"
+    executor.delivery.send_task_update.assert_any_await(
+        room_id="room-1",
+        message_id="sys-message-1",
+        status="completed",
+    )
+    executor.delivery.send_agent_response.assert_awaited()
 
 
 @pytest.mark.core

@@ -345,7 +345,11 @@ def _normalize_part_root(root: dict) -> dict | None:
             return None
         return root
 
-    if "metadata" in root and isinstance(root["metadata"], dict) and root["metadata"].get("file_id"):
+    if (
+        "metadata" in root
+        and isinstance(root["metadata"], dict)
+        and root["metadata"].get("file_id")
+    ):
         meta = root["metadata"]
         file_id = meta["file_id"]
         file_info = {

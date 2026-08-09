@@ -4,10 +4,14 @@ import uuid
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
+    Part,
+    Role,
     TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
+    TextPart,
+    Message,
 )
 from a2a.utils import new_text_artifact
 from agent import TravelPlannerAgent
@@ -30,27 +34,41 @@ class TravelPlannerAgentExecutor(AgentExecutor):
             raise Exception('No message provided')
 
         artifact_id = uuid.uuid4().hex
+        final_text = ''
         async for event in self.agent.stream(query):
+            chunk = event.get('content') or ''
+            if chunk:
+                final_text += chunk
             artifact = new_text_artifact(
                 name='current_result',
-                text=event['content'],
+                text=chunk,
             )
             artifact.artifact_id = artifact_id
             message = TaskArtifactUpdateEvent(
-                contextId=context.context_id, # type: ignore
-                taskId=context.task_id, # type: ignore
+                contextId=context.context_id,  # type: ignore
+                taskId=context.task_id,  # type: ignore
                 artifact=artifact,
-                append=True
+                append=True,
             )
             await event_queue.enqueue_event(message)
             if event['done']:
                 break
 
+        # Hybro (and other A2A clients) extract public display text from the
+        # completed status message. Artifact-only completion leaves the chat
+        # bubble empty even when streamed text was received.
+        status_message = None
+        if final_text.strip():
+            status_message = Message(
+                messageId=uuid.uuid4().hex,
+                role=Role.agent,
+                parts=[Part(root=TextPart(text=final_text))],
+            )
         status = TaskStatusUpdateEvent(
-            contextId=context.context_id, # type: ignore
-            taskId=context.task_id, # type: ignore
-            status=TaskStatus(state=TaskState.completed),
-            final=True
+            contextId=context.context_id,  # type: ignore
+            taskId=context.task_id,  # type: ignore
+            status=TaskStatus(state=TaskState.completed, message=status_message),
+            final=True,
         )
         await event_queue.enqueue_event(status)
 
@@ -59,4 +77,3 @@ class TravelPlannerAgentExecutor(AgentExecutor):
         self, context: RequestContext, event_queue: EventQueue
     ) -> None:
         raise Exception('cancel not supported')
-

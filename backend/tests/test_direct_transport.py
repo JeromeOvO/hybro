@@ -910,6 +910,9 @@ class TestFinalizeStreamingWritesArtifacts:
 
         assert status == ProcessingStatus.SUCCESS
         assert text == "Final answer from agent."
+        assert (
+            current_message.message_content.message_text == "Final answer from agent."
+        )
         proc.tsm.transition_task.assert_awaited_once()
         assert proc.tsm.transition_task.call_args[0][1] == TaskState.completed
         proc.response_handler.handle.assert_awaited_once()
@@ -917,6 +920,7 @@ class TestFinalizeStreamingWritesArtifacts:
         assert event_arg.message_id == "msg-1"
         assert event_arg.room_id == "room-1"
         assert event_arg.text == "Final answer from agent."
+        assert event_arg.public_text == "Final answer from agent."
         persisted_task = current_message.message_content.message_task
         assert persisted_task.history is None
         assert persisted_task.artifacts is not None
@@ -924,6 +928,56 @@ class TestFinalizeStreamingWritesArtifacts:
         assert (
             persisted_task.artifacts[0].parts[0].root.text == "Final answer from agent."
         )
+
+    @pytest.mark.asyncio
+    async def test_finalize_streaming_promotes_artifact_text_when_already_terminal(
+        self,
+    ):
+        """Artifact-only A2A completion must still persist public message_text."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=Task(
+                    id="task-001",
+                    contextId="ctx-001",
+                    status=TaskStatus(state=TaskState.completed),
+                    kind="task",
+                ),
+            )
+        )
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "travel-planner"
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info={"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"},
+            send_sse=False,
+        )
+
+        streaming_state = MessageStreamingState()
+        streaming_state.full_response_text = "Day 1: Arrive in Honolulu."
+        streaming_state.public_message_text = None
+        streaming_state.non_text_parts = []
+
+        status, text = await proc._finalize_streaming(ctx, streaming_state)
+
+        assert status == ProcessingStatus.SUCCESS
+        assert text == "Day 1: Arrive in Honolulu."
+        assert (
+            current_message.message_content.message_text == "Day 1: Arrive in Honolulu."
+        )
+        event_arg = proc.response_handler.handle.call_args[0][0]
+        assert event_arg.public_text == "Day 1: Arrive in Honolulu."
+        persisted_task = current_message.message_content.message_task
+        assert persisted_task.artifacts is not None
+        assert persisted_task.artifacts[0].name == "response"
 
     @pytest.mark.asyncio
     async def test_unavailable_only_stream_is_platform_failure(self):

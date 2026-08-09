@@ -17,8 +17,7 @@ from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableSerializable
 
 load_dotenv()
@@ -350,14 +349,12 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
 
     def _run_agent_loop(self, user_input: str, is_async: bool = False) -> str:
         """Run the agent loop and return the response content."""
-        messages = [
-            ("system", _system_prompt()),
-            ("human", user_input),
+        # Build messages directly. Do not run user_input through ChatPromptTemplate
+        # f-string parsing — Hybro-wrapped payloads may contain curly braces.
+        current_messages = [
+            SystemMessage(content=_system_prompt()),
+            HumanMessage(content=user_input),
         ]
-
-        prompt = ChatPromptTemplate.from_messages(messages)
-        formatted = prompt.invoke({})
-        current_messages = list(formatted.messages)
 
         for _ in range(self.max_iterations):
             response = self.llm.invoke(current_messages)
@@ -373,14 +370,10 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
 
     async def _arun_agent_loop(self, user_input: str) -> str:
         """Async run the agent loop and return the response content."""
-        messages = [
-            ("system", _system_prompt()),
-            ("human", user_input),
+        current_messages = [
+            SystemMessage(content=_system_prompt()),
+            HumanMessage(content=user_input),
         ]
-
-        prompt = ChatPromptTemplate.from_messages(messages)
-        formatted = prompt.invoke({})
-        current_messages = list(formatted.messages)
 
         for _ in range(self.max_iterations):
             response = await self.llm.ainvoke(current_messages)

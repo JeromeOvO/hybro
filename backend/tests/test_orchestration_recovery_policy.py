@@ -3,11 +3,15 @@ from execution.orchestration.blocker_resolver import validate_hitl_answered_bloc
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.recovery_policy import (
+    action_for_rejected_ask_user,
     action_for_rejected_delegate,
     normalize_delegate_repair_lineage,
+    normalize_independent_parallel_group,
+    normalize_prose_expected_outputs,
     recovery_directives,
 )
 from models.orchestration import (
+    AgentOutputRecord,
     BlockerRecord,
     DelegationOutcomeRecord,
     DispatchExpectedOutput,
@@ -212,6 +216,75 @@ def test_rejected_delegate_preserves_presence_only_obligation():
     }
 
 
+def test_rejected_ask_user_completes_when_agent_results_fulfilled():
+    state = _state(status="fulfilled")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="Here is your Hawaii itinerary.",
+        )
+    ]
+    state.blockers = []
+
+    action = action_for_rejected_ask_user(
+        state,
+        error_code="ask_user_blocker_keys_required",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.COMPLETE
+    assert action.completion_evidence is None
+
+
+def test_rejected_ask_user_prefers_validated_blocker_hitl():
+    state = _state(status="fulfilled")
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="partial answer",
+        )
+    ]
+    state.blockers = [
+        BlockerRecord(
+            key="blocker-1",
+            description="Need travel dates.",
+            blocked_output_keys=["quote"],
+            source="agent",
+            claimed_user_only=True,
+            validated_user_only=True,
+            validation_status="validated",
+        )
+    ]
+
+    action = action_for_rejected_ask_user(
+        state,
+        error_code="ask_user_blocker_not_validated",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.ASK_USER
+    assert action.questions[0].blocker_keys == ["blocker-1"]
+
+
+def test_rejected_ask_user_without_progress_returns_none():
+    state = _state(status="no_progress")
+    state.delegation_outcomes = []
+    state.agent_outputs = []
+    state.blockers = []
+
+    assert (
+        action_for_rejected_ask_user(
+            state,
+            error_code="ask_user_blocker_keys_required",
+        )
+        is None
+    )
+
+
 def test_does_not_set_repair_lineage_for_failed_operational_retry():
     state = _state(status="failed")
     action = PlannerAction(
@@ -344,3 +417,231 @@ def test_does_not_set_repair_lineage_for_same_shape_different_recorded_revision(
     )
 
     assert normalized.targets[0].repair_of_intent_id is None
+
+
+def test_normalize_independent_parallel_group_fills_shared_blank_group():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fan out",
+        targets=[
+            PlannedDelegateTarget(agent_id="agent-1", task="Plan trip."),
+            PlannedDelegateTarget(agent_id="agent-2", task="Check weather."),
+        ],
+    )
+
+    normalized = normalize_independent_parallel_group(action)
+
+    assert normalized.targets[0].parallel_group == normalized.targets[1].parallel_group
+    assert normalized.targets[0].parallel_group
+    assert normalized.targets[0].parallel_group.startswith("fanout-")
+
+
+def test_normalize_independent_parallel_group_preserves_explicit_group():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fan out",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Plan trip.",
+                parallel_group="hawaii",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Check weather.",
+                parallel_group="hawaii",
+            ),
+        ],
+    )
+
+    normalized = normalize_independent_parallel_group(action)
+
+    assert [target.parallel_group for target in normalized.targets] == [
+        "hawaii",
+        "hawaii",
+    ]
+
+
+def test_normalize_independent_parallel_group_unifies_partial_group():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fan out",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Plan trip.",
+                parallel_group="hawaii",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Check weather.",
+                parallel_group=None,
+            ),
+        ],
+    )
+
+    normalized = normalize_independent_parallel_group(action)
+
+    assert [target.parallel_group for target in normalized.targets] == [
+        "hawaii",
+        "hawaii",
+    ]
+
+
+def test_normalize_independent_parallel_group_leaves_conflicting_groups():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fan out",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Plan trip.",
+                parallel_group="a",
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Check weather.",
+                parallel_group="b",
+            ),
+        ],
+    )
+
+    normalized = normalize_independent_parallel_group(action)
+
+    assert [target.parallel_group for target in normalized.targets] == ["a", "b"]
+
+
+def test_normalize_independent_parallel_group_skips_dependent_targets():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="sequential",
+        targets=[
+            PlannedDelegateTarget(agent_id="agent-1", task="Plan trip."),
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Check weather.",
+                depends_on=["agent-1"],
+            ),
+        ],
+    )
+
+    normalized = normalize_independent_parallel_group(action)
+
+    assert [target.parallel_group for target in normalized.targets] == [None, None]
+
+
+def test_normalize_prose_expected_outputs_clears_text_contracts():
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fan out",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-weather",
+                task="Check Hawaii weather for the past month.",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="weather_past_month",
+                        kind="text",
+                        required=True,
+                        allow_partial=False,
+                    )
+                ],
+            ),
+            PlannedDelegateTarget(
+                agent_id="agent-travel",
+                task="Create a 7-day Hawaii plan.",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="7_day_travel_plan",
+                        kind="summary",
+                        required=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+
+    assert normalized.targets[0].expected_outputs == []
+    assert normalized.targets[1].expected_outputs == []
+
+
+def test_normalize_prose_expected_outputs_keeps_artifact_contracts():
+    structured = DispatchExpectedOutput(
+        output_key="quote",
+        kind="artifact",
+        artifact_name="quote",
+        required_fields=["pricing.premium"],
+    )
+    prose = DispatchExpectedOutput(
+        output_key="notes",
+        kind="text",
+        required=True,
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="mixed",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce quote and notes.",
+                expected_outputs=[structured, prose],
+            )
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+
+    assert len(normalized.targets[0].expected_outputs) == 1
+    assert normalized.targets[0].expected_outputs[0].output_key == "quote"
+    assert normalized.targets[0].expected_outputs[0].kind == "artifact"
+
+
+def test_normalize_prose_expected_outputs_clears_invented_structured_contracts():
+    invented = DispatchExpectedOutput(
+        output_key="travel_plan",
+        kind="structured",
+        artifact_name="Hawaii_Trip_Itinerary",
+        required_fields=["destination", "travel_dates", "budget"],
+        required=True,
+        allow_partial=False,
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="invented structured contract",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-travel",
+                task="Create a Hawaii itinerary.",
+                expected_outputs=[invented],
+            )
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+
+    assert normalized.targets[0].expected_outputs == []
+
+
+def test_normalize_prose_expected_outputs_clears_text_with_required_fields():
+    shaped = DispatchExpectedOutput(
+        output_key="weather_report",
+        kind="text",
+        required_fields=["temperature"],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="shaped text",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Return structured weather fields.",
+                expected_outputs=[shaped],
+            )
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+
+    assert normalized.targets[0].expected_outputs == []

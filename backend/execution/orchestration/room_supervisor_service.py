@@ -946,6 +946,9 @@ class RoomSupervisorService:
                     for output in raw_expected_outputs
                 ]
             for field_name in (
+                "parallel_group",
+                "depends_on",
+                "required_resource_refs",
                 "context_refs",
                 "artifact_refs",
                 "attachment_refs",

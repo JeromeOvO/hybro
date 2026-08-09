@@ -1292,6 +1292,26 @@ class DirectTransport(AgentTransport):
             public_parts.append(public_part)
         return public_parts
 
+    @staticmethod
+    def _resolved_public_stream_text(
+        streaming_state: MessageStreamingState,
+    ) -> str | None:
+        """Prefer status-message text; fall back to streamed artifact text.
+
+        A2A agents may complete with text-only artifacts and an empty
+        ``TaskStatus.message``. Sync/poll paths already promote artifact text
+        into ``message_text``; streaming must do the same so reconnect and the
+        conversation UI are not blank.
+        """
+
+        for candidate in (
+            streaming_state.public_message_text,
+            streaming_state.full_response_text,
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return None
+
     async def _finalize_streaming(
         self,
         ctx: ProcessingContext,
@@ -1391,11 +1411,18 @@ class DirectTransport(AgentTransport):
                     await self._emit_terminal(ctx, final_st)
                     return ProcessingStatus.SUCCESS, streaming_state.full_response_text
                 else:
+                    public_stream_text = self._resolved_public_stream_text(
+                        streaming_state
+                    )
                     if streaming_state.full_response_text:
                         self._materialize_text_as_response_artifact(
                             task,
                             streaming_state.full_response_text,
                             artifact_id=f"{ctx.current_message.message_id}-final",
+                        )
+                    if public_stream_text and ctx.current_message.message_content:
+                        ctx.current_message.message_content.message_text = (
+                            public_stream_text
                         )
                     await self.tsm.transition_task(
                         ctx.current_message, CommonTaskState.COMPLETED, persist=False
@@ -1412,14 +1439,19 @@ class DirectTransport(AgentTransport):
                     await self._emit_terminal(
                         ctx,
                         CommonTaskState.COMPLETED,
-                        public_text=streaming_state.public_message_text,
+                        public_text=public_stream_text,
                     )
             elif streaming_state.full_response_text:
+                public_stream_text = self._resolved_public_stream_text(streaming_state)
                 self._materialize_text_as_response_artifact(
                     task,
                     streaming_state.full_response_text,
                     artifact_id=f"{ctx.current_message.message_id}-final",
                 )
+                if public_stream_text and ctx.current_message.message_content:
+                    ctx.current_message.message_content.message_text = (
+                        public_stream_text
+                    )
                 await self.tsm.transition_task(
                     ctx.current_message,
                     CommonTaskState.COMPLETED,
@@ -1437,7 +1469,7 @@ class DirectTransport(AgentTransport):
                 await self._emit_terminal(
                     ctx,
                     CommonTaskState.COMPLETED,
-                    public_text=streaming_state.public_message_text,
+                    public_text=public_stream_text,
                 )
             else:
                 logger.warning(
@@ -1463,19 +1495,23 @@ class DirectTransport(AgentTransport):
             if is_failure_state(final_state):
                 final_error = _safe_terminal_error(final_state)
 
+            public_stream_text = None
             if is_failure_state(final_state):
                 ctx.current_message.message_content.message_text = (
                     final_error or _PUBLIC_AGENT_FAILURE_MESSAGE
                 )
-            elif (
-                state_str(final_state) == CommonTaskState.COMPLETED.value
-                and streaming_state.full_response_text
-            ):
-                self._materialize_text_as_response_artifact(
-                    task,
-                    streaming_state.full_response_text,
-                    artifact_id=f"{ctx.current_message.message_id}-final",
-                )
+            elif state_str(final_state) == CommonTaskState.COMPLETED.value:
+                public_stream_text = self._resolved_public_stream_text(streaming_state)
+                if streaming_state.full_response_text:
+                    self._materialize_text_as_response_artifact(
+                        task,
+                        streaming_state.full_response_text,
+                        artifact_id=f"{ctx.current_message.message_id}-final",
+                    )
+                if public_stream_text and ctx.current_message.message_content:
+                    ctx.current_message.message_content.message_text = (
+                        public_stream_text
+                    )
             if task:
                 ctx.current_message.message_content.message_task = (
                     self._public_terminal_output_task_model(task)
@@ -1485,7 +1521,7 @@ class DirectTransport(AgentTransport):
                 ctx,
                 final_state,
                 error=final_error,
-                public_text=streaming_state.public_message_text,
+                public_text=public_stream_text,
             )
 
             if is_failure_state(final_state):

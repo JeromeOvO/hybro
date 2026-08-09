@@ -478,7 +478,24 @@ result ingestion. `build_orchestration_planner_context` projects quoted content,
 candidate metadata, step budget, and durable run state into an immutable
 planner-facing payload; `RoomSupervisorPlannerAdapter` parses and validates the
 next action through the supervisor service's public planner boundary and the
-existing action contract. Backend control state remains private, but the latest
+existing action contract. Parse preserves delegate fanout fields
+(`parallel_group`, `depends_on`, `required_resource_refs`); when a multi-target
+delegate omits a usable shared group for independent work, or only partially
+fills one shared group, Execution normalizes to one group before validation.
+Conflicting non-empty groups remain validator errors. Planner-invented
+`expected_outputs` that Execution cannot enforce are cleared before
+validation: only ``kind: artifact`` contracts are kept. Free-text kinds
+(``text``, ``summary``, ``structured``, and other labels) depend on semantic
+facts keyed by ``output_key``, and free-text Agent replies are intentionally
+excluded from that fact map—so those contracts would loop as ``no_progress``
+and block completion. Clearing them restores the legacy empty-contract
+fulfillment path for completed non-empty Agent text. Real named DataPart
+artifact contracts remain unchanged. When the planner later invents a
+post-dispatch `ask_user` without validated blocker keys, Execution recovers by
+preferring a corrected HITL action for open validated blockers, or `complete`
+when Agent results already satisfy the goal—so the run does not exhaust retries
+while the UI stays on “checking whether the goal is complete.” Exhausted
+planner-validator retries emit an explicit `unable_to_continue` stage. Backend control state remains private, but the latest
 open planner-validator failure is projected separately as bounded,
 planner-facing retry feedback containing only its error, retry count, and
 recovery hints. The next planning attempt must correct that error instead of
@@ -1135,6 +1152,12 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      parallel or sequence.
    - Execution performs final synthesis after `complete` and marks the run
      terminal only after the user-facing response has been streamed.
+   - Synthesis persistence writes the answer onto `system:hybro`, stamps
+     `summary_origin: llm`, terminalizes the system task as `completed`, and
+     emits `task_update(completed)` before the final `agent_response`.
+   - RoomMessageCenter persists `turn_completion_kind` on the user message
+     after durable root `COMPLETED` wins (`synthesis` even when a duplicate
+     `summary-*` row is skipped for fewer than two trajectory responses).
    - Agent messages are created dynamically instead of being pre-generated.
    - Terminal status is emitted after synthesis or final failure/cancellation.
 
@@ -1344,7 +1367,10 @@ the idempotency update plus message, room, and client-request-id reads needed by
 `TaskStatus.message` is extracted into Hybro's explicit public `message_text`
 channel before the original status message is removed; structured completed
 artifacts remain a separate public output channel and can be displayed beside
-that text. Terminal task SSE prefers the persisted `message_text`, including
+that text. When streaming completes with text accumulated only from artifact
+updates (empty status message), DirectTransport promotes that streamed text
+into `message_text` the same way sync/poll paths do, so reconnect and the
+conversation UI are not blank. Terminal task SSE prefers the persisted `message_text`, including
 when the returned artifact contains only `DataPart` or `FilePart` content; a
 legacy message whose stored text is still equal to its dispatch seed falls back
 to extracted artifact text. Streaming text that should survive reconnect is materialized as a

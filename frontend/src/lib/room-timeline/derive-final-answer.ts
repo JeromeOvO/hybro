@@ -315,7 +315,11 @@ export function deriveFinalAnswer(
       || turn.processingStatusLogs.length > 0
       || real.length > 1
     )
-  if (real.length === 1 && !activeSupervisorTurn) {
+  if (
+    real.length === 1
+    && !activeSupervisorTurn
+    && !(orchestrator && orchestrator.content.trim().length > 0)
+  ) {
     return {
       kind: "single",
       label: "Working",
@@ -325,6 +329,27 @@ export function deriveFinalAnswer(
 
   // --- 4. Orchestrator-driven Derivation (New System Agent Architecture) ---
   if (orchestrator) {
+    const orchestratorHasAnswer = orchestrator.content.trim().length > 0
+    if (
+      orchestratorHasAnswer
+      && orchestrator.summaryOrigin !== "deterministic"
+      && !isDeterministicDigestContent(orchestrator.content)
+      && (
+        orchestrator.status === "completed"
+        || turn.turnTerminalStatus === "completed"
+      )
+    ) {
+      const llmSummary = turn.agentResults.find(
+        r => r.isSummaryAgent && r.summaryOrigin !== "deterministic"
+      )
+      return {
+        kind: "llm_synthesis",
+        label: "Synthesized",
+        summaryOrigin: "llm",
+        primaryMessageId: llmSummary?.messageId ?? summary?.messageId ?? orchestrator.messageId,
+      }
+    }
+
     if (orchestrator.status === "working" && !isTurnTerminal(turn.status)) {
       const isSynthesizing = shouldShowSynthesizingPhase(turn, real)
         || orchestrator.taskStatusMessage?.toLowerCase().includes('synthesiz')
