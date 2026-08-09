@@ -5,7 +5,7 @@ This module implements pointer-based compaction (NOT summarization).
 Full content is stored in MongoDB and replaced with references in context.
 Original content is always retrievable on demand.
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
+See docs/System-Architecture.md for the current design.
 """
 
 from datetime import datetime
@@ -23,7 +23,7 @@ class StorageType(str, Enum):
     MONGODB: Text content stored in MongoDB (current implementation)
     URL: Web content referenced by URL
 
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     MONGODB = "mongodb"
@@ -35,7 +35,7 @@ class ContentReference(BaseModel):
     Pointer to full content in storage. Used for compact representation.
 
     Current implementation: MongoDB for text content
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 for specification.
+    See docs/System-Architecture.md for the current architecture.
     """
 
     storage_type: StorageType
@@ -60,41 +60,3 @@ class ContentReference(BaseModel):
         elif self.storage_type == StorageType.URL:
             return f"[Content from: {self.url}]"
         return "[Content reference]"
-
-
-class StoredContent(BaseModel):
-    """
-    Full text content stored for compacted turns.
-
-    Stored in MongoDB `conversation_content` collection.
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 for schema.
-    """
-
-    id: str = Field(alias="_id")
-    room_id: str
-    turn_id: str
-    content: str  # Full text content
-    content_type: (
-        str  # "text", "tool_result", "agent_response" (uses memory.ContentType values)
-    )
-    content_hash: str  # SHA-256 for integrity/deduplication
-    stored_at: datetime = Field(default_factory=utcnow)
-
-    # TTL: None (keep forever) or set retention policy
-    expires_at: datetime | None = None
-
-    # Optional: turn_notes for keyword search on compact turns
-    turn_notes: dict | None = None
-
-    class Config:
-        populate_by_name = True
-
-
-class CompactionResult(BaseModel):
-    """Result of a compaction operation."""
-
-    room_id: str
-    compacted_count: int  # Number of turns compacted
-    tokens_saved: int  # Estimated tokens saved
-    errors: list[str] = Field(default_factory=list)  # Any errors encountered
-    compacted_at: datetime = Field(default_factory=utcnow)

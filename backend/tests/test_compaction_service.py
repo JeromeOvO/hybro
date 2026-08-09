@@ -62,7 +62,7 @@ def room_doc(turns: list[dict]) -> dict:
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {"conversation_history": turns},
+        "memory_content": {"summary": None},
         "conversation_history": turns,
         "total_compactions": 0,
     }
@@ -79,9 +79,6 @@ class MemoryRepositorySpy:
         if self.doc and self.doc.get("room_id") == room_id:
             return self.doc
         return None
-
-    async def get_user_memories(self, _user_id: str) -> list[dict]:
-        return []
 
     async def create_room_memory(self, memory: dict) -> str:
         self.doc = memory
@@ -108,9 +105,6 @@ class MemoryRepositorySpy:
             turn["content"] = None
             turn["content_ref"] = entry["content_ref"]
             turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
-        self.doc["memory_content"]["conversation_history"] = self.doc[
-            "conversation_history"
-        ]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 
@@ -254,7 +248,10 @@ async def test_compact_room_memory_preserves_recent_and_stores_content_hash() ->
     )
 
     assert result.compacted_count == 2
-    assert result.tokens_saved == 130
+    assert result.tokens_saved == sum(
+        max(0, full_tokens - entry["estimated_tokens_compact"])
+        for full_tokens, entry in zip((80, 90), repo.compacted_entries, strict=True)
+    )
     assert [entry["turn_id"] for entry in repo.compacted_entries] == ["t1", "t2"]
     assert repo.doc["conversation_history"][2]["representation"] == "full"
     stored = content_repo.docs[make_document_id("r1", "t1")]

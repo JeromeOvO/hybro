@@ -17,12 +17,17 @@ from common.dto import (
     CreateRoomRequest,
     ExplicitAgentMention,
     MembershipSeed,
+    MemorySearchResult,
     ParsedUserMessageRequest,
     RoomInfo,
     UserMessageInsertResult,
 )
 from common.message_commit_events import publish_message_committed
-from common.protocols.context_memory_protocols import ContextMemoryRuntime
+from common.protocols.context_memory_protocols import (
+    ContextAssemblyPort,
+    MemorySearchPort,
+    RoomMemoryCleanupPort,
+)
 from common.types import (
     Artifact,
     DataPart,
@@ -44,11 +49,7 @@ from common.utils.a2a_file_modes import (
 )
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.cancellation import CancellationToken
-from common.utils.context_utils import (
-    build_context_for_agent,
-    build_minimal_context,
-    migrate_legacy_memory,
-)
+from common.utils.context_utils import build_minimal_context
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from context_memory.projection import _human_size, build_turn_content
@@ -64,7 +65,7 @@ from execution.task_tracking import (
 )
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
-from models.memory import MemoryContent, RoomMemory
+from models.memory import RoomMemory
 from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     AgentCenterRequest,
@@ -239,8 +240,9 @@ class RoomServices:
         self._room_files = None
         self._facade = None
         self._bound = False
-        self._context_memory_manager = None
-        self._context_memory_runtime: ContextMemoryRuntime | None = None
+        self._context_assembly: ContextAssemblyPort | None = None
+        self._memory_search: MemorySearchPort | None = None
+        self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
         self._internal_event_publisher = None
         self._attachment_metadata_reader = None
         self._attachment_content_reader = None
@@ -303,11 +305,14 @@ class RoomServices:
 
     def bind_context_memory(
         self,
-        memory_manager,
-        context_memory_runtime: ContextMemoryRuntime | None = None,
+        *,
+        context_assembly: ContextAssemblyPort | None = None,
+        memory_search: MemorySearchPort | None = None,
+        room_memory_cleanup: RoomMemoryCleanupPort | None = None,
     ) -> None:
-        self._context_memory_manager = memory_manager
-        self._context_memory_runtime = context_memory_runtime or memory_manager
+        self._context_assembly = context_assembly
+        self._memory_search = memory_search
+        self._room_memory_cleanup = room_memory_cleanup
 
     def bind_internal_event_publisher(self, internal_event_publisher) -> None:
         self._internal_event_publisher = internal_event_publisher
@@ -370,12 +375,15 @@ class RoomServices:
             )
         return self._facade
 
-    def _require_context_memory_runtime(self) -> ContextMemoryRuntime:
-        if self._context_memory_runtime is None:
-            raise RuntimeError(
-                "RoomServices.bind_context_memory() not called - startup incomplete"
-            )
-        return self._context_memory_runtime
+    def _require_context_assembly(self) -> ContextAssemblyPort:
+        if self._context_assembly is None:
+            raise RuntimeError("RoomServices context assembly port has not been bound")
+        return self._context_assembly
+
+    def _require_memory_search(self) -> MemorySearchPort:
+        if self._memory_search is None:
+            raise RuntimeError("RoomServices memory search port has not been bound")
+        return self._memory_search
 
     @staticmethod
     def _assembled_context_text(assembled) -> str:
@@ -387,12 +395,11 @@ class RoomServices:
         *,
         query: str,
         room_id: str,
-    ) -> list:
-        runtime = self._require_context_memory_runtime()
-        payload = await runtime.legacy_search(query=query, room_id=room_id)
-        if isinstance(payload, dict):
-            return list(payload.get("results") or [])
-        return list(getattr(payload, "results", []) or [])
+    ) -> list[MemorySearchResult]:
+        return await self._require_memory_search().search_memory(
+            room_id=room_id,
+            query=query,
+        )
 
     async def _build_supervisor_conversation_context(
         self,
@@ -416,7 +423,7 @@ class RoomServices:
         except Exception as e:
             logger.debug("RoomServices: MemorySearch skipped%s: %s", log_context, e)
         try:
-            assembled = self._require_context_memory_runtime().assemble_supervisor_context_from_memory(
+            assembled = self._require_context_assembly().assemble_supervisor_context_from_memory(
                 room_memory,
                 message_text,
                 agent_registry=agent_registry,
@@ -426,7 +433,7 @@ class RoomServices:
             return self._assembled_context_text(assembled)
         except Exception as e:
             logger.warning(
-                "RoomServices: ContextMemoryRuntime failed%s: %s",
+                "RoomServices: context assembly failed%s: %s",
                 log_context,
                 e,
             )
@@ -442,7 +449,7 @@ class RoomServices:
         quoted_text: str | None,
         agent_task: str | None,
     ) -> str:
-        assembled = self._require_context_memory_runtime().assemble_agent_execution_context_from_memory(
+        assembled = self._require_context_assembly().assemble_agent_execution_context_from_memory(
             room_memory,
             current_task,
             agent_name=agent_name,
@@ -452,6 +459,36 @@ class RoomServices:
             include_system_instruction=True,
         )
         return self._assembled_context_text(assembled)
+
+    def _build_routing_context_from_memory(
+        self,
+        room_memory: RoomMemory,
+        current_task: str,
+    ) -> str:
+        """Build small pre-routing context from canonical room history."""
+        context_assembly = getattr(self, "_context_assembly", None)
+        if context_assembly is not None:
+            try:
+                assembled = context_assembly.assemble_supervisor_context_from_memory(
+                    room_memory,
+                    current_task,
+                    agent_registry=[],
+                    max_turns=5,
+                )
+                return self._assembled_context_text(assembled)
+            except Exception as exc:
+                logger.warning(
+                    "RoomServices: routing context assembly failed: %s",
+                    exc,
+                )
+
+        # Compatibility helper remains canonical: RoomMemory exposes the top-level
+        # conversation_history expected by build_minimal_context's structural input.
+        return build_minimal_context(
+            room_memory,
+            current_task=current_task,
+            max_turns=5,
+        )
 
     @staticmethod
     def _legacy_room_from_info(info: RoomInfo) -> Room:
@@ -1147,14 +1184,14 @@ class RoomServices:
         # Accepted room-deletion cleanup; startup binds the ContextMemory
         # protocol surface and this compatibility owner never imports the
         # concrete facade.
-        if self._context_memory_manager is None:
+        if self._room_memory_cleanup is None:
             logger.warning(
                 "Context & Memory cleanup skipped for room %s; manager not bound",
                 room_id,
             )
             return False
         try:
-            ok = await self._context_memory_manager.delete_room_memory(room_id)
+            ok = await self._room_memory_cleanup.delete_room_memory(room_id)
             if not ok:
                 logger.warning(
                     "Context & Memory cleanup reported failure for room %s",
@@ -2855,18 +2892,13 @@ class RoomServices:
         room_memory = None
         if not use_supervisor and len(selected_agent_set) > 1:
             room_memory = await self._store.get_room_memory_by_room_id(request.room_id)
-            if room_memory and room_memory.memory_content:
-                room_memory.memory_content = migrate_legacy_memory(
-                    room_memory.memory_content
-                )
 
         # Build conversation context only for queue/debate message preparation.
         conversation_context = None
-        if room_memory and room_memory.memory_content:
-            conversation_context = build_minimal_context(
-                room_memory.memory_content,
-                current_task=message_text,
-                max_turns=5,
+        if room_memory:
+            conversation_context = self._build_routing_context_from_memory(
+                room_memory,
+                message_text,
             )
         ext_q = (
             user_message.extend_info.get("quoted_text")
@@ -3738,8 +3770,9 @@ class RoomServices:
         """
         Process an agent message by building budget-aware context.
 
-        Uses ContextAssemblyService for structured MemoryContent (§11.2),
-        falls back to legacy string formatting for old-style memory.
+        Uses canonical top-level RoomMemory history through ContextAssemblyPort.
+        If assembly fails, the original outbound message is retained and the
+        failure is logged; deleted nested history is never used as a fallback.
 
         Args:
             request: The agent message request
@@ -3864,30 +3897,6 @@ class RoomServices:
             current_task_for_cas = turn_ctx.message_text if turn_ctx else original_text
             agent_task_for_cas = original_text if turn_ctx else None
 
-        embedded_text_resource_indexes: set[int] = set()
-        selected_text_sections: list[str] = []
-        if dispatch_task_text and isinstance(resolved_resource_payloads, list):
-            for index, payload in enumerate(resolved_resource_payloads):
-                if not isinstance(payload, dict):
-                    continue
-                text = payload.get("text")
-                mime_type = str(payload.get("mime_type") or "").split(";", 1)[0]
-                if (
-                    not isinstance(text, str)
-                    or not text.strip()
-                    or mime_type == "application/json"
-                ):
-                    continue
-                ref_id = payload.get("ref_id")
-                label = ref_id if isinstance(ref_id, str) and ref_id else "resource"
-                selected_text_sections.append(f"Resource {label}:\n{text.strip()}")
-                embedded_text_resource_indexes.add(index)
-        if selected_text_sections:
-            current_task_for_cas = (
-                f"{current_task_for_cas}\n\n"
-                "Selected source material follows.\n"
-                + "\n\n".join(selected_text_sections)
-            )
         room_awareness_task_description = (
             dispatch_task_text if dispatch_task_text else message.task_content
         )
@@ -3912,71 +3921,19 @@ class RoomServices:
             agent_profiles=agent_profiles,
         )
 
-        # Build context using ContextAssemblyService (§11.2) or legacy fallback
+        # Build context only from canonical RoomMemory assembly when memory exists.
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
-                room_memory_content = (
-                    room_memory.memory_content if room_memory else None
-                )
-
-                if isinstance(room_memory_content, MemoryContent):
-                    # Budget-aware context via ContextMemoryRuntime (§11.2)
-                    try:
-                        context = self._build_agent_execution_context_from_memory(
-                            room_memory=room_memory,
-                            current_task=current_task_for_cas,
-                            agent_name=agent_name,
-                            room_awareness=room_awareness,
-                            quoted_text=quoted_for_cas,
-                            agent_task=agent_task_for_cas,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "ContextMemoryRuntime failed for agent, falling back to "
-                            "DEPRECATED build_context_for_agent (to be removed): %s",
-                            e,
-                        )
-                        context = build_context_for_agent(
-                            memory_content=room_memory_content,
-                            current_task=current_task_for_cas,
-                            agent_name=agent_name,
-                            include_system_instruction=True,
-                            quoted_text=quoted_for_cas,
-                            room_awareness=room_awareness,
-                            agent_task=agent_task_for_cas,
-                        )
-                elif (
-                    isinstance(room_memory_content, str) and room_memory_content.strip()
-                ):
-                    # Legacy style: Use raw text as context
-                    quoted_section = ""
-                    if quoted_for_cas:
-                        if "\n---\n" in quoted_for_cas:
-                            quoted_section = f"[Quoted context]\n{quoted_for_cas}\n\n"
-                        else:
-                            quoted_section = (
-                                f"[Quoted context]\n"
-                                f"The user is referencing the following specific content:\n"
-                                f'"{quoted_for_cas}"\n\n'
-                            )
-                    room_awareness_section = ""
-                    if room_awareness:
-                        room_awareness_section = f"{room_awareness}\n\n"
-                    task_section = ""
-                    if agent_task_for_cas:
-                        task_section = f"\n\n[Task]\n{agent_task_for_cas}"
-                    context = (
-                        f"[Context]\n{room_memory_content}\n\n"
-                        f"{quoted_section}"
-                        f"{room_awareness_section}"
-                        f"[Current request]\nUser: {current_task_for_cas}"
-                        f"{task_section}"
+                if room_memory is not None:
+                    # Canonical-only, budget-aware context via ContextAssemblyPort.
+                    context = self._build_agent_execution_context_from_memory(
+                        room_memory=room_memory,
+                        current_task=current_task_for_cas,
+                        agent_name=agent_name,
+                        room_awareness=room_awareness,
+                        quoted_text=quoted_for_cas,
+                        agent_task=agent_task_for_cas,
                     )
-                    if agent_name:
-                        context += (
-                            f"\n\nYou are {agent_name}. "
-                            "Please respond to the current request above."
-                        )
                 else:
                     # No context available
                     quoted_section = ""
@@ -4016,7 +3973,7 @@ class RoomServices:
         if isinstance(resolved_resource_payloads, list):
             target_agent_card = getattr(agent, "agent_card", None)
             accepted_modes = agent_input_modes(target_agent_card)
-            for index, payload in enumerate(resolved_resource_payloads):
+            for payload in resolved_resource_payloads:
                 if not isinstance(payload, dict):
                     continue
                 text = payload.get("text")
@@ -4081,8 +4038,6 @@ class RoomServices:
                     continue
 
                 if not isinstance(text, str) or not text.strip():
-                    continue
-                if index in embedded_text_resource_indexes:
                     continue
                 if mime_type == "application/json" and mime_type_is_accepted(
                     mime_type, accepted_modes

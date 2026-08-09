@@ -43,8 +43,6 @@ from common.protocols import (
     AgentRepository,
     AttachmentMetadataReader,
     ContentStorageRepository,
-    ContextAssembler,
-    ContextMemoryRuntime,
     EventPublisher,
     ExecutionEngine,
     FileStorage,
@@ -56,8 +54,6 @@ from common.protocols import (
     HubManagement,
     LeaderElector,
     LLMGateway,
-    MemoryManager,
-    MemoryProjector,
     MemoryRepository,
     MongoCollection,
     MongoDAL,
@@ -393,11 +389,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
-            from context_memory.compat.runtime import (
-                ContextMemoryChatAdapter,
-                ContextMemoryRoomMemoryAdapter,
-                ContextMemoryRouteCenter,
-            )
             from context_memory.config import ContextMemoryLLMConfig
             from execution.orchestration.debate_prompt_injector import (
                 DebatePromptInjector,
@@ -414,7 +405,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from llm_gateway.services import (
                 AgentSelectionLLMService,
                 MessageParserLLMService,
-                RoomMemoryLLMService,
                 SummaryLLMService,
                 SupervisorLLMService,
             )
@@ -623,7 +613,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             message_parser_llm_service = MessageParserLLMService(
                 llm_provider=llm_provider
             )
-            room_memory_llm_service = RoomMemoryLLMService(llm_provider=llm_provider)
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
             room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
@@ -1220,27 +1209,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
                 ),
                 llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_legacy_json_model",
-                    summary_model="context_memory_legacy_json_model",
+                    turn_notes_model="context_memory_json_model",
+                    summary_model="context_memory_json_model",
                 ),
-            )
-            _context_memory_deps = create_context_memory_deps(context_memory_facade)
-            context_memory_chat_adapter = ContextMemoryChatAdapter(
-                chat_store=memory_store,
-                chat_context_llm=room_memory_llm_service,
-            )
-            route_memory_center = ContextMemoryRouteCenter(
-                chat_adapter=context_memory_chat_adapter,
-            )
-            context_memory_room_memory = ContextMemoryRoomMemoryAdapter(
-                facade=context_memory_facade,
-                usage_store=memory_store,
             )
             execution_room_memory = SimpleNamespace(
-                add_synthesis_to_history=(
-                    context_memory_room_memory.add_synthesis_to_history
-                ),
-                update_room_summary=context_memory_room_memory.update_room_summary,
+                add_synthesis_to_history=context_memory_facade.add_synthesis_to_history,
+                update_room_summary=context_memory_facade.update_room_summary,
             )
             agent_rate_limiter = None
             if getattr(app.state, "agent_rate_limiter_factory", None):
@@ -1295,7 +1270,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_health_service=agent_health_service,
                 room_files=file_storage,
                 capability_issue_service=agent_capability_issue_service,
-                context_memory_runtime=_context_memory_deps.context_memory_runtime,
+                context_assembly=context_memory_facade,
+                memory_search=context_memory_facade,
                 context_compaction=context_memory_facade,
                 build_turn_content_func=build_turn_content,
                 supervisor_planning_error_cls=SupervisorPlanningError,
@@ -1412,8 +1388,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
             room_runtime.bind_context_memory(
-                _context_memory_deps.memory_manager,
-                _context_memory_deps.context_memory_runtime,
+                context_assembly=context_memory_facade,
+                memory_search=context_memory_facade,
+                room_memory_cleanup=context_memory_facade,
             )
         else:
             raise RuntimeError("MongoDAL ping failed after connect")
@@ -1716,7 +1693,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_manager=_execution_deps.hitl_manager,
                 hub_relay_service=_relay_svc,
                 inspection_center=route_inspection_center,
-                memory_center=route_memory_center,
                 gateway_service=None,
                 gateway_rate_limiter=None,
                 relay_service=_relay_svc,
@@ -1885,14 +1861,6 @@ class RoomDeps:
     room_repository: Any
     message_repository: Any
     room_quote_repository: Any | None = None
-
-
-@dataclass(frozen=True)
-class ContextMemoryDeps:
-    context_assembler: ContextAssembler
-    memory_manager: MemoryManager
-    memory_projector: MemoryProjector
-    context_memory_runtime: ContextMemoryRuntime
 
 
 @dataclass(frozen=True)
@@ -2143,22 +2111,6 @@ async def _ensure_context_memory_indexes(mongo: MongoDAL) -> bool:
         name="content_ttl",
         expireAfterSeconds=0,
         sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "user_memories",
-        [("user_id", 1)],
-        name="user_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "agent_memories",
-        [("agent_id", 1)],
-        name="agent_id_unique",
-        unique=True,
-        critical=True,
     )
     await _create_index(
         mongo,
@@ -3283,15 +3235,6 @@ def create_context_memory_facade(
     )
 
 
-def create_context_memory_deps(facade: ContextMemoryFacade) -> ContextMemoryDeps:
-    return ContextMemoryDeps(
-        context_assembler=facade,
-        memory_manager=facade,
-        memory_projector=facade,
-        context_memory_runtime=facade,
-    )
-
-
 def register_context_memory_event_handlers(
     *,
     event_bus: InternalEventBus,
@@ -3299,10 +3242,7 @@ def register_context_memory_event_handlers(
 ):
     from context_memory.events import ContextMemoryEventHandler
 
-    handler = ContextMemoryEventHandler(
-        projector=context_memory_facade,
-        project_for_event=context_memory_facade.project_message_for_event,
-    )
+    handler = ContextMemoryEventHandler(projection=context_memory_facade)
     event_bus.register_handler(
         "message_committed",
         handler.handle_message_committed,

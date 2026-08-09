@@ -13,7 +13,6 @@ from context_memory.config import (
 )
 from context_memory.facade import ContextMemoryFacade
 from context_memory.projection import new_room_memory_doc
-from context_memory.translators import room_memory_info_from_doc
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -27,9 +26,7 @@ class StateMemoryRepository:
         self.doc = doc
         self.fail_delete = fail_delete
         self.deleted = []
-        self.user_docs = []
         self.created = []
-        self.updated = []
         self.compacted = []
 
     async def get_room_memory(self, room_id: str) -> dict | None:
@@ -37,9 +34,6 @@ class StateMemoryRepository:
 
     async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
         self.doc = {"room_id": room_id, **memory}
-
-    async def get_user_memories(self, user_id: str) -> list[dict]:
-        return [doc for doc in self.user_docs if doc["user_id"] == user_id]
 
     async def delete_room_memory(self, room_id: str) -> bool:
         self.deleted.append(room_id)
@@ -58,30 +52,6 @@ class StateMemoryRepository:
         if self.doc is None:
             self.doc = defaults
         return self.doc
-
-    async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return self.doc if self.doc and self.doc.get("memory_id") == memory_id else None
-
-    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
-        self.updated.append((room_id, updates))
-        if self.doc and self.doc["room_id"] == room_id:
-            self.doc.update(updates)
-            return True
-        return False
-
-    async def update_room_memory_by_memory_id(
-        self, memory_id: str, updates: dict
-    ) -> bool:
-        if self.doc and self.doc["memory_id"] == memory_id:
-            self.doc.update(updates)
-            return True
-        return False
-
-    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        if self.doc and self.doc["memory_id"] == memory_id:
-            self.doc = None
-            return True
-        return False
 
     async def push_and_trim_conversation_turn(self, room_id: str, turn: dict, **kwargs):
         if not self.doc:
@@ -222,7 +192,16 @@ class FakeLLM:
         return [0.1]
 
     async def generate_structured(self, messages, schema, model=None):
-        return SimpleNamespace(data={})
+        return SimpleNamespace(
+            data={
+                "current_goal": None,
+                "key_decisions": [],
+                "open_questions": [],
+                "recent_agent_contributions": [],
+                "important_constraints": [],
+                "room_facts": [],
+            }
+        )
 
 
 class RaisingLLM(FakeLLM):
@@ -233,6 +212,15 @@ class RaisingLLM(FakeLLM):
 class NonDictLLM(FakeLLM):
     async def generate_structured(self, messages, schema, model=None):
         return SimpleNamespace(data="not a dict")
+
+
+class RecordingLLM(FakeLLM):
+    def __init__(self):
+        self.generate_calls = 0
+
+    async def generate_structured(self, messages, schema, model=None):
+        self.generate_calls += 1
+        return await super().generate_structured(messages, schema, model=model)
 
 
 class MissingSummaryProjectionRepository(StateMemoryRepository):
@@ -275,7 +263,7 @@ def facade(memory_repo=None, content_repo=None, history=None, **overrides):
     )
 
 
-def test_token_budget_with_model_window_preserves_small_caller_budget():
+def test_token_budget_with_model_window_rejects_window_below_fixed_reserve():
     budget = TokenBudgetConfig(
         model_context_window=128000,
         system_prompt=2000,
@@ -283,9 +271,25 @@ def test_token_budget_with_model_window_preserves_small_caller_budget():
         response_reserve=4000,
     )
 
-    scoped = budget.with_model_window(5000)
+    with pytest.raises(
+        ValueError,
+        match="fixed_reserve_tokens must not exceed model_context_window",
+    ):
+        budget.with_model_window(5000)
 
-    assert scoped.model_context_window == 5000
+
+def test_token_budget_with_model_window_accepts_fixed_reserve_boundary():
+    budget = TokenBudgetConfig(
+        model_context_window=128000,
+        system_prompt=2000,
+        tool_schemas=3000,
+        response_reserve=4000,
+    )
+
+    scoped = budget.with_model_window(9000)
+
+    assert scoped.model_context_window == 9000
+    assert scoped.available_for_content == 0
 
 
 def test_facade_uses_noop_tracer_by_default():
@@ -363,45 +367,14 @@ async def test_facade_assemble_context_agent_path_does_not_use_agent_id_as_name(
 
 
 @pytest.mark.asyncio
-async def test_facade_assemble_context_zero_token_budget_does_not_crash():
+async def test_facade_assemble_context_rejects_budget_below_fixed_reserve():
     service = facade(memory_repo=StateMemoryRepository(existing_doc()))
 
-    result = await service.assemble_context("r1", "m1", token_budget=0)
-
-    assert result.room_id == "r1"
-    assert result.total_tokens >= 0
-    assert "hello" in result.metadata["context"]
-
-
-@pytest.mark.asyncio
-async def test_facade_get_room_memory():
-    info = await facade(
-        memory_repo=StateMemoryRepository(existing_doc())
-    ).get_room_memory("r1")
-
-    assert info.room_id == "r1"
-    assert info.memory_id == "m1"
-    assert "Summary: Finish tests" in info.content
-
-
-def test_room_memory_info_estimates_legacy_full_turn_tokens():
-    info = room_memory_info_from_doc(
-        {
-            "room_id": "r1",
-            "memory_id": "m1",
-            "conversation_history": [
-                {
-                    "turn_id": "t1",
-                    "role": "user",
-                    "representation": "full",
-                    "content": "legacy content with missing token estimate",
-                    "estimated_tokens_full": 0,
-                }
-            ],
-        }
-    )
-
-    assert info.token_count > 0
+    with pytest.raises(
+        ValueError,
+        match="fixed_reserve_tokens must not exceed model_context_window",
+    ):
+        await service.assemble_context("r1", "m1", token_budget=0)
 
 
 @pytest.mark.asyncio
@@ -414,27 +387,8 @@ async def test_facade_search_memory():
     assert results[0].metadata["turn_id"] == "t1"
 
 
-@pytest.mark.asyncio
-async def test_facade_legacy_search_limit_zero_returns_no_results():
-    response = await facade(content_repo=StateContentRepository()).legacy_search(
-        "matched",
-        "r1",
-        limit=0,
-    )
-
-    assert response["results"] == []
-    assert response["total_matches"] == 0
-
-
-@pytest.mark.asyncio
-async def test_facade_get_user_memories():
-    repo = StateMemoryRepository()
-    repo.user_docs = [{"user_id": "u1", "communication_style": "direct"}]
-
-    memories = await facade(memory_repo=repo).get_user_memories("u1")
-
-    assert memories[0].memory_id == "user_memory:u1"
-    assert memories[0].content == "Communication Style: direct"
+def test_facade_does_not_expose_legacy_search():
+    assert not hasattr(facade(content_repo=StateContentRepository()), "legacy_search")
 
 
 @pytest.mark.asyncio
@@ -522,56 +476,6 @@ async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fa
 
 
 @pytest.mark.asyncio
-async def test_facade_legacy_delete_memory_id_uses_canonical_room_cleanup():
-    repo = StateMemoryRepository(existing_doc())
-    content_repo = StateContentRepository()
-    await content_repo.upsert_full_content(
-        room_id="r1",
-        turn_id="t1",
-        document_id="doc1",
-        content="full content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-        turn_notes={},
-    )
-
-    ok = await facade(
-        memory_repo=repo,
-        content_repo=content_repo,
-    ).legacy_delete_room_memory_by_memory_id("m1")
-
-    assert ok is True
-    assert repo.deleted == ["r1"]
-    assert content_repo.docs == {}
-
-
-@pytest.mark.asyncio
-async def test_facade_legacy_delete_room_id_uses_canonical_room_cleanup():
-    repo = StateMemoryRepository(existing_doc())
-    content_repo = StateContentRepository()
-    await content_repo.upsert_full_content(
-        room_id="r1",
-        turn_id="t1",
-        document_id="doc1",
-        content="full content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-        turn_notes={},
-    )
-
-    ok = await facade(
-        memory_repo=repo,
-        content_repo=content_repo,
-    ).legacy_delete_room_memory_by_room_id("r1")
-
-    assert ok is True
-    assert repo.deleted == ["r1"]
-    assert content_repo.docs == {}
-
-
-@pytest.mark.asyncio
 async def test_facade_project_message():
     repo = StateMemoryRepository(existing_doc())
     service = facade(
@@ -635,12 +539,15 @@ async def test_facade_update_room_summary_logs_invalid_llm_payload(caplog):
 @pytest.mark.asyncio
 async def test_facade_update_room_summary_logs_missing_projection(caplog):
     caplog.set_level("WARNING")
+    llm = RecordingLLM()
 
     result = await facade(
         memory_repo=MissingSummaryProjectionRepository(existing_doc()),
+        llm_provider=llm,
     ).update_room_summary("r1", "synthesis", "s1")
 
     assert result is False
+    assert llm.generate_calls == 0
     assert "Room summary projection missing" in caplog.text
 
 
@@ -654,62 +561,3 @@ async def test_facade_update_room_summary_logs_persistence_failure(caplog):
 
     assert result is False
     assert "Failed to persist room summary" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_facade_legacy_crud_helpers():
-    repo = StateMemoryRepository()
-    service = facade(memory_repo=repo)
-
-    created = await service.legacy_create_room_memory({"room_id": "r1"})
-    fetched = await service.legacy_get_room_memory_by_room_id("r1")
-    updated = await service.legacy_update_room_memory_by_room_id(
-        "r1", {"extra": "value"}
-    )
-    updated_by_memory_id = await service.legacy_update_room_memory_by_memory_id(
-        created["memory_id"],
-        {"extra": "by-memory-id"},
-    )
-
-    assert created["memory_id"] == "id-1"
-    assert fetched["room_id"] == "r1"
-    assert updated is True
-    assert updated_by_memory_id is True
-    assert repo.doc["extra"] == "by-memory-id"
-
-
-@pytest.mark.asyncio
-async def test_facade_content_helpers():
-    content_repo = StateContentRepository()
-    service = facade(content_repo=content_repo)
-
-    document_id = await service.content_upsert_full_content(
-        "r1", "t1", "stored", "text", {"one_liner": "stored"}
-    )
-
-    assert await service.content_get_content_by_document_id(document_id) == "stored"
-    assert await service.content_get_content_by_turn_id("r1", "t1") == "stored"
-    assert (await service.content_get_content_stats_for_room("r1"))[
-        "total_documents"
-    ] == 1
-
-
-@pytest.mark.asyncio
-async def test_facade_content_helpers_do_not_hydrate_expired_documents():
-    content_repo = StateContentRepository()
-    content_repo.docs["doc-expired"] = {
-        "document_id": "doc-expired",
-        "room_id": "r1",
-        "turn_id": "t1",
-        "content": "expired",
-        "expires_at": datetime(2026, 5, 12, tzinfo=UTC),
-    }
-    service = facade(content_repo=content_repo)
-
-    assert await service.content_get_content_by_document_id("doc-expired") is None
-    assert await service.content_get_content_by_turn_id("r1", "t1") is None
-    with pytest.raises(Exception, match="not found in storage"):
-        await service.content_expand_mongodb_reference(
-            {"storage_type": "mongodb", "document_id": "doc-expired"},
-            "t1",
-        )

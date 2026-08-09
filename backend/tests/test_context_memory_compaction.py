@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from common.utils.context_utils import estimate_tokens
 from context_memory import compaction
 from context_memory.config import CompactionConfig
 from context_memory.content_storage import ContentExpiredError, make_document_id
+from context_memory.translators import normalize_room_memory
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -48,7 +50,7 @@ def room_doc(turns):
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {"conversation_history": turns},
+        "memory_content": {"summary": None},
         "conversation_history": turns,
         "total_compactions": 0,
     }
@@ -78,9 +80,7 @@ class StateMemoryRepository:
                     turn["content"] = None
                     turn["content_ref"] = entry["content_ref"]
                     turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
-        self.doc["memory_content"]["conversation_history"] = self.doc[
-            "conversation_history"
-        ]
+                    turn["brief_summary"] = entry["brief_summary"]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 
@@ -142,6 +142,25 @@ async def test_should_compact_above_full_turns():
 
 
 @pytest.mark.asyncio
+async def test_should_compact_uses_unwindowed_canonical_history():
+    direct_turns = [
+        full_turn(f"t{index}", f"short {index}", tokens=1) for index in range(1, 22)
+    ]
+    doc = room_doc(direct_turns)
+    repo = StateMemoryRepository(doc)
+    default_config = CompactionConfig(
+        enabled=True,
+        max_total_tokens=80_000,
+        preserve_recent_turns=10,
+        content_ttl_days=0,
+        concurrency=2,
+    )
+
+    assert default_config.max_full_turns == 20
+    assert await compaction.should_compact(repo, "r1", default_config)
+
+
+@pytest.mark.asyncio
 async def test_should_compact_above_token_threshold():
     repo = StateMemoryRepository(room_doc([full_turn("t1", "one", tokens=50)]))
 
@@ -173,13 +192,16 @@ async def test_compact_room_memory_preserves_recent():
 
 
 @pytest.mark.asyncio
-async def test_compact_room_memory_stores_content():
+async def test_compact_room_memory_stores_content_and_bounded_brief_summary():
+    semantic_content = "  Deploy   the React frontend with zero downtime.  " + (
+        "retain details " * 30
+    )
     repo = StateMemoryRepository(
-        room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
+        room_doc([full_turn("t1", semantic_content), full_turn("t2", "two")])
     )
     content_repo = StateContentRepository()
 
-    await compaction.compact_room_memory(
+    result = await compaction.compact_room_memory(
         repository=repo,
         content_repository=content_repo,
         room_id="r1",
@@ -189,7 +211,22 @@ async def test_compact_room_memory_stores_content():
     )
 
     assert make_document_id("r1", "t1") in content_repo.docs
-    assert content_repo.docs[make_document_id("r1", "t1")]["content"] == "one"
+    assert (
+        content_repo.docs[make_document_id("r1", "t1")]["content"] == semantic_content
+    )
+    summary = repo.doc["conversation_history"][0]["brief_summary"]
+    assert summary.startswith("Deploy the React frontend with zero downtime.")
+    assert "  " not in summary
+    assert len(summary) == compaction.BRIEF_SUMMARY_MAX_CHARS
+    assert summary.endswith("...")
+    compacted_turns = normalize_room_memory(repo.doc).conversation_history
+    compact_estimate = compacted_turns[0].estimated_tokens_compact
+    assert compact_estimate == estimate_tokens(compacted_turns[0].to_context_string())
+    assert compact_estimate > 20
+    assert result.tokens_saved == sum(
+        max(0, turn.estimated_tokens_full - turn.estimated_tokens_compact)
+        for turn in compacted_turns
+    )
 
 
 @pytest.mark.asyncio

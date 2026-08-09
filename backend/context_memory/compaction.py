@@ -18,6 +18,22 @@ from context_memory.translators import (
     turn_from_dict,
 )
 
+BRIEF_SUMMARY_MAX_CHARS = 200
+
+
+def brief_summary_from_content(content: str) -> str:
+    """Build a deterministic, bounded semantic preview from a full turn."""
+    normalized = " ".join(content.split())
+    if len(normalized) <= BRIEF_SUMMARY_MAX_CHARS:
+        return normalized
+    return f"{normalized[: BRIEF_SUMMARY_MAX_CHARS - 3].rstrip()}..."
+
+
+def estimate_compact_turn_tokens(turn_doc: dict) -> int:
+    """Estimate the actual role, summary, and pointer rendering of a compact turn."""
+    compact_turn_doc = {**turn_doc, "representation": "compact", "content": None}
+    return estimate_tokens(turn_from_dict(compact_turn_doc).to_context_string())
+
 
 def safe_tokens_full(turn) -> int:
     if turn.estimated_tokens_full > 0:
@@ -172,12 +188,22 @@ async def compact_room_memory(
                     "content_hash": hash_content(turn.content),
                     "created_at": now(),
                 }
+                brief_summary = brief_summary_from_content(turn.content)
+                compact_turn_doc = {
+                    **turn.to_dict(),
+                    "content_ref": content_ref,
+                    "brief_summary": brief_summary,
+                }
+                estimated_tokens_compact = estimate_compact_turn_tokens(
+                    compact_turn_doc
+                )
                 entry = {
                     "turn_id": turn.turn_id,
                     "content_ref": content_ref,
-                    "estimated_tokens_compact": turn.estimated_tokens_compact,
+                    "estimated_tokens_compact": estimated_tokens_compact,
+                    "brief_summary": brief_summary,
                 }
-                saved = max(0, safe_tokens_full(turn) - turn.estimated_tokens_compact)
+                saved = max(0, safe_tokens_full(turn) - estimated_tokens_compact)
                 return entry, saved
             except Exception as exc:
                 errors.append(f"Failed to compact turn {turn.turn_id}: {exc}")

@@ -217,10 +217,7 @@ async def test_new_room_user_then_agent_events_project_both_turns():
         ]
     )
     projector = MemoryProjector(repository, history)
-    handler = ContextMemoryEventHandler(
-        projector=projector,
-        project_for_event=projector.project_message_for_event,
-    )
+    handler = ContextMemoryEventHandler(projection=projector)
     publisher = SchedulingEventPublisher()
     publisher.register_handler(
         "message_committed",

@@ -64,7 +64,7 @@ async def test_keyword_search_hydrates_content_and_prefers_one_liner():
         [_row("t1", 4.0, now)],
         {"t1": _content("t1", "full content", one_liner="short summary")},
     )
-    results, response = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="summary",
         limit=5,
@@ -76,9 +76,7 @@ async def test_keyword_search_hydrates_content_and_prefers_one_liner():
     assert results[0].relevance_score <= 1.0
     assert results[0].temporal_decay_factor <= 1.0
     assert "score" not in results[0].model_dump()
-    assert response["keyword_search_used"] is True
-    assert "vector_search_used" not in response
-    assert "mmr_applied" not in response
+    assert all(type(result).__name__ == "MemorySearchResult" for result in results)
 
 
 @pytest.mark.asyncio
@@ -90,7 +88,7 @@ async def test_keyword_search_caps_candidates_and_stops_hydration_after_limit():
         {row["turn_id"]: _content(row["turn_id"], row["turn_id"]) for row in rows},
     )
 
-    results, response = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="content",
         limit=1,
@@ -99,7 +97,6 @@ async def test_keyword_search_caps_candidates_and_stops_hydration_after_limit():
     )
 
     assert [result.metadata["turn_id"] for result in results] == ["t0"]
-    assert response["total_matches"] == 5
     assert repository.search_calls == [(0, 5)]
     assert repository.hydration_calls == [["t0", "t1", "t2"]]
 
@@ -113,7 +110,7 @@ async def test_missing_hydration_is_dropped_and_later_pages_backfill():
         rows,
         {"valid": _content("valid", "backfilled content")},
     )
-    results, _ = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="content",
         limit=1,
@@ -143,7 +140,7 @@ async def test_empty_hydrated_content_does_not_prevent_later_backfill():
         },
     )
 
-    results, _ = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="content",
         limit=1,
@@ -179,7 +176,7 @@ async def test_ttl_deletion_during_hydration_does_not_shift_away_backfill():
         {"valid": _content("valid", "surviving content")},
     )
 
-    results, _ = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="content",
         limit=1,
@@ -205,7 +202,7 @@ async def test_temporal_ranking_scans_all_keyword_candidates_before_top_k():
         },
     )
 
-    results, _ = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="content",
         limit=1,
@@ -224,7 +221,7 @@ async def test_content_prefix_is_used_without_placeholder_text():
         [_row("t1", 1.0, now)],
         {"t1": _content("t1", "x" * 500)},
     )
-    results, _ = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="x",
         limit=1,
@@ -294,7 +291,7 @@ async def test_keyword_failure_returns_empty_relevant_memory():
         async def scan_text_search(self, room_id, query, limit):
             raise RuntimeError("text index missing")
 
-    results, response = await search_memory(
+    results = await search_memory(
         room_id="r1",
         query="anything",
         limit=5,
@@ -302,4 +299,3 @@ async def test_keyword_failure_returns_empty_relevant_memory():
         config=MemorySearchConfig(),
     )
     assert results == []
-    assert response["keyword_search_used"] is False

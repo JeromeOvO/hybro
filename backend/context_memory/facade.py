@@ -5,13 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from common.dto import (
-    AssembledContext,
-    CompactionResult,
-    MemorySearchResult,
-    RoomMemoryInfo,
-    UserMemory,
-)
+from common.dto import AssembledContext, CompactionResult, MemorySearchResult
 from common.observability import NoopTracingProvider, traced_create_task
 from common.protocols import (
     ContentStorageRepository,
@@ -27,16 +21,7 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
-from context_memory.content_storage import (
-    content_from_document,
-    expand_mongodb_reference,
-    store_full_content,
-)
-from context_memory.translators import (
-    normalize_room_memory,
-    room_memory_info_from_doc,
-    user_memory_from_doc,
-)
+from context_memory.translators import normalize_room_memory
 
 logger = get_logger(__name__)
 
@@ -127,14 +112,10 @@ class ContextMemoryFacade:
         metadata.update({"message_id": message_id, "agent_id": agent_id})
         return result.model_copy(update={"metadata": metadata})
 
-    async def get_room_memory(self, room_id: str) -> RoomMemoryInfo | None:
-        doc = await self.memory_repository.get_room_memory(room_id)
-        return room_memory_info_from_doc(doc) if doc else None
-
     async def search_memory(
         self, room_id: str, query: str, limit: int = 10
     ) -> list[MemorySearchResult]:
-        results, _response = await search.search_memory(
+        results = await search.search_memory(
             room_id=room_id,
             query=query,
             limit=limit,
@@ -142,10 +123,6 @@ class ContextMemoryFacade:
             config=self.search_config,
         )
         return results
-
-    async def get_user_memories(self, user_id: str) -> list[UserMemory]:
-        docs = await self.memory_repository.get_user_memories(user_id)
-        return [user_memory_from_doc(doc) for doc in docs]
 
     async def delete_room_memory(self, room_id: str) -> bool:
         existed = await self.memory_repository.get_room_memory(room_id)
@@ -202,12 +179,12 @@ class ContextMemoryFacade:
 
     def assemble_supervisor_context_from_memory(
         self,
-        room_memory_doc: dict,
+        room_memory_doc: Any,
         current_task: str,
         *,
-        agent_registry: list[dict] | None = None,
+        agent_registry: list[dict[str, Any]] | None = None,
         max_turns: int = 5,
-        memory_search_results: list | None = None,
+        memory_search_results: list[MemorySearchResult] | None = None,
     ) -> AssembledContext:
         return assembly.assemble_supervisor_context_from_memory(
             room_memory_doc,
@@ -220,7 +197,7 @@ class ContextMemoryFacade:
 
     def assemble_agent_execution_context_from_memory(
         self,
-        room_memory_doc: dict,
+        room_memory_doc: Any,
         current_task: str,
         *,
         agent_id: str | None = None,
@@ -244,95 +221,6 @@ class ContextMemoryFacade:
 
     def get_budget_summary(self) -> dict[str, int]:
         return self.token_budget.get_budget_summary()
-
-    async def legacy_create_room_memory(self, memory_doc: dict) -> dict | None:
-        doc = dict(memory_doc)
-        doc.setdefault("memory_id", self.id_factory())
-        await self.memory_repository.create_room_memory(doc)
-        return doc
-
-    async def legacy_get_room_memory_by_room_id(self, room_id: str) -> dict | None:
-        return await self.memory_repository.get_room_memory(room_id)
-
-    async def legacy_get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
-
-    async def legacy_update_room_memory_by_room_id(
-        self, room_id: str, memory_doc: dict
-    ) -> bool:
-        return await self.memory_repository.update_room_memory_by_room_id(
-            room_id, memory_doc
-        )
-
-    async def legacy_get_room_memory_for_update_by_memory_id(
-        self, memory_id: str
-    ) -> dict | None:
-        return await self.memory_repository.get_room_memory_by_memory_id(memory_id)
-
-    async def legacy_update_room_memory_by_memory_id(
-        self, memory_id: str, memory_doc: dict
-    ) -> bool:
-        return await self.memory_repository.update_room_memory_by_memory_id(
-            memory_id, memory_doc
-        )
-
-    async def legacy_delete_room_memory_by_room_id(self, room_id: str) -> bool:
-        return await self.delete_room_memory(room_id)
-
-    async def legacy_delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        doc = await self.memory_repository.get_room_memory_by_memory_id(memory_id)
-        if not doc:
-            return False
-        room_id = doc.get("room_id")
-        if not room_id:
-            return False
-        return await self.delete_room_memory(room_id)
-
-    async def initialize_or_update_room_memory(
-        self,
-        room_id: str,
-        *,
-        memory_content: str | None,
-        room_agent_set: dict | None,
-        user_id: str | None,
-        attachments: list | None = None,
-        message_id: str | None = None,
-    ) -> dict | None:
-        return await projection.initialize_or_update_room_memory(
-            repository=self.memory_repository,
-            room_id=room_id,
-            memory_content=memory_content,
-            room_agent_set=room_agent_set,
-            user_id=user_id,
-            attachments=attachments,
-            id_factory=self.id_factory,
-            now=self.now,
-            message_id=message_id,
-        )
-
-    async def add_agent_response_to_memory(
-        self,
-        room_id: str,
-        agent_id: str,
-        agent_name: str,
-        response_text: str,
-        was_successful: bool = True,
-        message_id: str | None = None,
-    ) -> tuple[bool, bool]:
-        return await projection.add_agent_response_to_memory(
-            repository=self.memory_repository,
-            room_id=room_id,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            response_text=response_text,
-            was_successful=was_successful,
-            id_factory=self.id_factory,
-            now=self.now,
-            llm_provider=self.llm_provider,
-            llm_config=self.llm_config,
-            background_task_runner=self.background_task_runner,
-            message_id=message_id,
-        )
 
     async def add_synthesis_to_history(
         self, room_id: str, synthesis_text: str, trajectory: Any | None = None
@@ -365,23 +253,6 @@ class ContextMemoryFacade:
             id_factory=self.id_factory,
             now=self.now,
         )
-
-    async def legacy_search(
-        self,
-        query: str,
-        room_id: str,
-        user_id: str | None = None,
-        limit: int | None = None,
-    ) -> dict:
-        _results, response = await search.search_memory(
-            room_id=room_id,
-            query=query,
-            limit=limit if limit is not None else self.search_config.max_results,
-            content_repository=self.content_repository,
-            config=self.search_config,
-        )
-        response["user_id"] = user_id
-        return response
 
     async def should_compact(self, room_id: str) -> bool:
         return await compaction.should_compact(
@@ -450,53 +321,6 @@ class ContextMemoryFacade:
             self.content_repository,
             room_id,
         )
-
-    async def content_upsert_full_content(
-        self,
-        room_id: str,
-        turn_id: str,
-        content: str,
-        content_type: str,
-        turn_notes: dict | None = None,
-    ) -> str:
-        return await store_full_content(
-            self.content_repository,
-            room_id=room_id,
-            turn_id=turn_id,
-            content=content,
-            content_type=content_type,
-            turn_notes=turn_notes,
-            now=self.now(),
-            config=self.compaction_config,
-        )
-
-    async def content_get_content_by_document_id(self, document_id: str) -> str | None:
-        doc = await self.content_repository.get_content_by_document_id(document_id)
-        return content_from_document(doc, now=self.now())
-
-    async def content_get_content_by_turn_id(
-        self, room_id: str, turn_id: str
-    ) -> str | None:
-        doc = await self.content_repository.get_content_by_turn_id(room_id, turn_id)
-        return content_from_document(doc, now=self.now())
-
-    async def content_expand_mongodb_reference(
-        self, content_ref: dict, turn_id: str
-    ) -> str:
-        return await expand_mongodb_reference(
-            self.content_repository, content_ref, turn_id, now=self.now()
-        )
-
-    async def content_delete_content_by_turn_id(
-        self, room_id: str, turn_id: str
-    ) -> bool:
-        return await self.content_repository.delete_content_by_turn_id(room_id, turn_id)
-
-    async def content_delete_content_by_room_id(self, room_id: str) -> int:
-        return await self.content_repository.delete_content_by_room_id(room_id)
-
-    async def content_get_content_stats_for_room(self, room_id: str) -> dict:
-        return await self.content_repository.get_content_stats_for_room(room_id)
 
 
 def _background_task(coro: Awaitable[Any]) -> None:

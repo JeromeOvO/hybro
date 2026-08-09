@@ -5,9 +5,8 @@ Covers:
 - CompactionSweep: fail-closed safety gate and worker lifecycle
 - extract_turn_notes_llm: LLM path and heuristic fallback
 - Memory search result hydration: _hydrate_results_from_storage
-- was_successful propagation through add_turn_to_history
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design specification.
+See docs/System-Architecture.md for the current design.
 """
 
 import asyncio
@@ -17,14 +16,12 @@ from uuid import uuid4
 
 import pytest
 
+from common.dto import CompactionResult, MemorySearchResult
 from common.types import MessageRole
-from common.utils.context_utils import (
-    add_turn_to_history,
-    estimate_tokens,
-)
+from common.utils.context_utils import estimate_tokens, get_context_stats
 from context_memory import search
+from context_memory.config import TokenBudgetConfig
 from context_memory.models import SearchRankingRecord
-from models.compaction import CompactionResult
 from models.memory import (
     ContentType,
     ConversationTurn,
@@ -41,7 +38,7 @@ from models.memory import (
 
 @pytest.fixture
 def mock_compaction_config():
-    with patch("models.context_config.settings") as mock:
+    with patch("common.config.settings") as mock:
         mock.compaction_enabled = True
         mock.compaction_max_full_turns = 20
         mock.compaction_max_total_tokens = 80000
@@ -68,6 +65,38 @@ def _make_turn(content="Test", role=TurnRole.USER, **kwargs) -> ConversationTurn
     )
     defaults.update(kwargs)
     return ConversationTurn(**defaults)
+
+
+def test_context_stats_use_canonical_history_and_nested_summary_only():
+    summary = "Canonical room summary"
+    canonical_full = _make_turn(content="canonical full", estimated_tokens_full=3)
+    canonical_compact = _make_turn(
+        content=None,
+        representation=TurnRepresentation.COMPACT,
+        brief_summary="canonical compact",
+        estimated_tokens_full=50,
+        estimated_tokens_compact=12,
+    )
+    room_memory = RoomMemory(
+        room_id="room-1",
+        memory_content=MemoryContent(
+            summary=summary,
+            conversation_history=[_make_turn(content="nested history is ignored")],
+        ),
+        conversation_history=[canonical_full, canonical_compact],
+    )
+
+    stats = get_context_stats(room_memory)
+
+    assert stats == {
+        "history_turns": 2,
+        "full_turns": 1,
+        "compact_turns": 1,
+        "has_summary": True,
+        "summary_length": len(summary),
+        "total_chars": len(summary) + len("canonical full"),
+        "total_tokens": 53,
+    }
 
 
 def _pending_compaction_workers() -> list[asyncio.Task]:
@@ -427,7 +456,7 @@ class TestExtractTurnNotesLLM:
         mock_gateway.generate_structured.assert_awaited_once()
         assert (
             mock_gateway.generate_structured.await_args.kwargs["model"]
-            == "context_memory_legacy_json_model"
+            == "context_memory_json_model"
         )
 
     @pytest.mark.asyncio
@@ -500,51 +529,6 @@ class TestMemorySearchHydration:
 
 
 # =============================================================================
-# was_successful Propagation Tests
-# =============================================================================
-
-
-class TestWasSuccessfulPropagation:
-    """Tests that was_successful is correctly stored on ConversationTurn."""
-
-    def test_add_turn_to_history_preserves_was_successful_true(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.AGENT,
-            content="Agent completed the task successfully.",
-            agent_id="agent_1",
-            agent_name="TestAgent",
-            was_successful=True,
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is True
-
-    def test_add_turn_to_history_preserves_was_successful_false(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.AGENT,
-            content="Agent failed to complete the task.",
-            agent_id="agent_1",
-            agent_name="TestAgent",
-            was_successful=False,
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is False
-
-    def test_add_turn_to_history_defaults_was_successful_to_none(self):
-        mc = MemoryContent()
-        result = add_turn_to_history(
-            mc,
-            role=MessageRole.USER,
-            content="User message",
-        )
-        assert len(result.conversation_history) == 1
-        assert result.conversation_history[0].was_successful is None
-
-
-# =============================================================================
 # Legacy Turn Token Fallback Tests
 # =============================================================================
 
@@ -555,7 +539,8 @@ class TestLegacyTokenFallback:
     def test_select_turns_within_budget_handles_zero_tokens(
         self, mock_compaction_config
     ):
-        from context_memory.legacy_assembly import select_legacy_turns_within_budget
+        from context_memory.assembly import select_turns_within_budget
+        from context_memory.translators import turn_from_dict
 
         mock_compaction_config.context_model_window = 32000
         mock_compaction_config.context_system_prompt_tokens = 2000
@@ -571,8 +556,11 @@ class TestLegacyTokenFallback:
         )
         recent_turn = _make_turn(content="Recent message")
 
-        selected, truncated = select_legacy_turns_within_budget(
-            turns=[legacy_turn, recent_turn],
+        selected, truncated = select_turns_within_budget(
+            [
+                turn_from_dict(legacy_turn.model_dump(mode="json")),
+                turn_from_dict(recent_turn.model_dump(mode="json")),
+            ],
             budget_tokens=50,
         )
 
@@ -592,60 +580,30 @@ class TestLegacyTokenFallback:
 class TestSearchToContextIntegration:
     """Verify memory search results flow through to supervisor context output."""
 
-    def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
-        from context_memory.compat.context_assembly import ContextAssemblyService
-        from models.search import MemorySearchResult, MemorySourceType
-
-        mock_compaction_config.context_model_window = 32000
-        mock_compaction_config.context_system_prompt_tokens = 2000
-        mock_compaction_config.context_tool_schema_tokens = 3000
-        mock_compaction_config.context_response_reserve_tokens = 4000
-        mock_compaction_config.context_room_pct = 0.15
-        mock_compaction_config.context_history_pct = 0.60
-        mock_compaction_config.context_task_pct = 0.25
-
-        class Facade:
-            def assemble_supervisor_context_from_memory(
-                self, room_memory_doc, current_task, **kwargs
-            ):
-                from context_memory.assembly import (
-                    assemble_supervisor_context_from_memory,
-                )
-
-                return assemble_supervisor_context_from_memory(
-                    room_memory_doc,
-                    current_task,
-                    agent_registry=kwargs.get("agent_registry"),
-                    max_turns=kwargs.get("max_turns", 5),
-                    memory_search_results=kwargs.get("memory_search_results"),
-                )
-
-        service = ContextAssemblyService()
-        service.bind_facade(Facade())
+    def test_search_results_appear_in_supervisor_context(self):
+        from context_memory.assembly import assemble_supervisor_context_from_memory
 
         search_results = [
             MemorySearchResult(
-                turn_id="turn_abc",
                 content="User asked about deploying the React frontend",
-                content_preview="User asked about deploying the React frontend",
-                role=MessageRole.USER,
                 room_id="room_1",
-                source_type=MemorySourceType.TURN,
                 keyword_score=0.92,
                 relevance_score=0.92,
-                timestamp=datetime(2026, 2, 20),
+                temporal_decay_factor=1.0,
+                source_message_id="turn_abc",
+                metadata={
+                    "content_preview": "User asked about deploying the React frontend",
+                    "role": MessageRole.USER,
+                },
             ),
             MemorySearchResult(
-                turn_id="turn_def",
                 content="",
-                content_preview=None,
-                role=MessageRole.AGENT,
-                agent_name="DevAgent",
                 room_id="room_1",
-                source_type=MemorySourceType.TURN,
                 keyword_score=0.85,
                 relevance_score=0.85,
-                timestamp=datetime(2026, 2, 20),
+                temporal_decay_factor=1.0,
+                source_message_id="turn_def",
+                metadata={"role": MessageRole.AGENT, "agent_name": "DevAgent"},
             ),
         ]
 
@@ -658,13 +616,23 @@ class TestSearchToContextIntegration:
             ),
         )
 
-        result = service.build_supervisor_context(
-            room_memory=room_memory,
-            current_task="Deploy the app",
+        result = assemble_supervisor_context_from_memory(
+            room_memory.model_dump(mode="json"),
+            "Deploy the app",
+            token_budget=TokenBudgetConfig(
+                model_context_window=32000,
+                system_prompt=2000,
+                tool_schemas=3000,
+                response_reserve=4000,
+                room_context_pct=0.15,
+                conversation_history_pct=0.60,
+                current_task_pct=0.25,
+            ),
             memory_search_results=search_results,
         )
 
-        assert "deploying the React frontend" in result.context
-        assert "[Relevant Memory]" in result.context
+        context = result.metadata["context"]
+        assert "deploying the React frontend" in context
+        assert "[Relevant Memory]" in context
         # Empty-content result should NOT appear (no preview)
-        assert "DevAgent" not in result.context or "" not in result.context
+        assert "DevAgent" not in context

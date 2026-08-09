@@ -8,7 +8,7 @@ This catches rooms that grow without triggering inline compaction — e.g.
 supervisor orchestration rooms, rooms with high-frequency direct chat, or rooms
 where the inline trigger was skipped due to an error.
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for compaction design.
+See docs/System-Architecture.md for compaction design.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from common.config import settings
 from common.observability import traced_create_task
+from common.protocols import CompactionPort
 from common.utils.logger import get_logger
-from context_memory.protocols import ContextMemoryCompactionPort
 from jobs.constants import COMPACTION_SWEEP
-from models.context_config import compaction_config
 
 logger = get_logger(__name__)
 
@@ -40,7 +40,7 @@ class LeaderGate(Protocol):
 class CompactionSweepDeps:
     list_room_ids_with_memory: Callable[[], Awaitable[list[str]]]
     get_room_ids_with_non_terminal_runs: Callable[[], Awaitable[list[str]]]
-    context_compaction: ContextMemoryCompactionPort
+    context_compaction: CompactionPort
 
 
 class CompactionSweep:
@@ -69,7 +69,7 @@ class CompactionSweep:
         if self._running:
             logger.warning("Compaction sweep already running")
             return
-        if not compaction_config.enabled:
+        if not settings.compaction_enabled:
             logger.info("Compaction sweep skipped — compaction is disabled")
             return
         self._running = True

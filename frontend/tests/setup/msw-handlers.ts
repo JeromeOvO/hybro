@@ -4,7 +4,6 @@ import { getApiUrl } from '@/lib/utils'
 const roomCenter = getApiUrl('roomCenter')
 const agentCenter = getApiUrl('agentCenter')
 const agent = getApiUrl('agent')
-const memoryCenter = getApiUrl('memoryCenter')
 const orchestrationCenter = getApiUrl('orchestrationCenter')
 const task = getApiUrl('task')
 const sseBase = getApiUrl('sse')
@@ -211,23 +210,6 @@ export const handlers = [
 
   http.post(`${agent}/getAgentListWithConditions`, async () => {
     return HttpResponse.json({ success: true, agents: [] })
-  }),
-
-  // Memory Center API handlers
-  http.post(`${memoryCenter}/addChatContext`, async () => {
-    return HttpResponse.json({ success: true })
-  }),
-
-  http.post(`${memoryCenter}/getChatContextBySessionId`, async () => {
-    return HttpResponse.json({ success: true, chat_context: [] })
-  }),
-
-  http.post(`${memoryCenter}/updateChatContextBySessionId`, async () => {
-    return HttpResponse.json({ success: true })
-  }),
-
-  http.post(`${memoryCenter}/deleteChatContextBySessionId`, async () => {
-    return HttpResponse.json({ success: true })
   }),
 
   // Orchestration Center API handlers

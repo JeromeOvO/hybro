@@ -171,31 +171,6 @@ export interface BaseTask {
   task: Task;
   extend_info?: unknown;
 }
-/**
- * A ChatContext represents a chat context between a user and the multi-agent system.
- * It tracks session metadata like creation time, user info, and context content.
- * Multiple ChatContext objects can belong to one TaskSession during a conversation.
- */
-export interface ChatContext {
-  memory_id: string;
-  user_name: string;
-  session_id: string;
-  context_data?: ContextData | null;
-  created_at?: string;
-  updated_at?: string;
-  extend_info?: unknown;
-}
-export interface ContextData {
-  context_content?: string | null;
-  [k: string]: unknown;
-}
-export interface ChatMemoryRequest {
-  user_name?: string | null;
-  session_id?: string | null;
-  user_input?: string | null;
-  agent_response?: string | null;
-  chat_context?: ChatContext | null;
-}
 export interface ChatRequest {
   user_name: string;
   user_input: string;
@@ -287,50 +262,6 @@ export interface RoomCenterAgentMessageRequest {
     [k: string]: unknown;
   } | null;
   message?: RoomAgentMessage | null;
-}
-export interface RoomCenterMemoryRequest {
-  room_id?: string | null;
-  memory_id?: string | null;
-  memory_content?: string | null;
-  memory_created_at?: string | null;
-  extend_info?: {
-    [k: string]: unknown;
-  } | null;
-  memory?: RoomMemory | null;
-  room_agent_set?: {
-    [k: string]: string;
-  } | null;
-  user_id?: string | null;
-}
-export interface RoomMemory {
-  room_id: string;
-  memory_id: string;
-  memory_content?: MemoryContent;
-  memory_created_at?: string;
-  extend_info?: unknown;
-}
-/**
- * Room conversation memory with structured history.
- * Similar to ChatGPT/Claude conversation context management.
- */
-export interface MemoryContent {
-  summary?: string | null;
-  conversation_history?: ConversationTurn[];
-  memory_text?: string | null;
-  [k: string]: unknown;
-}
-/**
- * A single turn in the conversation (ChatGPT/Claude style).
- * Represents either a user message or an agent response.
- */
-export interface ConversationTurn {
-  role: "user" | "agent";
-  content: string;
-  agent_id?: string | null;
-  agent_name?: string | null;
-  user_id?: string | null;
-  timestamp?: string;
-  [k: string]: unknown;
 }
 export interface RoomCenterRoomMessageRequest {
   room_id?: string | null;

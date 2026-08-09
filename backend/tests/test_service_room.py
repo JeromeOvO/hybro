@@ -17,7 +17,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.dto import MessageCommitted, RoomInfo, UserMessageInsertResult
+from common.dto import (
+    MemorySearchResult,
+    MessageCommitted,
+    RoomInfo,
+    UserMessageInsertResult,
+)
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room.compat.runtime import RoomServices
@@ -104,6 +109,41 @@ async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(fa
     svc.cancellation_control.release_token.assert_called_once_with("msg-1", token)
 
 
+@pytest.mark.asyncio
+async def test_room_services_passes_typed_search_results_to_context_assembly():
+    svc = object.__new__(RoomServices)
+    result = MemorySearchResult(
+        room_id="r1",
+        content="Typed memory",
+        keyword_score=1.0,
+        relevance_score=1.0,
+        temporal_decay_factor=1.0,
+    )
+    memory_search = SimpleNamespace(search_memory=AsyncMock(return_value=[result]))
+    context_assembly = SimpleNamespace(
+        assemble_supervisor_context_from_memory=MagicMock(
+            return_value=SimpleNamespace(metadata={"context": "assembled"})
+        )
+    )
+    svc.bind_context_memory(
+        context_assembly=context_assembly,
+        memory_search=memory_search,
+    )
+
+    context = await svc._build_supervisor_conversation_context(
+        room=SimpleNamespace(room_id="r1"),
+        room_memory=SimpleNamespace(),
+        message_text="question",
+        agent_registry=[],
+        log_context="",
+    )
+
+    assert context == "assembled"
+    assert context_assembly.assemble_supervisor_context_from_memory.call_args.kwargs[
+        "memory_search_results"
+    ] == [result]
+
+
 def test_room_services_bind_store_sets_runtime_store():
     svc = object.__new__(RoomServices)
     store = object()
@@ -150,7 +190,9 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
 
     svc.bind_facade(facade)
     svc.bind_context_memory(
-        SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
+        room_memory_cleanup=SimpleNamespace(
+            delete_room_memory=AsyncMock(return_value=True)
+        )
     )
     svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
 
@@ -1032,8 +1074,8 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     facade.get_room_owner.return_value = "owner"
     facade.delete_room.return_value = True
     svc.bind_facade(facade)
-    memory_manager = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
-    svc.bind_context_memory(memory_manager)
+    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
+    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
 
     response = await svc.delete_room_by_room_id(
         RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="intruder")
@@ -1043,7 +1085,7 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     assert response.status_code == 403
     assert response.error == "Forbidden"
     facade.delete_room.assert_not_awaited()
-    memory_manager.delete_room_memory.assert_not_awaited()
+    memory_cleanup.delete_room_memory.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1059,7 +1101,9 @@ async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails
     facade.delete_room.return_value = True
     svc.bind_facade(facade)
     svc.bind_context_memory(
-        SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
+        room_memory_cleanup=SimpleNamespace(
+            delete_room_memory=AsyncMock(return_value=False)
+        )
     )
 
     response = await svc.delete_room_by_room_id(

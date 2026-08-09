@@ -71,14 +71,6 @@
       "inspection"
     ]
   },
-  "memory": {
-    "api_key": false,
-    "auth": "clerk-global",
-    "cors": "default",
-    "tags": [
-      "memory"
-    ]
-  },
   "platform_gateway": {
     "api_key": true,
     "auth": "api-key-route-level",

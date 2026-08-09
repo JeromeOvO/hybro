@@ -1,17 +1,21 @@
 import ast
 import inspect
+import re
 import sys
 import tomllib
 from datetime import UTC
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 
 from common.protocols import (
-    ContextAssembler,
-    MemoryManager,
-    MemoryProjector,
+    CompactionPort,
+    ContextAssemblyPort,
     MemoryRepository,
+    MemorySearchPort,
+    ProjectionPort,
+    RoomMemoryCleanupPort,
 )
 
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
@@ -29,9 +33,6 @@ class FakeMemoryRepository:
     async def upsert_room_memory(self, room_id: str, memory: dict) -> None:
         return None
 
-    async def get_user_memories(self, user_id: str) -> list[dict]:
-        return []
-
     async def delete_room_memory(self, room_id: str) -> bool:
         return True
 
@@ -40,20 +41,6 @@ class FakeMemoryRepository:
 
     async def ensure_room_memory(self, room_id: str, defaults: dict) -> dict:
         return {"room_id": room_id, **defaults}
-
-    async def get_room_memory_by_memory_id(self, memory_id: str) -> dict | None:
-        return None
-
-    async def update_room_memory_by_room_id(self, room_id: str, updates: dict) -> bool:
-        return True
-
-    async def update_room_memory_by_memory_id(
-        self, memory_id: str, updates: dict
-    ) -> bool:
-        return True
-
-    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
-        return True
 
     async def push_and_trim_conversation_turn(
         self,
@@ -184,19 +171,124 @@ def _facade():
     )
 
 
-def test_context_memory_runtime_protocol_conformance():
+def test_context_assembly_port_and_facade_parameter_types_match():
+    from context_memory import ContextMemoryFacade
+
+    protocol_hints = get_type_hints(
+        ContextAssemblyPort.assemble_supervisor_context_from_memory
+    )
+    facade_hints = get_type_hints(
+        ContextMemoryFacade.assemble_supervisor_context_from_memory
+    )
+
+    for parameter in (
+        "room_memory_doc",
+        "current_task",
+        "agent_registry",
+        "max_turns",
+        "memory_search_results",
+        "return",
+    ):
+        assert facade_hints[parameter] == protocol_hints[parameter]
+
+    protocol_hints = get_type_hints(
+        ContextAssemblyPort.assemble_agent_execution_context_from_memory
+    )
+    facade_hints = get_type_hints(
+        ContextMemoryFacade.assemble_agent_execution_context_from_memory
+    )
+    assert facade_hints == protocol_hints
+
+
+def test_context_memory_port_conformance():
     from common.protocols import ContentStorageRepository
     from context_memory import ContentStorageMongoRepository, MemoryMongoRepository
 
     facade = _facade()
 
-    assert isinstance(facade, ContextAssembler)
-    assert isinstance(facade, MemoryManager)
-    assert isinstance(facade, MemoryProjector)
+    assert isinstance(facade, ContextAssemblyPort)
+    assert isinstance(facade, MemorySearchPort)
+    assert isinstance(facade, ProjectionPort)
+    assert isinstance(facade, CompactionPort)
+    assert isinstance(facade, RoomMemoryCleanupPort)
     assert isinstance(MemoryMongoRepository(mongo=FakeMongo()), MemoryRepository)
     assert isinstance(
         ContentStorageMongoRepository(mongo=FakeMongo()), ContentStorageRepository
     )
+
+
+def test_retired_context_memory_residue_does_not_return():
+    retired_text = {
+        "ChatContext",
+        "RuntimeChatContext",
+        "ChatContextGenerationInput",
+        "LegacyChatContextAPI",
+        "/memoryCenter/addChatContext",
+        "/memoryCenter/getChatContextBySessionId",
+        "/memoryCenter/updateChatContextBySessionId",
+        "/memoryCenter/deleteChatContextBySessionId",
+        "legacy_search",
+        "legacy_create_room_memory",
+        "legacy_get_room_memory_by_room_id",
+        "legacy_get_room_memory_by_memory_id",
+        "legacy_update_room_memory_by_room_id",
+        "legacy_update_room_memory_by_memory_id",
+        "legacy_delete_room_memory_by_room_id",
+        "legacy_delete_room_memory_by_memory_id",
+        "initialize_or_update_room_memory",
+        "add_agent_response_to_memory",
+        "RoomCenterMemoryRequest",
+        "RoomCenterMemoryResponse",
+        "RoomMemoryInfo",
+        "add_turn_to_history",
+        "build_context_for_agent",
+        "context_memory.compat",
+        "context_memory.legacy_assembly",
+        "context_memory_legacy_json_model",
+    }
+    checked_suffixes = {".py", ".json", ".toml", ".yaml", ".yml"}
+    violations: list[str] = []
+    for path in Path(".").rglob("*"):
+        if (
+            not path.is_file()
+            or path.suffix not in checked_suffixes
+            or "tests" in path.parts
+            or "docs" in path.parts
+            or ".venv" in path.parts
+        ):
+            continue
+        source = path.read_text(errors="ignore")
+        for residue in retired_text:
+            if residue in source:
+                violations.append(f"{path}:{residue}")
+
+    retired_paths = {
+        Path("context_memory/compat"),
+        Path("context_memory/legacy_assembly.py"),
+        Path("context_memory/protocols.py"),
+        Path("api_gateway/routes/memory_routes.py"),
+    }
+    violations.extend(str(path) for path in retired_paths if path.exists())
+
+    frontend_types = Path(__file__).resolve().parents[2] / "frontend/src/lib/types"
+    retired_frontend_paths = {frontend_types / "memory.ts"}
+    violations.extend(str(path) for path in retired_frontend_paths if path.exists())
+
+    nested_history_type = re.compile(
+        r"interface\s+MemoryContent\s*\{[^}]*\bconversation_history\b",
+        re.DOTALL,
+    )
+    for path in frontend_types.glob("*.ts"):
+        source = path.read_text()
+        for residue in retired_text:
+            if residue in source:
+                violations.append(f"{path}:{residue}")
+        if nested_history_type.search(source):
+            violations.append(f"{path}:MemoryContent.conversation_history")
+
+    # extend_info is active generic room/message metadata, not ChatContext residue.
+    assert "extend_info" not in retired_text
+    assert violations == []
 
 
 def test_context_memory_exports_are_stable():
@@ -330,6 +422,51 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
         context_memory_config._setting("context_model_window", 128000)
 
 
+def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
+    from models.memory import ConversationTurn, RoomMemory, TurnRole
+    from room.compat.runtime import RoomServices
+
+    class FailingAssembly:
+        received_memory = None
+
+        def assemble_agent_execution_context_from_memory(
+            self, room_memory, current_task, **kwargs
+        ):
+            self.received_memory = room_memory
+            raise RuntimeError("canonical assembly failed")
+
+    assembly = FailingAssembly()
+    services = object.__new__(RoomServices)
+    services._context_assembly = assembly
+    room_memory = RoomMemory(
+        room_id="room-1",
+        conversation_history=[
+            ConversationTurn(turn_id="turn-1", role=TurnRole.USER, content="canonical")
+        ],
+        memory_content={
+            "summary": "summary only",
+            "conversation_history": [
+                {"turn_id": "nested", "role": "user", "content": "retired nested"}
+            ],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="canonical assembly failed"):
+        services._build_agent_execution_context_from_memory(
+            room_memory=room_memory,
+            current_task="task",
+            agent_name="Agent",
+            room_awareness=None,
+            quoted_text=None,
+            agent_task=None,
+        )
+
+    assert assembly.received_memory is room_memory
+    source = inspect.getsource(RoomServices.process_agent_message)
+    assert "build_context_for_agent" not in source
+    assert "room_memory_content" not in source
+
+
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
     from room.compat.runtime import RoomServices
 
@@ -345,7 +482,7 @@ def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
     source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
 
     assert "Context & Memory cleanup skipped" in source
-    assert "_context_memory_manager is None" in source
+    assert "_room_memory_cleanup is None" in source
 
 
 def test_message_write_flows_do_not_call_context_memory_write_shims():
@@ -401,20 +538,7 @@ def test_context_memory_import_boundary():
     }
     allowed_stdlib = set(sys.stdlib_module_names) | {"__future__"}
     allowed_roots = allowed_stdlib | {"common", "context_memory"}
-    protocol_legacy_model_imports = {
-        "models.request",
-        "models.response",
-    }
-    path_legacy_compat_imports = {
-        Path("context_memory/protocols.py"): protocol_legacy_model_imports,
-        Path("context_memory/compat/runtime.py"): {
-            "llm_gateway.errors",
-            "models.error",
-            "models.memory",
-            "models.request",
-            "models.response",
-        },
-    }
+    path_legacy_compat_imports: dict[Path, set[str]] = {}
 
     for path in Path("context_memory").rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -441,33 +565,7 @@ def test_context_memory_import_boundary():
 
 def test_non_protocol_helper_call_boundary():
     allowed_call_sites = {
-        "context_memory/compat/context_assembly.py": {
-            "assemble_supervisor_context_from_memory",
-            "assemble_agent_execution_context_from_memory",
-        },
-        "context_memory/compat/runtime.py": {
-            "legacy_create_room_memory",
-            "legacy_get_room_memory_by_room_id",
-            "legacy_get_room_memory_by_memory_id",
-            "legacy_update_room_memory_by_room_id",
-            "legacy_update_room_memory_by_memory_id",
-            "legacy_delete_room_memory_by_room_id",
-            "legacy_delete_room_memory_by_memory_id",
-            "initialize_or_update_room_memory",
-            "add_agent_response_to_memory",
-            "add_synthesis_to_history",
-            "update_room_summary",
-        },
         f"{REMOVED_RUNTIME_PACKAGE}/memory_service.py": {
-            "legacy_create_room_memory",
-            "legacy_get_room_memory_by_room_id",
-            "legacy_get_room_memory_by_memory_id",
-            "legacy_update_room_memory_by_room_id",
-            "legacy_update_room_memory_by_memory_id",
-            "legacy_delete_room_memory_by_room_id",
-            "legacy_delete_room_memory_by_memory_id",
-            "initialize_or_update_room_memory",
-            "add_agent_response_to_memory",
             "add_synthesis_to_history",
             "update_room_summary",
         },

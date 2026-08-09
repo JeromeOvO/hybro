@@ -76,12 +76,8 @@ def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
 
 
 def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none():
-    from common.dto import RuntimeChatContext, RuntimeRoomMemory, RuntimeRoomRecord
-    from dal.runtime_store.contracts import (
-        _dump_runtime,
-        runtime_to_chat_context,
-        runtime_to_room,
-    )
+    from common.dto import RuntimeRoomMemory, RuntimeRoomRecord
+    from dal.runtime_store.contracts import _dump_runtime, runtime_to_room
 
     room = RuntimeRoomRecord(
         room_id="r1",
@@ -114,22 +110,6 @@ def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none
         runtime_to_room(cleared_room).model_dump(mode="json", exclude_unset=True)[
             "applied_from_group"
         ]
-        is None
-    )
-
-    cleared_context = RuntimeChatContext(
-        memory_id="ctx-1",
-        user_name="User",
-        session_id="s1",
-        context_data=None,
-    )
-    cleared_context_payload = _dump_runtime(cleared_context)
-
-    assert cleared_context_payload["context_data"] is None
-    assert (
-        runtime_to_chat_context(cleared_context).model_dump(
-            mode="json", exclude_unset=True
-        )["context_data"]
         is None
     )
 
@@ -245,34 +225,19 @@ def test_room_and_message_conversion_preserves_runtime_fields():
     assert runtime_to_room_agent_message(runtime_message).message_id == "a1"
 
 
-def test_memory_conversion_preserves_summary_and_chat_context():
+def test_memory_conversion_preserves_summary():
     from dal.runtime_store.contracts import (
-        chat_context_to_runtime,
         room_memory_to_runtime,
-        runtime_to_chat_context,
         runtime_to_room_memory,
     )
-    from models.memory import ChatContext, ContextData, RoomMemory
+    from models.memory import RoomMemory
 
     memory = RoomMemory(room_id="r1", memory_id="mem-1", total_messages=3)
-    context = ChatContext(
-        memory_id="ctx-1",
-        user_name="User",
-        session_id="session-1",
-        context_data=ContextData(context_content="summary"),
-    )
-
     runtime_memory = room_memory_to_runtime(memory)
-    runtime_context = chat_context_to_runtime(context)
 
     assert runtime_memory.memory_id == "mem-1"
     assert runtime_memory.total_messages == 3
-    assert runtime_context.context_data == {"context_content": "summary"}
     assert runtime_to_room_memory(runtime_memory).memory_id == "mem-1"
-    assert (
-        runtime_to_chat_context(runtime_context).context_data.context_content
-        == "summary"
-    )
 
 
 def test_orchestration_run_document_conversion_round_trips_state_and_event():

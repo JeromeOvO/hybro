@@ -9,7 +9,7 @@ Tests cover:
 5. Compaction trigger in _handle_supervisor_run_result() for terminal statuses
 6. Prompt cache optimization (conversation_context in system prompt)
 
-See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification.
+See docs/System-Architecture.md for the current design.
 """
 
 import asyncio
@@ -22,9 +22,6 @@ from uuid import uuid4
 import pytest
 
 from common.utils.time import utcnow
-from context_memory import assembly as context_memory_assembly
-from context_memory.compat.runtime import ContextMemoryRoomMemoryAdapter
-from context_memory.config import TokenBudgetConfig
 from models.agent import AgentStatus
 from models.memory import (
     ConversationTurn,
@@ -139,7 +136,18 @@ class BoundRoomMemoryFacade:
         synthesis_text: str,
         synthesis_turn_id: str | None = None,
     ) -> bool:
-        prompt = f"Synthesis:\n{synthesis_text}"
+        doc = await self.service._store.get_room_summary_projection(room_id)
+        if not doc:
+            return False
+
+        existing = RoomSummary(**(doc.get("room_summary") or {}))
+        prompt = (
+            "Extract an incremental room summary. Empty lists preserve existing "
+            "values; durable lists merge case-insensitively; non-empty recent "
+            "lists replace existing values.\n"
+            f"Existing projection:\n{existing.model_dump(mode='json')!r}\n"
+            f"Synthesis:\n{synthesis_text}"
+        )
         try:
             extracted = await self.service.supervisor_llm_service.call_json(
                 system_prompt="You extract structured information from text. Respond with valid JSON only.",
@@ -149,36 +157,45 @@ class BoundRoomMemoryFacade:
         except Exception:
             return False
 
-        doc = await self.service._store.get_room_summary_projection(room_id)
-        if not doc:
-            return False
+        def non_empty_strings(value):
+            return [
+                item.strip()
+                for item in (value or [])
+                if isinstance(item, str) and item.strip()
+            ]
 
-        existing = RoomSummary(**(doc.get("room_summary") or {}))
+        def merge(existing_values, new_values):
+            values = []
+            seen = set()
+            for item in [
+                *non_empty_strings(existing_values),
+                *non_empty_strings(new_values),
+            ]:
+                key = item.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    values.append(item)
+            return values
+
+        extracted_goal = extracted.get("current_goal")
         new_summary = RoomSummary(
             current_goal=(
-                extracted.get("current_goal")
-                if extracted.get("current_goal") is not None
+                extracted_goal.strip()
+                if isinstance(extracted_goal, str) and extracted_goal.strip()
                 else existing.current_goal
             ),
-            key_decisions=(
-                extracted.get("key_decisions")
-                if extracted.get("key_decisions") is not None
-                else existing.key_decisions
-            ),
+            key_decisions=merge(existing.key_decisions, extracted.get("key_decisions")),
             open_questions=(
-                extracted.get("open_questions")
-                if extracted.get("open_questions") is not None
-                else existing.open_questions
+                non_empty_strings(extracted.get("open_questions"))
+                or existing.open_questions
             ),
             recent_agent_contributions=(
-                extracted.get("recent_agent_contributions")
-                if extracted.get("recent_agent_contributions") is not None
-                else existing.recent_agent_contributions
+                non_empty_strings(extracted.get("recent_agent_contributions"))
+                or existing.recent_agent_contributions
             ),
-            important_constraints=(
-                extracted.get("important_constraints")
-                if extracted.get("important_constraints") is not None
-                else existing.important_constraints
+            important_constraints=merge(
+                existing.important_constraints,
+                extracted.get("important_constraints"),
             ),
             last_updated_at=utcnow(),
             updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
@@ -211,55 +228,13 @@ class BoundRoomMemoryFacade:
         )
 
 
-def room_memory_adapter(mock_db_service, mock_supervisor_llm_service):
+def room_memory_facade(mock_db_service, mock_supervisor_llm_service):
     holder = SimpleNamespace(
         _store=mock_db_service,
         supervisor_llm_service=mock_supervisor_llm_service,
         _enrich_turn_notes_background=AsyncMock(),
     )
-    return ContextMemoryRoomMemoryAdapter(facade=BoundRoomMemoryFacade(holder)), holder
-
-
-class BoundAssemblyFacade:
-    def __init__(self, service):
-        self.service = service
-
-    def _budget(self):
-        budget = self.service.budget
-        return TokenBudgetConfig(
-            model_context_window=budget.model_context_window,
-            system_prompt=budget.system_prompt,
-            tool_schemas=budget.tool_schemas,
-            response_reserve=budget.response_reserve,
-            room_context_pct=budget.room_context_pct,
-            conversation_history_pct=budget.conversation_history_pct,
-            current_task_pct=budget.current_task_pct,
-        )
-
-    def assemble_supervisor_context_from_memory(
-        self, room_memory_doc, current_task, **kwargs
-    ):
-        return context_memory_assembly.assemble_supervisor_context_from_memory(
-            room_memory_doc,
-            current_task,
-            token_budget=self._budget(),
-            **kwargs,
-        )
-
-    def assemble_agent_execution_context_from_memory(
-        self, room_memory_doc, current_task, **kwargs
-    ):
-        return context_memory_assembly.assemble_agent_execution_context_from_memory(
-            room_memory_doc,
-            current_task,
-            token_budget=self._budget(),
-            **kwargs,
-        )
-
-
-def bind_assembly_facade(service):
-    service.bind_facade(BoundAssemblyFacade(service))
-    return service
+    return BoundRoomMemoryFacade(holder), holder
 
 
 @pytest.fixture
@@ -281,6 +256,7 @@ def room_memory():
     return RoomMemory(
         room_id="test_room",
         memory_content=MemoryContent(conversation_history=turns),
+        conversation_history=turns,
         room_summary=RoomSummary(current_goal="Write tests"),
     )
 
@@ -314,7 +290,7 @@ class TestAddSynthesisToHistory:
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -337,7 +313,7 @@ class TestAddSynthesisToHistory:
         """Should return None when room document doesn't exist."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -355,7 +331,7 @@ class TestAddSynthesisToHistory:
         """Should return None when DB persistence fails."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -377,7 +353,7 @@ class TestSynthesisLLMEnrichment:
         """Long synthesis text should trigger background _enrich_turn_notes_background."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, holder = room_memory_adapter(
+        service, holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -405,7 +381,7 @@ class TestSynthesisLLMEnrichment:
         """Short synthesis text should NOT trigger background enrichment."""
         mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
-        service, holder = room_memory_adapter(
+        service, holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -448,7 +424,7 @@ class TestUpdateRoomSummary:
             "important_constraints": ["Must finish by Friday"],
         }
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -468,9 +444,13 @@ class TestUpdateRoomSummary:
         self, room_memory, mock_db_service, mock_supervisor_llm_service
     ):
         """On LLM failure, existing summary should be preserved (graceful degradation)."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {"current_goal": "Write tests"},
+            "room_facts": [],
+        }
         mock_supervisor_llm_service.call_json.side_effect = Exception("LLM timeout")
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -496,7 +476,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -506,6 +486,7 @@ class TestUpdateRoomSummary:
         )
 
         assert success is False
+        mock_supervisor_llm_service.call_json.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_keeps_existing_fields_when_extraction_returns_empty(
@@ -528,7 +509,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -540,9 +521,7 @@ class TestUpdateRoomSummary:
         assert success is True
         saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
         assert saved_summary["current_goal"] == "Original goal"
-        assert (
-            saved_summary["key_decisions"] == []
-        )  # LLM explicitly returned empty list
+        assert saved_summary["key_decisions"] == ["Original decision"]
         assert saved_summary["open_questions"] == ["New question"]
 
     @pytest.mark.asyncio
@@ -563,7 +542,7 @@ class TestUpdateRoomSummary:
             "important_constraints": [],
         }
 
-        service, _holder = room_memory_adapter(
+        service, _holder = room_memory_facade(
             mock_db_service, mock_supervisor_llm_service
         )
 
@@ -791,81 +770,6 @@ class TestCompactionTrigger:
         # (not fire-and-forget) to avoid a race with compaction.
         if status == "completed":
             rmc._update_room_summary_safe.assert_awaited_once()
-
-
-# =========================================================================
-# Test: MAX_CONTEXT_CHARS enforcement in ContextAssemblyService
-# =========================================================================
-
-
-class TestMaxContextCharsEnforcement:
-    """Tests for MAX_CONTEXT_CHARS hard cap in ContextAssemblyService."""
-
-    @pytest.fixture
-    def service(self):
-        """Create a ContextAssemblyService with mock settings."""
-        with patch("common.config.settings") as mock_settings:
-            mock_settings.context_model_window = 128000
-            mock_settings.context_system_prompt_tokens = 2000
-            mock_settings.context_tool_schema_tokens = 1000
-            mock_settings.context_response_reserve_tokens = 4000
-            mock_settings.context_room_pct = 0.2
-            mock_settings.context_history_pct = 0.6
-            mock_settings.context_task_pct = 0.2
-            from context_memory.compat.context_assembly import ContextAssemblyService
-
-            yield bind_assembly_facade(ContextAssemblyService())
-
-    def test_supervisor_context_truncated_beyond_char_limit(self, service):
-        """Context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
-        small_cap = 1_000
-        with patch("context_memory.assembly.MAX_CONTEXT_CHARS", small_cap):
-            huge_content = "X" * (small_cap + 500)
-            turns = [
-                ConversationTurn(
-                    role=TurnRole.USER,
-                    content=huge_content,
-                    timestamp=datetime(2026, 2, 20),
-                ),
-            ]
-            room_memory = RoomMemory(
-                room_id="test_room",
-                memory_content=MemoryContent(conversation_history=turns),
-            )
-
-            result = service.build_supervisor_context(
-                room_memory=room_memory,
-                current_task="Test",
-            )
-
-            assert len(result.context) <= small_cap + 50
-            assert result.was_truncated is True
-
-    def test_agent_context_truncated_beyond_char_limit(self, service):
-        """Agent context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
-        small_cap = 1_000
-        with patch("context_memory.assembly.MAX_CONTEXT_CHARS", small_cap):
-            huge_content = "Y" * (small_cap + 500)
-            turns = [
-                ConversationTurn(
-                    role=TurnRole.USER,
-                    content=huge_content,
-                    timestamp=datetime(2026, 2, 20),
-                ),
-            ]
-            room_memory = RoomMemory(
-                room_id="test_room",
-                memory_content=MemoryContent(conversation_history=turns),
-            )
-
-            result = service.build_agent_execution_context(
-                room_memory=room_memory,
-                current_task="Test",
-                agent_name="TestAgent",
-            )
-
-            assert len(result.context) <= small_cap + 50
-            assert result.was_truncated is True
 
 
 # =========================================================================
@@ -1640,7 +1544,8 @@ class _FakePhase5App:
         self.room_center.remote_task_reader = AsyncMock()
         self.room_center.debate_prompt_injector = None
         self.room_center.rate_limit_service = None
-        self.room_center.context_memory_runtime = None
+        self.room_center.context_assembly = None
+        self.room_center.memory_search = None
         self.room_center.context_compaction = None
         self.room_center.build_turn_content = None
         self.room_center.agent_response_handler = None

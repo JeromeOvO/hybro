@@ -125,20 +125,9 @@ class RuntimeRoomMemory(FrozenDTO):
     extend_info: Any | None = None
 
 
-class RuntimeChatContext(FrozenDTO):
-    memory_id: str
-    user_name: str
-    session_id: str
-    context_data: dict[str, Any] | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    extend_info: Any | None = None
-
-
 __all__ = [
     "RuntimeAgentGroup",
     "RuntimeAgentRecord",
-    "RuntimeChatContext",
     "RuntimeMessageContent",
     "RuntimeRoomAgentMessage",
     "RuntimeRoomMemory",

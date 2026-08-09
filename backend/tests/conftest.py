@@ -691,7 +691,6 @@ def make_api_gateway_deps(
             "hitl_manager": mock_hitl_service,
             "hub_relay_service": MagicMock(),
             "inspection_center": MagicMock(),
-            "memory_center": MagicMock(),
             "gateway_service": gateway_service,
             "gateway_rate_limiter": _rate_limiter(),
             "relay_service": MagicMock(),

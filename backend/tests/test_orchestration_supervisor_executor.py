@@ -10,6 +10,7 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from common.dto import MemorySearchResult
 from execution.cancellation.finalizer import CancellationFinalizer
 from execution.orchestration import supervisor_executor as supervisor_executor_module
 from execution.orchestration.action_validator import (
@@ -7866,13 +7867,22 @@ async def test_orchestration_initial_run_receives_context_memory():
             )
         )
     )
-    rmc.context_memory_runtime = SimpleNamespace(
-        legacy_search=AsyncMock(return_value={"results": []}),
+    search_result = MemorySearchResult(
+        room_id="room-1",
+        content="Typed memory",
+        keyword_score=1.0,
+        relevance_score=1.0,
+        temporal_decay_factor=1.0,
+    )
+    rmc.memory_search = SimpleNamespace(
+        search_memory=AsyncMock(return_value=[search_result])
+    )
+    rmc.context_assembly = SimpleNamespace(
         assemble_supervisor_context_from_memory=MagicMock(
             return_value=SimpleNamespace(
                 metadata={"context": "Context from room memory", "occupancy_pct": 12.5}
             )
-        ),
+        )
     )
     rmc.supervisor_executor = SimpleNamespace(
         run=AsyncMock(return_value=supervisor_result),
@@ -7899,6 +7909,8 @@ async def test_orchestration_initial_run_receives_context_memory():
     assert response.success is True
     run_kwargs = rmc.supervisor_executor.run.await_args.kwargs
     assert run_kwargs["conversation_context"] == "Context from room memory"
+    assembly_call = rmc.context_assembly.assemble_supervisor_context_from_memory
+    assert assembly_call.call_args.kwargs["memory_search_results"] == [search_result]
 
 
 def test_orchestration_envelope_requires_candidate_scope():

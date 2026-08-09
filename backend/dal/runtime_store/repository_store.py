@@ -6,7 +6,6 @@ from typing import Any
 from common.dto import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeChatContext,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
@@ -23,7 +22,6 @@ from common.utils.logger import get_logger
 from dal.runtime_store.contracts import (
     agent_group_to_runtime,
     agent_to_runtime,
-    chat_context_to_runtime,
     room_agent_message_to_runtime,
     room_memory_to_runtime,
     room_to_runtime,
@@ -33,7 +31,6 @@ from dal.runtime_store.contracts import (
     runtime_agents,
     runtime_rooms,
     runtime_to_agent_group,
-    runtime_to_chat_context,
     runtime_to_message_content,
     runtime_to_room,
     runtime_to_room_agent_message,
@@ -54,7 +51,6 @@ from dal.runtime_store.parts.parsing import (
     _safe_parse_agent,
     _safe_parse_agent_group,
     _safe_parse_agent_message,
-    _safe_parse_chat_context,
     _safe_parse_room,
     _safe_parse_room_memory,
     _safe_parse_user_message,
@@ -78,7 +74,6 @@ __all__ = [
     "_safe_parse_agent",
     "_safe_parse_agent_group",
     "_safe_parse_agent_message",
-    "_safe_parse_chat_context",
     "_safe_parse_room",
     "_safe_parse_room_memory",
     "_safe_parse_user_message",
@@ -103,10 +98,7 @@ class RuntimeRepositoryStore:
         agent_repository: AgentRepository,
     ) -> None:
         self._agent_groups = mongo.collection("agent_groups")
-        self._chat_contexts = mongo.collection("chat_contexts")
         self._agents = mongo.collection("agents")
-        self._user_memories = mongo.collection("user_memories")
-        self._agent_memories = mongo.collection("agent_memories")
         self._room_memories = mongo.collection("room_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
         self._room_user_messages = mongo.collection("room_user_messages")
@@ -141,9 +133,6 @@ class RuntimeRepositoryStore:
             room_user_messages=self._room_user_messages,
         )
         self._memory_part = MemoryRuntimeStorePart(
-            chat_contexts=self._chat_contexts,
-            user_memories=self._user_memories,
-            agent_memories=self._agent_memories,
             room_memories=self._room_memories,
             room_repository=self._room_repository,
         )
@@ -206,9 +195,6 @@ class RuntimeRepositoryStore:
         if part is not None:
             return part
         return MemoryRuntimeStorePart(
-            chat_contexts=getattr(self, "_chat_contexts", None),
-            user_memories=getattr(self, "_user_memories", None),
-            agent_memories=getattr(self, "_agent_memories", None),
             room_memories=getattr(self, "_room_memories", None),
             room_repository=getattr(self, "_room_repository", None),
         )
@@ -817,49 +803,6 @@ class RuntimeRepositoryStore:
 
     async def ensure_hitl_indexes(self) -> None:
         return await self._hitl_delegate().ensure_hitl_indexes()
-
-    async def add_chat_context(self, chat_context: RuntimeChatContext) -> bool:
-        return await self._memory_delegate().add_chat_context(
-            runtime_to_chat_context(chat_context)
-        )
-
-    async def get_chat_context_by_session_id(
-        self, session_id: str
-    ) -> RuntimeChatContext | None:
-        chat_context = await self._memory_delegate().get_chat_context_by_session_id(
-            session_id
-        )
-        return (
-            chat_context_to_runtime(chat_context) if chat_context is not None else None
-        )
-
-    async def update_chat_context_by_session_id(
-        self, session_id: str, chat_context: RuntimeChatContext
-    ) -> bool:
-        return await self._memory_delegate().update_chat_context_by_session_id(
-            session_id, runtime_to_chat_context(chat_context)
-        )
-
-    async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
-        return await self._memory_delegate().delete_chat_context_by_session_id(
-            session_id
-        )
-
-    async def increment_user_interactions(self, user_id: str) -> bool:
-        return await self._memory_delegate().increment_user_interactions(user_id)
-
-    async def record_agent_call(
-        self,
-        *,
-        agent_id: str,
-        success: bool,
-        response_time_ms: float = 0.0,
-    ) -> bool:
-        return await self._memory_delegate().record_agent_call(
-            agent_id=agent_id,
-            success=success,
-            response_time_ms=response_time_ms,
-        )
 
     async def update_turn_notes(
         self, room_id: str, turn_id: str, turn_notes: dict

@@ -13,8 +13,6 @@ from common.dto.context_memory import (
     CompactionResult,
     ContextBlock,
     MemorySearchResult,
-    RoomMemoryInfo,
-    UserMemory,
 )
 from common.dto.dal import (
     PaginationParams,
@@ -85,7 +83,6 @@ from common.dto.llm import (
 )
 from common.dto.llm_workflows import (
     AgentRoutingCandidate,
-    ChatContextGenerationInput,
     ExplicitAgentMention,
     ParsedUserMessageRequest,
     RoomMemoryGenerationInput,
@@ -125,7 +122,6 @@ from common.dto.room import (
 from common.dto.runtime_store import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeChatContext,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
@@ -144,7 +140,6 @@ __all__ = [
     "AgentMessageInput",
     "AgentMessagePartial",
     "AgentRoutingCandidate",
-    "ChatContextGenerationInput",
     "AgentRegistered",
     "AgentStreamEvent",
     "AgentTaskResult",
@@ -217,7 +212,6 @@ __all__ = [
     "RoomInfo",
     "RoomMemoryGenerationInput",
     "RoomMembership",
-    "RoomMemoryInfo",
     "RoomMessageSummary",
     "RoomMessageInfo",
     "RoomSummary",
@@ -225,7 +219,6 @@ __all__ = [
     "RoomTimelinePage",
     "RuntimeAgentGroup",
     "RuntimeAgentRecord",
-    "RuntimeChatContext",
     "RuntimeMessageContent",
     "RuntimeRoomAgentMessage",
     "RuntimeRoomMemory",
@@ -246,7 +239,6 @@ __all__ = [
     "TaskSubmittedEvent",
     "TaskUpdateEvent",
     "TimelinePosition",
-    "UserMemory",
     "UserMessageInput",
     "UserMessageInsertResult",
     "WorkflowState",

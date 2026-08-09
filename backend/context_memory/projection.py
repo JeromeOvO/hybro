@@ -227,7 +227,7 @@ def new_room_memory_doc(*, room_id: str, memory_id: str, now) -> dict:
     return {
         "room_id": room_id,
         "memory_id": memory_id,
-        "memory_content": {"summary": None, "conversation_history": []},
+        "memory_content": {"summary": None},
         "conversation_history": [],
         "room_summary": {
             "current_goal": None,
@@ -299,129 +299,6 @@ def supervisor_turn(*, turn_id: str, content: str, timestamp) -> dict:
         "estimated_tokens_compact": 20,
         "turn_notes": extract_turn_notes(content),
     }
-
-
-async def initialize_or_update_room_memory(
-    *,
-    repository: MemoryRepository,
-    room_id: str,
-    memory_content: str | None,
-    room_agent_set: dict | None,
-    user_id: str | None,
-    attachments: list | None,
-    id_factory: Callable[[], str],
-    now,
-    message_id: str | None = None,
-) -> dict | None:
-    room_memory = await repository.get_room_memory(room_id)
-    if not room_memory:
-        room_memory = new_room_memory_doc(
-            room_id=room_id,
-            memory_id=id_factory(),
-            now=now(),
-        )
-        await repository.create_room_memory(room_memory)
-
-    if memory_content:
-        clean_message = clean_mention_format(memory_content, room_agent_set or {})
-        content = build_turn_content(clean_message, attachments)
-        turn_id = message_id or id_factory()
-        turn = user_turn(
-            message_id=turn_id,
-            content=content,
-            user_id=user_id,
-            timestamp=now(),
-        )
-        if message_id is None:
-            turn["turn_id"] = turn_id
-            modified, matched = await repository.push_and_trim_conversation_turn(
-                room_id,
-                turn,
-                max_turns=MAX_HISTORY_TURNS,
-                summary_stub=f"[User] {clean_message[:200]}...",
-                max_summary_chars=MAX_SUMMARY_CHARS,
-            )
-        else:
-            (
-                modified,
-                matched,
-                already_exists,
-            ) = await repository.push_and_trim_conversation_turn_if_absent(
-                room_id,
-                turn,
-                turn_id=turn["turn_id"],
-                max_turns=MAX_HISTORY_TURNS,
-                summary_stub=f"[User] {clean_message[:200]}...",
-                max_summary_chars=MAX_SUMMARY_CHARS,
-            )
-            if already_exists:
-                latest = await repository.get_room_memory(room_id) or room_memory
-                duplicate_doc = dict(latest)
-                duplicate_doc["_context_memory_duplicate_turn"] = True
-                return duplicate_doc
-        if not modified and not matched:
-            return None
-        room_memory = await repository.get_room_memory(room_id) or room_memory
-    return room_memory
-
-
-async def add_agent_response_to_memory(
-    *,
-    repository: MemoryRepository,
-    room_id: str,
-    agent_id: str,
-    agent_name: str,
-    response_text: str,
-    was_successful: bool,
-    id_factory: Callable[[], str],
-    now,
-    llm_provider: LLMStructuredGateway,
-    llm_config: ContextMemoryLLMConfig,
-    background_task_runner: Callable[[Awaitable[Any]], None],
-    message_id: str | None = None,
-) -> tuple[bool, bool]:
-    turn = agent_turn(
-        content=response_text,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        timestamp=now(),
-        turn_id=f"message:{message_id}" if message_id else id_factory(),
-        was_successful=was_successful,
-    )
-    if message_id:
-        (
-            modified,
-            matched,
-            _already_exists,
-        ) = await repository.push_and_trim_conversation_turn_if_absent(
-            room_id,
-            turn,
-            turn_id=turn["turn_id"],
-            max_turns=MAX_HISTORY_TURNS,
-            summary_stub=f"[{agent_name}] {response_text[:200]}...",
-            max_summary_chars=MAX_SUMMARY_CHARS,
-        )
-    else:
-        modified, matched = await repository.push_and_trim_conversation_turn(
-            room_id,
-            turn,
-            max_turns=MAX_HISTORY_TURNS,
-            summary_stub=f"[{agent_name}] {response_text[:200]}...",
-            max_summary_chars=MAX_SUMMARY_CHARS,
-        )
-    if modified and turn["estimated_tokens_full"] > LLM_TURN_NOTES_THRESHOLD:
-        background_task_runner(
-            enrich_turn_notes(
-                repository=repository,
-                llm_provider=llm_provider,
-                llm_config=llm_config,
-                room_id=room_id,
-                turn_id=turn["turn_id"],
-                heuristic_notes=turn.get("turn_notes"),
-                content=response_text,
-            )
-        )
-    return modified, matched
 
 
 async def add_synthesis_to_history(

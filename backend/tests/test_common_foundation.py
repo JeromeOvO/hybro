@@ -101,9 +101,6 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
         Path("common/utils/a2a_helpers.py"): {
             "a2a_artifact_storage": "A2AArtifactFiles | None"
         },
-        Path("common/utils/context_utils.py"): {
-            "context_turn_factory": "ContextTurnFactory | None"
-        },
     }
     violations: list[str] = []
 
@@ -704,20 +701,21 @@ def test_protocol_methods_match_design_doc():
             "verify_room_agent_membership",
             "verify_room_hub_ownership",
         },
-        protocols.ContextAssembler: {"assemble_context"},
-        protocols.MemoryManager: {
-            "get_room_memory",
-            "search_memory",
-            "get_user_memories",
-            "delete_room_memory",
-        },
-        protocols.MemoryProjector: {"project_message", "run_compaction"},
-        protocols.ContextMemoryRuntime: {
+        protocols.ContextAssemblyPort: {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
-            "legacy_search",
-            "get_budget_summary",
         },
+        protocols.MemorySearchPort: {"search_memory"},
+        protocols.ProjectionPort: {
+            "project_message_for_event",
+            "run_compaction",
+        },
+        protocols.CompactionPort: {
+            "should_compact",
+            "compact_if_needed",
+            "compact_room_memory",
+        },
+        protocols.RoomMemoryCleanupPort: {"delete_room_memory"},
         protocols.ExecutionEngine: {
             "execute",
             "start_orchestration",
@@ -855,13 +853,7 @@ def test_protocol_methods_match_design_doc():
             "update_hitl_request",
         },
         protocols.RuntimeMemoryStore: {
-            "add_chat_context",
-            "delete_chat_context_by_session_id",
-            "get_chat_context_by_session_id",
             "get_room_memory_by_room_id",
-            "increment_user_interactions",
-            "record_agent_call",
-            "update_chat_context_by_session_id",
             "update_turn_notes",
         },
         protocols.RuntimeMessageStore: {
@@ -1132,14 +1124,9 @@ def test_protocol_methods_match_design_doc():
         protocols.MemoryRepository: {
             "get_room_memory",
             "upsert_room_memory",
-            "get_user_memories",
             "delete_room_memory",
             "create_room_memory",
             "ensure_room_memory",
-            "get_room_memory_by_memory_id",
-            "update_room_memory_by_room_id",
-            "update_room_memory_by_memory_id",
-            "delete_room_memory_by_memory_id",
             "push_and_trim_conversation_turn",
             "push_and_trim_conversation_turn_if_absent",
             "update_turn_notes",

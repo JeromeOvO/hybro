@@ -34,7 +34,6 @@ from common.protocols import (
     ViewSetRepositoryProvider,
     WebhookReceiver,
 )
-from context_memory.protocols import LegacyChatContextAPI
 from local_agents.protocols import LocalAgentDiscovery
 from room.protocols import RoomCenterCompatibility
 
@@ -56,7 +55,6 @@ class APIGatewayDeps:
     hitl_manager: HITLManager
     hub_relay_service: HubStatusReader
     inspection_center: AgentInspection
-    memory_center: LegacyChatContextAPI
     gateway_service: GatewayService | None
     gateway_rate_limiter: APIKeyRateLimiter | None
     relay_service: HubRelayManagement
@@ -208,12 +206,6 @@ def get_inspection_center(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentInspection:
     return deps.inspection_center
-
-
-def get_memory_center(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> LegacyChatContextAPI:
-    return deps.memory_center
 
 
 def get_gateway_service(

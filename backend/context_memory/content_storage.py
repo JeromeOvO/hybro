@@ -70,14 +70,6 @@ async def expand_mongodb_reference(
     return doc.get("content") or ""
 
 
-def content_from_document(
-    doc: dict | None, *, now: datetime | None = None
-) -> str | None:
-    if not doc or is_content_expired(doc, now=now):
-        return None
-    return doc.get("content")
-
-
 def is_content_expired(doc: dict[str, Any], *, now: datetime | None = None) -> bool:
     expires_at = doc.get("expires_at")
     if not isinstance(expires_at, datetime):
@@ -90,15 +82,3 @@ def _as_utc_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
-
-
-def compact_pointer(content_ref: dict[str, Any]) -> str:
-    storage_type = content_ref.get("storage_type")
-    if storage_type == "mongodb":
-        return (
-            "[Content stored: db/"
-            f"{content_ref.get('collection')}/{content_ref.get('document_id')}]"
-        )
-    if storage_type == "url":
-        return f"[Content from: {content_ref.get('url')}]"
-    return "[Content reference]"

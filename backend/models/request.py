@@ -12,13 +12,11 @@ from pydantic import (
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
 from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
-from models.memory import ChatContext, RoomMemory
 from models.room import (
     Room,
     RoomAgentMessage,
     RoomMessage,
     RoomUserMessage,
-    UserAttachment,
 )
 
 
@@ -239,14 +237,6 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
-class ChatMemoryRequest(BaseModel):
-    user_name: str | None = None
-    session_id: str | None = None
-    user_input: str | None = None
-    agent_response: str | None = None
-    chat_context: ChatContext | None = None
-
-
 class RoomCenterRoomSettingRequest(BaseModel):
     room_id: str | None = None
     room_name: str | None = None
@@ -319,21 +309,6 @@ class RoomCenterAgentMessageRequest(BaseModel):
     dispatch_resource_payloads: list[dict[str, Any]] | None = None
     selected_attachment_refs: list[str] | None = None
     attachment_forwarding_policy: str | None = None
-
-
-class RoomCenterMemoryRequest(BaseModel):
-    room_id: str | None = None
-    message_id: str | None = None
-    memory_id: str | None = None
-    memory_content: str | None = None
-    memory_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
-    memory: RoomMemory | None = None
-    room_agent_set: dict[str, str] | None = (
-        None  # {agent_id: agent_name} for cleaning mentions
-    )
-    user_id: str | None = None  # User ID for attribution in conversation history
-    attachments: list[UserAttachment] | None = None
 
 
 class RoomCenterRoomMessageRequest(BaseModel):

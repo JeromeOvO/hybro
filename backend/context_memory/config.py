@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from math import isfinite
 
 
 def _setting(name: str, fallback):
@@ -34,6 +35,30 @@ class TokenBudgetConfig:
         default_factory=lambda: _setting("context_task_pct", 0.25)
     )
 
+    def __post_init__(self) -> None:
+        for name in (
+            "model_context_window",
+            "system_prompt",
+            "tool_schemas",
+            "response_reserve",
+        ):
+            _require_non_negative(name, getattr(self, name))
+
+        percentages = (
+            ("room_context_pct", self.room_context_pct),
+            ("conversation_history_pct", self.conversation_history_pct),
+            ("current_task_pct", self.current_task_pct),
+        )
+        for name, value in percentages:
+            if not isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"{name} must be finite and between 0 and 1")
+        if sum(value for _, value in percentages) > 1:
+            raise ValueError("context allocation percentages must not exceed 1")
+        if self.fixed_reserve_tokens > self.model_context_window:
+            raise ValueError(
+                "fixed_reserve_tokens must not exceed model_context_window"
+            )
+
     @property
     def fixed_reserve_tokens(self) -> int:
         return self.system_prompt + self.tool_schemas + self.response_reserve
@@ -55,7 +80,7 @@ class TokenBudgetConfig:
         return int(self.available_for_content * self.current_task_pct)
 
     def with_model_window(self, token_budget: int) -> TokenBudgetConfig:
-        model_context_window = max(0, int(token_budget))
+        model_context_window = int(token_budget)
         return TokenBudgetConfig(
             model_context_window=model_context_window,
             system_prompt=self.system_prompt,
@@ -98,6 +123,19 @@ class CompactionConfig:
         default_factory=lambda: _setting("compaction_concurrency", 5)
     )
 
+    def __post_init__(self) -> None:
+        for name in (
+            "max_full_turns",
+            "max_total_tokens",
+            "preserve_recent_turns",
+            "content_ttl_days",
+        ):
+            _require_non_negative(name, getattr(self, name))
+        if self.preserve_recent_turns > self.max_full_turns:
+            raise ValueError("preserve_recent_turns must not exceed max_full_turns")
+        if self.concurrency < 1:
+            raise ValueError("concurrency must be at least 1")
+
     def expires_delta(self) -> timedelta | None:
         if self.content_ttl_days <= 0:
             return None
@@ -125,8 +163,20 @@ class MemorySearchConfig:
         default_factory=lambda: _setting("memory_search_max_snippet_chars", 300)
     )
 
+    def __post_init__(self) -> None:
+        if self.half_life_days <= 0:
+            raise ValueError("half_life_days must be greater than 0")
+        for name in ("max_results", "max_candidates", "max_snippet_chars"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than 0")
+
 
 @dataclass(frozen=True)
 class ContextMemoryLLMConfig:
-    turn_notes_model: str = "context_memory_legacy_json_model"
-    summary_model: str = "context_memory_legacy_json_model"
+    turn_notes_model: str = "context_memory_json_model"
+    summary_model: str = "context_memory_json_model"
+
+
+def _require_non_negative(name: str, value: int) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")

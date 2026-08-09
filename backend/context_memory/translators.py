@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from typing import Any
 
 from common.dto import (
@@ -9,10 +7,7 @@ from common.dto import (
     CompactionResult,
     ContextBlock,
     MemorySearchResult,
-    RoomMemoryInfo,
-    UserMemory,
 )
-from common.utils.context_utils import estimate_tokens
 from context_memory.models import (
     AssemblyResult,
     ContentReferenceData,
@@ -42,8 +37,7 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
     doc = primitive(memory) or {}
     memory_content = doc.get("memory_content") or {}
     direct_history = doc.get("conversation_history")
-    legacy_history = memory_content.get("conversation_history")
-    history = _reconcile_histories(legacy_history, direct_history)
+    history = direct_history if isinstance(direct_history, list) else []
 
     return RoomMemoryState(
         room_id=doc.get("room_id", ""),
@@ -58,23 +52,6 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
         total_compactions=int(doc.get("total_compactions") or 0),
         raw=doc,
     )
-
-
-def _reconcile_histories(
-    primary_history: list | None,
-    fallback_history: list | None,
-) -> list:
-    merged: list = []
-    positions_by_turn_id: dict[str, int] = {}
-    for turn in [*(primary_history or []), *(fallback_history or [])]:
-        turn_id = turn.get("turn_id") if isinstance(turn, dict) else None
-        if turn_id:
-            if turn_id in positions_by_turn_id:
-                merged[positions_by_turn_id[turn_id]] = turn
-                continue
-            positions_by_turn_id[turn_id] = len(merged)
-        merged.append(turn)
-    return merged
 
 
 def summary_from_dict(doc: dict[str, Any]) -> RoomSummaryData:
@@ -184,93 +161,6 @@ def assemble_context_dto(
     )
 
 
-def room_memory_info_from_doc(doc: dict[str, Any]) -> RoomMemoryInfo:
-    state = normalize_room_memory(doc)
-    return RoomMemoryInfo(
-        room_id=state.room_id,
-        memory_id=state.memory_id,
-        content=render_room_memory_content(state),
-        created_at=_maybe_datetime(state.memory_created_at),
-        updated_at=_maybe_datetime(state.last_activity_at),
-        token_count=sum(_turn_token_count(turn) for turn in state.conversation_history),
-    )
-
-
-def _turn_token_count(turn: ConversationTurnData) -> int:
-    if turn.representation != "full":
-        return turn.estimated_tokens_compact
-    if turn.estimated_tokens_full:
-        return turn.estimated_tokens_full
-    return estimate_tokens(turn.content or "")
-
-
-def render_room_memory_content(state: RoomMemoryState) -> str:
-    parts: list[str] = []
-    summary = state.room_summary.current_goal or state.summary
-    if summary:
-        parts.append(f"Summary: {summary}")
-    one_liners = [
-        str(turn.turn_notes.get("one_liner"))
-        for turn in state.conversation_history[-3:]
-        if isinstance(turn.turn_notes, dict) and turn.turn_notes.get("one_liner")
-    ]
-    if one_liners:
-        parts.append(f"Recent Turns: {'; '.join(one_liners)}")
-    facts = sorted(
-        str(fact.get("content"))
-        for fact in state.room_facts
-        if isinstance(fact, dict) and fact.get("content")
-    )
-    if facts:
-        parts.append(f"Facts: {'; '.join(facts)}")
-    return "\n".join(parts)
-
-
-def user_memory_from_doc(doc: dict[str, Any]) -> UserMemory:
-    return UserMemory(
-        user_id=doc["user_id"],
-        memory_id=doc.get("memory_id") or f"user_memory:{doc['user_id']}",
-        content=render_user_memory_content(doc),
-        created_at=_maybe_datetime(doc.get("created_at")),
-        metadata={
-            "preferences": doc.get("preferences", {}),
-            "preferred_agents": doc.get("preferred_agents", []),
-            "communication_style": doc.get("communication_style"),
-            "user_facts": doc.get("user_facts", []),
-            "last_active_at": doc.get("last_active_at"),
-            "total_interactions": doc.get("total_interactions", 0),
-        },
-    )
-
-
-def render_user_memory_content(doc: dict[str, Any]) -> str:
-    parts: list[str] = []
-    if doc.get("communication_style"):
-        parts.append(f"Communication Style: {doc['communication_style']}")
-    preferences = doc.get("preferences") or {}
-    if preferences:
-        rendered = []
-        for key in sorted(preferences):
-            value = preferences[key]
-            if isinstance(value, dict | list):
-                value_text = json.dumps(value, sort_keys=True, separators=(",", ":"))
-            else:
-                value_text = str(value)
-            rendered.append(f"{key}={value_text}")
-        parts.append(f"Preferences: {'; '.join(rendered)}")
-    preferred_agents = doc.get("preferred_agents") or []
-    if preferred_agents:
-        parts.append(f"Preferred Agents: {', '.join(preferred_agents)}")
-    facts = [
-        str(fact.get("content"))
-        for fact in (doc.get("user_facts") or [])
-        if isinstance(fact, dict) and fact.get("content")
-    ]
-    if facts:
-        parts.append(f"Facts: {'; '.join(facts)}")
-    return "\n".join(parts)
-
-
 def search_result_from_record(
     *,
     room_id: str,
@@ -307,14 +197,3 @@ def compaction_result_dto(
         memory_id=memory_id,
         metadata=metadata or {},
     )
-
-
-def _maybe_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    return None

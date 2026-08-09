@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from context_memory.models import (
@@ -32,10 +34,7 @@ def room_doc(turns=None, summary=None, room_summary=None, facts=None):
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {
-            "summary": summary,
-            "conversation_history": [item.to_dict() for item in (turns or [])],
-        },
+        "memory_content": {"summary": summary},
         "conversation_history": [item.to_dict() for item in (turns or [])],
         "room_summary": room_summary or {},
         "room_facts": facts or [],
@@ -60,9 +59,9 @@ def test_direct_zero_model_window_does_not_crash():
         "current task",
         token_budget=TokenBudgetConfig(
             model_context_window=0,
-            system_prompt=10,
-            tool_schemas=10,
-            response_reserve=10,
+            system_prompt=0,
+            tool_schemas=0,
+            response_reserve=0,
         ),
     )
 
@@ -149,6 +148,59 @@ def test_select_turns_within_budget_truncates():
 
     assert [item.turn_id for item in selected] == ["t3"]
     assert truncated == 2
+
+
+def test_supervisor_max_turns_zero_selects_no_history():
+    result = assembly.assemble_supervisor_context_from_memory(
+        room_doc(turns=[turn("t1", "old"), turn("t2", "recent")]),
+        "current task",
+        token_budget=small_budget(1000),
+        max_turns=0,
+    )
+
+    assert "old" not in result.metadata["context"]
+    assert "recent" not in result.metadata["context"]
+    assert result.metadata["turns_included"] == 0
+    assert result.metadata["turns_truncated"] == 2
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TURN_COUNT_EXCEEDED.value
+    )
+
+
+def test_supervisor_negative_max_turns_fails_fast():
+    with pytest.raises(ValueError, match="max_turns must be non-negative"):
+        assembly.assemble_supervisor_context_from_memory(
+            room_doc(turns=[turn("t1", "hello")]),
+            "current task",
+            token_budget=small_budget(1000),
+            max_turns=-1,
+        )
+
+
+def test_supervisor_max_turns_discard_is_reported():
+    result = assembly.assemble_supervisor_context_from_memory(
+        room_doc(
+            turns=[
+                turn("t1", "oldest"),
+                turn("t2", "middle"),
+                turn("t3", "recent"),
+            ]
+        ),
+        "current task",
+        token_budget=small_budget(1000),
+        max_turns=2,
+    )
+
+    assert "oldest" not in result.metadata["context"]
+    assert "middle" in result.metadata["context"]
+    assert "recent" in result.metadata["context"]
+    assert result.metadata["turns_included"] == 2
+    assert result.metadata["turns_truncated"] == 1
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TURN_COUNT_EXCEEDED.value
+    )
 
 
 def test_assemble_supervisor_context_basic():
@@ -269,6 +321,48 @@ def test_char_limit_inside_stable_prefix_preserves_current_request(monkeypatch):
     assert dynamic_block.token_count == result.metadata["dynamic_suffix_tokens"]
     assert result.metadata["turns_included"] == 0
     assert result.metadata["full_turns"] == 0
+
+
+def test_char_limit_preserves_turn_count_reason(monkeypatch):
+    monkeypatch.setattr(assembly, "MAX_CONTEXT_CHARS", 80)
+
+    result = assembly.assemble_supervisor_context_from_memory(
+        room_doc(
+            turns=[
+                turn("t1", "old"),
+                turn("t2", "recent " * 100, tokens=5),
+            ]
+        ),
+        "current task",
+        token_budget=small_budget(1000),
+        max_turns=1,
+    )
+
+    assert result.metadata["was_truncated"] is True
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TURN_COUNT_EXCEEDED.value
+    )
+
+
+def test_token_budget_reason_overrides_turn_count_reason():
+    result = assembly.assemble_supervisor_context_from_memory(
+        room_doc(
+            turns=[
+                turn("t1", "old"),
+                turn("t2", "recent " * 100, tokens=5),
+            ]
+        ),
+        "current task " * 100,
+        token_budget=small_budget(90),
+        max_turns=1,
+    )
+
+    assert result.metadata["was_truncated"] is True
+    assert (
+        result.metadata["truncation_reason"]
+        == TruncationReason.TOKEN_BUDGET_EXCEEDED.value
+    )
 
 
 def test_char_limit_preserves_token_budget_reason(monkeypatch):

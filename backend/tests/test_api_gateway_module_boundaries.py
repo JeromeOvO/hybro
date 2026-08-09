@@ -103,7 +103,6 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
         "hitl_manager",
         "hub_relay_service",
         "inspection_center",
-        "memory_center",
         "relay_service",
         "repository_provider",
         "room_center",

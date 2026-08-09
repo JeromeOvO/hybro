@@ -49,7 +49,7 @@ class ModelRegistryImpl:
             max_context_tokens=8192,
         )
         self._register(
-            logical_name="context_memory_legacy_json_model",
+            logical_name="context_memory_json_model",
             model_id="gpt-4o-mini",
             provider="openai",
             capabilities=["json_schema"],

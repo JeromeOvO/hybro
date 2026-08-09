@@ -1158,12 +1158,8 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     ]
     assert len(registry.list_models()) == 7
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
-    assert (
-        registry.get_model("context_memory_legacy_json_model").model_id == "gpt-4o-mini"
-    )
-    assert registry.supports_capability(
-        "context_memory_legacy_json_model", "json_schema"
-    )
+    assert registry.get_model("context_memory_json_model").model_id == "gpt-4o-mini"
+    assert registry.supports_capability("context_memory_json_model", "json_schema")
 
 
 @pytest.mark.asyncio
