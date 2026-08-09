@@ -18,6 +18,7 @@ class FakeMongoCollection:
     def __init__(self):
         self.documents: list[dict] = []
         self.find_calls: list[tuple[dict, dict]] = []
+        self.find_one_and_update_calls: list[tuple[dict, dict | list[dict], dict]] = []
         self.update_one_calls: list[tuple[dict, dict | list[dict], dict]] = []
         self.raise_on_update_one = False
         self.update_one_exception: Exception | None = None
@@ -37,6 +38,9 @@ class FakeMongoCollection:
     async def find_one_and_update(
         self, query: dict, update: dict | list[dict], **kwargs
     ):
+        self.find_one_and_update_calls.append(
+            (deepcopy(query), deepcopy(update), deepcopy(kwargs))
+        )
         for doc in self.documents:
             if _matches(doc, query):
                 _apply_update(doc, update)
@@ -267,6 +271,41 @@ async def test_push_and_trim_conversation_turn_appends_only_top_level(memory_rep
     assert (modified, matched) == (True, True)
     assert doc["conversation_history"][0]["turn_id"] == "t1"
     assert "conversation_history" not in doc["memory_content"]
+
+
+@pytest.mark.asyncio
+async def test_push_literalizes_complete_turn_with_mongo_expression_strings(
+    memory_repo, mongo
+):
+    await memory_repo.create_room_memory(
+        {
+            "room_id": "r1",
+            "memory_id": "m1",
+            "memory_content": {"summary": None},
+            "conversation_history": [],
+        }
+    )
+    turn = {
+        "turn_id": "$private-turn",
+        "role": "user",
+        "content": "$$NOW is private content",
+        "brief_summary": "$private summary",
+        "content_ref": {"document_id": "$$NOW"},
+    }
+
+    await memory_repo.push_and_trim_conversation_turn(
+        "r1",
+        turn,
+        max_turns=5,
+        summary_stub="$private caller summary",
+        max_summary_chars=100,
+    )
+
+    doc = await memory_repo.get_room_memory("r1")
+    assert doc["conversation_history"] == [turn]
+    pipeline = mongo.collections["room_memories"].find_one_and_update_calls[-1][1]
+    append_expression = pipeline[0]["$set"]["conversation_history"]
+    assert append_expression["$concatArrays"][1] == {"$literal": [turn]}
 
 
 @pytest.mark.asyncio
@@ -817,6 +856,53 @@ async def test_compact_turns_bulk(memory_repo, mongo):
 
 
 @pytest.mark.asyncio
+async def test_compact_turns_bulk_literalizes_caller_values(memory_repo, mongo):
+    await memory_repo.create_room_memory(
+        {
+            "room_id": "r1",
+            "memory_id": "m1",
+            "conversation_history": [
+                {
+                    "turn_id": "$private-turn",
+                    "representation": "full",
+                    "content": "secret",
+                }
+            ],
+        }
+    )
+    entry = {
+        "turn_id": "$private-turn",
+        "content_ref": {"document_id": "$$NOW", "label": "$private"},
+        "estimated_tokens_compact": 7,
+        "brief_summary": "$$NOW remains summary text",
+    }
+
+    assert await memory_repo.compact_turns_bulk("r1", [entry]) is True
+
+    doc = await memory_repo.get_room_memory("r1")
+    compacted = doc["conversation_history"][0]
+    assert compacted["turn_id"] == "$private-turn"
+    assert compacted["content_ref"] == entry["content_ref"]
+    assert compacted["brief_summary"] == "$$NOW remains summary text"
+    assert compacted["estimated_tokens_compact"] == 7
+
+    pipeline = mongo.collections["room_memories"].update_one_calls[-1][1]
+    mapped = pipeline[0]["$set"]["conversation_history"]["$cond"][1]["$map"]
+    condition, patch = mapped["in"]["$cond"][:2]
+    assert condition["$and"][0]["$in"][1] == {"$literal": ["$private-turn"]}
+    switches = patch["$mergeObjects"][1]
+    for field in (
+        "content_ref",
+        "estimated_tokens_compact",
+        "brief_summary",
+    ):
+        switch = switches[field]["$switch"]
+        assert switch["branches"][0]["case"]["$eq"][1] == {"$literal": "$private-turn"}
+        assert switch["branches"][0]["then"] == {"$literal": entry[field]}
+        assert switch["default"] == f"$$turn.{field}"
+
+
+@pytest.mark.asyncio
 async def test_compact_turns_bulk_skips_already_compact_db_turn(memory_repo):
     await memory_repo.create_room_memory(
         {
@@ -1328,6 +1414,8 @@ def _turn_summary_preview(turn: dict) -> str:
 
 
 def _eval_history_expression(doc: dict, expression) -> list[dict]:
+    if isinstance(expression, dict) and set(expression) == {"$literal"}:
+        return deepcopy(expression["$literal"])
     if _contains_operator(expression, "$map"):
         entries = _compact_entries_from_expression(expression)
         direct = _get_path(doc, "conversation_history")
@@ -1345,7 +1433,8 @@ def _eval_history_expression(doc: dict, expression) -> list[dict]:
         return turns
     if "$concatArrays" in expression:
         base = _eval_history_expression(doc, expression["$concatArrays"][0])
-        return base + deepcopy(expression["$concatArrays"][1])
+        addition = _eval_history_expression(doc, expression["$concatArrays"][1])
+        return base + addition
     if "$slice" in expression:
         source = _eval_history_expression(doc, expression["$slice"][0])
         limit_expr = expression["$slice"][1]
@@ -1365,6 +1454,8 @@ def _eval_history_expression(doc: dict, expression) -> list[dict]:
 
 def _contains_operator(expression, operator: str) -> bool:
     if isinstance(expression, dict):
+        if "$literal" in expression:
+            return operator == "$literal"
         return operator in expression or any(
             _contains_operator(value, operator) for value in expression.values()
         )
@@ -1404,15 +1495,23 @@ def _compact_entries_from_expression(expression: dict) -> dict[str, dict]:
     summary_branches = patch["brief_summary"]["$switch"]["branches"]
     entries: dict[str, dict] = {}
     for branch in ref_branches:
-        turn_id = branch["case"]["$eq"][1]
-        entries.setdefault(turn_id, {})["content_ref"] = branch["then"]
+        turn_id = _eval_literal(branch["case"]["$eq"][1])
+        entries.setdefault(turn_id, {})["content_ref"] = _eval_literal(branch["then"])
     for branch in token_branches:
-        turn_id = branch["case"]["$eq"][1]
-        entries.setdefault(turn_id, {})["estimated_tokens_compact"] = branch["then"]
+        turn_id = _eval_literal(branch["case"]["$eq"][1])
+        entries.setdefault(turn_id, {})["estimated_tokens_compact"] = _eval_literal(
+            branch["then"]
+        )
     for branch in summary_branches:
-        turn_id = branch["case"]["$eq"][1]
-        entries.setdefault(turn_id, {})["brief_summary"] = branch["then"]
+        turn_id = _eval_literal(branch["case"]["$eq"][1])
+        entries.setdefault(turn_id, {})["brief_summary"] = _eval_literal(branch["then"])
     return entries
+
+
+def _eval_literal(expression):
+    if isinstance(expression, dict) and set(expression) == {"$literal"}:
+        return deepcopy(expression["$literal"])
+    return deepcopy(expression)
 
 
 def _find_operator(expression: dict, operator: str) -> dict:

@@ -473,7 +473,9 @@ def _push_turn_update(
     return [
         {
             "$set": {
-                "conversation_history": {"$concatArrays": [canonical_history, [turn]]},
+                "conversation_history": {
+                    "$concatArrays": [canonical_history, _literal([turn])]
+                },
                 "memory_content.summary": _summary_append_evicted_turn_expression(
                     max_turns=max_turns,
                     max_summary_chars=max_summary_chars,
@@ -653,7 +655,7 @@ def _compact_history_expression(
                 "$cond": [
                     {
                         "$and": [
-                            {"$in": ["$$turn.turn_id", turn_ids]},
+                            {"$in": ["$$turn.turn_id", _literal(turn_ids)]},
                             {"$eq": ["$$turn.representation", "full"]},
                         ]
                     },
@@ -699,11 +701,16 @@ def _switch_for_field(
         "$switch": {
             "branches": [
                 {
-                    "case": {"$eq": ["$$turn.turn_id", entry["turn_id"]]},
-                    "then": entry.get(field, default),
+                    "case": {"$eq": ["$$turn.turn_id", _literal(entry["turn_id"])]},
+                    "then": _literal(entry.get(field, default)),
                 }
                 for entry in compacted_turns
             ],
+            # This is an aggregation variable reference, not caller-provided data.
             "default": f"$$turn.{field}",
         }
     }
+
+
+def _literal(value: Any) -> dict[str, Any]:
+    return {"$literal": value}
