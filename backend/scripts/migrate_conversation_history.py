@@ -215,31 +215,51 @@ async def _content_for_compact_turn(
 async def plan_document_with_backfill(
     row: dict[str, Any], content_collection: Any
 ) -> DocumentPlan:
-    """Reconcile a document, then recover missing compact-turn summaries."""
+    """Reconcile a document, then normalize every compact turn."""
     plan = plan_document(row)
     room_id = row.get("room_id")
     for index, turn in enumerate(plan.history):
         if turn.get("representation") != "compact":
             continue
-        if _nonempty_string(turn.get("brief_summary")) is not None:
-            continue
 
-        source = await _content_for_compact_turn(
-            content_collection,
-            room_id=room_id,
-            turn=turn,
+        content_ref = turn.get("content_ref")
+        document_id = (
+            content_ref.get("document_id") if isinstance(content_ref, dict) else None
         )
-        if source is None:
-            source = _one_liner_fallback(turn)
-        if source is None:
-            raise MissingCompactContentBlocker(
-                "compact turn is missing full content and a reliable one_liner; "
+        if document_id is None or (
+            isinstance(document_id, str) and not document_id.strip()
+        ):
+            raise MigrationBlocker(
+                "compact turn has an invalid or missing content_ref; "
                 f"history_index={index} turn_id={turn.get('turn_id')}"
             )
 
-        turn["brief_summary"] = brief_summary_from_content(source)
-        turn["estimated_tokens_compact"] = estimate_compact_turn_tokens(turn)
-        plan.backfill_count += 1
+        if _nonempty_string(turn.get("brief_summary")) is None:
+            source = await _content_for_compact_turn(
+                content_collection,
+                room_id=room_id,
+                turn=turn,
+            )
+            if source is None:
+                source = _one_liner_fallback(turn)
+            if source is None:
+                raise MissingCompactContentBlocker(
+                    "compact turn is missing full content and a reliable one_liner; "
+                    f"history_index={index} turn_id={turn.get('turn_id')}"
+                )
+
+            turn["brief_summary"] = brief_summary_from_content(source)
+            plan.backfill_count += 1
+
+        canonical_estimate = estimate_compact_turn_tokens(turn)
+        stored_estimate = turn.get("estimated_tokens_compact")
+        if (
+            not isinstance(stored_estimate, int)
+            or isinstance(stored_estimate, bool)
+            or stored_estimate != canonical_estimate
+        ):
+            turn["estimated_tokens_compact"] = canonical_estimate
+            plan.needs_update = True
 
     if plan.backfill_count:
         plan.needs_update = True

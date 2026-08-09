@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from common.utils.context_utils import estimate_tokens
+from context_memory.compaction import estimate_compact_turn_tokens
 from context_memory.translators import turn_from_dict
 from scripts.migrate_conversation_history import (
     MigrationBlocker,
@@ -65,8 +66,10 @@ class FakeRoomCollection:
 class FakeContentCollection:
     def __init__(self, documents):
         self.documents = [deepcopy(document) for document in documents]
+        self.find_one_calls = 0
 
     async def find_one(self, query):
+        self.find_one_calls += 1
         return next(
             (
                 deepcopy(document)
@@ -177,6 +180,7 @@ def compact_turn(
     *,
     brief_summary=None,
     one_liner=None,
+    estimated_tokens_compact=20,
 ):
     value = {
         "turn_id": turn_id,
@@ -187,7 +191,7 @@ def compact_turn(
             "collection": "conversation_content",
             "document_id": document_id,
         },
-        "estimated_tokens_compact": 20,
+        "estimated_tokens_compact": estimated_tokens_compact,
     }
     if brief_summary is not None:
         value["brief_summary"] = brief_summary
@@ -391,6 +395,134 @@ async def test_migration_backfills_reconciled_legacy_direct_and_divergent_compac
 
     assert repeated.updated == 0
     assert repeated.backfilled == 0
+
+
+@pytest.mark.parametrize(
+    ("document", "category"),
+    [
+        (
+            {
+                "_id": "direct-existing-summary",
+                "conversation_history": [
+                    compact_turn(
+                        "direct",
+                        "content-direct",
+                        brief_summary="direct existing summary " * 12,
+                    )
+                ],
+            },
+            "direct_only",
+        ),
+        (
+            {
+                "_id": "legacy-existing-summary",
+                "memory_content": {
+                    "conversation_history": [
+                        compact_turn(
+                            "legacy",
+                            "content-legacy",
+                            brief_summary="legacy existing summary " * 12,
+                        )
+                    ]
+                },
+            },
+            "legacy_only",
+        ),
+        (
+            {
+                "_id": "divergent-existing-summary",
+                "memory_content": {
+                    "conversation_history": [turn("same", "legacy full")]
+                },
+                "conversation_history": [
+                    compact_turn(
+                        "same",
+                        "content-winner",
+                        brief_summary="direct winner existing summary " * 12,
+                    )
+                ],
+            },
+            "divergent",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_migration_reestimates_existing_compact_summaries_without_content_reads(
+    document, category
+):
+    database = FakeDatabase([document])
+    original_turn = (
+        document.get("conversation_history")
+        or document["memory_content"]["conversation_history"]
+    )[0]
+    assert original_turn["estimated_tokens_compact"] == 20
+    assert estimate_compact_turn_tokens(original_turn) != 20
+
+    dry_run = await run_migration(database, apply=False, batch_size=1)
+
+    assert getattr(dry_run, category) == 1
+    assert dry_run.would_update == 1
+    assert dry_run.backfill_count == 0
+    assert database.content_collection.find_one_calls == 0
+
+    applied = await run_migration(database, apply=True, batch_size=1)
+
+    assert applied.updated == 1
+    assert applied.backfilled == 0
+    migrated_turn = database.collection.documents[0]["conversation_history"][0]
+    assert migrated_turn["estimated_tokens_compact"] == estimate_compact_turn_tokens(
+        migrated_turn
+    )
+    assert database.content_collection.find_one_calls == 0
+
+    repeated = await run_migration(database, apply=True, batch_size=1)
+
+    assert repeated.updated == 0
+    assert repeated.would_update == 0
+    assert database.content_collection.find_one_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_migration_existing_summary_with_canonical_estimate_is_a_no_op():
+    existing = compact_turn(
+        "canonical",
+        "content-canonical",
+        brief_summary="already canonical compact summary",
+    )
+    existing["estimated_tokens_compact"] = estimate_compact_turn_tokens(existing)
+    database = FakeDatabase([{"_id": "canonical", "conversation_history": [existing]}])
+    original = deepcopy(database.collection.documents)
+
+    result = await run_migration(database, apply=True, batch_size=1)
+
+    assert result.updated == 0
+    assert result.would_update == 0
+    assert database.collection.update_calls == 0
+    assert database.content_collection.find_one_calls == 0
+    assert database.collection.documents == original
+
+
+@pytest.mark.parametrize(
+    "content_ref", [None, {}, "not-an-object", {"document_id": " "}]
+)
+@pytest.mark.asyncio
+async def test_migration_fails_closed_for_invalid_compact_content_ref(content_ref):
+    invalid = compact_turn(
+        "invalid-ref",
+        "placeholder",
+        brief_summary="summary does not make an invalid pointer trustworthy",
+    )
+    if content_ref is None:
+        invalid.pop("content_ref")
+    else:
+        invalid["content_ref"] = content_ref
+    database = FakeDatabase([{"_id": "invalid-ref", "conversation_history": [invalid]}])
+
+    with pytest.raises(RuntimeError, match="blockers"):
+        await run_migration(database, apply=True, batch_size=1)
+
+    assert database.collection.update_calls == 0
+    assert database.content_collection.find_one_calls == 0
 
 
 @pytest.mark.asyncio

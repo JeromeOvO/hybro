@@ -16,9 +16,14 @@ used by current compaction. The migration reads full content from
 `conversation_content` by `content_ref.document_id`, with a legacy
 `room_id` + `turn_id` lookup when needed. A non-empty existing
 `turn_notes.one_liner` is the only fallback when full content is unavailable.
-Non-array history fields, non-object history items, malformed `memory_content`
-values, and compact turns with neither recoverable content nor a reliable one-liner
-are blockers; they are reported and never silently replaced with a placeholder.
+Every compact turn is then normalized to the canonical token estimate for its
+rendered role, summary, and content pointer. A turn with an existing non-blank
+summary does not require a full-content read; it is updated only when its stored
+estimate differs from the canonical estimate. Non-array history fields, non-object
+history items, malformed `memory_content` values, invalid or missing compact
+`content_ref` values, and compact turns with neither recoverable content nor a
+reliable one-liner are blockers; they are reported and never silently replaced
+with a placeholder.
 
 ## Rollout preconditions (operations must execute)
 
@@ -88,7 +93,8 @@ migration phase, and counts.
    for the agreed observation window.
 
 The script is idempotent: a repeat apply after success reports zero updates and
-zero backfills. If apply is interrupted after partial updates, keep writers
+zero backfills, including when existing compact summaries already have canonical
+token estimates. If apply is interrupted after partial updates, keep writers
 stopped, restore any required content from the verified backup/snapshot, and rerun
 first the audit and then apply; already migrated documents are safe to encounter
 again. Idempotency is not a substitute for either backup: it cannot recover
