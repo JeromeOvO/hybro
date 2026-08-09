@@ -123,32 +123,45 @@ def test_parser_accepts_only_noncredential_connection_overrides():
     assert not hasattr(args, "mongo_url")
 
 
-def test_parser_help_does_not_advertise_mongo_url(capsys):
+def test_parser_help_advertises_only_safe_options(capsys):
     with pytest.raises(SystemExit) as exc_info:
         _parse_args(["--help"])
 
+    captured = capsys.readouterr()
     assert exc_info.value.code == 0
-    assert "--mongo-url" not in capsys.readouterr().out
+    assert captured.err == ""
+    assert "--apply" in captured.out
+    assert "--database" in captured.out
+    assert "--batch-size" in captured.out
+    assert "--mongo-url" not in captured.out
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["--mongo-url", "mongodb://migration-user:secret@db.example/hybro"],
-        ["--mongo-url=mongodb://migration-user:secret@db.example/hybro"],
+        ["--mongo-url", "mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--mongo-url=mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--mongo", "mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--mongo-urlx=mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--batch-sze", "mongodb://user:TOPSECRET@db.example/hybro"],
+        ["mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--batch-size", "mongodb://user:TOPSECRET@db.example/hybro"],
+        ["--database"],
     ],
 )
-def test_parser_rejects_mongo_url_without_echoing_credential(arguments, capsys):
-    credential = "mongodb://migration-user:secret@db.example/hybro"
+def test_parser_errors_never_echo_arguments(arguments, capsys):
+    credential = "mongodb://user:TOPSECRET@db.example/hybro"
 
     with pytest.raises(SystemExit) as exc_info:
         _parse_args(arguments)
 
     captured = capsys.readouterr()
-    assert exc_info.value.code == 2
+    assert exc_info.value.code != 0
+    assert "TOPSECRET" not in captured.out
+    assert "TOPSECRET" not in captured.err
     assert credential not in captured.out
     assert credential not in captured.err
-    assert "configure settings/environment" in captured.err
+    assert captured.err == "error: invalid command-line arguments\n"
 
 
 def turn(turn_id=None, content="content"):

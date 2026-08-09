@@ -33,9 +33,12 @@ target without echoing credentials. The script reads the URI only from settings
 and uses the settings database name by default; the CLI intentionally has no
 `--mongo-url` option because process arguments may be visible to other users or
 captured by process tooling. A non-sensitive database-name override may be
-supplied as `--database <database-name>` when required. Archived script
-summaries must not contain the URI, credentials, or other secrets; the summary
-is limited to the collection name, migration phase, and counts.
+supplied as `--database <database-name>` when required. All invalid CLI input,
+including unknown or misspelled options, positional arguments, invalid values,
+and missing values, exits with a generic error that never repeats the original
+argument or value. Archived script summaries must not contain the URI,
+credentials, or other secrets; the summary is limited to the collection name,
+migration phase, and counts.
 
 1. Take and verify restorable backups/snapshots of both `room_memories` and
    `conversation_content`. Record the `conversation_content` TTL policy and

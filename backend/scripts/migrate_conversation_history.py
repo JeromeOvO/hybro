@@ -13,7 +13,7 @@ import sys
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Never
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -28,6 +28,13 @@ COLLECTION_NAME = "room_memories"
 CONTENT_COLLECTION_NAME = "conversation_content"
 SAMPLE_LIMIT = 10
 _MISSING = object()
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose failures never repeat untrusted command-line input."""
+
+    def error(self, _message: str) -> Never:
+        self.exit(2, "error: invalid command-line arguments\n")
 
 
 class MigrationBlocker(ValueError):
@@ -380,7 +387,7 @@ async def run_migration(
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
+    parser = _SafeArgumentParser(
         description="Audit or apply the canonical conversation-history cutover",
         allow_abbrev=False,
     )
