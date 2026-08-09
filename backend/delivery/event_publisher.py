@@ -97,17 +97,25 @@ class EventPublisherImpl:
             trace_id=trace_id,
             reservation=reservation,
         )
-        if not lease_owned:
-            return DeliveryEmitStatus.FAILED
         if not delivered:
             await self._release_typed_delivery(event, reservation)
             return DeliveryEmitStatus.FAILED
+
+        # Transport acceptance is the delivery boundary. Losing the lease or
+        # Redis confirmation after fanout must not make durable reconciliation
+        # send the already-accepted terminal frame again.
         if reservation is not None:
-            try:
-                if not await self.deduplicator.confirm(reservation):
-                    return DeliveryEmitStatus.FAILED
-            except Exception:
-                return DeliveryEmitStatus.FAILED
+            confirmed = False
+            if lease_owned:
+                try:
+                    confirmed = await self.deduplicator.confirm(reservation)
+                except Exception:
+                    confirmed = False
+            if not confirmed:
+                self.deduplicator.mark_delivered_locally(
+                    reservation,
+                    status=self._dedup_status(event),
+                )
         return DeliveryEmitStatus.DELIVERED
 
     async def _deliver_with_reservation(

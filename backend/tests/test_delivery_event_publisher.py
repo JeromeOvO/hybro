@@ -181,7 +181,7 @@ async def test_long_fanout_renews_reservation_until_confirmed():
 
 
 @pytest.mark.asyncio
-async def test_lost_reservation_during_fanout_fails_without_confirmation():
+async def test_lost_reservation_after_fanout_is_locally_confirmed():
     from tests.test_delivery_deduplication import FakeRedisKV
 
     class LostRedis(FakeRedisKV):
@@ -211,8 +211,45 @@ async def test_lost_reservation_during_fanout_fails_without_confirmation():
         delivery_id="terminal:evt-1:processing",
     )
 
-    assert await publisher.emit_checked(event) == DeliveryEmitStatus.FAILED
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
     assert not any(value.startswith("delivered:") for value in redis.values.values())
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    assert len(publisher.sse_transport.frames) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation_result", [False, RuntimeError("redis failed")])
+async def test_post_fanout_confirmation_failure_does_not_redeliver(
+    confirmation_result,
+):
+    from tests.test_delivery_deduplication import FakeRedisKV
+
+    class ConfirmationFailureRedis(FakeRedisKV):
+        async def compare_set(self, key, expected_value, value, *, ttl):
+            self.compare_sets.append((key, expected_value, value, ttl))
+            if isinstance(confirmation_result, Exception):
+                raise confirmation_result
+            return confirmation_result
+
+    redis = ConfirmationFailureRedis()
+    transport = FakeTransport()
+    config = DeliveryConfig()
+    publisher = make_publisher(
+        transport=transport,
+        config=config,
+        dedup=TerminalStatusDeduplicator(config=config, redis_kv=redis),
+    )
+    event = ProcessingStatusEvent(
+        room_id="room-1",
+        message_id="msg-1",
+        status="failed",
+        delivery_id="terminal:evt-1:processing",
+    )
+
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.DELIVERED
+    assert len(transport.frames) == 1
+    assert await publisher.emit_checked(event) == DeliveryEmitStatus.ALREADY_DELIVERED
+    assert len(transport.frames) == 1
 
 
 @pytest.mark.asyncio

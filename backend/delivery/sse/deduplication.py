@@ -224,6 +224,25 @@ class TerminalStatusDeduplicator:
         self.cache[reservation.dedup_key] = _CacheEntry("delivered", cached.status)
         return True
 
+    def mark_delivered_locally(
+        self,
+        reservation: DeliveryReservation,
+        *,
+        status: str,
+    ) -> None:
+        """Record transport acceptance after distributed confirmation is uncertain.
+
+        Once fanout has accepted the frame, a failed Redis confirmation must not
+        make durable reconciliation send it again. Only the caller's own local
+        reservation is removed; a newer distributed owner is never overwritten.
+        """
+        cached = self.reservations.get(reservation.dedup_key)
+        if cached is not None and cached.claim_id == reservation.claim_id:
+            self.reservations.pop(reservation.dedup_key, None)
+        self.cache[reservation.dedup_key] = _CacheEntry(
+            "delivered", status.strip().lower()
+        )
+
     async def should_deliver(
         self,
         *,
