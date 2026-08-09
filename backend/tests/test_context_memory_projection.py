@@ -40,9 +40,6 @@ class StateMemoryRepository:
         if not self.doc:
             return False, False
         self.pushed.append(turn)
-        self.doc.setdefault("memory_content", {}).setdefault(
-            "conversation_history", []
-        ).append(turn)
         self.doc.setdefault("conversation_history", []).append(turn)
         return True, True
 
@@ -54,9 +51,6 @@ class StateMemoryRepository:
         if not self.doc:
             return False, False, False
         self.pushed.append(turn)
-        self.doc.setdefault("memory_content", {}).setdefault(
-            "conversation_history", []
-        ).append(turn)
         self.doc.setdefault("conversation_history", []).append(turn)
         return True, True, False
 

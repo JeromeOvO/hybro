@@ -423,9 +423,10 @@ async def test_context_memory_room_adapter_delegates_create_with_initial_content
         response.memory.get_conversation_history()[0].content == "initial user request"
     )
     assert (
-        facade.created_doc["memory_content"]["conversation_history"][0]["content"]
+        facade.created_doc["conversation_history"][0]["content"]
         == "initial user request"
     )
+    assert "conversation_history" not in facade.created_doc["memory_content"]
 
 
 @pytest.mark.asyncio

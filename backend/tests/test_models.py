@@ -20,7 +20,6 @@ from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
     ContentType,
     ConversationTurn,
-    MemoryContent,
     RoomMemory,
     TurnRepresentation,
     TurnRole,
@@ -360,11 +359,10 @@ class TestRoomMemoryModel:
             ),
         ]
 
-        memory_content = MemoryContent(conversation_history=turns)
         memory = RoomMemory(
             room_id="room-123",
             memory_id=str(uuid4()),
-            memory_content=memory_content,
+            conversation_history=turns,
         )
 
         history = memory.get_conversation_history()

@@ -34,10 +34,7 @@ def room_doc(turns=None, summary=None, room_summary=None, facts=None):
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {
-            "summary": summary,
-            "conversation_history": [item.to_dict() for item in (turns or [])],
-        },
+        "memory_content": {"summary": summary},
         "conversation_history": [item.to_dict() for item in (turns or [])],
         "room_summary": room_summary or {},
         "room_facts": facts or [],

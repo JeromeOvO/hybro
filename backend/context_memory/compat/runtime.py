@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from common.types import MessageRole
-from common.utils.context_utils import add_turn_to_history
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from models.memory import MemoryContent, RoomMemory
+from context_memory.projection import user_turn
+from models.memory import RoomMemory
 from models.request import RoomCenterMemoryRequest
 from models.response import RoomCenterMemoryResponse
 
@@ -42,22 +41,28 @@ class ContextMemoryRoomMemoryAdapter:
         facade = self._require_facade()
         try:
             if request.memory is not None:
-                memory_doc = request.memory.model_dump(mode="json")
+                memory_doc = _canonical_memory_doc(request.memory)
             else:
-                memory_content = MemoryContent()
+                created_at = request.memory_created_at or utcnow()
+                history = []
                 if request.memory_content:
-                    memory_content = add_turn_to_history(
-                        memory_content=memory_content,
-                        role=MessageRole.USER,
-                        content=request.memory_content,
+                    history.append(
+                        user_turn(
+                            message_id=str(uuid4()),
+                            content=request.memory_content,
+                            user_id=request.user_id,
+                            timestamp=created_at,
+                        )
                     )
-                memory_doc = RoomMemory(
-                    room_id=request.room_id,
-                    memory_id=request.memory_id or str(uuid4()),
-                    memory_content=memory_content,
-                    memory_created_at=request.memory_created_at or utcnow(),
-                    extend_info=request.extend_info,
-                ).model_dump(mode="json")
+                memory_doc = _canonical_memory_doc(
+                    RoomMemory(
+                        room_id=request.room_id,
+                        memory_id=request.memory_id or str(uuid4()),
+                        conversation_history=history,
+                        memory_created_at=created_at,
+                        extend_info=request.extend_info,
+                    )
+                )
             created = await facade.legacy_create_room_memory(memory_doc)
             memory = None if created is None else _room_memory_from_doc(created)
             return RoomCenterMemoryResponse(
@@ -96,15 +101,16 @@ class ContextMemoryRoomMemoryAdapter:
     ) -> RoomCenterMemoryResponse:
         facade = self._require_facade()
         try:
-            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            doc = _canonical_memory_doc(request.memory) if request.memory else {}
             ok = await facade.legacy_update_room_memory_by_room_id(
                 request.room_id,
                 doc,
             )
+            memory = _room_memory_from_doc(doc) if ok and doc else None
             return RoomCenterMemoryResponse(
-                room_id=_response_room_id(request, request.memory if ok else None),
-                memory_id=_response_memory_id(request, request.memory if ok else None),
-                memory=request.memory if ok else None,
+                room_id=_response_room_id(request, memory),
+                memory_id=_response_memory_id(request, memory),
+                memory=memory,
                 success=ok,
                 error=None if ok else "Room memory not found",
                 status_code=200 if ok else 404,
@@ -145,15 +151,16 @@ class ContextMemoryRoomMemoryAdapter:
     ) -> RoomCenterMemoryResponse:
         facade = self._require_facade()
         try:
-            doc = request.memory.model_dump(mode="json") if request.memory else {}
+            doc = _canonical_memory_doc(request.memory) if request.memory else {}
             ok = await facade.legacy_update_room_memory_by_memory_id(
                 request.memory_id,
                 doc,
             )
+            memory = _room_memory_from_doc(doc) if ok and doc else None
             return RoomCenterMemoryResponse(
-                room_id=_response_room_id(request, request.memory if ok else None),
-                memory_id=_response_memory_id(request, request.memory if ok else None),
-                memory=request.memory if ok else None,
+                room_id=_response_room_id(request, memory),
+                memory_id=_response_memory_id(request, memory),
+                memory=memory,
                 success=ok,
                 error=None if ok else "Room memory not found",
                 status_code=200 if ok else 404,
@@ -350,6 +357,14 @@ class ContextMemoryRoomMemoryAdapter:
             )
         except Exception as exc:
             logger.debug("AgentMemory tracking skipped: %s", exc)
+
+
+def _canonical_memory_doc(memory: RoomMemory) -> dict[str, Any]:
+    doc = memory.model_dump(mode="json")
+    memory_content = dict(doc.get("memory_content") or {})
+    memory_content.pop("conversation_history", None)
+    doc["memory_content"] = memory_content
+    return doc
 
 
 def _room_memory_from_doc(doc: Any | None) -> RoomMemory | None:

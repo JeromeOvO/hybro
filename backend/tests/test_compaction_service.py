@@ -62,7 +62,7 @@ def room_doc(turns: list[dict]) -> dict:
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {"conversation_history": turns},
+        "memory_content": {"summary": None},
         "conversation_history": turns,
         "total_compactions": 0,
     }
@@ -108,9 +108,6 @@ class MemoryRepositorySpy:
             turn["content"] = None
             turn["content_ref"] = entry["content_ref"]
             turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
-        self.doc["memory_content"]["conversation_history"] = self.doc[
-            "conversation_history"
-        ]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 

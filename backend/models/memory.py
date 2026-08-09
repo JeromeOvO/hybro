@@ -268,14 +268,15 @@ class MemoryContent(BaseModel):
     Room conversation memory with structured history.
     Similar to ChatGPT/Claude conversation context management.
 
-    NOTE: This is the legacy structure. New code should use RoomMemory.conversation_history
-    directly. This class is kept for backward compatibility during migration.
+    NOTE: This is a compatibility structure. Runtime persistence stores only
+    ``summary`` here; conversation history is canonical on ``RoomMemory``.
     """
 
     # Summarized older context (when history exceeds window)
     summary: str | None = None
 
-    # Recent conversation turns (sliding window, e.g., last 20 turns)
+    # Compatibility-only input for legacy context helpers. Persistence adapters
+    # must not serialize this nested history.
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
 
     # Legacy field (for backward compatibility/migration)
@@ -292,12 +293,10 @@ class RoomMemory(BaseModel):
     room_id: str
     memory_id: str = Field(default_factory=lambda: str(uuid4()))
 
-    # Legacy: nested MemoryContent (kept for backward compatibility during migration)
-    # New code should use conversation_history directly when memory_content is None
+    # Nested compatibility content retains summary metadata only in persistence.
     memory_content: MemoryContent | None = Field(default_factory=MemoryContent)
 
-    # NEW: Direct conversation history (mix of full and compact representations)
-    # During migration, this may be None while memory_content is populated
+    # Canonical conversation history (mix of full and compact representations).
     conversation_history: list[ConversationTurn] = Field(default_factory=list)
     max_history_turns: int = 100  # Total turns to keep (full + compact)
 
@@ -320,17 +319,8 @@ class RoomMemory(BaseModel):
     extend_info: Any | None = None
 
     def get_conversation_history(self) -> list[ConversationTurn]:
-        """
-        Get conversation history, handling both legacy and new structures.
-
-        Returns conversation_history if populated, otherwise falls back to
-        memory_content.conversation_history for backward compatibility.
-        """
-        if self.conversation_history:
-            return self.conversation_history
-        if self.memory_content and self.memory_content.conversation_history:
-            return self.memory_content.conversation_history
-        return []
+        """Return the canonical top-level conversation history."""
+        return self.conversation_history
 
     def get_summary(self) -> str | None:
         """

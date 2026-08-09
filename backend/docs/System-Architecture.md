@@ -640,12 +640,15 @@ search, and compaction:
   storage.
 - `content_repository`: stores full content references for compacted turns.
 
-Room-memory persistence uses two transition-era history limits. The top-level
-`conversation_history` is the canonical, unwindowed source for normalization and
-lossless compaction. The nested `memory_content.conversation_history` remains a
-legacy display window of at most 20 turns. Appends summarize only old turns that
-leave that nested window; compaction updates canonical turns and rebuilds the
-nested window from the canonical tail.
+Room-memory persistence has one canonical, unwindowed history at top-level
+`conversation_history`. Runtime reads, appends, note updates, and compaction touch
+only that field; `memory_content` retains summary metadata and no nested history.
+On append, the summary eviction boundary is derived directly from the canonical
+length: once the history already contains `max_turns` items, the item at
+`len(history) - max_turns` crosses the recent-display boundary and is summarized.
+Canonical turns remain present and reachable by lossless compaction. The migration,
+rollout preconditions, and rollback procedure are documented in
+[`conversation-history-cutover.md`](conversation-history-cutover.md).
 
 The facade uses:
 

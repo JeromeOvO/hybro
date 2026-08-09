@@ -360,10 +360,7 @@ def _assembly_room_doc() -> dict:
     return {
         "room_id": "r-golden",
         "memory_id": "m-golden",
-        "memory_content": {
-            "summary": "Earlier short summary",
-            "conversation_history": turns,
-        },
+        "memory_content": {"summary": "Earlier short summary"},
         "conversation_history": turns,
         "room_summary": {
             "current_goal": "Ship Phase 5",
@@ -404,7 +401,7 @@ def _truncation_room_doc() -> dict:
     return {
         "room_id": "r-golden",
         "memory_id": "m-golden",
-        "memory_content": {"summary": None, "conversation_history": turns},
+        "memory_content": {"summary": None},
         "conversation_history": turns,
         "room_summary": {},
         "room_facts": [],

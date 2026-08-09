@@ -227,7 +227,7 @@ def new_room_memory_doc(*, room_id: str, memory_id: str, now) -> dict:
     return {
         "room_id": room_id,
         "memory_id": memory_id,
-        "memory_content": {"summary": None, "conversation_history": []},
+        "memory_content": {"summary": None},
         "conversation_history": [],
         "room_summary": {
             "current_goal": None,

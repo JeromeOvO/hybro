@@ -48,7 +48,7 @@ def room_doc(turns):
     return {
         "room_id": "r1",
         "memory_id": "m1",
-        "memory_content": {"conversation_history": turns},
+        "memory_content": {"summary": None},
         "conversation_history": turns,
         "total_compactions": 0,
     }
@@ -78,9 +78,6 @@ class StateMemoryRepository:
                     turn["content"] = None
                     turn["content_ref"] = entry["content_ref"]
                     turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
-        self.doc["memory_content"]["conversation_history"] = self.doc[
-            "conversation_history"
-        ]
         self.doc["total_compactions"] = self.doc.get("total_compactions", 0) + 1
         return True
 
@@ -142,12 +139,11 @@ async def test_should_compact_above_full_turns():
 
 
 @pytest.mark.asyncio
-async def test_should_compact_uses_canonical_direct_history_beyond_legacy_window():
+async def test_should_compact_uses_unwindowed_canonical_history():
     direct_turns = [
         full_turn(f"t{index}", f"short {index}", tokens=1) for index in range(1, 22)
     ]
     doc = room_doc(direct_turns)
-    doc["memory_content"]["conversation_history"] = direct_turns[-20:]
     repo = StateMemoryRepository(doc)
     default_config = CompactionConfig(
         enabled=True,

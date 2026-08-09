@@ -42,13 +42,7 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
     doc = primitive(memory) or {}
     memory_content = doc.get("memory_content") or {}
     direct_history = doc.get("conversation_history")
-    legacy_history = memory_content.get("conversation_history")
-    if isinstance(direct_history, list):
-        history = direct_history
-    elif isinstance(legacy_history, list):
-        history = legacy_history
-    else:
-        history = []
+    history = direct_history if isinstance(direct_history, list) else []
 
     return RoomMemoryState(
         room_id=doc.get("room_id", ""),
