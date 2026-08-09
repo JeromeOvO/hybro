@@ -737,9 +737,9 @@ def _executor(
         return True
 
     async def process_agent_message(message, *_args, **_kwargs):
-        persisted_messages[message.message_id].message_content.message_text = (
-            "Agent One response"
-        )
+        persisted_messages[
+            message.message_id
+        ].message_content.message_text = "Agent One response"
         return ProcessingResult(
             ProcessingStatus.SUCCESS,
             response_text="Agent One response",
@@ -758,13 +758,16 @@ def _executor(
         ),
         message_reader=SimpleNamespace(
             get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
-            get_room_agent_message_by_message_id=AsyncMock(side_effect=get_agent_message),
+            get_room_agent_message_by_message_id=AsyncMock(
+                side_effect=get_agent_message
+            ),
         ),
         message_writer=SimpleNamespace(
             add_room_agent_message=AsyncMock(side_effect=persist_agent_message),
             upsert_room_agent_message=AsyncMock(side_effect=persist_agent_message),
             delete_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_user_message_by_message_id=AsyncMock(return_value=True),
+            update_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(
                 side_effect=update_agent_message
             ),
@@ -1988,8 +1991,10 @@ async def test_supervisor_records_dispatch_status_through_run_reducer():
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
     async def process_single_message(message, *_args, **_kwargs):
-        persisted_message = await executor.message_reader.get_room_agent_message_by_message_id(
-            message.message_id
+        persisted_message = (
+            await executor.message_reader.get_room_agent_message_by_message_id(
+                message.message_id
+            )
         )
         persisted_message.message_content.message_text = "Reviewed"
         dispatching = await store.get_run("run-1")
@@ -11457,7 +11462,9 @@ async def _recover_finalizing_state(
         finalization_committed_at=(datetime.now(UTC) if committed else None),
     )
     state = await store.create_run(state)
-    executor = _executor(store=store, planner=RecordingPlanner(), user_message=user_message)
+    executor = _executor(
+        store=store, planner=RecordingPlanner(), user_message=user_message
+    )
     if persisted_text is not None:
         persisted = _agent_message("sys-message-1")
         persisted.message_content.message_text = persisted_text
@@ -11548,3 +11555,90 @@ async def test_phase_durations_are_accumulated_in_durable_run_state():
     durable = await store.get_run(state.run_id)
     assert durable is not None
     assert durable.phase_durations_ms["planner"] == 42
+
+
+def test_extract_response_text_from_message_with_artifact_parts():
+    """Verifies that text artifacts are extracted when message_text is empty."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="current_result",
+                parts=[Part(root=TextPart(kind="text", text="Once upon a story."))],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    text = supervisor_executor_module._extract_response_text_from_message(msg)
+    assert text == "Once upon a story."
+    assert msg.message_content.message_text == "Once upon a story."
+
+
+def test_step_result_from_persisted_message_extracts_artifact_text():
+    """Verifies _step_result_from_persisted_message extracts artifact text for empty message_text."""
+    from common.types import Artifact, Part, Task, TextPart
+    from models.room import MessageContent, RoomAgentMessage
+
+    task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status={"state": "completed"},
+        artifacts=[
+            Artifact(
+                artifact_id="art-1",
+                name="response",
+                parts=[
+                    Part(root=TextPart(kind="text", text="Once upon a robot story."))
+                ],
+            )
+        ],
+    )
+    msg = RoomAgentMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        agent_id="story_agent",
+        message_content=MessageContent(message_text="", message_task=task),
+        last_notified_state="completed",
+    )
+
+    from models.orchestration import (
+        DispatchExpectedOutput,
+        DispatchIntent,
+    )
+
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="msg-1",
+        agent_id="story_agent",
+        task="story",
+        task_hash="hash-1",
+        goal_family_fingerprint="fam-1",
+        goal_revision_fingerprint="rev-1",
+        expected_outputs=[
+            DispatchExpectedOutput(output_key="out", kind="text", required=True)
+        ],
+    )
+    result = SupervisorExecutor._orchestration_result_from_agent_message(
+        intent,
+        msg,
+        {"story_agent": "Story Agent"},
+        1,
+    )
+    assert result is not None
+    assert result.response_text == "Once upon a robot story."
+    assert result.success is True

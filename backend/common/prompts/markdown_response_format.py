@@ -12,6 +12,7 @@ HYBRO_MARKDOWN_RESPONSE_FORMAT = """
 - For nested fields under a numbered item, use markdown sub-bullets only: `- **Label:** value`.
 - Write sub-bullets at column 0 (no ASCII space indentation); Hybro renders them nested under the numbered item above.
 - Never write the literal words "4 spaces" in the response — that is a formatting instruction, not content to show the user.
+- Never output raw markdown image tags (e.g. `![alt](...)`) or invent attachment URLs (`attachment://...`). Generated images and files are automatically rendered as attachments.
 
 Do not:
 - Use `1.` or `1. •` for sub-fields (use `-` only).
@@ -19,6 +20,7 @@ Do not:
 - Put multiple numbered items on one line (`1. foo 2. bar`).
 - Put a `###` heading on its own line separate from its title.
 - Use `1.` or plain prose as a section header when you mean a `###` section.
+- Use markdown image embeds (`![alt](...)`) or hallucinated URLs like `attachment://`.
 
 Example when sections and a list are genuinely useful:
 ### Result

@@ -360,7 +360,14 @@ class PlannerActionValidator:
                     or not blocker.claimed_user_only
                     or not blocker.validated_user_only
                     or blocker.validation_status != "validated"
-                    or not (set(blocker.blocked_output_keys) & required_output_keys)
+                    or (
+                        # Prose delegates may have empty expected_outputs; do not
+                        # require an output-key intersection in that case.
+                        required_output_keys
+                        and not (
+                            set(blocker.blocked_output_keys) & required_output_keys
+                        )
+                    )
                 ):
                     raise PlannerActionValidationError(
                         "ask_user action references a non-validated blocker",

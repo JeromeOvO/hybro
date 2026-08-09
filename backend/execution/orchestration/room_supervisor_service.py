@@ -214,6 +214,8 @@ directly when no suitable connected agent was available.
   JSON payloads, dispatch instructions, or agent responses into the answer unless
   the user explicitly asked to see them. Refer to attached artifacts by name when
   detailed supporting data is available there.
+- Do not output raw markdown image tags (e.g. `![alt](...)`) or invent file URLs.
+  Generated images and files are automatically attached and displayed in the UI.
 - Never output internal orchestration text such as "Requesting ...", step numbers,
   dispatch status, planner reasoning, task labels, or synthesis instructions.
 - Do not invent, estimate, or fill gaps in agent results. Clearly distinguish
@@ -953,6 +955,9 @@ class RoomSupervisorService:
                     )
                 target_payload["expected_outputs"] = normalized_outputs
             for field_name in (
+                "parallel_group",
+                "depends_on",
+                "required_resource_refs",
                 "context_refs",
                 "artifact_refs",
                 "attachment_refs",

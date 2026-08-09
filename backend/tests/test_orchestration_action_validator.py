@@ -660,6 +660,28 @@ def test_post_dispatch_question_accepts_validated_blocker():
     )
 
 
+def test_post_dispatch_question_accepts_validated_blocker_without_expected_outputs():
+    """Prose delegates clear expected_outputs; HITL must still work."""
+    blocker = _validated_quote_blocker("travel-dates")
+    intent = _completed_quote_intent()
+    intent.expected_outputs = []
+    state = _guardrail_state(
+        intents=[intent],
+        blockers=[blocker],
+    )
+    action = _question_action("blocker", [blocker.key])
+
+    assert (
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            guardrails_enabled=True,
+            resource_fingerprints={},
+        )
+        is action
+    )
+
+
 @pytest.mark.parametrize("status", ["creating", "open", "resolved"])
 def test_post_dispatch_question_rejects_pending_or_answered_duplicate(status: str):
     blocker = _validated_quote_blocker("quote-input")
@@ -1010,13 +1032,7 @@ async def test_planner_adapter_preserves_raw_delegate_target_refs_and_policy():
             required=False,
         )
     ]
-    assert target.expected_outputs == [
-        DispatchExpectedOutput(
-            kind="quote_summary",
-            required=True,
-            description="Summarize underwriting blockers.",
-        )
-    ]
+    assert target.expected_outputs == []
     assert target.attachment_policy == "compatible_only"
 
 
@@ -1506,6 +1522,177 @@ def test_planner_prompt_is_compact_and_execution_owned():
     assert "never relabel an ordinary written answer" in prompt
     assert "decision_summary under 500 characters" in prompt
     assert "private chain-of-thought" in prompt
+
+
+def test_parse_planner_action_preserves_multi_target_parallel_group_fields():
+    payload = {
+        "action": "delegate",
+        "reasoning": "Fan out independent travel and weather work.",
+        "targets": [
+            {
+                "agent_id": "agent-travel",
+                "agent_name": "Travel Planner",
+                "task": "Create a 7-day Hawaii plan for 4 people.",
+                "parallel_group": "hawaii-fanout",
+                "depends_on": [],
+                "required_resource_refs": ["res-1"],
+                "context_refs": [],
+                "artifact_refs": [],
+                "attachment_refs": [],
+                "expected_outputs": [],
+            },
+            {
+                "agent_id": "agent-weather",
+                "agent_name": "Weather Agent",
+                "task": "Summarize Hawaii weather for the past month.",
+                "parallel_group": "hawaii-fanout",
+                "depends_on": [],
+                "required_resource_refs": [],
+                "context_refs": [],
+                "artifact_refs": [],
+                "attachment_refs": [],
+                "expected_outputs": [],
+            },
+        ],
+        "questions": [],
+        "synthesis_instruction": None,
+        "failure_reason": None,
+        "completion_evidence": None,
+    }
+
+    parsed = RoomSupervisorService.parse_planner_action(payload)
+
+    assert [target.parallel_group for target in parsed.targets] == [
+        "hawaii-fanout",
+        "hawaii-fanout",
+    ]
+    assert [target.depends_on for target in parsed.targets] == [[], []]
+    assert parsed.targets[0].required_resource_refs == ["res-1"]
+    assert parsed.targets[1].required_resource_refs == []
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_normalizes_blank_independent_parallel_group():
+    adapter = RoomSupervisorPlannerAdapter(
+        raw_action_provider=lambda _context: {
+            "action": "delegate",
+            "reasoning": "Independent travel and weather tasks.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Travel",
+                    "task": "Plan Hawaii trip.",
+                    "parallel_group": None,
+                    "depends_on": [],
+                    "required_resource_refs": [],
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [],
+                },
+                {
+                    "agent_id": "agent-2",
+                    "agent_name": "Weather",
+                    "task": "Check Hawaii weather.",
+                    "parallel_group": None,
+                    "depends_on": [],
+                    "required_resource_refs": [],
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [],
+                },
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        }
+    )
+    context = build_orchestration_planner_context(
+        run_state=OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Plan Hawaii and check weather",
+            candidate_agent_ids=["agent-1", "agent-2"],
+        ),
+        candidate_scope=["agent-1", "agent-2"],
+        message_text="Plan Hawaii and check weather",
+    )
+
+    action = await adapter.plan(context)
+
+    assert action.action == PlannerActionType.DELEGATE
+    assert len(action.targets) == 2
+    assert action.targets[0].parallel_group == action.targets[1].parallel_group
+    assert action.targets[0].parallel_group
+    assert action.targets[0].parallel_group.startswith("fanout-")
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_strips_prose_expected_outputs():
+    adapter = RoomSupervisorPlannerAdapter(
+        raw_action_provider=lambda _context: {
+            "action": "delegate",
+            "reasoning": "Ask weather agent.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Weather",
+                    "task": "Check Hawaii weather for the past month.",
+                    "parallel_group": None,
+                    "depends_on": [],
+                    "required_resource_refs": [],
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [
+                        {
+                            "output_key": "weather_past_month",
+                            "kind": "text",
+                            "required": True,
+                            "description": "Past month weather",
+                            "artifact_name": None,
+                            "required_fields": [],
+                            "allow_partial": False,
+                        }
+                    ],
+                }
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        }
+    )
+    context = build_orchestration_planner_context(
+        run_state=OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Check Hawaii weather",
+            candidate_agent_ids=["agent-1"],
+        ),
+        candidate_scope=["agent-1"],
+        message_text="Check Hawaii weather",
+    )
+
+    action = await adapter.plan(context)
+
+    assert action.action == PlannerActionType.DELEGATE
+    assert action.targets[0].expected_outputs == []
+
+
+def test_planner_prompt_requires_domain_supported_agent_suitability():
+    import inspect
+
+    source = inspect.getsource(RoomSupervisorPlannerAdapter._call_supervisor_service)
+
+    assert "Agent Card's" in source
+    assert "accepting text" in source
+    assert "unrelated " in source
+    assert '"domain.' in source
 
 
 @pytest.mark.asyncio

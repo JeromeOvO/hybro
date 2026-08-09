@@ -1,12 +1,17 @@
+import uuid
 from typing import override
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
+    Message,
+    Part,
+    Role,
     TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
+    TextPart,
 )
 from a2a.utils import new_text_artifact
 from agent import StoryAgent
@@ -30,40 +35,53 @@ class StoryAgentExecutor(AgentExecutor):
 
         artifact_id = f"{context.task_id}-current-result"
         chunks: list[str] = []
-
         async for event in self.agent.stream(query):
-            if event["content"]:
-                chunks.append(event["content"])
-            if event["done"]:
+            chunk = event.get("content") or ""
+            if not isinstance(chunk, str):
+                chunk = (
+                    "".join(str(part) for part in chunk)
+                    if isinstance(chunk, list)
+                    else str(chunk)
+                )
+            if chunk:
+                chunks.append(chunk)
+            if event.get("done"):
                 break
 
-        if chunks:
-            await self._emit_text_chunk(
+        final_text = "".join(chunks)
+        if final_text:
+            await self._emit_text(
                 context,
                 event_queue,
                 artifact_id,
-                "".join(chunks),
-                append=False,
-                last_chunk=True,
+                final_text,
             )
 
-        status = TaskStatusUpdateEvent(
-            contextId=context.context_id,  # type: ignore
-            taskId=context.task_id,  # type: ignore
-            status=TaskStatus(state=TaskState.completed),
-            final=True,
+        status_message = None
+        if final_text.strip():
+            status_message = Message(
+                messageId=uuid.uuid4().hex,
+                role=Role.agent,
+                parts=[Part(root=TextPart(text=final_text))],
+            )
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                contextId=context.context_id,  # type: ignore
+                taskId=context.task_id,  # type: ignore
+                status=TaskStatus(
+                    state=TaskState.completed,
+                    message=status_message,
+                ),
+                final=True,
+            )
         )
-        await event_queue.enqueue_event(status)
 
     @staticmethod
-    async def _emit_text_chunk(
+    async def _emit_text(
         context: RequestContext,
         event_queue: EventQueue,
         artifact_id: str,
         content: str,
-        *,
-        append: bool,
-        last_chunk: bool,
     ) -> None:
         artifact = new_text_artifact(name="current_result", text=content)
         artifact.artifact_id = artifact_id
@@ -72,8 +90,8 @@ class StoryAgentExecutor(AgentExecutor):
                 contextId=context.context_id,  # type: ignore
                 taskId=context.task_id,  # type: ignore
                 artifact=artifact,
-                append=append,
-                lastChunk=last_chunk,
+                append=False,
+                lastChunk=True,
             )
         )
 

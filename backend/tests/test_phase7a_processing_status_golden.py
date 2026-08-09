@@ -291,7 +291,10 @@ async def test_resume_completion_uses_deterministic_kind_when_summary_skipped(
     assert len(completed_frames) == 1
     assert completed_frames[0][1]["details"]["turn_completion_kind"] == "deterministic"
     assert completed_frames[0][1]["details"]["turn_phase"] == "terminal"
-    rmc._persist_turn_completion_kind.assert_not_awaited()
+    rmc._persist_turn_completion_kind.assert_awaited_once_with(
+        "msg-1",
+        "deterministic",
+    )
 
 
 @pytest.mark.asyncio

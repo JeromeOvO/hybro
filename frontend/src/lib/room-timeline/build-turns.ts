@@ -221,7 +221,9 @@ function assembleTurn(
   const turnEvents = filterEventsForTurn(scaffold, entities, events, nextTurnStart)
 
   const rawAgentResults = scaffold.agentMessageIds
-    .map((id) => buildAgentResult(entities[id], turnEvents))
+    .map((id) =>
+      buildAgentResult(entities[id], turnEvents, scaffold.userEntity?.turnTerminalStatus),
+    )
     .filter((r): r is AgentResultViewModel => r !== null)
 
   // Deduplicate: when both task_update and agent_response SSE events create
@@ -326,6 +328,7 @@ function isPersistedTerminalTurn(
 function buildAgentResult(
   entity: MessageEntity | undefined,
   turnEvents: RawTimelineEvent[],
+  turnTerminalStatus?: TurnViewModel['turnTerminalStatus'],
 ): AgentResultViewModel | null {
   if (!entity) return null
 
@@ -382,7 +385,18 @@ function buildAgentResult(
       status = 'working'
     }
   } else if (entity.taskStatus && !isTerminalState(entity.taskStatus)) {
-    status = 'working'
+    // Legacy rows: synthesis left system:hybro as submitted while message_text
+    // already held the answer. Repair only after the turn is durably complete
+    // so live streaming still shows synthesizing.
+    if (
+      isSummarySystemAgent(entity.agentId)
+      && entity.content.trim().length > 0
+      && turnTerminalStatus === 'completed'
+    ) {
+      status = 'completed'
+    } else {
+      status = 'working'
+    }
   }
 
   // HITL split (spec §5.3)
@@ -619,6 +633,15 @@ export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
     
     if (real.length === 0) return "collecting"
     if (real.some(r => r.status === "working")) return "collecting"
+
+    // Contentful orchestrator is already the final answer (incl. hydrate repair).
+    if (
+      orchestrator.content.trim().length > 0
+      && orchestrator.summaryOrigin !== "deterministic"
+      && (orchestrator.status === "completed" || turn.turnTerminalStatus === "completed")
+    ) {
+      return "completed"
+    }
     
     if (orchestrator.status === "working") return "synthesizing"
     return "answering"

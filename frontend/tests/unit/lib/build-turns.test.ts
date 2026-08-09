@@ -1396,6 +1396,69 @@ describe('deriveTurnPhase', () => {
     expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
   })
 
+  it('repairs contentful submitted system:hybro after turn is terminal', () => {
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'synthesis' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'Story body',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'Image ready',
+    })
+    const hybro = makeAgentEntity({
+      id: 'sys-u1',
+      agentId: 'system:hybro',
+      taskStatus: 'submitted',
+      content: 'Here is the synthesized story and image plan.',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, hybro]),
+      ['u1', 'a1', 'a2', 'sys-u1'],
+      [],
+    )
+    expect(turns[0].agentResults.find((r) => r.agentId === 'system:hybro')?.status).toBe('completed')
+    expect(deriveTurnPhase(turns[0])).toBe('completed')
+    expect(turns[0].finalAnswer).toMatchObject({
+      kind: 'llm_synthesis',
+      label: 'Synthesized',
+      primaryMessageId: 'sys-u1',
+    })
+  })
+
+  it('keeps contentful system:hybro as working while turn is still live', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'agent-a',
+      taskStatus: 'completed',
+      content: 'Story body',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'agent-b',
+      taskStatus: 'completed',
+      content: 'Image ready',
+    })
+    const hybro = makeAgentEntity({
+      id: 'sys-u1',
+      agentId: 'system:hybro',
+      taskStatus: 'submitted',
+      content: 'Partial synthesis…',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB, hybro]),
+      ['u1', 'a1', 'a2', 'sys-u1'],
+      [],
+    )
+    expect(turns[0].agentResults.find((r) => r.agentId === 'system:hybro')?.status).toBe('working')
+    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+  })
+
   it('does not enter synthesizing phase when only delegation logs exist after agents finish', () => {
     const user = makeUserEntity({
       id: 'u1',

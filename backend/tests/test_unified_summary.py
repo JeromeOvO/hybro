@@ -87,8 +87,10 @@ class TestEmitUnifiedSummary:
 
         The individual agent's task_update SSE already delivers the content,
         so emitting a redundant synthesis summary would create a duplicate.
+        Completion kind remains synthesis so hydrate does not treat the turn
+        as deterministic or still synthesizing.
         """
-        await rmc._emit_unified_summary(
+        origin, content = await rmc._emit_unified_summary(
             room_id="room-1",
             user_message_id="msg-1",
             synthesis_text="Supervisor generated this.",
@@ -97,6 +99,8 @@ class TestEmitUnifiedSummary:
             ],
         )
 
+        assert origin == "synthesis"
+        assert content is None
         # No SSE events should be emitted
         rmc.delivery.send_task_submitted.assert_not_awaited()
         rmc.delivery.send_agent_response.assert_not_awaited()
@@ -106,13 +110,15 @@ class TestEmitUnifiedSummary:
     @pytest.mark.asyncio
     async def test_supervisor_synthesis_zero_agents_skipped(self, rmc):
         """When supervisor synthesis is provided but 0 agents responded, skip summary."""
-        await rmc._emit_unified_summary(
+        origin, content = await rmc._emit_unified_summary(
             room_id="room-1",
             user_message_id="msg-1",
             synthesis_text="Supervisor generated this.",
             trajectory_responses=[],
         )
 
+        assert origin == "synthesis"
+        assert content is None
         rmc.delivery.send_task_submitted.assert_not_awaited()
         rmc.delivery.send_agent_response.assert_not_awaited()
         rmc.message_writer.upsert_room_agent_message.assert_not_awaited()
