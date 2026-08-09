@@ -111,10 +111,7 @@ def _ask_user_action_for_validated_blockers(
 
 def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:
     """True only when at least one delegation outcome is fulfilled."""
-    return any(
-        outcome.status == "fulfilled"
-        for outcome in state.delegation_outcomes
-    )
+    return any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes)
 
 
 def action_for_rejected_delegate(
